@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PiGate - Settings & Maintenance Sketch</title>
+    <style>
+        /* สไตล์แบบ Wireframe/Sketch ขาวดำ */
+        body { font-family: 'Courier New', Courier, monospace; background-color: #f9f9f9; color: #333; padding: 20px; }
+        .sketch-container { max-width: 1000px; margin: 0 auto; display: flex; flex-direction: column; gap: 30px; }
+        
+        .page-box { border: 2px dashed #888; padding: 20px; background: #fff; box-shadow: 5px 5px 0px #ccc; }
+        .header { border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px; }
+        .header h2 { margin: 0; font-size: 22px; display: flex; align-items: center; gap: 10px; }
+        
+        /* สไตล์ Card ย่อยภายในหน้า */
+        .section-card { border: 2px solid #333; padding: 20px; margin-bottom: 20px; background: #fff; }
+        .section-title { font-weight: bold; font-size: 16px; margin-top: 0; margin-bottom: 15px; border-bottom: 1px dashed #ccc; padding-bottom: 5px; color: #555; text-transform: uppercase; }
+
+        /* ปุ่มกด */
+        .btn { border: 2px solid #333; background: #eee; padding: 8px 15px; cursor: pointer; font-weight: bold; font-family: inherit; font-size: 14px; transition: 0.2s; display: inline-flex; align-items: center; gap: 5px; }
+        .btn:hover { background: #333; color: #fff; }
+        .btn-primary { background: #333; color: #fff; }
+        .btn-danger { background: #fff; color: #dc3545; border-color: #dc3545; }
+        .btn-danger:hover { background: #dc3545; color: #fff; }
+
+        /* ฟอร์มกรอกข้อมูล */
+        .form-group { margin-bottom: 15px; display: flex; flex-direction: column; }
+        .form-label { font-weight: bold; margin-bottom: 5px; font-size: 14px; }
+        .form-control { padding: 8px; border: 2px solid #ccc; font-family: inherit; font-size: 14px; width: 100%; max-width: 400px; box-sizing: border-box; }
+        
+        .help-text { font-size: 11px; color: #666; margin-top: 4px; font-style: italic; }
+        
+        /* ปุ่มจัดการ Service List ในหน้า Maintenance */
+        .service-list { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        .service-list td { padding: 10px; border-bottom: 1px solid #eee; }
+        .status-running { color: #28a745; font-weight: bold; }
+        
+        /* กล่องบันทึกหลังบ้าน */
+        .backend-preview { border: 2px dashed #ff9900; padding: 15px; background-color: #fffaf0; margin-top: 15px; }
+        .backend-preview h4 { margin: 0 0 10px 0; color: #cc6600; font-size: 14px; }
+        .code-box { background: #333; color: #fff; padding: 10px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+
+    <div class="sketch-container">
+
+        <div class="page-box">
+            <div class="header">
+                <h2>⚙️ Settings (ตั้งค่าระบบ)</h2>
+            </div>
+
+            <div class="section-card">
+                <h3 class="section-title">Administrator Password (รหัสผ่านผู้ดูแลระบบ)</h3>
+                <div class="form-group">
+                    <div class="form-label">Current Password:</div>
+                    <input type="password" class="form-control" placeholder="รหัสผ่านปัจจุบัน">
+                </div>
+                <div class="form-group">
+                    <div class="form-label">New Password:</div>
+                    <input type="password" class="form-control" placeholder="รหัสผ่านใหม่">
+                </div>
+                <div class="form-group">
+                    <div class="form-label">Confirm New Password:</div>
+                    <input type="password" class="form-control" placeholder="ยืนยันรหัสผ่านใหม่">
+                </div>
+                <button class="btn btn-primary">💾 Change Password</button>
+            </div>
+
+            <div class="section-card">
+                <h3 class="section-title">System Time & NTP (เวลาและเขตเวลา)</h3>
+                <div class="form-group">
+                    <div class="form-label">Time Zone:</div>
+                    <select class="form-control">
+                        <option>Asia/Bangkok (GMT+7:00)</option>
+                        <option>Asia/Singapore (GMT+8:00)</option>
+                        <option>UTC (GMT+0:00)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <div class="form-label">NTP Server Sync:</div>
+                    <label style="font-size: 14px; margin-bottom: 8px;">
+                        <input type="checkbox" checked> เปิดใช้งานการซิงค์เวลาอัตโนมัติ
+                    </label>
+                    <input type="text" class="form-control" value="pool.ntp.org">
+                    <div class="help-text">ระบุที่อยู่ของ NTP Server ที่ต้องการให้อุปกรณ์ไปดึงค่าเวลา</div>
+                </div>
+                <button class="btn btn-primary">💾 Save Time Settings</button>
+            </div>
+
+            <div class="backend-preview">
+                <h4>🧠 Backend Integration สําหรับ หน้า Settings</h4>
+                <div class="code-box">
+# พิกัดคำสั่ง Linux หลังบ้านที่ Python ต้องไปจัดการเมื่อมีการบันทึกค่า:
+# 1. เปลี่ยนรหัสผ่านของระบบ (กรณีผูกกับ User Linux) หรือบันทึก Hash ลง DB ของเว็บ
+echo "admin:new_password" | chpasswd
+
+# 2. ตั้งค่าเขตเวลาและซิงค์เวลาระบบ RPI5
+timedatectl set-timezone Asia/Bangkok
+timedatectl set-ntp true</div>
+            </div>
+        </div>
+
+
+        <div class="page-box">
+            <div class="header">
+                <h2>🔄 Maintenance (ดูแลรักษาและจัดการระบบ)</h2>
+            </div>
+
+            <div class="section-card">
+                <h3 class="section-title">System Actions (ควบคุมพลังงานบอร์ด)</h3>
+                <p style="font-size: 14px; margin-bottom: 15px;">จัดการสถานะการทำงานของบอร์ด Raspberry Pi 5</p>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn btn-danger">🔄 Reboot System (รีบูตเครื่อง)</button>
+                    <button class="btn btn-danger" style="background-color: #fff; color: #333;">🛑 Shutdown System (ปิดเครื่อง)</button>
+                </div>
+            </div>
+
+            <div class="section-card">
+                <h3 class="section-title">Backup & Restore (สำรองและคืนค่าคอนฟิก)</h3>
+                <p style="font-size: 13px; color: #666; margin-bottom: 15px;">* คอนฟิกจะถูกส่งออกเป็นไฟล์เพื่อเก็บค่านโยบายและวัตถุทั้งหมดเอาไว้</p>
+                <div style="display: flex; gap: 15px; flex-wrap: wrap;">
+                    <div style="border-right: 1px dashed #ccc; padding-right: 20px;">
+                        <div class="form-label" style="margin-bottom: 10px;">สำรองข้อมูลปัจจุบัน:</div>
+                        <button class="btn">📥 Export Configuration</button>
+                    </div>
+                    <div>
+                        <div class="form-label" style="margin-bottom: 10px;">คืนค่าจากไฟล์สำรอง:</div>
+                        <input type="file" style="font-family: inherit; font-size: 13px; margin-bottom: 5px;"><br>
+                        <button class="btn btn-primary">📤 Import & Apply Config</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section-card">
+                <h3 class="section-title">Network Services Status (ควบคุมการทำงานระบบย่อย)</h3>
+                <table class="service-list">
+                    <tr>
+                        <td><strong>Firewall Engine (nftables)</strong></td>
+                        <td><span class="status-running">● Running</span></td>
+                        <td style="text-align: right;"><button class="btn">🔄 Restart</button></td>
+                    </tr>
+                    <tr>
+                        <td><strong>DHCP Server (isc-dhcp-server)</strong></td>
+                        <td><span class="status-running">● Running</span></td>
+                        <td style="text-align: right;"><button class="btn">🔄 Restart</button></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Network Core Manager (NetworkManager)</strong></td>
+                        <td><span class="status-running">● Running</span></td>
+                        <td style="text-align: right;"><button class="btn">🔄 Restart</button></td>
+                    </tr>
+                </table>
+            </div>
+
+            <div class="backend-preview">
+                <h4>🧠 Backend Integration สําหรับ หน้า Maintenance</h4>
+                <div class="code-box">
+# คำสั่งระบบระดับ OS ที่ต้องระวังและกรองสิทธิ์ (Sudoers) อย่างเข้มงวด:
+# 1. ควบคุมเครื่อง
+sudo reboot
+sudo poweroff
+
+# 2. ควบคุมบริการย่อยผ่านระบบ OS
+sudo systemctl restart nftables
+sudo systemctl restart isc-dhcp-server
+
+# 3. การ Export/Import คอนฟิก
+# หลังบ้านจะทำการดึงตารางทั้งหมดในฐานข้อมูล SQLite ออกมาเขียนเป็นไฟล์ JSON เพื่อให้ผู้ใช้ดาวน์โหลด
+# และเมื่อโหลดไฟล์กลับเข้ามาระบบจะเขียนทับฐานข้อมูลเดิมแล้วสั่ง Apply ruleset ใหม่อีกครั้ง</div>
+            </div>
+        </div>
+
+    </div>
+
+</body>
+</html>

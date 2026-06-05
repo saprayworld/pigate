@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PiGate - Policy Sketch</title>
+    <style>
+        /* สไตล์แบบ Wireframe/Sketch (เน้นเส้นขอบขาวดำ ดูโครงสร้าง) */
+        body { font-family: 'Courier New', Courier, monospace; background-color: #f9f9f9; color: #333; padding: 20px; }
+        .sketch-container { max-width: 1200px; margin: 0 auto; border: 2px dashed #888; padding: 20px; background: #fff; box-shadow: 5px 5px 0px #ccc; }
+        
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px; }
+        .header h1 { margin: 0; font-size: 24px; }
+        
+        .toolbar { display: flex; gap: 10px; margin-bottom: 15px; }
+        .btn { border: 2px solid #333; background: #eee; padding: 8px 15px; cursor: pointer; font-weight: bold; font-family: inherit; transition: 0.2s; }
+        .btn:hover { background: #333; color: #fff; }
+        .btn-primary { background: #333; color: #fff; }
+        .btn-primary:hover { background: #555; }
+
+        /* ตาราง Policy */
+        table { width: 100%; border-collapse: collapse; border: 2px solid #333; }
+        th, td { border: 1px solid #777; padding: 12px; text-align: left; }
+        th { background-color: #e0e0e0; font-weight: bold; }
+        
+        /* ป้ายกำกับ Object ต่างๆ ให้ดูเหมือนเป็นก้อนๆ */
+        .badge { display: inline-block; border: 1px solid #333; padding: 2px 8px; border-radius: 12px; font-size: 12px; background: #f0f0f0; margin: 2px; }
+        .badge-accept { background: #d4edda; border-color: #28a745; }
+        .badge-deny { background: #f8d7da; border-color: #dc3545; }
+        
+        /* จำลองที่จับสำหรับ Drag & Drop */
+        .drag-handle { cursor: grab; color: #999; font-size: 18px; margin-right: 10px; }
+        
+        .footer-note { margin-top: 20px; font-size: 12px; color: #666; text-align: right; font-style: italic; }
+    </style>
+</head>
+<body>
+
+    <div class="sketch-container">
+        <div class="header">
+            <h1>🛡️ PiGate : Firewall Policies (nftables)</h1>
+            <div>User: Admin | Uptime: 2 Days</div>
+        </div>
+
+        <div class="toolbar">
+            <button class="btn btn-primary">+ Create New Policy</button>
+            <button class="btn">✏️ Edit</button>
+            <button class="btn">🗑️ Delete</button>
+            <span style="flex-grow: 1;"></span>
+            <input type="text" placeholder="🔍 Search rules..." style="border: 2px solid #333; padding: 5px 10px; font-family: inherit;">
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th width="5%">Seq.</th>
+                    <th width="15%">Name</th>
+                    <th width="15%">Source</th>
+                    <th width="15%">Destination</th>
+                    <th width="15%">Service / Port</th>
+                    <th width="10%">Action</th>
+                    <th width="10%">Log</th>
+                    <th width="10%">Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><span class="drag-handle">☰</span> 1</td>
+                    <td><strong>Allow-Web-Out</strong></td>
+                    <td>
+                        <span class="badge">LAN_Network</span>
+                        <span class="badge">192.168.1.0/24</span>
+                    </td>
+                    <td><span class="badge">ALL (Internet)</span></td>
+                    <td>
+                        <span class="badge">HTTP (80)</span>
+                        <span class="badge">HTTPS (443)</span>
+                    </td>
+                    <td><span class="badge badge-accept">ACCEPT</span></td>
+                    <td><input type="checkbox"></td>
+                    <td><input type="checkbox" checked> Enable</td>
+                </tr>
+                
+                <tr>
+                    <td><span class="drag-handle">☰</span> 2</td>
+                    <td><strong>Block-BitTorrent</strong></td>
+                    <td><span class="badge">LAN_Network</span></td>
+                    <td><span class="badge">ALL</span></td>
+                    <td><span class="badge">BitTorrent_Ports</span></td>
+                    <td><span class="badge badge-deny">DROP</span></td>
+                    <td><input type="checkbox" checked></td>
+                    <td><input type="checkbox" checked> Enable</td>
+                </tr>
+
+                <tr style="background-color: #f5f5f5; color: #777;">
+                    <td>-</td>
+                    <td><em>Implicit Deny</em></td>
+                    <td><em>ALL</em></td>
+                    <td><em>ALL</em></td>
+                    <td><em>ALL</em></td>
+                    <td><span class="badge badge-deny">DROP</span></td>
+                    <td>-</td>
+                    <td><em>System</em></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="footer-note">
+            * Changes are saved to database automatically. Click "Apply Settings" to reload nftables.
+        </div>
+    </div>
+
+</body>
+</html>

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PiGate - Address Objects Sketch</title>
+    <style>
+        /* สไตล์แบบ Wireframe/Sketch */
+        body { font-family: 'Courier New', Courier, monospace; background-color: #f9f9f9; color: #333; padding: 20px; }
+        .sketch-container { max-width: 1000px; margin: 0 auto; border: 2px dashed #888; padding: 20px; background: #fff; box-shadow: 5px 5px 0px #ccc; }
+        
+        .header { border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px; }
+        .header h2 { margin: 0; font-size: 22px; display: flex; align-items: center; gap: 10px; }
+        
+        .toolbar { display: flex; gap: 10px; margin-bottom: 15px; }
+        .btn { border: 2px solid #333; background: #eee; padding: 8px 15px; cursor: pointer; font-weight: bold; font-family: inherit; font-size: 14px; transition: 0.2s; }
+        .btn:hover { background: #333; color: #fff; }
+        .btn-primary { background: #333; color: #fff; }
+
+        /* สไตล์ตาราง */
+        table { width: 100%; border-collapse: collapse; border: 2px solid #333; margin-bottom: 30px; }
+        th, td { border: 1px solid #777; padding: 12px; text-align: left; }
+        th { background-color: #e0e0e0; font-weight: bold; }
+        
+        /* ป้ายกำกับแยกประเภท Object */
+        .type-badge { display: inline-block; border: 1px solid #333; padding: 2px 6px; font-size: 11px; font-weight: bold; background: #fff; }
+        .type-subnet { background-color: #e2f0d9; }
+        .type-range { background-color: #fff2cc; }
+        .type-fqdn { background-color: #fce4d6; }
+
+        /* ฟอร์มตั้งค่า (Panel สร้าง/แก้ไข) */
+        .edit-panel { border: 2px solid #333; padding: 20px; background-color: #f5f5f5; position: relative; margin-top: 20px; }
+        .edit-panel h3 { margin-top: 0; border-bottom: 1px dashed #999; padding-bottom: 10px; }
+        .close-btn { position: absolute; top: 10px; right: 15px; cursor: pointer; font-weight: bold; font-size: 18px; }
+        
+        .form-group { margin-bottom: 15px; display: flex; flex-direction: column; }
+        .form-label { font-weight: bold; margin-bottom: 5px; font-size: 14px; }
+        .form-control { padding: 8px; border: 2px solid #ccc; font-family: inherit; font-size: 14px; width: 100%; }
+        
+        .help-text { font-size: 11px; color: #666; margin-top: 4px; font-style: italic; }
+    </style>
+</head>
+<body>
+
+    <div class="sketch-container">
+        
+        <div class="header">
+            <h2>📖 Address Objects</h2>
+        </div>
+
+        <div class="toolbar">
+            <button class="btn btn-primary">+ Create New Address</button>
+            <button class="btn">✏️ Edit</button>
+            <button class="btn">🗑️ Delete</button>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th width="5%"><input type="checkbox"></th>
+                    <th width="25%">Name</th>
+                    <th width="15%">Type</th>
+                    <th width="35%">Details / Value</th>
+                    <th width="20%">Ref. Policies</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><input type="checkbox"></td>
+                    <td><strong>LAN_Network</strong></td>
+                    <td><span class="type-badge type-subnet">Subnet</span></td>
+                    <td>192.168.1.0/24</td>
+                    <td>Allow-Web-Out, Block-Bit</td>
+                </tr>
+                <tr>
+                    <td><input type="checkbox"></td>
+                    <td><strong>Admin_PC</strong></td>
+                    <td><span class="type-badge type-subnet">IP Address</span></td>
+                    <td>192.168.1.10</td>
+                    <td>Allow-SSH-In</td>
+                </tr>
+                <tr>
+                    <td><input type="checkbox"></td>
+                    <td><strong>DHCP_Pool_Zone</strong></td>
+                    <td><span class="type-badge type-range">IP Range</span></td>
+                    <td>192.168.1.100 - 192.168.1.200</td>
+                    <td>None</td>
+                </tr>
+                <tr>
+                    <td><input type="checkbox"></td>
+                    <td><strong>Update_Server</strong></td>
+                    <td><span class="type-badge type-fqdn">FQDN</span></td>
+                    <td>pigate-update.com</td>
+                    <td>System-Update</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="edit-panel">
+            <div class="close-btn">✖</div>
+            <h3>⚙️ New Address Object</h3>
+            
+            <div class="form-group">
+                <div class="form-label">Address Name:</div>
+                <input type="text" class="form-control" placeholder="e.g. Printer_Room_1">
+                <div class="help-text">ห้ามเว้นวรรค และแนะนำให้ใช้ตัวอักษรภาษาอังกฤษหรือเครื่องหมาย _ เท่านั้น</div>
+            </div>
+
+            <div class="form-group">
+                <div class="form-label">Type:</div>
+                <select class="form-control" id="type-select">
+                    <option value="subnet">Subnet (IP/Netmask)</option>
+                    <option value="range">IP Range (ช่วงไอพี)</option>
+                    <option value="fqdn">FQDN (ชื่อโดเมน)</option>
+                </select>
+            </div>
+
+            <div style="border: 1px dashed #aaa; padding: 15px; background: #fff; margin-bottom: 15px;">
+                <div class="form-group" style="margin-bottom: 0;">
+                    <div class="form-label">IP / Netmask:</div>
+                    <input type="text" class="form-control" placeholder="e.g. 192.168.1.0/24">
+                </div>
+            </div>
+
+            <div style="text-align: right; border-top: 1px dashed #ccc; padding-top: 15px;">
+                <button class="btn">Cancel</button>
+                <button class="btn btn-primary">Save Object</button>
+            </div>
+        </div>
+
+    </div>
+
+</body>
+</html>

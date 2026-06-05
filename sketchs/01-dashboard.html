@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PiGate - Dashboard Sketch</title>
+    <style>
+        /* สไตล์แบบ Wireframe/Sketch ขาวดำ */
+        body { font-family: 'Courier New', Courier, monospace; background-color: #f9f9f9; color: #333; padding: 20px; }
+        .sketch-container { max-width: 1200px; margin: 0 auto; border: 2px dashed #888; padding: 20px; background: #fff; box-shadow: 5px 5px 0px #ccc; }
+        
+        .header { border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+        .header h2 { margin: 0; font-size: 22px; }
+        
+        /* การจัดเลย์เอาต์แบบ Grid สำหรับ Widgets */
+        .dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; margin-bottom: 25px; }
+        
+        /* สไตล์ของแต่ละ Widget */
+        .widget-card { border: 2px solid #333; background: #fff; display: flex; flex-direction: column; box-shadow: 4px 4px 0px #eee; }
+        .widget-header { background-color: #e0e0e0; padding: 10px 15px; font-weight: bold; font-size: 14px; border-bottom: 2px solid #333; display: flex; justify-content: space-between; }
+        .widget-body { padding: 15px; flex-grow: 1; font-size: 14px; }
+        
+        /* ตารางย่อยใน Widget */
+        .info-table { width: 100%; border-collapse: collapse; }
+        .info-table td { padding: 6px 0; border-bottom: 1px dashed #eee; }
+        .info-table td:last-child { text-align: right; font-weight: bold; }
+        
+        /* จำลองกราฟความเร็วเน็ต */
+        .mock-chart { height: 120px; border: 1px dashed #999; margin-top: 10px; display: flex; align-items: flex-end; justify-content: space-between; padding: 5px; background: #fafafa auto; }
+        .chart-bar { width: 12%; background-color: #ccc; border: 1px solid #333; transition: 0.3s; }
+        
+        .status-up { color: #28a745; font-weight: bold; }
+        .badge { display: inline-block; border: 1px solid #333; padding: 1px 5px; font-size: 11px; background: #eee; }
+        
+        /* ตาราง Log ล่าสุด */
+        .log-table { width: 100%; border-collapse: collapse; margin-top: 5px; font-size: 12px; }
+        .log-table th, .log-table td { border: 1px solid #aaa; padding: 6px; text-align: left; }
+        .log-table th { background: #f0f0f0; }
+        .log-drop { color: #dc3545; font-weight: bold; }
+
+        /* กล่องบันทึกหลังบ้าน */
+        .backend-preview { border: 2px dashed #ff9900; padding: 15px; background-color: #fffaf0; }
+        .backend-preview h4 { margin: 0 0 10px 0; color: #cc6600; font-size: 14px; }
+        .code-box { background: #333; color: #fff; padding: 10px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+
+    <div class="sketch-container">
+        
+        <div class="header">
+            <h2>📊 Dashboard Overview (ภาพรวมระบบ)</h2>
+            <div><button style="border: 2px solid #333; background: #eee; padding: 5px 10px; cursor: pointer; font-family: inherit; font-weight: bold; font-size: 12px;">🔄 Refresh Data</button></div>
+        </div>
+
+        <div class="dashboard-grid">
+            
+            <div class="widget-card">
+                <div class="widget-header">📌 System Information</div>
+                <div class="widget-body">
+                    <table class="info-table">
+                        <tr><td>Hostname:</td><td>PiGate-RPI5</td></tr>
+                        <tr><td>Firmware Version:</td><td>v1.0.0 (เฟสแรก)</td></tr>
+                        <tr><td>OS Base:</td><td>Raspberry Pi OS (64-bit)</td></tr>
+                        <tr><td>System Uptime:</td><td>02 วัน 14 ชั่วโมง 32 นาที</td></tr>
+                        <tr><td>System Time:</td><td>2026-06-05 16:21:45</td></tr>
+                    </table>
+                </div>
+            </div>
+
+            <div class="widget-card">
+                <div class="widget-header">📈 System Performance</div>
+                <div class="widget-body">
+                    <table class="info-table">
+                        <tr><td>CPU Usage:</td><td>14% (4 Cores)</td></tr>
+                        <tr><td>Memory Usage:</td><td>1.2 GB / 7.6 GB (15%)</td></tr>
+                        <tr><td>CPU Temperature:</td><td>48.5 °C</td></tr>
+                    </table>
+                    <div style="margin-top: 15px; font-size: 12px; font-weight: bold;">Storage (/): 24 GB / 58 GB</div>
+                    <div style="border: 2px solid #333; height: 15px; background: #eee; margin-top: 5px; position: relative;">
+                        <div style="width: 41%; background: #ccc; height: 100%; border-right: 1px solid #333;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="widget-card">
+                <div class="widget-header">🌐 Interface Status</div>
+                <div class="widget-body">
+                    <table class="info-table">
+                        <tr>
+                            <td>📶 wlan0 (WAN):</td>
+                            <td><span class="status-up">Connected</span><br><small style="font-weight:normal; color:#666;">IP: 10.0.0.45</small></td>
+                        </tr>
+                        <tr>
+                            <td>🖧 eth0 (LAN):</td>
+                            <td><span class="status-up">Link Up</span><br><small style="font-weight:normal; color:#666;">IP: 192.168.1.1</small></td>
+                        </tr>
+                    </table>
+                    <div style="margin-top: 10px; font-size: 12px; color: #555;">
+                        * ขา WAN เชื่อมต่อผ่าน USB WiFi SSID: <em>MyHome_5G</em>
+                    </div>
+                </div>
+            </div>
+
+            <div class="widget-card">
+                <div class="widget-header">📊 WAN Real-time Traffic</div>
+                <div class="widget-body" style="padding: 10px 15px;">
+                    <div style="display: flex; justify-content: space-between; font-size: 12px;">
+                        <span>In: 4.2 Mbps (Max: 50M)</span>
+                        <span>Out: 1.1 Mbps (Max: 20M)</span>
+                    </div>
+                    <div class="mock-chart">
+                        <div class="chart-bar" style="height: 20%;"></div>
+                        <div class="chart-bar" style="height: 45%;"></div>
+                        <div class="chart-bar" style="height: 30%;"></div>
+                        <div class="chart-bar" style="height: 65%;"></div>
+                        <div class="chart-bar" style="height: 85%;"></div>
+                        <div class="chart-bar" style="height: 40%;"></div>
+                        <div class="chart-bar" style="height: 55%;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="widget-card" style="grid-column: span 1;">
+                <div class="widget-header">📡 Network Summary</div>
+                <div class="widget-body">
+                    <table class="info-table">
+                        <tr><td>Active DHCP Leases:</td><td>12 Devices</td></tr>
+                        <tr><td>Static Routes In System:</td><td>2 Routes</td></tr>
+                        <tr><td>Active Sessions (NAT):</td><td>245 Sessions</td></tr>
+                    </table>
+                </div>
+            </div>
+
+            <div class="widget-card" style="grid-column: repeat(auto-fit, minmax(340px, 1fr));">
+                <div class="widget-header">⚠️ Recent Firewall Logs (nftables)</div>
+                <div class="widget-body" style="padding: 10px;">
+                    <table class="log-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Source IP</th>
+                                <th>Destination</th>
+                                <th>Proto/Port</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>16:20:11</td>
+                                <td>192.168.1.105</td>
+                                <td>8.8.8.8</td>
+                                <td>UDP/53</td>
+                                <td><span class="badge" style="background:#d4edda;">PASS</span></td>
+                            </tr>
+                            <tr>
+                                <td>16:19:45</td>
+                                <td>192.168.1.132</td>
+                                <td>203.0.113.5</td>
+                                <td>TCP/23</td>
+                                <td><span class="badge log-drop" style="background:#f8d7da; border-color:#dc3545;">DROP</span></td>
+                            </tr>
+                            <tr>
+                                <td>16:18:02</td>
+                                <td>10.0.0.99 (WAN)</td>
+                                <td>10.0.0.45</td>
+                                <td>TCP/22</td>
+                                <td><span class="badge log-drop" style="background:#f8d7da; border-color:#dc3545;">DROP</span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="backend-preview">
+            <h4>🧠 Backend Integration สําหรับ หน้า Dashboard (กลไกการดึงข้อมูล Real-time)</h4>
+            <p style="font-size: 13px; margin: 0 0 10px 0; line-height: 1.4;">
+                เพื่อให้หน้า Dashboard แสดงผลแบบขยับได้สดๆ บนหน้าเว็บ แนะนำให้เขียนฝั่ง Frontend ยิงคำสั่งดึงข้อมูล (Polling API) มาอัปเดตทุกๆ 3-5 วินาที โดย Backend (Python) จะใช้ช่องทางของคอร์ระบบในการไปแกะข้อมูลมาจัดฟอร์แมต JSON:
+            </p>
+            <div class="code-box">
+# 1. การดึงค่า CPU / RAM / Temp (ใช้ Library 'psutil' ใน Python จะง่ายที่สุด)
+import psutil
+cpu = psutil.cpu_percent()
+ram = psutil.virtual_memory().percent
+# ดึงความร้อนบอร์ด RPI5
+with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
+    temp = int(f.read()) / 1000
+
+# 2. การดึงประวัติการบล็อกคัดกรองแพ็กเก็ตจาก nftables มาแสดงในตาราง Log
+# ต้องเปิดการทำ log ในกฎ nftables ก่อน (เช่น nft add rule ip filter FORWARD log prefix "PiGate_Drop: " drop)
+# จากนั้นดึงข้อความล่าสุุดจากระบบ dmesg หรือ syslog ออกมาวิเคราะห์
+sudo dmesg | grep "PiGate_Drop" | tail -n 5</div>
+        </div>
+
+    </div>
+
+</body>
+</html>

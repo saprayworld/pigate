@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PiGate - DHCP Server Sketch</title>
+    <style>
+        /* สไตล์แบบ Wireframe/Sketch */
+        body { font-family: 'Courier New', Courier, monospace; background-color: #f9f9f9; color: #333; padding: 20px; }
+        .sketch-container { max-width: 1000px; margin: 0 auto; border: 2px dashed #888; padding: 20px; background: #fff; box-shadow: 5px 5px 0px #ccc; }
+        
+        .header { border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end; }
+        .header h2 { margin: 0; font-size: 22px; display: flex; align-items: center; gap: 10px; }
+        
+        /* สไตล์ Card/Section */
+        .section-card { border: 2px solid #333; padding: 20px; margin-bottom: 25px; background: #fff; }
+        .section-title { font-weight: bold; font-size: 16px; margin-top: 0; margin-bottom: 15px; border-bottom: 1px dashed #ccc; padding-bottom: 5px; color: #555; text-transform: uppercase; }
+
+        .btn { border: 2px solid #333; background: #eee; padding: 6px 12px; cursor: pointer; font-weight: bold; font-family: inherit; font-size: 12px; transition: 0.2s; }
+        .btn:hover { background: #333; color: #fff; }
+        .btn-primary { background: #333; color: #fff; }
+        
+        /* ฟอร์มตั้งค่า */
+        .form-row { display: flex; gap: 20px; margin-bottom: 15px; flex-wrap: wrap; }
+        .form-group { flex: 1; min-width: 200px; display: flex; flex-direction: column; }
+        .form-label { font-weight: bold; margin-bottom: 5px; font-size: 14px; }
+        .form-control { padding: 8px; border: 2px solid #ccc; font-family: inherit; font-size: 14px; }
+        
+        /* ตาราง */
+        table { width: 100%; border-collapse: collapse; border: 2px solid #333; margin-top: 10px; }
+        th, td { border: 1px solid #777; padding: 10px; text-align: left; font-size: 14px; }
+        th { background-color: #e0e0e0; font-weight: bold; }
+        
+        .toggle-switch { display: flex; gap: 10px; align-items: center; background: #eee; padding: 10px; border: 2px solid #333; font-weight: bold; }
+        
+        .badge { background: #d4edda; border: 1px solid #28a745; padding: 2px 6px; font-size: 12px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+
+    <div class="sketch-container">
+        
+        <div class="header">
+            <h2>📡 DHCP Server Settings</h2>
+            <div class="toggle-switch">
+                <span>Service Status:</span>
+                <label><input type="radio" name="dhcp_status" checked> ON</label>
+                <label><input type="radio" name="dhcp_status"> OFF</label>
+            </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 20px;">
+            <div class="form-label">Select Interface:</div>
+            <select class="form-control" style="max-width: 300px; font-weight: bold;">
+                <option>eth0 (LAN_Internal) - 192.168.1.1/24</option>
+                <option>wlan0 (WAN_WiFi) - Not Recommended</option>
+            </select>
+        </div>
+
+        <div class="section-card">
+            <h3 class="section-title">IP Address Pool</h3>
+            <div class="form-row">
+                <div class="form-group">
+                    <div class="form-label">Starting IP:</div>
+                    <input type="text" class="form-control" value="192.168.1.100">
+                </div>
+                <div class="form-group">
+                    <div class="form-label">Ending IP:</div>
+                    <input type="text" class="form-control" value="192.168.1.200">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <div class="form-label">Default Gateway:</div>
+                    <input type="text" class="form-control" value="192.168.1.1">
+                </div>
+                <div class="form-group">
+                    <div class="form-label">Netmask:</div>
+                    <input type="text" class="form-control" value="255.255.255.0">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <div class="form-label">DNS Server 1:</div>
+                    <input type="text" class="form-control" value="8.8.8.8">
+                </div>
+                <div class="form-group">
+                    <div class="form-label">DNS Server 2:</div>
+                    <input type="text" class="form-control" value="1.1.1.1">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <div class="form-label">Default Lease Time (Seconds):</div>
+                    <input type="number" class="form-control" value="86400">
+                </div>
+            </div>
+            <div style="text-align: right; margin-top: 10px;">
+                <button class="btn btn-primary">💾 Save Settings & Restart Service</button>
+            </div>
+        </div>
+
+        <div class="section-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed #ccc; padding-bottom: 5px; margin-bottom: 15px;">
+                <h3 class="section-title" style="border: none; margin: 0; padding: 0;">MAC / IP Reservation</h3>
+                <button class="btn">+ Add Reservation</button>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th width="30%">Device Name</th>
+                        <th width="25%">MAC Address</th>
+                        <th width="25%">Reserved IP</th>
+                        <th width="20%">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>CEO_Laptop</strong></td>
+                        <td>A1:B2:C3:D4:E5:F6</td>
+                        <td>192.168.1.10</td>
+                        <td><button class="btn">Edit</button> <button class="btn">Del</button></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Network_Printer</strong></td>
+                        <td>11:22:33:44:55:66</td>
+                        <td>192.168.1.50</td>
+                        <td><button class="btn">Edit</button> <button class="btn">Del</button></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed #ccc; padding-bottom: 5px; margin-bottom: 15px;">
+                <h3 class="section-title" style="border: none; margin: 0; padding: 0;">Active DHCP Leases</h3>
+                <button class="btn">🔄 Refresh</button>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th width="25%">IP Address</th>
+                        <th width="25%">MAC Address</th>
+                        <th width="20%">Hostname</th>
+                        <th width="30%">Expires In</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="badge">192.168.1.101</span></td>
+                        <td>99:88:77:66:55:44</td>
+                        <td>iPhone-13</td>
+                        <td>11 hours, 45 mins</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge">192.168.1.102</span></td>
+                        <td>AA:BB:CC:DD:EE:FF</td>
+                        <td>Android-SmartTV</td>
+                        <td>23 hours, 10 mins</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+    </div>
+
+</body>
+</html>

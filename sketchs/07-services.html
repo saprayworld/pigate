@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PiGate - Service Objects Sketch</title>
+    <style>
+        /* สไตล์แบบ Wireframe/Sketch (เน้นเส้นขอบและโครงสร้างขาวดำ) */
+        body { font-family: 'Courier New', Courier, monospace; background-color: #f9f9f9; color: #333; padding: 20px; }
+        .sketch-container { max-width: 1000px; margin: 0 auto; border: 2px dashed #888; padding: 20px; background: #fff; box-shadow: 5px 5px 0px #ccc; }
+        
+        .header { border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px; }
+        .header h2 { margin: 0; font-size: 22px; display: flex; align-items: center; gap: 10px; }
+        
+        /* แถบเครื่องมือและตัวกรอง */
+        .toolbar { display: flex; gap: 10px; margin-bottom: 15px; align-items: center; flex-wrap: wrap; }
+        .btn { border: 2px solid #333; background: #eee; padding: 8px 15px; cursor: pointer; font-weight: bold; font-family: inherit; font-size: 14px; transition: 0.2s; }
+        .btn:hover { background: #333; color: #fff; }
+        .btn-primary { background: #333; color: #fff; }
+        
+        .filter-group { display: flex; border: 2px solid #333; background: #eee; padding: 2px; gap: 2px; }
+        .filter-btn { border: none; background: none; padding: 4px 10px; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: bold; }
+        .filter-btn.active { background: #333; color: #fff; }
+
+        /* สไตล์ตาราง */
+        table { width: 100%; border-collapse: collapse; border: 2px solid #333; margin-bottom: 30px; }
+        th, td { border: 1px solid #777; padding: 12px; text-align: left; }
+        th { background-color: #e0e0e0; font-weight: bold; }
+        
+        /* ป้ายกำกับแยกประเภทวัตถุ */
+        .type-badge { display: inline-block; border: 1px solid #333; padding: 2px 6px; font-size: 11px; font-weight: bold; background: #fff; }
+        .type-system { background-color: #e2f0d9; }
+        .type-custom { background-color: #d9e1f2; }
+
+        /* ฟอร์มตั้งค่า (Panel สร้าง/แก้ไข) */
+        .edit-panel { border: 2px solid #333; padding: 20px; background-color: #f5f5f5; position: relative; margin-top: 20px; }
+        .edit-panel h3 { margin-top: 0; border-bottom: 1px dashed #999; padding-bottom: 10px; }
+        .close-btn { position: absolute; top: 10px; right: 15px; cursor: pointer; font-weight: bold; font-size: 18px; }
+        
+        .form-row { display: flex; gap: 20px; margin-bottom: 15px; }
+        .form-group { flex: 1; display: flex; flex-direction: column; }
+        .form-label { font-weight: bold; margin-bottom: 5px; font-size: 14px; }
+        .form-control { padding: 8px; border: 2px solid #ccc; font-family: inherit; font-size: 14px; width: 100%; }
+        
+        .help-text { font-size: 11px; color: #666; margin-top: 4px; font-style: italic; }
+        
+        /* กล่องพรีวิวคำสั่งหลังบ้าน */
+        .backend-preview { margin-top: 25px; border: 2px dashed #ff9900; padding: 15px; background-color: #fffaf0; }
+        .backend-preview h4 { margin: 0 0 10px 0; color: #cc6600; font-size: 14px; }
+        .code-box { background: #333; color: #fff; padding: 10px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+
+    <div class="sketch-container">
+        
+        <div class="header">
+            <h2>🔌 Service Objects (วัตถุบริการและพอร์ต)</h2>
+        </div>
+
+        <div class="toolbar">
+            <button class="btn btn-primary">+ Create New Service</button>
+            <button class="btn">✏️ Edit</button>
+            <button class="btn">🗑️ Delete</button>
+            
+            <div style="border-left: 2px solid #ccc; height: 25px; margin: 0 10px;"></div>
+            
+            <span style="font-size: 13px; font-weight: bold;">Filter:</span>
+            <div class="filter-group">
+                <button class="filter-btn active">All</button>
+                <button class="filter-btn">TCP</button>
+                <button class="filter-btn">UDP</button>
+                <button class="filter-btn">ICMP</button>
+            </div>
+
+            <span style="flex-grow: 1;"></span>
+            <input type="text" placeholder="🔍 Search services..." style="border: 2px solid #333; padding: 6px 10px; font-family: inherit; font-size: 13px;">
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th width="5%"><input type="checkbox"></th>
+                    <th width="25%">Service Name</th>
+                    <th width="15%">Protocol</th>
+                    <th width="35%">Port Range / Details</th>
+                    <th width="20%">Type</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><input type="checkbox"></td>
+                    <td><strong>HTTP</strong></td>
+                    <td>TCP</td>
+                    <td>80</td>
+                    <td><span class="type-badge type-system">System (Predefined)</span></td>
+                </tr>
+                <tr>
+                    <td><input type="checkbox"></td>
+                    <td><strong>HTTPS</strong></td>
+                    <td>TCP</td>
+                    <td>443</td>
+                    <td><span class="type-badge type-system">System (Predefined)</span></td>
+                </tr>
+                <tr>
+                    <td><input type="checkbox"></td>
+                    <td><strong>SSH</strong></td>
+                    <td>TCP</td>
+                    <td>22</td>
+                    <td><span class="type-badge type-system">System (Predefined)</span></td>
+                </tr>
+                <tr>
+                    <td><input type="checkbox"></td>
+                    <td><strong>DNS</strong></td>
+                    <td>UDP</td>
+                    <td>53</td>
+                    <td><span class="type-badge type-system">System (Predefined)</span></td>
+                </tr>
+                <tr>
+                    <td><input type="checkbox"></td>
+                    <td><strong>My_Minecraft_Server</strong></td>
+                    <td>TCP/UDP</td>
+                    <td>25565</td>
+                    <td><span class="type-badge type-custom">Custom (กำหนดเอง)</span></td>
+                </tr>
+                <tr>
+                    <td><input type="checkbox"></td>
+                    <td><strong>Web_Testing_Pool</strong></td>
+                    <td>TCP</td>
+                    <td>8080-8085</td>
+                    <td><span class="type-badge type-custom">Custom (กำหนดเอง)</span></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="edit-panel">
+            <div class="close-btn">✖</div>
+            <h3>⚙️ New Service Object</h3>
+            
+            <div class="form-group">
+                <div class="form-label">Service Name:</div>
+                <input type="text" class="form-control" placeholder="e.g. RDP_Custom">
+                <div class="help-text">ใช้ภาษาอังกฤษ ตัวเลข หรือเครื่องหมาย _ (ห้ามเว้นวรรค)</div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <div class="form-label">Protocol:</div>
+                    <select class="form-control">
+                        <option>TCP</option>
+                        <option>UDP</option>
+                        <option>TCP/UDP</option>
+                        <option>ICMP</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <div class="form-label">Destination Port:</div>
+                    <input type="text" class="form-control" placeholder="e.g. 3389 หรือ 8000-8010">
+                    <div class="help-text">ใส่เป็นพอร์ตเดี่ยว หรือระบุเป็นช่วงโดยใช้เครื่องหมาย -</div>
+                </div>
+            </div>
+
+            <div style="text-align: right; border-top: 1px dashed #ccc; padding-top: 15px;">
+                <button class="btn">Cancel</button>
+                <button class="btn btn-primary">Save Service</button>
+            </div>
+        </div>
+
+        <div class="backend-preview">
+            <h4>🧠 Backend Integration Concept สำหรับ nftables</h4>
+            <p style="font-size: 13px; margin: 0 0 10px 0; line-height: 1.4;">
+                แนวคิดเดียวกับหน้า Addresses ครับ แนะนำให้ใช้คุณสมบัติ <strong>Named Sets</strong> ของ <code>nftables</code> ในการจัดกลุ่มพอร์ต โดยหลังบ้าน (Python) จะสร้าง Set สำหรับพอร์ตขึ้นมาแยกตามโปรโตคอล ตัวอย่างโครงสร้างคำสั่งที่จะใช้ส่งไปคุมระบบบน Raspi 5 มีลักษณะดังนี้:
+            </p>
+            <div class="code-box">
+# 1. สั่งสร้างกลุ่มตัวแปร (Set) สำหรับพอร์ต TCP ไว้รอในตาราง
+nft add set ip filter Web_Testing_Pool { type inet_service; }
+
+# 2. ทำการเพิ่มช่วงพอร์ตเข้าไปในตัวแปรนั้น
+nft add element ip filter Web_Testing_Pool { 8080-8085 }
+
+# 3. เวลาเขียนกฎในหน้า Firewall Policy ก็อ้างอิงชื่อตัวแปรผ่านเครื่องหมาย @ ได้เลย
+nft add rule ip filter FORWARD tcp dport @Web_Testing_Pool accept</div>
+        </div>
+
+    </div>
+
+</body>
+</html>
