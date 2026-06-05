@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PiGate - API Endpoints Sketch</title>
+    <style>
+        /* สไตล์แบบ Wireframe/Sketch คล้ายไฟล์อื่น แต่เพิ่มลูกเล่นพรีเมียม */
+        * { box-sizing: border-box; }
+        body { 
+            font-family: 'Courier New', Courier, monospace; 
+            background-color: #f9f9f9; 
+            color: #333; 
+            padding: 20px; 
+            margin: 0;
+        }
+        
+        .sketch-container { 
+            max-width: 1100px; 
+            margin: 0 auto; 
+            border: 2px dashed #888; 
+            padding: 25px; 
+            background: #fff; 
+            box-shadow: 6px 6px 0px #ccc; 
+        }
+        
+        .header { 
+            border-bottom: 3px solid #333; 
+            padding-bottom: 15px; 
+            margin-bottom: 25px; 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+        }
+        
+        .header h2 { 
+            margin: 0; 
+            font-size: 24px; 
+            display: flex; 
+            align-items: center; 
+            gap: 10px; 
+        }
+
+        .header-subtitle {
+            font-size: 13px;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .btn { 
+            border: 2px solid #333; 
+            background: #eee; 
+            padding: 8px 16px; 
+            cursor: pointer; 
+            font-weight: bold; 
+            font-family: inherit; 
+            font-size: 13px; 
+            transition: all 0.15s ease-in-out; 
+            box-shadow: 2px 2px 0px #333;
+        }
+        .btn:hover { 
+            background: #333; 
+            color: #fff; 
+            transform: translate(-1px, -1px);
+            box-shadow: 3px 3px 0px #333;
+        }
+        .btn:active {
+            transform: translate(1px, 1px);
+            box-shadow: 1px 1px 0px #333;
+        }
+
+        /* หมวดหมู่ของ API */
+        .category-group {
+            margin-bottom: 30px;
+        }
+
+        .category-title {
+            font-size: 18px;
+            font-weight: bold;
+            background-color: #e0e0e0;
+            padding: 8px 15px;
+            border: 2px solid #333;
+            margin-bottom: 15px;
+            box-shadow: 3px 3px 0px #ccc;
+            text-transform: uppercase;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        /* ตารางสไตล์ Sketch สำหรับแสดง API */
+        .endpoint-card {
+            border: 2px solid #333;
+            margin-bottom: 15px;
+            background: #fff;
+            transition: all 0.2s ease;
+            box-shadow: 3px 3px 0px #eee;
+        }
+
+        .endpoint-card:hover {
+            box-shadow: 4px 4px 0px #ddd;
+        }
+
+        .endpoint-header {
+            padding: 12px 15px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background-color: #fcfcfc;
+            border-bottom: 1px solid #333;
+            user-select: none;
+        }
+
+        .endpoint-header-left {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex-grow: 1;
+        }
+
+        .endpoint-path {
+            font-weight: bold;
+            font-size: 15px;
+            color: #111;
+        }
+
+        .endpoint-desc {
+            font-size: 13px;
+            color: #666;
+            margin-left: 10px;
+        }
+
+        /* Badge สำหรับ HTTP Methods */
+        .method-badge {
+            display: inline-block;
+            font-size: 12px;
+            font-weight: bold;
+            padding: 4px 8px;
+            border: 2px solid #333;
+            min-width: 80px;
+            text-align: center;
+            border-radius: 4px;
+            box-shadow: 1px 1px 0px #333;
+        }
+        .method-get { background-color: #d4edda; color: #155724; }
+        .method-post { background-color: #cce5ff; color: #004085; }
+        .method-put { background-color: #fff3cd; color: #856404; }
+        .method-delete { background-color: #f8d7da; color: #721c24; }
+
+        /* ส่วนรายละเอียดที่ซ่อนไว้ */
+        .endpoint-details {
+            display: none; /* จะใช้ JS ในการเปิด-ปิด */
+            padding: 15px;
+            background-color: #fcfbf7;
+            border-top: 1px dashed #aaa;
+            font-size: 13px;
+        }
+
+        .endpoint-details.active {
+            display: block;
+        }
+
+        .json-section {
+            margin-top: 10px;
+        }
+
+        .json-title {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #444;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .json-block {
+            background-color: #222;
+            color: #f8f8f2;
+            padding: 12px;
+            border: 2px solid #333;
+            overflow-x: auto;
+            white-space: pre;
+            font-size: 12px;
+            border-radius: 4px;
+            margin-bottom: 12px;
+        }
+
+        .params-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 15px;
+        }
+        .params-table th, .params-table td {
+            border: 1px solid #777;
+            padding: 8px;
+            text-align: left;
+        }
+        .params-table th {
+            background-color: #eee;
+            font-weight: bold;
+        }
+
+        .optional-badge {
+            background-color: #f0f0f0;
+            border: 1px solid #999;
+            padding: 1px 4px;
+            font-size: 11px;
+            border-radius: 3px;
+        }
+
+        .required-badge {
+            background-color: #f8d7da;
+            border: 1px solid #dc3545;
+            color: #721c24;
+            padding: 1px 4px;
+            font-size: 11px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="sketch-container">
+        
+        <div class="header">
+            <div>
+                <h2>🔌 PiGate Backend API Endpoints</h2>
+                <div class="header-subtitle">แผนผัง API Spec สำหรับการเชื่อมโยงระบบ Dashboard & Firewall (ออกแบบสำหรับ Frontend)</div>
+            </div>
+            <div>
+                <button class="btn" onclick="toggleAll(true)">[ Expand All ]</button>
+                <button class="btn" onclick="toggleAll(false)">[ Collapse All ]</button>
+            </div>
+        </div>
+
+        <!-- CATEGORY: SYSTEM & DASHBOARD -->
+        <div class="category-group">
+            <div class="category-title">
+                <span>📊 1. System & Dashboard API</span>
+                <span style="font-size: 12px; font-weight: normal; text-transform: none; color: #555;">(การดึงสถานะ Real-time)</span>
+            </div>
+
+            <!-- GET /api/system/status -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-path">/api/system/status</span>
+                        <span class="endpoint-desc">ดึงสถิติ CPU, Memory, อุณหภูมิ และปริมาณการรับส่งข้อมูล (WAN Traffic) สำหรับ Dashboard</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">{
+  "hostname": "PiGate-RPI5",
+  "uptime": "2d 14h 32m",
+  "firmware": "v1.0.0",
+  "cpu": {
+    "usage_percent": 14.5,
+    "cores": 4,
+    "temperature_celsius": 48.5
+  },
+  "memory": {
+    "total_bytes": 8160436224,
+    "used_bytes": 1224065433,
+    "percent_used": 15.0
+  },
+  "storage": {
+    "total_bytes": 62283022336,
+    "used_bytes": 25732104192,
+    "percent_used": 41.3
+  },
+  "traffic": {
+    "interface": "wlan0",
+    "in_bps": 4200000,
+    "out_bps": 1100000
+  }
+}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- GET /api/system/logs -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-path">/api/system/logs</span>
+                        <span class="endpoint-desc">ดึงประวัติการทำงานและ log การบล็อกข้อมูลของ nftables (รองรับการกรองคำค้นหา)</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-title">Query Parameters</div>
+                    <table class="params-table">
+                        <thead>
+                            <tr>
+                                <th width="20%">Parameter</th>
+                                <th width="15%">Type</th>
+                                <th width="15%">Required</th>
+                                <th width="50%">Description</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>limit</td>
+                                <td>integer</td>
+                                <td><span class="optional-badge">Optional</span></td>
+                                <td>จำนวนรายการที่ต้องการดึง (ค่าเริ่มต้น 50)</td>
+                            </tr>
+                            <tr>
+                                <td>search</td>
+                                <td>string</td>
+                                <td><span class="optional-badge">Optional</span></td>
+                                <td>คำค้นหา Source IP หรือพอร์ต</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">{
+  "logs": [
+    {
+      "time": "2026-06-05T16:20:11Z",
+      "src_ip": "192.168.1.105",
+      "dst_ip": "8.8.8.8",
+      "proto": "UDP",
+      "port": 53,
+      "action": "PASS"
+    },
+    {
+      "time": "2026-06-05T16:19:45Z",
+      "src_ip": "192.168.1.132",
+      "dst_ip": "203.0.113.5",
+      "proto": "TCP",
+      "port": 23,
+      "action": "DROP"
+    }
+  ]
+}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- POST /api/system/action -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-post">POST</span>
+                        <span class="endpoint-path">/api/system/action</span>
+                        <span class="endpoint-desc">สั่งงานระบบ เช่น reboot หรือ shutdown บอร์ด Raspberry Pi</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Request Body (JSON)</div>
+                        <div class="json-block">{
+  "action": "reboot"  // หรือ "shutdown"
+}</div>
+                    </div>
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">{
+  "success": true,
+  "message": "System is rebooting now..."
+}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CATEGORY: NETWORK INTERFACES -->
+        <div class="category-group">
+            <div class="category-title">
+                <span>🌐 2. Interfaces API</span>
+                <span style="font-size: 12px; font-weight: normal; text-transform: none; color: #555;">(การจัดการพอร์ต LAN/WiFi)</span>
+            </div>
+
+            <!-- GET /api/interfaces -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-path">/api/interfaces</span>
+                        <span class="endpoint-desc">ดึงรายการข้อมูลอินเตอร์เฟสทั้งหมดในระบบ (Physical & Virtual)</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">[
+  {
+    "name": "eth0",
+    "alias": "LAN_Internal",
+    "type": "ethernet",
+    "ip_address": "192.168.1.1",
+    "netmask": "255.255.255.0",
+    "mode": "static",
+    "admin_access": ["PING", "HTTP", "SSH"],
+    "status": "UP"
+  },
+  {
+    "name": "wlan0",
+    "alias": "WAN_WiFi",
+    "type": "wifi",
+    "ip_address": "10.0.0.45",
+    "netmask": "255.255.255.0",
+    "mode": "dhcp",
+    "admin_access": ["PING"],
+    "status": "UP",
+    "wifi_settings": {
+      "ssid": "MyHome_5G",
+      "signal_percent": 85
+    }
+  }
+]</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PUT /api/interfaces/{name} -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-put">PUT</span>
+                        <span class="endpoint-path">/api/interfaces/{name}</span>
+                        <span class="endpoint-desc">บันทึกค่าการแก้ไขอินเตอร์เฟส (เช่น แก้ alias, โหมด IP, Wi-Fi หรือ สิทธิ์ Admin Access)</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Request Body (JSON)</div>
+                        <div class="json-block">{
+  "alias": "WAN_WiFi",
+  "mode": "dhcp",               // "dhcp" หรือ "static"
+  "ip_address": "",             // หากเป็น static ต้องส่งค่านี้มาด้วย
+  "netmask": "",
+  "admin_access": ["PING"],     // รายการสิทธิ์ เช่น "PING", "HTTP", "HTTPS", "SSH"
+  "wifi_settings": {            // ส่งเฉพาะอินเตอร์เฟสที่เป็น wifi
+    "ssid": "MyHome_5G",
+    "psk": "mypassword123"
+  }
+}</div>
+                    </div>
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">{
+  "success": true,
+  "message": "Interface configuration updated successfully"
+}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- POST /api/interfaces/wlan0/scan -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-post">POST</span>
+                        <span class="endpoint-path">/api/interfaces/wlan0/scan</span>
+                        <span class="endpoint-desc">สั่งสแกนสัญญาณ Wi-Fi บริเวณรอบข้างเพื่อนำมาแสดงรายการ SSID ให้ผู้ใช้เลือก</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">[
+  {
+    "ssid": "MyHome_5G",
+    "signal": 85,
+    "security": "WPA2-PSK"
+  },
+  {
+    "ssid": "Cafe_Free_WiFi",
+    "signal": 40,
+    "security": "OPEN"
+  }
+]</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CATEGORY: FIREWALL POLICIES -->
+        <div class="category-group">
+            <div class="category-title">
+                <span>🔥 3. Firewall Policy API</span>
+                <span style="font-size: 12px; font-weight: normal; text-transform: none; color: #555;">(การจัดการกฎการกรองข้อมูล)</span>
+            </div>
+
+            <!-- GET /api/policies -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-path">/api/policies</span>
+                        <span class="endpoint-desc">ดึงรายการกฎนโยบายไฟร์วอลล์ทั้งหมด จัดเรียงตามลำดับความสำคัญ</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">[
+  {
+    "id": 1,
+    "seq": 1,
+    "name": "Allow-Web-Out",
+    "src": "LAN_Network",
+    "dst": "ALL (Internet)",
+    "service": ["HTTP (80)", "HTTPS (443)"],
+    "action": "ACCEPT",
+    "log": false,
+    "status": true
+  },
+  {
+    "id": 2,
+    "seq": 2,
+    "name": "Block-BitTorrent",
+    "src": "LAN_Network",
+    "dst": "ALL",
+    "service": ["BitTorrent_Ports"],
+    "action": "DROP",
+    "log": true,
+    "status": true
+  }
+]</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- POST /api/policies -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-post">POST</span>
+                        <span class="endpoint-path">/api/policies</span>
+                        <span class="endpoint-desc">สร้างกฎไฟร์วอลล์ใหม่</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Request Body (JSON)</div>
+                        <div class="json-block">{
+  "name": "Allow-SSH-In",
+  "src": "192.168.1.100",
+  "dst": "LAN_Internal",
+  "service": ["SSH (22)"],
+  "action": "ACCEPT",
+  "log": true,
+  "status": true
+}</div>
+                    </div>
+                    <div class="json-section">
+                        <div class="json-title">Response (201 Created)</div>
+                        <div class="json-block">{
+  "success": true,
+  "id": 3,
+  "message": "Policy created successfully"
+}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PUT /api/policies/{id} -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-put">PUT</span>
+                        <span class="endpoint-path">/api/policies/{id}</span>
+                        <span class="endpoint-desc">แก้ไขกฎการทำงานเดิม</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Request Body (JSON)</div>
+                        <div class="json-block">{
+  "name": "Allow-Web-Out-Updated",
+  "src": "LAN_Network",
+  "dst": "ALL (Internet)",
+  "service": ["HTTP (80)", "HTTPS (443)"],
+  "action": "ACCEPT",
+  "log": true,
+  "status": true
+}</div>
+                    </div>
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">{
+  "success": true,
+  "message": "Policy updated successfully"
+}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- DELETE /api/policies/{id} -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-delete">DELETE</span>
+                        <span class="endpoint-path">/api/policies/{id}</span>
+                        <span class="endpoint-desc">ลบกฎไฟร์วอลล์</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">{
+  "success": true,
+  "message": "Policy deleted successfully"
+}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- POST /api/policies/reorder -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-post">POST</span>
+                        <span class="endpoint-path">/api/policies/reorder</span>
+                        <span class="endpoint-desc">สลับลำดับการทำงานหลังผู้ใช้ทำ Drag & Drop จัดเรียงกฎใหม่</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Request Body (JSON)</div>
+                        <div class="json-block">{
+  "ordered_ids": [2, 1, 3]  // ลิสต์ ID ที่เรียงลำดับใหม่แล้ว
+}</div>
+                    </div>
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">{
+  "success": true,
+  "message": "Policies reordered successfully"
+}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- POST /api/policies/apply -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-post">POST</span>
+                        <span class="endpoint-path">/api/policies/apply</span>
+                        <span class="endpoint-desc">สั่งให้ Backend นำการเปลี่ยนแปลงทั้งหมดไปเขียนลงในระบบ nftables จริง (Apply Configuration)</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">{
+  "success": true,
+  "message": "Successfully reloaded nftables with current rules."
+}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CATEGORY: DHCP SERVER -->
+        <div class="category-group">
+            <div class="category-title">
+                <span>📡 4. DHCP Server API</span>
+                <span style="font-size: 12px; font-weight: normal; text-transform: none; color: #555;">(การจ่าย IP และผูก MAC Address)</span>
+            </div>
+
+            <!-- GET /api/dhcp/config -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-path">/api/dhcp/config</span>
+                        <span class="endpoint-desc">ดึงค่ากำหนดค่าของ DHCP Server (Pool, DNS, Lease Time)</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">{
+  "enabled": true,
+  "interface": "eth0",
+  "start_ip": "192.168.1.100",
+  "end_ip": "192.168.1.200",
+  "gateway": "192.168.1.1",
+  "netmask": "255.255.255.0",
+  "dns_servers": ["8.8.8.8", "1.1.1.1"],
+  "lease_time_seconds": 86400
+}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PUT /api/dhcp/config -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-put">PUT</span>
+                        <span class="endpoint-path">/api/dhcp/config</span>
+                        <span class="endpoint-desc">บันทึกตั้งค่า DHCP Server (พร้อมสั่งระบบให้ restart service)</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Request Body (JSON)</div>
+                        <div class="json-block">{
+  "enabled": true,
+  "start_ip": "192.168.1.100",
+  "end_ip": "192.168.1.200",
+  "gateway": "192.168.1.1",
+  "netmask": "255.255.255.0",
+  "dns_servers": ["8.8.8.8", "1.1.1.1"],
+  "lease_time_seconds": 86400
+}</div>
+                    </div>
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">{
+  "success": true,
+  "message": "DHCP configurations updated and service restarted."
+}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- GET /api/dhcp/leases -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-path">/api/dhcp/leases</span>
+                        <span class="endpoint-desc">ดึงรายการอุปกรณ์ที่กำลังเชื่อมต่อและได้รับแจก IP ไปจากเซิร์ฟเวอร์</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">[
+  {
+    "ip_address": "192.168.1.101",
+    "mac_address": "99:88:77:66:55:44",
+    "hostname": "iPhone-13",
+    "expires_in": "11 hours, 45 mins"
+  },
+  {
+    "ip_address": "192.168.1.102",
+    "mac_address": "AA:BB:CC:DD:EE:FF",
+    "hostname": "Android-SmartTV",
+    "expires_in": "23 hours, 10 mins"
+  }
+]</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // ฟังก์ชัน Toggle รายละเอียด API
+        function toggleDetails(element) {
+            const details = element.nextElementSibling;
+            details.classList.toggle('active');
+            
+            // เปลี่ยนข้อความบอกผู้ใช้งาน
+            const label = element.querySelector('div:last-child');
+            if (details.classList.contains('active')) {
+                label.textContent = '[ ย่อเก็บรายละเอียด ]';
+            } else {
+                label.textContent = '[ คลิกดูรายละเอียด ]';
+            }
+        }
+
+        // สั่งเปิดหรือปิดทั้งหมด
+        function toggleAll(open) {
+            const cards = document.querySelectorAll('.endpoint-details');
+            cards.forEach(card => {
+                const header = card.previousElementSibling;
+                const label = header.querySelector('div:last-child');
+                
+                if (open) {
+                    card.classList.add('active');
+                    label.textContent = '[ ย่อเก็บรายละเอียด ]';
+                } else {
+                    card.classList.remove('active');
+                    label.textContent = '[ คลิกดูรายละเอียด ]';
+                }
+            });
+        }
+    </script>
+</body>
+</html>
