@@ -773,7 +773,218 @@
             </div>
         </div>
 
+        <!-- CATEGORY: AUTHENTICATION -->
+        <div class="category-group">
+            <div class="category-title">
+                <span>🔑 5. Authentication API</span>
+                <span style="font-size: 12px; font-weight: normal; text-transform: none; color: #555;">(ระบบการเข้าสู่ระบบและระบุตัวตน)</span>
+            </div>
+
+            <!-- POST /api/auth/login -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-post">POST</span>
+                        <span class="endpoint-path">/api/auth/login</span>
+                        <span class="endpoint-desc">ตรวจสอบชื่อผู้ใช้และรหัสผ่านเพื่อสร้าง Session (บันทึก HttpOnly Cookie)</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Request Body (JSON)</div>
+                        <div class="json-block">{
+  "username": "admin",
+  "password": "yourpasswordhere"
+}</div>
+                    </div>
+                    <div class="json-section">
+                        <div class="json-title">Response Headers (Set-Cookie)</div>
+                        <div class="json-block">Set-Cookie: token=JWT_SESSION_TOKEN; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=86400</div>
+                    </div>
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">{
+  "success": true,
+  "message": "Login successful"
+}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- POST /api/auth/logout -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-post">POST</span>
+                        <span class="endpoint-path">/api/auth/logout</span>
+                        <span class="endpoint-desc">ออกจากระบบและทำลาย Cookie Session</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Response Headers (Clear-Cookie)</div>
+                        <div class="json-block">Set-Cookie: token=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0</div>
+                    </div>
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">{
+  "success": true,
+  "message": "Logged out successfully"
+}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CATEGORY: REAL-TIME STREAMING -->
+        <div class="category-group">
+            <div class="category-title">
+                <span>📡 6. Real-time Streaming API (SSE)</span>
+                <span style="font-size: 12px; font-weight: normal; text-transform: none; color: #555;">(การส่งสถิติ Real-time ผ่าน Server-Sent Events)</span>
+            </div>
+
+            <!-- GET /api/system/status/stream -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-path">/api/system/status/stream</span>
+                        <span class="endpoint-desc">สตรีมข้อมูลสถิติ CPU, Memory, Temp, WAN Traffic อย่างต่อเนื่อง (Content-Type: text/event-stream)</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Event Stream Format</div>
+                        <div class="json-block">event: system-metrics
+data: {"cpu": 14.5, "temp": 48.5, "ram": 15.0, "wan": {"in_bps": 4200000, "out_bps": 1100000}}
+
+event: system-metrics
+data: {"cpu": 12.8, "temp": 48.0, "ram": 15.0, "wan": {"in_bps": 3900000, "out_bps": 950000}}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- GET /api/system/logs/stream -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-path">/api/system/logs/stream</span>
+                        <span class="endpoint-desc">สตรีมข้อความ Logs ล่าสุดจาก nftables และ kernel syslog แบบเรียลไทม์</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Event Stream Format</div>
+                        <div class="json-block">event: firewall-log
+data: {"time": "2026-06-05T16:22:01Z", "src_ip": "192.168.1.132", "dst_ip": "203.0.113.5", "proto": "TCP", "port": 23, "action": "DROP"}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CATEGORY: OBJECTS & ROUTING -->
+        <div class="category-group">
+            <div class="category-title">
+                <span>📖 7. Objects & Routing API</span>
+                <span style="font-size: 12px; font-weight: normal; text-transform: none; color: #555;">(การจัดการ Address/Service Objects และตาราง Routing)</span>
+            </div>
+
+            <!-- GET /api/addresses -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-path">/api/addresses</span>
+                        <span class="endpoint-desc">ดึงรายการกลุ่มที่อยู่อินเทอร์เน็ต (Address Objects) ทั้งหมด</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">[
+  {
+    "id": 1,
+    "name": "LAN_Network",
+    "type": "subnet",
+    "value": "192.168.1.0/24"
+  },
+  {
+    "id": 2,
+    "name": "Admin_PC",
+    "type": "ip",
+    "value": "192.168.1.100"
+  }
+]</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- GET /api/services -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-path">/api/services</span>
+                        <span class="endpoint-desc">ดึงรายการบริการพอร์ตเครือข่าย (Service Objects) ทั้งหมด</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">[
+  {
+    "id": 1,
+    "name": "HTTP",
+    "protocol": "TCP",
+    "port": "80"
+  },
+  {
+    "id": 2,
+    "name": "SSH",
+    "protocol": "TCP",
+    "port": "22"
+  }
+]</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- GET /api/routes -->
+            <div class="endpoint-card">
+                <div class="endpoint-header" onclick="toggleDetails(this)">
+                    <div class="endpoint-header-left">
+                        <span class="method-badge method-get">GET</span>
+                        <span class="endpoint-path">/api/routes</span>
+                        <span class="endpoint-desc">ดึงรายการกฎการเชื่อมเส้นทาง Routing (Static Routes) ทั้งหมดในระบบ</span>
+                    </div>
+                    <div>[ คลิกดูรายละเอียด ]</div>
+                </div>
+                <div class="endpoint-details">
+                    <div class="json-section">
+                        <div class="json-title">Response (200 OK)</div>
+                        <div class="json-block">[
+  {
+    "id": 1,
+    "destination": "0.0.0.0/0",
+    "gateway": "10.0.0.1",
+    "interface": "wlan0",
+    "metric": 100
+  }
+]</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </div>
+
 
     <script>
         // ฟังก์ชัน Toggle รายละเอียด API
