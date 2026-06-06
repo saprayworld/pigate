@@ -74,7 +74,7 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
       ref={setNodeRef}
       style={style}
       className={`border-b border-border/40 transition duration-200 hover:bg-muted/15 ${!rule.status ? "bg-muted/5 opacity-55" : ""
-        } ${isDragging ? "bg-muted/30 shadow-md" : ""}`}
+        } ${isDragging ? "bg-muted/30" : ""}`}
     >
       {/* 1. Sequence & Drag Handle */}
       <td className="p-3 text-xs text-muted-foreground font-mono">
@@ -144,7 +144,7 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
         <Badge
           variant={rule.action === "DROP" ? "destructive" : "outline"}
           className={`font-bold text-[10px] px-2 py-0.5 rounded ${rule.action === "ACCEPT"
-            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-450 border-emerald-500/20"
+            ? "bg-primary/10 text-primary border border-primary/20"
             : "bg-red-500/10 text-red-500 border-red-500/20"
             }`}
         >
@@ -161,7 +161,7 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
             onChange={() => onToggleLog(rule.id)}
             className="sr-only peer"
           />
-          <div className="w-8.5 h-4.5 bg-neutral-800 rounded-full peer peer-checked:after:translate-x-4 peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-450 after:border-neutral-400 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-emerald-550/60 peer-checked:after:bg-emerald-400"></div>
+          <div className="w-8.5 h-4.5 bg-neutral-800 rounded-full peer peer-checked:after:translate-x-4 peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-450 after:border-neutral-400 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-primary/60 peer-checked:after:bg-primary"></div>
         </label>
       </td>
 
@@ -175,9 +175,9 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
               onChange={() => onToggleStatus(rule.id)}
               className="sr-only peer"
             />
-            <div className="w-8.5 h-4.5 bg-neutral-800 rounded-full peer peer-checked:after:translate-x-4 peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-450 after:border-neutral-400 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-emerald-550/60 peer-checked:after:bg-emerald-400"></div>
+            <div className="w-8.5 h-4.5 bg-neutral-800 rounded-full peer peer-checked:after:translate-x-4 peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-450 after:border-neutral-400 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-primary/60 peer-checked:after:bg-primary"></div>
           </label>
-          <span className={`text-xs ${rule.status ? "text-emerald-400 font-semibold" : "text-muted-foreground"}`}>
+          <span className={`text-xs ${rule.status ? "text-primary font-semibold" : "text-muted-foreground"}`}>
             {rule.status ? "Enable" : "Disable"}
           </span>
         </div>
@@ -451,7 +451,7 @@ export default function FirewallPolicy() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
-            <Flame className="h-7 w-7 text-emerald-500 fill-emerald-500/10" />
+            <Flame className="h-7 w-7 text-primary fill-primary/10" />
             Firewall Policy (กฎไฟร์วอลล์)
           </h1>
           <p className="text-muted-foreground mt-1">
@@ -463,7 +463,7 @@ export default function FirewallPolicy() {
           <Button
             onClick={handleApplySettings}
             disabled={isApplying}
-            className="cursor-pointer bg-emerald-500 hover:bg-emerald-600 text-neutral-950 font-bold gap-2 px-4 shadow-sm"
+            className="cursor-pointer bg-primary hover:bg-primary/90 text-primary-foreground font-bold gap-2 px-4"
           >
             {isApplying ? (
               <>
@@ -492,13 +492,13 @@ export default function FirewallPolicy() {
       )}
 
       {showApplySuccess && (
-        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 animate-fade-in flex items-center justify-between gap-3">
+        <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 animate-fade-in flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary border border-primary/20">
               <Check className="h-4.5 w-4.5" />
             </div>
             <div className="text-sm">
-              <span className="font-semibold text-emerald-400 block">ปรับใช้สำเร็จ! (nftables reloaded)</span>
+              <span className="font-semibold text-primary block">ปรับใช้สำเร็จ! (nftables reloaded)</span>
               <span className="text-muted-foreground text-xs">
                 บิลด์กฎและนำการตั้งค่านโยบายไฟร์วอลล์ทั้งหมดขึ้นระบบเคอร์เนลเรียบร้อยแล้ว
               </span>
@@ -523,7 +523,7 @@ export default function FirewallPolicy() {
             Create New Policy
           </Button>
           <div className="text-xs text-muted-foreground px-2 hidden md:block">
-            สถานะ: <span className="text-emerald-400 font-semibold">{activeCount} เปิดใช้งาน</span> |{" "}
+            สถานะ: <span className="text-primary font-semibold">{activeCount} เปิดใช้งาน</span> |{" "}
             <span className="text-neutral-400 font-semibold">{disabledCount} ปิดใช้งาน</span>
           </div>
         </div>
@@ -536,13 +536,13 @@ export default function FirewallPolicy() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="ค้นหาชื่อกฎ, ไอพี หรือพอร์ต..."
-            className="h-9 w-full rounded-lg border border-border bg-background/50 pl-8 pr-3 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/50"
+            className="h-9 w-full rounded-lg border border-border bg-background/50 pl-8 pr-3 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
           />
         </div>
       </div>
 
       {/* 4. Policies Table Container */}
-      <Card className="bg-card/25 border border-border/50 shadow-sm overflow-hidden">
+      <Card className="bg-card/25 border border-border/50 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-left text-sm">
             <thead>
@@ -623,14 +623,14 @@ export default function FirewallPolicy() {
           <span className="font-bold text-foreground block mb-0.5">ข้อแนะนำเกี่ยวกับการจัดเรียงลำดับนโยบาย:</span>
           การตั้งค่ากฎ Firewall จะเรียงลำดับความสำคัญจากบนลงล่าง (First-match wins) กฎที่อยู่ด้านบนสุดจะถูกตรวจสอบและประมวลผลก่อนเสมอ
           หากกฎด้านบนตรงตามเงื่อนไข จะไม่มีการประมวลผลกฎข้อถัดไปลงมา
-          หลังจากเพิ่ม แก้ไข หรือจัดเรียงกฎใหม่เรียบร้อยแล้ว จำเป็นต้องกดปุ่ม <span className="font-semibold text-emerald-400">"Apply Settings"</span> ทางขวาบนเพื่ออัปโหลดนโยบายเข้าสู่ระบบ Kernel `nftables` จริง
+          หลังจากเพิ่ม แก้ไข หรือจัดเรียงกฎใหม่เรียบร้อยแล้ว จำเป็นต้องกดปุ่ม <span className="font-semibold text-primary">"Apply Settings"</span> ทางขวาบนเพื่ออัปโหลดนโยบายเข้าสู่ระบบ Kernel `nftables` จริง
         </div>
       </div>
 
       {/* 7. Dialog Modal (Create & Edit Overlay) */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="w-full max-w-lg rounded-xl border border-border bg-card p-6 shadow-2xl space-y-4 animate-scale-up">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 animate-fade-in">
+          <div className="w-full max-w-lg rounded-xl border border-border bg-card p-6 space-y-4 animate-scale-up">
             {/* Header */}
             <div className="flex items-center justify-between pb-3 border-b border-border/40">
               <h3 className="text-lg font-bold text-foreground">
@@ -659,7 +659,7 @@ export default function FirewallPolicy() {
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
                   placeholder="เช่น Allow-HTTP-Out, Block-MalIPs"
-                  className="h-9 w-full rounded-lg border border-border bg-background/50 px-3 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/50"
+                  className="h-9 w-full rounded-lg border border-border bg-background/50 px-3 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
                 />
               </div>
 
@@ -674,7 +674,7 @@ export default function FirewallPolicy() {
                     value={formSource}
                     onChange={(e) => setFormSource(e.target.value)}
                     placeholder="เช่น LAN_Network, 192.168.1.100"
-                    className="h-9 w-full rounded-lg border border-border bg-background/50 px-3 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/50"
+                    className="h-9 w-full rounded-lg border border-border bg-background/50 px-3 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
                   />
                   <span className="text-[10.5px] text-muted-foreground">คั่นด้วยเครื่องหมายจุลภาค (,)</span>
                 </div>
@@ -687,7 +687,7 @@ export default function FirewallPolicy() {
                     value={formDest}
                     onChange={(e) => setFormDest(e.target.value)}
                     placeholder="เช่น ALL (Internet), Web_Host"
-                    className="h-9 w-full rounded-lg border border-border bg-background/50 px-3 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/50"
+                    className="h-9 w-full rounded-lg border border-border bg-background/50 px-3 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
                   />
                 </div>
               </div>
@@ -703,7 +703,7 @@ export default function FirewallPolicy() {
                     value={formService}
                     onChange={(e) => setFormService(e.target.value)}
                     placeholder="เช่น HTTP (80), TCP (22), ALL"
-                    className="h-9 w-full rounded-lg border border-border bg-background/50 px-3 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/50"
+                    className="h-9 w-full rounded-lg border border-border bg-background/50 px-3 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -718,8 +718,8 @@ export default function FirewallPolicy() {
                         onClick={() => setFormAction(act)}
                         className={`flex-1 rounded text-center cursor-pointer font-bold transition ${formAction === act
                           ? act === "ACCEPT"
-                            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold shadow-xs"
-                            : "bg-red-500/10 text-red-400 border border-red-500/20 font-semibold shadow-xs"
+                            ? "bg-primary/10 text-primary border border-primary/20 font-semibold"
+                            : "bg-red-500/10 text-red-400 border border-red-500/20 font-semibold"
                           : "text-muted-foreground hover:text-foreground"
                           }`}
                       >
@@ -740,7 +740,7 @@ export default function FirewallPolicy() {
                       onChange={(e) => setFormLog(e.target.checked)}
                       className="sr-only peer"
                     />
-                    <div className="w-9 h-5 bg-neutral-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-450 after:border-neutral-400 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-550/60 peer-checked:after:bg-emerald-400"></div>
+                    <div className="w-9 h-5 bg-neutral-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-450 after:border-neutral-400 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary/60 peer-checked:after:bg-primary"></div>
                   </label>
                   <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">บันทึกล็อก (Log Packet)</span>
                 </div>
@@ -753,7 +753,7 @@ export default function FirewallPolicy() {
                       onChange={(e) => setFormStatus(e.target.checked)}
                       className="sr-only peer"
                     />
-                    <div className="w-9 h-5 bg-neutral-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-450 after:border-neutral-400 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-550/60 peer-checked:after:bg-emerald-400"></div>
+                    <div className="w-9 h-5 bg-neutral-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-450 after:border-neutral-400 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary/60 peer-checked:after:bg-primary"></div>
                   </label>
                   <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">เปิดใช้งานทันที (Active)</span>
                 </div>
@@ -773,7 +773,7 @@ export default function FirewallPolicy() {
                 <Button
                   type="submit"
                   size="sm"
-                  className="cursor-pointer bg-emerald-500 hover:bg-emerald-600 text-neutral-950 font-bold"
+                  className="cursor-pointer bg-primary hover:bg-primary/90 text-primary-foreground font-bold"
                 >
                   Save Policy
                 </Button>

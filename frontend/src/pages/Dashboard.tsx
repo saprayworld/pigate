@@ -303,13 +303,13 @@ export default function Dashboard() {
 
   // --- Helpers for color representation ---
   const getTempColor = (temp: number) => {
-    if (temp < 50) return "text-emerald-500 bg-emerald-500/10 border-emerald-500/20"
+    if (temp < 50) return "text-primary bg-primary/10 border-primary/20"
     if (temp < 70) return "text-amber-500 bg-amber-500/10 border-amber-500/20"
     return "text-red-500 bg-red-500/10 border-red-500/20"
   }
 
   const getCpuColor = (cpu: number) => {
-    if (cpu < 50) return "bg-emerald-500"
+    if (cpu < 50) return "bg-primary"
     if (cpu < 85) return "bg-amber-500"
     return "bg-red-500"
   }
@@ -325,11 +325,11 @@ export default function Dashboard() {
         <div className="flex items-center gap-3">
           <Badge
             variant="outline"
-            className="flex items-center gap-1.5 px-3 py-1 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 animate-fade-in"
+            className="flex items-center gap-1.5 px-3 py-1 bg-primary/5 text-primary border-primary/20 animate-fade-in"
           >
             <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
             </span>
             SSE Connected
           </Badge>
@@ -353,24 +353,24 @@ export default function Dashboard() {
       {/* 2. Grid Stats Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {/* Card 1: Firewall Status */}
-        <Card size="sm" className="bg-card/40 border border-border/60 backdrop-blur-sm shadow-xs transition duration-300 hover:shadow-md hover:border-emerald-500/20">
+        <Card size="sm" className="bg-card/40 border border-border/60 transition duration-300 hover:border-primary/20">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1.5">
             <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Firewall Status</CardTitle>
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 text-primary border border-primary/20">
               <Shield className="h-4 w-4" />
             </div>
           </CardHeader>
           <CardContent className="space-y-1">
             <div className="flex items-center gap-2">
               <span className="text-2xl font-bold text-foreground">Active</span>
-              <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_var(--color-emerald-500)]"></span>
+              <span className="flex h-2.5 w-2.5 rounded-full bg-primary animate-pulse"></span>
             </div>
             <CardDescription className="text-xs text-muted-foreground">nftables kernel module active</CardDescription>
           </CardContent>
         </Card>
 
         {/* Card 2: Total Traffic */}
-        <Card size="sm" className="bg-card/40 border border-border/60 backdrop-blur-sm shadow-xs transition duration-300 hover:shadow-md hover:border-cyan-500/20">
+        <Card size="sm" className="bg-card/40 border border-border/60 transition duration-300 hover:border-cyan-500/20">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1.5">
             <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Total Traffic</CardTitle>
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-cyan-500/10 text-cyan-500 border border-cyan-500/20">
@@ -388,7 +388,7 @@ export default function Dashboard() {
         </Card>
 
         {/* Card 3: DHCP Leases */}
-        <Card size="sm" className="bg-card/40 border border-border/60 backdrop-blur-sm shadow-xs transition duration-300 hover:shadow-md hover:border-indigo-500/20">
+        <Card size="sm" className="bg-card/40 border border-border/60 transition duration-300 hover:border-indigo-500/20">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1.5">
             <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">DHCP Leases</CardTitle>
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-500 border border-indigo-500/20">
@@ -402,7 +402,7 @@ export default function Dashboard() {
         </Card>
 
         {/* Card 4: Wi-Fi Status */}
-        <Card size="sm" className="bg-card/40 border border-border/60 backdrop-blur-sm shadow-xs transition duration-300 hover:shadow-md hover:border-amber-500/20">
+        <Card size="sm" className="bg-card/40 border border-border/60 transition duration-300 hover:border-amber-500/20">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1.5">
             <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Wi-Fi Status</CardTitle>
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/10 text-amber-500 border border-amber-500/20">
@@ -419,7 +419,7 @@ export default function Dashboard() {
       {/* 3. Main Chart & Log Grid */}
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Recharts Area Chart */}
-        <Card className="lg:col-span-2 bg-card/25 border border-border/50 shadow-sm overflow-hidden">
+        <Card className="lg:col-span-2 bg-card/25 border border-border/50 overflow-hidden">
           <CardHeader className="flex flex-row items-center justify-between border-b border-border/40 pb-4">
             <div>
               <CardTitle className="text-lg font-bold text-foreground flex items-center gap-2">
@@ -517,7 +517,7 @@ export default function Dashboard() {
         </Card>
 
         {/* 4. Live Firewall Logs */}
-        <Card className="bg-card/25 border border-border/50 shadow-sm flex flex-col h-full overflow-hidden">
+        <Card className="bg-card/25 border border-border/50 flex flex-col h-full overflow-hidden">
           <CardHeader className="border-b border-border/40 pb-4 flex flex-row items-center justify-between">
             <div>
               <CardTitle className="text-lg font-bold text-foreground flex items-center gap-2">
@@ -532,7 +532,7 @@ export default function Dashboard() {
                 size="icon-xs"
                 onClick={() => setIsLiveStreaming(!isLiveStreaming)}
                 title={isLiveStreaming ? "Pause stream" : "Resume stream"}
-                className={`cursor-pointer ${isLiveStreaming ? "border-emerald-500/20 text-emerald-500 bg-emerald-500/5" : "text-muted-foreground"}`}
+                className={`cursor-pointer ${isLiveStreaming ? "border-primary/20 text-primary bg-primary/5" : "text-muted-foreground"}`}
               >
                 {isLiveStreaming ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
               </Button>
@@ -558,7 +558,7 @@ export default function Dashboard() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="ค้นหา IP / Port / บริการ..."
-                className="h-8.5 w-full rounded-lg border border-border bg-background/50 pl-8 pr-3 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/50"
+                className="h-8.5 w-full rounded-lg border border-border bg-background/50 pl-8 pr-3 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
               />
             </div>
             {/* Action Segment Filter */}
@@ -569,7 +569,7 @@ export default function Dashboard() {
                   onClick={() => setActionFilter(filter)}
                   className={`flex-1 py-1 rounded text-center cursor-pointer font-medium transition ${
                     actionFilter === filter
-                      ? "bg-card text-foreground font-semibold shadow-xs"
+                      ? "bg-card text-foreground font-semibold"
                       : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
@@ -589,7 +589,7 @@ export default function Dashboard() {
                       setSearchQuery("")
                       setActionFilter("ALL")
                     }}
-                    className="text-emerald-500 mt-1 hover:underline cursor-pointer"
+                    className="text-primary mt-1 hover:underline cursor-pointer"
                   >
                     ล้างการค้นหา
                   </button>
@@ -607,7 +607,7 @@ export default function Dashboard() {
                       variant={log.action === "DROP" ? "destructive" : "outline"}
                       className={`h-4.5 rounded px-1.5 text-[9px] font-bold ${
                         log.action === "PASS"
-                          ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20"
+                          ? "bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20"
                           : "bg-red-500/10 text-red-500 border-red-500/20 hover:bg-red-500/20"
                       }`}
                     >
@@ -633,7 +633,7 @@ export default function Dashboard() {
       {/* 5. Lower Row: Details (System Info, System Performance, Interfaces) */}
       <div className="grid gap-6 md:grid-cols-3">
         {/* Widget 1: System Information */}
-        <Card className="bg-card/25 border border-border/50 shadow-sm">
+        <Card className="bg-card/25 border border-border/50">
           <CardHeader className="border-b border-border/40 pb-4">
             <CardTitle className="text-md font-bold text-foreground flex items-center gap-2">
               <Clock className="h-5 w-5 text-muted-foreground" />
@@ -667,7 +667,7 @@ export default function Dashboard() {
         </Card>
 
         {/* Widget 2: System Performance */}
-        <Card className="bg-card/25 border border-border/50 shadow-sm">
+        <Card className="bg-card/25 border border-border/50">
           <CardHeader className="border-b border-border/40 pb-4">
             <CardTitle className="text-md font-bold text-foreground flex items-center gap-2">
               <Cpu className="h-5 w-5 text-muted-foreground" />
@@ -732,7 +732,7 @@ export default function Dashboard() {
         </Card>
 
         {/* Widget 3: Interface Status */}
-        <Card className="bg-card/25 border border-border/50 shadow-sm">
+        <Card className="bg-card/25 border border-border/50">
           <CardHeader className="border-b border-border/40 pb-4">
             <CardTitle className="text-md font-bold text-foreground flex items-center gap-2">
               <Wifi className="h-5 w-5 text-muted-foreground" />
@@ -747,7 +747,7 @@ export default function Dashboard() {
                   <Radio className="h-4 w-4 text-amber-500" />
                   wlan0 (WAN)
                 </span>
-                <Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                <Badge className="bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
                   Connected
                 </Badge>
               </div>
@@ -762,7 +762,7 @@ export default function Dashboard() {
                 </div>
                 <div className="flex justify-between">
                   <span>Signal:</span>
-                  <span className="text-emerald-400 font-semibold">84% (-58 dBm)</span>
+                  <span className="text-primary font-semibold">84% (-58 dBm)</span>
                 </div>
               </div>
             </div>
@@ -774,7 +774,7 @@ export default function Dashboard() {
                   <Activity className="h-4 w-4 text-cyan-400" />
                   eth0 (LAN)
                 </span>
-                <Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                <Badge className="bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
                   Link Up
                 </Badge>
               </div>

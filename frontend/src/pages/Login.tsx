@@ -22,9 +22,9 @@ export default function Login() {
 
   return (
     <div className="flex min-h-svh flex-col items-center justify-center bg-background px-4 py-12 sm:px-6 lg:px-8">
-      <div className="w-full max-w-md space-y-8 rounded-2xl border border-border bg-card/50 p-8 backdrop-blur-md shadow-2xl">
+      <div className="w-full max-w-md space-y-8 rounded-2xl border border-border bg-card p-8">
         <div className="flex flex-col items-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 dark:text-emerald-400">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 border border-primary/20 text-primary">
             <Shield className="h-6 w-6" />
           </div>
           <h2 className="mt-6 text-center text-3xl font-extrabold tracking-tight text-foreground">
@@ -43,7 +43,7 @@ export default function Login() {
             </div>
           )}
 
-          <div className="space-y-4 rounded-md shadow-sm">
+          <div className="space-y-4 rounded-md">
             <div className="relative">
               <label htmlFor="username" className="sr-only">Username</label>
               <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-muted-foreground">
@@ -56,7 +56,7 @@ export default function Login() {
                 required
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="block w-full rounded-lg border border-border bg-muted/30 py-3 pl-10 pr-3 text-sm text-foreground placeholder-muted-foreground focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition"
+                className="block w-full rounded-lg border border-border bg-muted/30 py-3 pl-10 pr-3 text-sm text-foreground placeholder-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary outline-none transition"
                 placeholder="Username"
               />
             </div>
@@ -72,7 +72,7 @@ export default function Login() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="block w-full rounded-lg border border-border bg-muted/30 py-3 pl-10 pr-3 text-sm text-foreground placeholder-muted-foreground focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition"
+                className="block w-full rounded-lg border border-border bg-muted/30 py-3 pl-10 pr-3 text-sm text-foreground placeholder-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary outline-none transition"
                 placeholder="Password"
               />
             </div>
@@ -81,7 +81,7 @@ export default function Login() {
           <div>
             <button
               type="submit"
-              className="group relative flex w-full justify-center rounded-lg border border-emerald-500/20 bg-emerald-600 px-4 py-3 text-sm font-medium text-white hover:bg-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-background transition cursor-pointer"
+              className="group relative flex w-full justify-center rounded-lg border border-primary/20 bg-primary px-4 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background transition cursor-pointer"
             >
               Sign In
             </button>

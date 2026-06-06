@@ -102,11 +102,11 @@ export default function ShellLayout() {
     <div className="flex h-full flex-col bg-sidebar border-r border-sidebar-border text-sidebar-foreground">
       {/* Brand Header */}
       <div className="flex h-16 items-center gap-2 px-6 border-b border-sidebar-border bg-sidebar">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 dark:text-emerald-400">
-          <Flame className="h-5 w-5 fill-emerald-500/20" />
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 border border-primary/20 text-primary">
+          <Flame className="h-5 w-5 fill-primary/20" />
         </div>
         <span className="text-xl font-bold tracking-wider text-sidebar-foreground">PiGate</span>
-        <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 hover:bg-emerald-550/20 h-4.5 rounded-full px-1.5 text-[10px]">v1.0</Badge>
+        <Badge variant="outline" className="bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 h-4.5 rounded-full px-1.5 text-[10px]">v1.0</Badge>
       </div>
 
       {/* Navigation Links */}
@@ -126,7 +126,7 @@ export default function ShellLayout() {
                   onClick={() => setIsMobileMenuOpen(false)}
                   className={({ isActive }) =>
                     `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition duration-200 ${isActive
-                      ? "bg-sidebar-accent text-emerald-600 dark:text-emerald-400 font-semibold"
+                      ? "bg-sidebar-accent text-primary font-semibold"
                       : "hover:bg-sidebar-accent/50 hover:text-sidebar-foreground text-sidebar-foreground/75"
                     }`
                   }
@@ -163,7 +163,7 @@ export default function ShellLayout() {
       {/* Mobile Sidebar Backing */}
       {isMobileMenuOpen && (
         <div
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 md:hidden"
+          className="fixed inset-0 bg-black/60 z-30 md:hidden"
           onClick={() => setIsMobileMenuOpen(false)}
         />
       )}
@@ -179,7 +179,7 @@ export default function ShellLayout() {
       {/* Main Content Area */}
       <div className="flex-1 md:pl-64 flex flex-col min-w-0">
         {/* Topbar */}
-        <header className="sticky top-0 z-10 flex h-16 w-full items-center justify-between border-b border-border bg-background/80 backdrop-blur-md px-6 shadow-sm">
+        <header className="sticky top-0 z-10 flex h-16 w-full items-center justify-between border-b border-border bg-background px-6">
           {/* Topbar Left */}
           <div className="flex items-center gap-4">
             <button
@@ -199,9 +199,9 @@ export default function ShellLayout() {
             <div className="flex items-center gap-2 sm:gap-3">
               {/* CPU */}
               <Badge variant="outline" className="flex items-center gap-1.5 rounded-full border-border bg-card/60 px-3 py-1 text-foreground hover:bg-card/60 h-7 text-xs font-normal">
-                <Cpu className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />
+                <Cpu className="h-3.5 w-3.5 text-primary" />
                 <span className="hidden lg:inline text-muted-foreground">CPU</span>
-                <span className="font-semibold text-emerald-500 dark:text-emerald-400">15%</span>
+                <span className="font-semibold text-primary">15%</span>
               </Badge>
 
               {/* RAM */}
@@ -220,9 +220,9 @@ export default function ShellLayout() {
 
               {/* Power status */}
               <Badge variant="outline" className="hidden sm:flex items-center gap-1.5 rounded-full border-border bg-card/60 px-3 py-1 text-foreground hover:bg-card/60 h-7 text-xs font-normal">
-                <Zap className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />
+                <Zap className="h-3.5 w-3.5 text-primary" />
                 <span className="hidden lg:inline text-muted-foreground">Power</span>
-                <span className="font-semibold text-emerald-500 dark:text-emerald-400">OK</span>
+                <span className="font-semibold text-primary">OK</span>
               </Badge>
             </div>
 
@@ -231,7 +231,7 @@ export default function ShellLayout() {
               <DropdownMenuTrigger asChild>
                 <button className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium hover:bg-accent hover:text-accent-foreground transition outline-none cursor-pointer">
                   <Avatar size="sm">
-                    <AvatarFallback className="bg-emerald-500/10 text-emerald-500 dark:text-emerald-400">
+                    <AvatarFallback className="bg-primary/10 text-primary">
                       AD
                     </AvatarFallback>
                   </Avatar>
@@ -247,7 +247,7 @@ export default function ShellLayout() {
                   </div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                
+
                 <DropdownMenuGroup>
                   <DropdownMenuItem
                     onClick={() => navigate("/system/settings")}
@@ -279,14 +279,12 @@ export default function ShellLayout() {
                     <span>Dark Mode</span>
                   </div>
                   <div
-                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
-                      theme === "dark" ? "bg-emerald-500" : "bg-neutral-300 dark:bg-neutral-700"
-                    }`}
+                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${theme === "dark" ? "bg-primary" : "bg-neutral-300 dark:bg-neutral-700"
+                      }`}
                   >
                     <span
-                      className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
-                        theme === "dark" ? "translate-x-[18px]" : "translate-x-[3px]"
-                      }`}
+                      className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${theme === "dark" ? "translate-x-[18px]" : "translate-x-[3px]"
+                        }`}
                     />
                   </div>
                 </DropdownMenuItem>
