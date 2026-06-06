@@ -22,6 +22,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts"
+import {
+  type FirewallLog,
+  initialFirewallLogs,
+  mockSources,
+  mockDestinations,
+  mockLogServices
+} from "@/data-mockup/mockData"
 
 // Structure for Recharts data
 interface TrafficData {
@@ -30,17 +37,7 @@ interface TrafficData {
   outbound: number
 }
 
-// Structure for Firewall Logs
-interface FirewallLog {
-  id: string
-  time: string
-  action: "PASS" | "DROP"
-  src: string
-  dest: string
-  port: string
-  proto: string
-  reason: string
-}
+
 
 export default function Dashboard() {
   // --- 1. Real-time Uptime & Live Time ---
@@ -159,58 +156,7 @@ export default function Dashboard() {
   }, [])
 
   // --- 4. Firewall Logs Streaming ---
-  const [logs, setLogs] = useState<FirewallLog[]>([
-    {
-      id: "log-1",
-      time: "14:31:02",
-      action: "DROP",
-      src: "185.220.101.4",
-      dest: "10.0.0.45",
-      port: "445",
-      proto: "TCP",
-      reason: "Blocked Port (SMB)"
-    },
-    {
-      id: "log-2",
-      time: "14:31:15",
-      action: "PASS",
-      src: "192.168.1.105",
-      dest: "8.8.8.8",
-      port: "53",
-      proto: "UDP",
-      reason: "DNS request"
-    },
-    {
-      id: "log-3",
-      time: "14:31:22",
-      action: "DROP",
-      src: "192.168.1.132",
-      dest: "203.0.113.5",
-      port: "23",
-      proto: "TCP",
-      reason: "Blocked Telnet"
-    },
-    {
-      id: "log-4",
-      time: "14:31:30",
-      action: "PASS",
-      src: "192.168.1.100",
-      dest: "142.250.196.46",
-      port: "443",
-      proto: "TCP",
-      reason: "HTTPS traffic"
-    },
-    {
-      id: "log-5",
-      time: "14:31:40",
-      action: "DROP",
-      src: "45.143.203.14",
-      dest: "10.0.0.45",
-      port: "22",
-      proto: "TCP",
-      reason: "Brute-force SSH"
-    }
-  ])
+  const [logs, setLogs] = useState<FirewallLog[]>(initialFirewallLogs)
 
   const [isLiveStreaming, setIsLiveStreaming] = useState<boolean>(true)
   const [searchQuery, setSearchQuery] = useState<string>("")
@@ -221,36 +167,9 @@ export default function Dashboard() {
     if (!isLiveStreaming) return
 
     const logGenerator = setInterval(() => {
-      const mockSrcs = [
-        "192.168.1.104",
-        "192.168.1.112",
-        "192.168.1.188",
-        "185.220.101.4",
-        "45.143.203.18",
-        "82.102.23.140",
-        "192.168.1.101"
-      ]
-      const mockDests = [
-        "8.8.8.8",
-        "1.1.1.1",
-        "10.0.0.45",
-        "142.250.196.46",
-        "151.101.1.140",
-        "192.168.1.1"
-      ]
-      const mockServices = [
-        { port: "53", proto: "UDP", reason: "DNS query", action: "PASS" },
-        { port: "443", proto: "TCP", reason: "HTTPS secure", action: "PASS" },
-        { port: "80", proto: "TCP", reason: "HTTP plain", action: "PASS" },
-        { port: "22", proto: "TCP", reason: "Blocked SSH", action: "DROP" },
-        { port: "23", proto: "TCP", reason: "Blocked Telnet", action: "DROP" },
-        { port: "445", proto: "TCP", reason: "Blocked Port (SMB)", action: "DROP" },
-        { port: "3389", proto: "TCP", reason: "RDP connection attempt", action: "DROP" }
-      ]
-
-      const randomSrc = mockSrcs[Math.floor(Math.random() * mockSrcs.length)]
-      const randomDest = mockDests[Math.floor(Math.random() * mockDests.length)]
-      const randomSvc = mockServices[Math.floor(Math.random() * mockServices.length)]
+      const randomSrc = mockSources[Math.floor(Math.random() * mockSources.length)]
+      const randomDest = mockDestinations[Math.floor(Math.random() * mockDestinations.length)]
+      const randomSvc = mockLogServices[Math.floor(Math.random() * mockLogServices.length)]
 
       const t = new Date()
       const timeStr =

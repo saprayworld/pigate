@@ -16,6 +16,7 @@ import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
+import { type PolicyRule, initialPolicyRules } from "@/data-mockup/mockData"
 
 // Dnd-kit imports
 import {
@@ -37,17 +38,7 @@ import {
 import { CSS } from "@dnd-kit/utilities"
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers"
 
-// Structure of a policy rule
-interface PolicyRule {
-  id: string
-  name: string
-  source: string[]
-  destination: string[]
-  service: string[]
-  action: "ACCEPT" | "DROP"
-  log: boolean
-  status: boolean // true = Enabled, false = Disabled
-}
+
 
 // Props for Sortable Row component
 interface SortableRowProps {
@@ -205,58 +196,7 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
 
 export default function FirewallPolicy() {
   // --- State for Policies ---
-  const [rules, setRules] = useState<PolicyRule[]>([
-    {
-      id: "rule-1",
-      name: "Allow-DNS-Out",
-      source: ["LAN_Network", "192.168.1.0/24"],
-      destination: ["8.8.8.8", "1.1.1.1"],
-      service: ["UDP (53)", "TCP (53)"],
-      action: "ACCEPT",
-      log: false,
-      status: true
-    },
-    {
-      id: "rule-2",
-      name: "Allow-Web-Out",
-      source: ["LAN_Network"],
-      destination: ["ALL (Internet)"],
-      service: ["HTTP (80)", "HTTPS (443)"],
-      action: "ACCEPT",
-      log: false,
-      status: true
-    },
-    {
-      id: "rule-3",
-      name: "Block-BitTorrent",
-      source: ["LAN_Network"],
-      destination: ["ALL"],
-      service: ["BitTorrent_Ports"],
-      action: "DROP",
-      log: true,
-      status: true
-    },
-    {
-      id: "rule-4",
-      name: "Block-Malicious-IPs",
-      source: ["ALL"],
-      destination: ["Malicious_IP_List"],
-      service: ["ALL"],
-      action: "DROP",
-      log: true,
-      status: true
-    },
-    {
-      id: "rule-5",
-      name: "Allow-SSH-Admin",
-      source: ["Admin_Host", "192.168.1.100"],
-      destination: ["PiGate_Host"],
-      service: ["SSH (22)"],
-      action: "ACCEPT",
-      log: true,
-      status: true
-    }
-  ])
+  const [rules, setRules] = useState<PolicyRule[]>(initialPolicyRules)
 
   // --- Search and Filters State ---
   const [searchQuery, setSearchQuery] = useState<string>("")
