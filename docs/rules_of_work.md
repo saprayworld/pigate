@@ -19,6 +19,19 @@
   ```
 * **เหตุผลสำคัญ:** ตัวจัดการแพ็กเกจของโครงการในปัจจุบันใช้ Yarn รุ่น 1 (Yarn v1) ซึ่ง**ไม่รองรับคำสั่ง `yarn dlx`** การพยายามรันติดตั้งผ่าน `yarn dlx` จะล้มเหลว ดังนั้นจึงกำหนดให้ใช้ `npx` เป็นมาตรฐานหลักแทน
 
+### 1.3 การจัดการ Portal Components ภายใน Dialog/Modal (Portal inside Dialog Rules)
+* **ข้อกำหนด:** หากมีการใช้งานคอมโพเนนต์ที่เป็น Portal (เช่น Combobox, Select, Dropdown หรือ Popover ของ Base UI / Radix UI) **ภายใน Dialog หรือ Modal ของโครงการ** อาจเกิดปัญหาคลิกดรอปดาวน์แล้วโดนบล็อกเนื่องจาก Focus/Pointer Blocker ของ Radix Dialog มองว่าเป็นกิจกรรมนอกขอบเขต (Interact Outside)
+* **แนวทางปฏิบัติ:**
+  * ห้ามเรนเดอร์ Combobox แบบไม่ใช้ Portal (เช่น ปลดแท็ก Portal ออกตรงๆ) เพราะจะขัดกับกฎ Context ของไลบรารีและอาจเกิด Error: `Base UI: <Combobox.Portal> is missing.`
+  * ให้ใช้วิธีส่งผ่าน container ref โดยสร้าง `useRef` ผูกเข้ากับ `<DialogContent>` เช่น:
+    ```tsx
+    const dialogContentRef = useRef<HTMLDivElement | null>(null)
+    ...
+    <DialogContent ref={dialogContentRef}>
+    ```
+  * จากนั้นให้ตั้งค่า `container={dialogContentRef}` ให้กับคอมโพเนนต์ Content ของ Portal นั้น ๆ (เช่น `<ComboboxContent container={dialogContentRef}>`) เพื่อย้าย Portal เข้ามาเรนเดอร์ใต้ DOM Tree ของ Dialog Content วิธีนี้จะทำให้คลิกเลือกรายการได้สมบูรณ์และถูกต้อง
+* **เหตุผล:** เพื่อรองรับการทำงานร่วมกันระหว่างไลบรารีคอมโพเนนต์ต่างค่าย (Radix UI และ Base UI) ได้อย่างเสถียรและปลอดภัย
+
 ---
 
 ## 2. กฎการเลือกใช้สไตล์และโทนสี (Styling & Theme Rules)

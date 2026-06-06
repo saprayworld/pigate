@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react"
+import { useState, useMemo, useRef } from "react"
 import {
   Flame,
   Plus,
@@ -37,6 +37,17 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertTitle, AlertDescription, AlertAction } from "@/components/ui/alert"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Combobox,
+  ComboboxChips,
+  ComboboxChip,
+  ComboboxChipsInput,
+  ComboboxContent,
+  ComboboxList,
+  ComboboxItem,
+  ComboboxEmpty,
+  useComboboxAnchor,
+} from "@/components/ui/combobox"
 
 // Dnd-kit imports
 import {
@@ -85,7 +96,7 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
     <TableRow
       ref={setNodeRef}
       style={style}
-      className={`border-b border-border/40 transition duration-200 hover:bg-muted/15 ${!rule.status ? "bg-muted/5 opacity-55" : ""
+      className={`border-b border-border/40 hover:bg-muted/15 ${!rule.status ? "bg-muted/5 opacity-55" : ""
         } ${isDragging ? "bg-muted/30" : ""}`}
     >
       {/* 1. Sequence & Drag Handle */}
@@ -214,6 +225,45 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
   )
 }
 
+// Options for Source and Destination multiple selection comboboxes
+const sourceOptions = [
+  "ALL",
+  "LAN_Network",
+  "192.168.1.0/24",
+  "Admin_Host",
+  "192.168.1.100",
+  "PiGate_Host",
+  "WAN_Network"
+]
+
+const destinationOptions = [
+  "ALL",
+  "ALL (Internet)",
+  "LAN_Network",
+  "192.168.1.1",
+  "8.8.8.8",
+  "1.1.1.1",
+  "PiGate_Host",
+  "Malicious_IP_List",
+  "LAN_Printer"
+]
+
+const serviceOptions = [
+  "ALL",
+  "HTTP (80)",
+  "HTTPS (443)",
+  "SSH (22)",
+  "TCP (53)",
+  "UDP (53)",
+  "DNS (53)",
+  "DHCP (67/68)",
+  "FTP (20/21)",
+  "SMTP (25)",
+  "NTP (123)",
+  "ICMP",
+  "BitTorrent_Ports"
+]
+
 export default function FirewallPolicy() {
   // --- State for Policies ---
   const [rules, setRules] = useState<PolicyRule[]>(initialPolicyRules)
@@ -251,11 +301,19 @@ export default function FirewallPolicy() {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false)
   const [editingRule, setEditingRule] = useState<PolicyRule | null>(null)
 
+  // Combobox anchors for positioning the popup relative to the chips container
+  const sourceAnchor = useComboboxAnchor()
+  const destAnchor = useComboboxAnchor()
+  const serviceAnchor = useComboboxAnchor()
+
+  // Ref for DialogContent to container-portal the combobox popups
+  const dialogContentRef = useRef<HTMLDivElement | null>(null)
+
   // Form Fields
   const [formName, setFormName] = useState<string>("")
-  const [formSource, setFormSource] = useState<string>("")
-  const [formDest, setFormDest] = useState<string>("")
-  const [formService, setFormService] = useState<string>("")
+  const [formSource, setFormSource] = useState<string[]>([])
+  const [formDest, setFormDest] = useState<string[]>([])
+  const [formService, setFormService] = useState<string[]>([])
   const [formAction, setFormAction] = useState<"ACCEPT" | "DROP">("ACCEPT")
   const [formLog, setFormLog] = useState<boolean>(false)
   const [formStatus, setFormStatus] = useState<boolean>(true)
@@ -264,9 +322,9 @@ export default function FirewallPolicy() {
   const openCreateModal = () => {
     setEditingRule(null)
     setFormName("")
-    setFormSource("LAN_Network")
-    setFormDest("ALL (Internet)")
-    setFormService("HTTPS (443)")
+    setFormSource(["LAN_Network"])
+    setFormDest(["ALL (Internet)"])
+    setFormService(["HTTPS (443)"])
     setFormAction("ACCEPT")
     setFormLog(false)
     setFormStatus(true)
@@ -276,9 +334,9 @@ export default function FirewallPolicy() {
   const openEditModal = (rule: PolicyRule) => {
     setEditingRule(rule)
     setFormName(rule.name)
-    setFormSource(rule.source.join(", "))
-    setFormDest(rule.destination.join(", "))
-    setFormService(rule.service.join(", "))
+    setFormSource([...rule.source])
+    setFormDest([...rule.destination])
+    setFormService([...rule.service])
     setFormAction(rule.action)
     setFormLog(rule.log)
     setFormStatus(rule.status)
@@ -290,18 +348,7 @@ export default function FirewallPolicy() {
 
     if (!formName.trim()) return
 
-    const parsedSources = formSource
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0)
-    const parsedDests = formDest
-      .split(",")
-      .map((d) => d.trim())
-      .filter((d) => d.length > 0)
-    const parsedSvcs = formService
-      .split(",")
-      .map((v) => v.trim())
-      .filter((v) => v.length > 0)
+    const parsedSvcs = formService.length ? formService : ["ALL"]
 
     if (editingRule) {
       // Edit mode
@@ -311,8 +358,8 @@ export default function FirewallPolicy() {
             ? {
               ...r,
               name: formName,
-              source: parsedSources,
-              destination: parsedDests,
+              source: formSource,
+              destination: formDest,
               service: parsedSvcs,
               action: formAction,
               log: formLog,
@@ -326,9 +373,9 @@ export default function FirewallPolicy() {
       const newRule: PolicyRule = {
         id: "rule-" + Math.random().toString(36).substring(2, 9),
         name: formName,
-        source: parsedSources.length ? parsedSources : ["ALL"],
-        destination: parsedDests.length ? parsedDests : ["ALL"],
-        service: parsedSvcs.length ? parsedSvcs : ["ALL"],
+        source: formSource.length ? formSource : ["ALL"],
+        destination: formDest.length ? formDest : ["ALL"],
+        service: parsedSvcs,
         action: formAction,
         log: formLog,
         status: formStatus
@@ -572,9 +619,8 @@ export default function FirewallPolicy() {
         </AlertDescription>
       </Alert>
 
-      {/* 7. Dialog Modal (Create & Edit Overlay) */}
       <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
-        <DialogContent className="w-full max-w-lg rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up">
+        <DialogContent ref={dialogContentRef} className="md:max-w-[85vw] lg:max-w-[960px] w-full rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up">
           <DialogHeader className="pb-3 border-b border-border/40">
             <DialogTitle className="text-lg font-bold text-foreground">
               {editingRule ? "แก้ไขนโยบายความปลอดภัย" : "สร้างนโยบายความปลอดภัยใหม่"}
@@ -582,65 +628,125 @@ export default function FirewallPolicy() {
           </DialogHeader>
 
           {/* Form */}
-          <form onSubmit={handleSaveForm} className="space-y-4 text-sm">
-            {/* Name */}
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                ชื่อนโยบาย (Name) <span className="text-red-500">*</span>
-              </Label>
-              <Input
-                type="text"
-                required
-                value={formName}
-                onChange={(e) => setFormName(e.target.value)}
-                placeholder="เช่น Allow-HTTP-Out, Block-MalIPs"
-                className="bg-background/50 placeholder:text-muted-foreground h-9"
-              />
+          <form onSubmit={handleSaveForm} className="space-y-5 text-sm">
+            {/* Row 1: Name & Service/Port */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="form-name" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                  ชื่อนโยบาย (Name) <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="form-name"
+                  type="text"
+                  required
+                  value={formName}
+                  onChange={(e) => setFormName(e.target.value)}
+                  placeholder="เช่น Allow-HTTP-Out, Block-MalIPs"
+                  className="bg-background/50 placeholder:text-muted-foreground h-9"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                  บริการ / พอร์ต (Service/Port)
+                </Label>
+                <Combobox
+                  multiple={true}
+                  value={formService}
+                  onValueChange={(val) => setFormService(val as string[])}
+                >
+                  <div ref={serviceAnchor}>
+                    <ComboboxChips className="bg-background/50 border border-border rounded-lg min-h-9 flex items-center flex-wrap px-2 py-1 gap-1.5 focus-within:ring-1 focus-within:ring-primary/50 focus-within:border-primary/50">
+                      {formService.map((val) => (
+                        <ComboboxChip key={val} className="text-xs">
+                          {val}
+                        </ComboboxChip>
+                      ))}
+                      <ComboboxChipsInput placeholder={formService.length === 0 ? "เลือกบริการ / พอร์ต..." : ""} className="h-7 text-xs bg-transparent border-none outline-none focus:ring-0" />
+                    </ComboboxChips>
+                  </div>
+                  <ComboboxContent container={dialogContentRef} anchor={serviceAnchor} className="w-[var(--anchor-width)] bg-popover border border-border shadow-md rounded-lg overflow-hidden">
+                    <ComboboxList className="p-1 max-h-48 overflow-y-auto">
+                      {serviceOptions.map((opt) => (
+                        <ComboboxItem key={opt} value={opt} className="cursor-pointer hover:bg-muted/80 text-xs">
+                          {opt}
+                        </ComboboxItem>
+                      ))}
+                      <ComboboxEmpty className="p-2 text-xs text-muted-foreground text-center">ไม่พบข้อมูล</ComboboxEmpty>
+                    </ComboboxList>
+                  </ComboboxContent>
+                </Combobox>
+              </div>
             </div>
 
-            {/* Source & Dest Grid */}
+            {/* Row 2: Source & Destination with Multiple Selection Combobox */}
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
                   ต้นทาง (Source IP/Network)
                 </Label>
-                <Input
-                  type="text"
+                <Combobox
+                  multiple={true}
                   value={formSource}
-                  onChange={(e) => setFormSource(e.target.value)}
-                  placeholder="เช่น LAN_Network, 192.168.1.100"
-                  className="bg-background/50 placeholder:text-muted-foreground h-9"
-                />
-                <span className="text-[10.5px] text-muted-foreground">คั่นด้วยเครื่องหมายจุลภาค (,)</span>
+                  onValueChange={(val) => setFormSource(val as string[])}
+                >
+                  <div ref={sourceAnchor}>
+                    <ComboboxChips className="bg-background/50 border border-border rounded-lg min-h-9 flex items-center flex-wrap px-2 py-1 gap-1.5 focus-within:ring-1 focus-within:ring-primary/50 focus-within:border-primary/50">
+                      {formSource.map((val) => (
+                        <ComboboxChip key={val} className="text-xs">
+                          {val}
+                        </ComboboxChip>
+                      ))}
+                      <ComboboxChipsInput placeholder={formSource.length === 0 ? "เลือกต้นทาง..." : ""} className="h-7 text-xs bg-transparent border-none outline-none focus:ring-0" />
+                    </ComboboxChips>
+                  </div>
+                  <ComboboxContent container={dialogContentRef} anchor={sourceAnchor} className="w-[var(--anchor-width)] bg-popover border border-border shadow-md rounded-lg overflow-hidden">
+                    <ComboboxList className="p-1 max-h-48 overflow-y-auto">
+                      {sourceOptions.map((opt) => (
+                        <ComboboxItem key={opt} value={opt} className="cursor-pointer hover:bg-muted/80 text-xs">
+                          {opt}
+                        </ComboboxItem>
+                      ))}
+                      <ComboboxEmpty className="p-2 text-xs text-muted-foreground text-center">ไม่พบข้อมูล</ComboboxEmpty>
+                    </ComboboxList>
+                  </ComboboxContent>
+                </Combobox>
               </div>
+
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
                   ปลายทาง (Destination IP/Network)
                 </Label>
-                <Input
-                  type="text"
+                <Combobox
+                  multiple={true}
                   value={formDest}
-                  onChange={(e) => setFormDest(e.target.value)}
-                  placeholder="เช่น ALL (Internet), Web_Host"
-                  className="bg-background/50 placeholder:text-muted-foreground h-9"
-                />
+                  onValueChange={(val) => setFormDest(val as string[])}
+                >
+                  <div ref={destAnchor}>
+                    <ComboboxChips className="bg-background/50 border border-border rounded-lg min-h-9 flex items-center flex-wrap px-2 py-1 gap-1.5 focus-within:ring-1 focus-within:ring-primary/50 focus-within:border-primary/50">
+                      {formDest.map((val) => (
+                        <ComboboxChip key={val} className="text-xs">
+                          {val}
+                        </ComboboxChip>
+                      ))}
+                      <ComboboxChipsInput placeholder={formDest.length === 0 ? "เลือกปลายทาง..." : ""} className="h-7 text-xs bg-transparent border-none outline-none focus:ring-0" />
+                    </ComboboxChips>
+                  </div>
+                  <ComboboxContent container={dialogContentRef} anchor={destAnchor} className="w-[var(--anchor-width)] bg-popover border border-border shadow-md rounded-lg overflow-hidden">
+                    <ComboboxList className="p-1 max-h-48 overflow-y-auto">
+                      {destinationOptions.map((opt) => (
+                        <ComboboxItem key={opt} value={opt} className="cursor-pointer hover:bg-muted/80 text-xs">
+                          {opt}
+                        </ComboboxItem>
+                      ))}
+                      <ComboboxEmpty className="p-2 text-xs text-muted-foreground text-center">ไม่พบข้อมูล</ComboboxEmpty>
+                    </ComboboxList>
+                  </ComboboxContent>
+                </Combobox>
               </div>
             </div>
 
-            {/* Service & Action Grid */}
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                  บริการ / พอร์ต (Service/Port)
-                </Label>
-                <Input
-                  type="text"
-                  value={formService}
-                  onChange={(e) => setFormService(e.target.value)}
-                  placeholder="เช่น HTTP (80), TCP (22), ALL"
-                  className="bg-background/50 placeholder:text-muted-foreground h-9"
-                />
-              </div>
+            {/* Row 3: Action & Switches */}
+            <div className="grid gap-4 sm:grid-cols-2 items-end">
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
                   การจัดการ (Action)
@@ -652,24 +758,24 @@ export default function FirewallPolicy() {
                   </TabsList>
                 </Tabs>
               </div>
-            </div>
+              <div className="flex items-center gap-6 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id="form-log"
+                    checked={formLog}
+                    onCheckedChange={setFormLog}
+                  />
+                  <Label htmlFor="form-log" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer">บันทึกล็อก (Log)</Label>
+                </div>
 
-            {/* Switches Area */}
-            <div className="flex items-center gap-6 pt-2">
-              <div className="flex items-center gap-2">
-                <Switch
-                  checked={formLog}
-                  onCheckedChange={setFormLog}
-                />
-                <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer">บันทึกล็อก (Log Packet)</Label>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Switch
-                  checked={formStatus}
-                  onCheckedChange={setFormStatus}
-                />
-                <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer">เปิดใช้งานทันที (Active)</Label>
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id="form-status"
+                    checked={formStatus}
+                    onCheckedChange={setFormStatus}
+                  />
+                  <Label htmlFor="form-status" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer">เปิดใช้งาน (Active)</Label>
+                </div>
               </div>
             </div>
 
