@@ -46,6 +46,7 @@ import {
   ComboboxList,
   ComboboxItem,
   ComboboxEmpty,
+  ComboboxValue,
   useComboboxAnchor,
 } from "@/components/ui/combobox"
 
@@ -653,25 +654,30 @@ export default function FirewallPolicy() {
                   multiple={true}
                   value={formService}
                   onValueChange={(val) => setFormService(val as string[])}
+                  items={serviceOptions}
                 >
-                  <div ref={serviceAnchor}>
-                    <ComboboxChips className="bg-background/50 border border-border rounded-lg min-h-9 flex items-center flex-wrap px-2 py-1 gap-1.5 focus-within:ring-1 focus-within:ring-primary/50 focus-within:border-primary/50">
-                      {formService.map((val) => (
-                        <ComboboxChip key={val} className="text-xs">
-                          {val}
-                        </ComboboxChip>
-                      ))}
-                      <ComboboxChipsInput placeholder={formService.length === 0 ? "เลือกบริการ / พอร์ต..." : ""} className="h-7 text-xs bg-transparent border-none outline-none focus:ring-0" />
-                    </ComboboxChips>
-                  </div>
+                  <ComboboxChips ref={serviceAnchor} className="bg-background/50 border border-border rounded-lg min-h-9 flex items-center flex-wrap px-2 py-1 gap-1.5 focus-within:ring-1 focus-within:ring-primary/50 focus-within:border-primary/50">
+                    <ComboboxValue>
+                      {(values: string[]) => (
+                        <>
+                          {values.map((val) => (
+                            <ComboboxChip key={val} className="text-xs">
+                              {val}
+                            </ComboboxChip>
+                          ))}
+                          <ComboboxChipsInput placeholder={values.length === 0 ? "เลือกบริการ / พอร์ต..." : ""} className="h-7 text-xs bg-transparent border-none outline-none focus:ring-0" />
+                        </>
+                      )}
+                    </ComboboxValue>
+                  </ComboboxChips>
                   <ComboboxContent container={dialogContentRef} anchor={serviceAnchor} className="w-[var(--anchor-width)] bg-popover border border-border shadow-md rounded-lg overflow-hidden">
+                    <ComboboxEmpty className="p-2 text-xs text-muted-foreground text-center">ไม่พบข้อมูล</ComboboxEmpty>
                     <ComboboxList className="p-1 max-h-48 overflow-y-auto">
-                      {serviceOptions.map((opt) => (
+                      {(opt: string) => (
                         <ComboboxItem key={opt} value={opt} className="cursor-pointer hover:bg-muted/80 text-xs">
                           {opt}
                         </ComboboxItem>
-                      ))}
-                      <ComboboxEmpty className="p-2 text-xs text-muted-foreground text-center">ไม่พบข้อมูล</ComboboxEmpty>
+                      )}
                     </ComboboxList>
                   </ComboboxContent>
                 </Combobox>
@@ -688,25 +694,30 @@ export default function FirewallPolicy() {
                   multiple={true}
                   value={formSource}
                   onValueChange={(val) => setFormSource(val as string[])}
+                  items={sourceOptions}
                 >
-                  <div ref={sourceAnchor}>
-                    <ComboboxChips className="bg-background/50 border border-border rounded-lg min-h-9 flex items-center flex-wrap px-2 py-1 gap-1.5 focus-within:ring-1 focus-within:ring-primary/50 focus-within:border-primary/50">
-                      {formSource.map((val) => (
-                        <ComboboxChip key={val} className="text-xs">
-                          {val}
-                        </ComboboxChip>
-                      ))}
-                      <ComboboxChipsInput placeholder={formSource.length === 0 ? "เลือกต้นทาง..." : ""} className="h-7 text-xs bg-transparent border-none outline-none focus:ring-0" />
-                    </ComboboxChips>
-                  </div>
+                  <ComboboxChips ref={sourceAnchor} className="bg-background/50 border border-border rounded-lg min-h-9 flex items-center flex-wrap px-2 py-1 gap-1.5 focus-within:ring-1 focus-within:ring-primary/50 focus-within:border-primary/50">
+                    <ComboboxValue>
+                      {(values: string[]) => (
+                        <>
+                          {values.map((val) => (
+                            <ComboboxChip key={val} className="text-xs">
+                              {val}
+                            </ComboboxChip>
+                          ))}
+                          <ComboboxChipsInput placeholder={values.length === 0 ? "เลือกต้นทาง..." : ""} className="h-7 text-xs bg-transparent border-none outline-none focus:ring-0" />
+                        </>
+                      )}
+                    </ComboboxValue>
+                  </ComboboxChips>
                   <ComboboxContent container={dialogContentRef} anchor={sourceAnchor} className="w-[var(--anchor-width)] bg-popover border border-border shadow-md rounded-lg overflow-hidden">
+                    <ComboboxEmpty className="p-2 text-xs text-muted-foreground text-center">ไม่พบข้อมูล</ComboboxEmpty>
                     <ComboboxList className="p-1 max-h-48 overflow-y-auto">
-                      {sourceOptions.map((opt) => (
+                      {(opt: string) => (
                         <ComboboxItem key={opt} value={opt} className="cursor-pointer hover:bg-muted/80 text-xs">
                           {opt}
                         </ComboboxItem>
-                      ))}
-                      <ComboboxEmpty className="p-2 text-xs text-muted-foreground text-center">ไม่พบข้อมูล</ComboboxEmpty>
+                      )}
                     </ComboboxList>
                   </ComboboxContent>
                 </Combobox>
@@ -720,25 +731,30 @@ export default function FirewallPolicy() {
                   multiple={true}
                   value={formDest}
                   onValueChange={(val) => setFormDest(val as string[])}
+                  items={destinationOptions}
                 >
-                  <div ref={destAnchor}>
-                    <ComboboxChips className="bg-background/50 border border-border rounded-lg min-h-9 flex items-center flex-wrap px-2 py-1 gap-1.5 focus-within:ring-1 focus-within:ring-primary/50 focus-within:border-primary/50">
-                      {formDest.map((val) => (
-                        <ComboboxChip key={val} className="text-xs">
-                          {val}
-                        </ComboboxChip>
-                      ))}
-                      <ComboboxChipsInput placeholder={formDest.length === 0 ? "เลือกปลายทาง..." : ""} className="h-7 text-xs bg-transparent border-none outline-none focus:ring-0" />
-                    </ComboboxChips>
-                  </div>
+                  <ComboboxChips ref={destAnchor} className="bg-background/50 border border-border rounded-lg min-h-9 flex items-center flex-wrap px-2 py-1 gap-1.5 focus-within:ring-1 focus-within:ring-primary/50 focus-within:border-primary/50">
+                    <ComboboxValue>
+                      {(values: string[]) => (
+                        <>
+                          {values.map((val) => (
+                            <ComboboxChip key={val} className="text-xs">
+                              {val}
+                            </ComboboxChip>
+                          ))}
+                          <ComboboxChipsInput placeholder={values.length === 0 ? "เลือกปลายทาง..." : ""} className="h-7 text-xs bg-transparent border-none outline-none focus:ring-0" />
+                        </>
+                      )}
+                    </ComboboxValue>
+                  </ComboboxChips>
                   <ComboboxContent container={dialogContentRef} anchor={destAnchor} className="w-[var(--anchor-width)] bg-popover border border-border shadow-md rounded-lg overflow-hidden">
+                    <ComboboxEmpty className="p-2 text-xs text-muted-foreground text-center">ไม่พบข้อมูล</ComboboxEmpty>
                     <ComboboxList className="p-1 max-h-48 overflow-y-auto">
-                      {destinationOptions.map((opt) => (
+                      {(opt: string) => (
                         <ComboboxItem key={opt} value={opt} className="cursor-pointer hover:bg-muted/80 text-xs">
                           {opt}
                         </ComboboxItem>
-                      ))}
-                      <ComboboxEmpty className="p-2 text-xs text-muted-foreground text-center">ไม่พบข้อมูล</ComboboxEmpty>
+                      )}
                     </ComboboxList>
                   </ComboboxContent>
                 </Combobox>
