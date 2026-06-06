@@ -18,6 +18,26 @@ import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { type PolicyRule, initialPolicyRules } from "@/data-mockup/mockData"
 
+// shadcn UI component imports
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Alert, AlertTitle, AlertDescription, AlertAction } from "@/components/ui/alert"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+
 // Dnd-kit imports
 import {
   DndContext,
@@ -62,14 +82,14 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
   }
 
   return (
-    <tr
+    <TableRow
       ref={setNodeRef}
       style={style}
       className={`border-b border-border/40 transition duration-200 hover:bg-muted/15 ${!rule.status ? "bg-muted/5 opacity-55" : ""
         } ${isDragging ? "bg-muted/30" : ""}`}
     >
       {/* 1. Sequence & Drag Handle */}
-      <td className="p-3 text-xs text-muted-foreground font-mono">
+      <TableCell className="p-3 text-xs text-muted-foreground font-mono">
         <div className="flex items-center gap-2">
           <button
             {...attributes}
@@ -81,13 +101,13 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
           </button>
           <span>{index + 1}</span>
         </div>
-      </td>
+      </TableCell>
 
       {/* 2. Name */}
-      <td className="p-3 font-semibold text-foreground">{rule.name}</td>
+      <TableCell className="p-3 font-semibold text-foreground">{rule.name}</TableCell>
 
       {/* 3. Source */}
-      <td className="p-3">
+      <TableCell className="p-3">
         <div className="flex flex-wrap gap-1">
           {rule.source.map((src, i) => (
             <Badge
@@ -99,10 +119,10 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
             </Badge>
           ))}
         </div>
-      </td>
+      </TableCell>
 
       {/* 4. Destination */}
-      <td className="p-3">
+      <TableCell className="p-3">
         <div className="flex flex-wrap gap-1">
           {rule.destination.map((dst, i) => (
             <Badge
@@ -114,10 +134,10 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
             </Badge>
           ))}
         </div>
-      </td>
+      </TableCell>
 
       {/* 5. Service / Port */}
-      <td className="p-3">
+      <TableCell className="p-3">
         <div className="flex flex-wrap gap-1">
           {rule.service.map((svc, i) => (
             <Badge
@@ -129,10 +149,10 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
             </Badge>
           ))}
         </div>
-      </td>
+      </TableCell>
 
       {/* 6. Action */}
-      <td className="p-3">
+      <TableCell className="p-3">
         <Badge
           variant={rule.action === "DROP" ? "destructive" : "outline"}
           className={`font-bold text-[10px] px-2 py-0.5 rounded ${rule.action === "ACCEPT"
@@ -142,19 +162,19 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
         >
           {rule.action}
         </Badge>
-      </td>
+      </TableCell>
 
       {/* 7. Log Switch */}
-      <td className="p-3">
+      <TableCell className="p-3">
         <Switch
           size="sm"
           checked={rule.log}
           onCheckedChange={() => onToggleLog(rule.id)}
         />
-      </td>
+      </TableCell>
 
       {/* 8. Status Enable Switch */}
-      <td className="p-3">
+      <TableCell className="p-3">
         <div className="flex items-center gap-2">
           <Switch
             size="sm"
@@ -165,10 +185,10 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
             {rule.status ? "Enable" : "Disable"}
           </span>
         </div>
-      </td>
+      </TableCell>
 
       {/* 9. Action Buttons */}
-      <td className="p-3 text-right">
+      <TableCell className="p-3 text-right">
         <div className="flex items-center justify-end gap-1">
           <Button
             variant="ghost"
@@ -189,8 +209,8 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   )
 }
 
@@ -415,37 +435,31 @@ export default function FirewallPolicy() {
 
       {/* 2. Reload States Notification */}
       {isApplying && (
-        <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4 animate-pulse flex items-center gap-3">
-          <RefreshCw className="h-5 w-5 text-blue-400 animate-spin" />
-          <div className="text-sm">
-            <span className="font-semibold text-blue-400 block">กำลังนำนโยบายไปปรับใช้...</span>
-            <span className="text-muted-foreground text-xs">{applyProgress}</span>
-          </div>
-        </div>
+        <Alert className="animate-pulse border-blue-500/20 bg-blue-500/5">
+          <RefreshCw className="h-4 w-4 text-blue-400 animate-spin" />
+          <AlertTitle className="font-semibold text-blue-400">กำลังนำนโยบายไปปรับใช้...</AlertTitle>
+          <AlertDescription className="text-muted-foreground text-xs">{applyProgress}</AlertDescription>
+        </Alert>
       )}
 
       {showApplySuccess && (
-        <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 animate-fade-in flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary border border-primary/20">
-              <Check className="h-4.5 w-4.5" />
-            </div>
-            <div className="text-sm">
-              <span className="font-semibold text-primary block">ปรับใช้สำเร็จ! (nftables reloaded)</span>
-              <span className="text-muted-foreground text-xs">
-                บิลด์กฎและนำการตั้งค่านโยบายไฟร์วอลล์ทั้งหมดขึ้นระบบเคอร์เนลเรียบร้อยแล้ว
-              </span>
-            </div>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={() => setShowApplySuccess(false)}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
+        <Alert className="animate-fade-in border-primary/20 bg-primary/5">
+          <Check className="h-4.5 w-4.5 text-primary" />
+          <AlertTitle className="font-semibold text-primary">ปรับใช้สำเร็จ! (nftables reloaded)</AlertTitle>
+          <AlertDescription className="text-muted-foreground text-xs">
+            บิลด์กฎและนำการตั้งค่านโยบายไฟร์วอลล์ทั้งหมดขึ้นระบบเคอร์เนลเรียบร้อยแล้ว
+          </AlertDescription>
+          <AlertAction>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={() => setShowApplySuccess(false)}
+              className="text-muted-foreground hover:text-foreground h-5 w-5"
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </AlertAction>
+        </Alert>
       )}
 
       {/* 3. Toolbar Row */}
@@ -463,248 +477,224 @@ export default function FirewallPolicy() {
 
         {/* Search Input */}
         <div className="relative w-full sm:max-w-xs">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <input
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
+          <Input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="ค้นหาชื่อกฎ, ไอพี หรือพอร์ต..."
-            className="h-9 w-full rounded-lg border border-border bg-background/50 pl-8 pr-3 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
+            className="pl-8 bg-background/50 placeholder:text-muted-foreground h-9"
           />
         </div>
       </div>
 
       {/* 4. Policies Table Container */}
       <Card className="bg-card/25 border border-border/50 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-left text-sm">
-            <thead>
-              <tr className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground">
-                <th className="p-3 text-[11px] uppercase tracking-wider w-[8%]">Seq.</th>
-                <th className="p-3 text-[11px] uppercase tracking-wider w-[15%]">Name</th>
-                <th className="p-3 text-[11px] uppercase tracking-wider w-[18%]">Source</th>
-                <th className="p-3 text-[11px] uppercase tracking-wider w-[18%]">Destination</th>
-                <th className="p-3 text-[11px] uppercase tracking-wider w-[18%]">Service / Port</th>
-                <th className="p-3 text-[11px] uppercase tracking-wider w-[8%]">Action</th>
-                <th className="p-3 text-[11px] uppercase tracking-wider w-[8%]">Log</th>
-                <th className="p-3 text-[11px] uppercase tracking-wider w-[10%]">Status</th>
-                <th className="p-3 w-[8%] text-right"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRules.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="p-8 text-center text-muted-foreground text-xs">
-                    ไม่พบนโยบายไฟร์วอลล์ที่ค้นหา
-                  </td>
-                </tr>
-              ) : (
-                <DndContext
-                  sensors={sensors}
-                  collisionDetection={closestCenter}
-                  onDragEnd={handleDragEnd}
-                  modifiers={[restrictToVerticalAxis]}
-                >
-                  <SortableContext items={filteredRules.map((r) => r.id)} strategy={verticalListSortingStrategy}>
-                    {filteredRules.map((rule, idx) => (
-                      <SortableRow
-                        key={rule.id}
-                        rule={rule}
-                        index={idx}
-                        onEdit={openEditModal}
-                        onDelete={handleDeleteRule}
-                        onToggleStatus={handleToggleStatus}
-                        onToggleLog={handleToggleLog}
-                      />
-                    ))}
-                  </SortableContext>
-                </DndContext>
-              )}
+        <Table>
+          <TableHeader>
+            <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
+              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[8%] h-auto">Seq.</TableHead>
+              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[15%] h-auto">Name</TableHead>
+              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[18%] h-auto">Source</TableHead>
+              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[18%] h-auto">Destination</TableHead>
+              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[18%] h-auto">Service / Port</TableHead>
+              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[8%] h-auto">Action</TableHead>
+              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[8%] h-auto">Log</TableHead>
+              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[10%] h-auto">Status</TableHead>
+              <TableHead className="p-3 w-[8%] text-right h-auto"></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filteredRules.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={9} className="p-8 text-center text-muted-foreground text-xs">
+                  ไม่พบนโยบายไฟร์วอลล์ที่ค้นหา
+                </TableCell>
+              </TableRow>
+            ) : (
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
+                modifiers={[restrictToVerticalAxis]}
+              >
+                <SortableContext items={filteredRules.map((r) => r.id)} strategy={verticalListSortingStrategy}>
+                  {filteredRules.map((rule, idx) => (
+                    <SortableRow
+                      key={rule.id}
+                      rule={rule}
+                      index={idx}
+                      onEdit={openEditModal}
+                      onDelete={handleDeleteRule}
+                      onToggleStatus={handleToggleStatus}
+                      onToggleLog={handleToggleLog}
+                    />
+                  ))}
+                </SortableContext>
+              </DndContext>
+            )}
 
-              {/* 5. Default Implicit Deny Row */}
-              <tr className="bg-muted/10 border-t border-border/40 text-muted-foreground/70">
-                <td className="p-3 text-xs font-mono flex items-center gap-2 pl-6.5">
-                  <Lock className="h-3.5 w-3.5 text-muted-foreground/50" />
-                  -
-                </td>
-                <td className="p-3 italic">Implicit Deny</td>
-                <td className="p-3 italic">ALL</td>
-                <td className="p-3 italic">ALL</td>
-                <td className="p-3 italic">ALL</td>
-                <td className="p-3">
-                  <Badge variant="destructive" className="font-bold text-[10px] px-2 py-0.5 rounded bg-red-500/10 text-red-500/80 border-red-500/20">
-                    DROP
-                  </Badge>
-                </td>
-                <td className="p-3">-</td>
-                <td className="p-3 flex items-center gap-1.5 py-4">
-                  <Badge variant="outline" className="text-[10px] bg-neutral-900 border-neutral-800 text-muted-foreground px-1.5 py-0.5">
-                    System
-                  </Badge>
-                </td>
-                <td></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+            {/* 5. Default Implicit Deny Row */}
+            <TableRow className="bg-muted/10 border-t border-border/40 text-muted-foreground/70 hover:bg-muted/10">
+              <TableCell className="p-3 text-xs font-mono flex items-center gap-2 pl-6.5">
+                <Lock className="h-3.5 w-3.5 text-muted-foreground/50" />
+                -
+              </TableCell>
+              <TableCell className="p-3 italic">Implicit Deny</TableCell>
+              <TableCell className="p-3 italic">ALL</TableCell>
+              <TableCell className="p-3 italic">ALL</TableCell>
+              <TableCell className="p-3 italic">ALL</TableCell>
+              <TableCell className="p-3">
+                <Badge variant="destructive" className="font-bold text-[10px] px-2 py-0.5 rounded bg-red-500/10 text-red-500/80 border-red-500/20">
+                  DROP
+                </Badge>
+              </TableCell>
+              <TableCell className="p-3">-</TableCell>
+              <TableCell className="p-3 flex items-center gap-1.5 py-4">
+                <Badge variant="outline" className="text-[10px] bg-neutral-900 border-neutral-800 text-muted-foreground px-1.5 py-0.5">
+                  System
+                </Badge>
+              </TableCell>
+              <TableCell></TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
       </Card>
 
       {/* 6. Footer warnings */}
-      <div className="flex items-start gap-2.5 rounded-xl border border-dashed border-border bg-card/10 p-4 text-xs text-muted-foreground leading-relaxed">
-        <AlertCircle className="h-4.5 w-4.5 text-muted-foreground shrink-0 mt-0.5" />
-        <div>
-          <span className="font-bold text-foreground block mb-0.5">ข้อแนะนำเกี่ยวกับการจัดเรียงลำดับนโยบาย:</span>
+      <Alert className="border-dashed border-border bg-card/10">
+        <AlertCircle className="h-4 w-4 text-muted-foreground" />
+        <AlertTitle className="font-bold text-foreground mb-0.5">ข้อแนะนำเกี่ยวกับการจัดเรียงลำดับนโยบาย:</AlertTitle>
+        <AlertDescription className="text-xs text-muted-foreground leading-relaxed">
           การตั้งค่ากฎ Firewall จะเรียงลำดับความสำคัญจากบนลงล่าง (First-match wins) กฎที่อยู่ด้านบนสุดจะถูกตรวจสอบและประมวลผลก่อนเสมอ
           หากกฎด้านบนตรงตามเงื่อนไข จะไม่มีการประมวลผลกฎข้อถัดไปลงมา
           หลังจากเพิ่ม แก้ไข หรือจัดเรียงกฎใหม่เรียบร้อยแล้ว จำเป็นต้องกดปุ่ม <span className="font-semibold text-primary">"Apply Settings"</span> ทางขวาบนเพื่ออัปโหลดนโยบายเข้าสู่ระบบ Kernel `nftables` จริง
-        </div>
-      </div>
+        </AlertDescription>
+      </Alert>
 
       {/* 7. Dialog Modal (Create & Edit Overlay) */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 animate-fade-in">
-          <div className="w-full max-w-lg rounded-xl border border-border bg-card p-6 space-y-4 animate-scale-up">
-            {/* Header */}
-            <div className="flex items-center justify-between pb-3 border-b border-border/40">
-              <h3 className="text-lg font-bold text-foreground">
-                {editingRule ? "แก้ไขนโยบายความปลอดภัย" : "สร้างนโยบายความปลอดภัยใหม่"}
-              </h3>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                onClick={() => setIsModalOpen(false)}
-                className="text-muted-foreground hover:text-foreground cursor-pointer"
-              >
-                <X className="h-4.5 w-4.5" />
-              </Button>
+      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+        <DialogContent className="w-full max-w-lg rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up">
+          <DialogHeader className="pb-3 border-b border-border/40">
+            <DialogTitle className="text-lg font-bold text-foreground">
+              {editingRule ? "แก้ไขนโยบายความปลอดภัย" : "สร้างนโยบายความปลอดภัยใหม่"}
+            </DialogTitle>
+          </DialogHeader>
+
+          {/* Form */}
+          <form onSubmit={handleSaveForm} className="space-y-4 text-sm">
+            {/* Name */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                ชื่อนโยบาย (Name) <span className="text-red-500">*</span>
+              </Label>
+              <Input
+                type="text"
+                required
+                value={formName}
+                onChange={(e) => setFormName(e.target.value)}
+                placeholder="เช่น Allow-HTTP-Out, Block-MalIPs"
+                className="bg-background/50 placeholder:text-muted-foreground h-9"
+              />
             </div>
 
-            {/* Form */}
-            <form onSubmit={handleSaveForm} className="space-y-4 text-sm">
-              {/* Name */}
+            {/* Source & Dest Grid */}
+            <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                  ชื่อนโยบาย (Name) <span className="text-red-500">*</span>
-                </label>
-                <input
+                <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                  ต้นทาง (Source IP/Network)
+                </Label>
+                <Input
                   type="text"
-                  required
-                  value={formName}
-                  onChange={(e) => setFormName(e.target.value)}
-                  placeholder="เช่น Allow-HTTP-Out, Block-MalIPs"
-                  className="h-9 w-full rounded-lg border border-border bg-background/50 px-3 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
+                  value={formSource}
+                  onChange={(e) => setFormSource(e.target.value)}
+                  placeholder="เช่น LAN_Network, 192.168.1.100"
+                  className="bg-background/50 placeholder:text-muted-foreground h-9"
+                />
+                <span className="text-[10.5px] text-muted-foreground">คั่นด้วยเครื่องหมายจุลภาค (,)</span>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                  ปลายทาง (Destination IP/Network)
+                </Label>
+                <Input
+                  type="text"
+                  value={formDest}
+                  onChange={(e) => setFormDest(e.target.value)}
+                  placeholder="เช่น ALL (Internet), Web_Host"
+                  className="bg-background/50 placeholder:text-muted-foreground h-9"
                 />
               </div>
+            </div>
 
-              {/* Source & Dest Grid */}
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                    ต้นทาง (Source IP/Network)
-                  </label>
-                  <input
-                    type="text"
-                    value={formSource}
-                    onChange={(e) => setFormSource(e.target.value)}
-                    placeholder="เช่น LAN_Network, 192.168.1.100"
-                    className="h-9 w-full rounded-lg border border-border bg-background/50 px-3 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
-                  />
-                  <span className="text-[10.5px] text-muted-foreground">คั่นด้วยเครื่องหมายจุลภาค (,)</span>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                    ปลายทาง (Destination IP/Network)
-                  </label>
-                  <input
-                    type="text"
-                    value={formDest}
-                    onChange={(e) => setFormDest(e.target.value)}
-                    placeholder="เช่น ALL (Internet), Web_Host"
-                    className="h-9 w-full rounded-lg border border-border bg-background/50 px-3 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
-                  />
-                </div>
+            {/* Service & Action Grid */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                  บริการ / พอร์ต (Service/Port)
+                </Label>
+                <Input
+                  type="text"
+                  value={formService}
+                  onChange={(e) => setFormService(e.target.value)}
+                  placeholder="เช่น HTTP (80), TCP (22), ALL"
+                  className="bg-background/50 placeholder:text-muted-foreground h-9"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                  การจัดการ (Action)
+                </Label>
+                <Tabs value={formAction} onValueChange={(val) => setFormAction(val as "ACCEPT" | "DROP")} className="w-full">
+                  <TabsList className="grid w-full grid-cols-2">
+                    <TabsTrigger value="ACCEPT" className="font-bold data-active:text-primary dark:data-active:text-primary">ACCEPT</TabsTrigger>
+                    <TabsTrigger value="DROP" className="font-bold data-active:text-red-500 dark:data-active:text-red-400">DROP</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              </div>
+            </div>
+
+            {/* Switches Area */}
+            <div className="flex items-center gap-6 pt-2">
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={formLog}
+                  onCheckedChange={setFormLog}
+                />
+                <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer">บันทึกล็อก (Log Packet)</Label>
               </div>
 
-              {/* Service & Action Grid */}
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                    บริการ / พอร์ต (Service/Port)
-                  </label>
-                  <input
-                    type="text"
-                    value={formService}
-                    onChange={(e) => setFormService(e.target.value)}
-                    placeholder="เช่น HTTP (80), TCP (22), ALL"
-                    className="h-9 w-full rounded-lg border border-border bg-background/50 px-3 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                    การจัดการ (Action)
-                  </label>
-                  <div className="flex rounded-md border border-border bg-background/30 p-0.5 h-9 text-xs">
-                    {(["ACCEPT", "DROP"] as const).map((act) => (
-                      <button
-                        key={act}
-                        type="button"
-                        onClick={() => setFormAction(act)}
-                        className={`flex-1 rounded text-center cursor-pointer font-bold transition ${formAction === act
-                          ? act === "ACCEPT"
-                            ? "bg-primary/10 text-primary border border-primary/20 font-semibold"
-                            : "bg-red-500/10 text-red-400 border border-red-500/20 font-semibold"
-                          : "text-muted-foreground hover:text-foreground"
-                          }`}
-                      >
-                        {act}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={formStatus}
+                  onCheckedChange={setFormStatus}
+                />
+                <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer">เปิดใช้งานทันที (Active)</Label>
               </div>
+            </div>
 
-              {/* Switches Area */}
-              <div className="flex items-center gap-6 pt-2">
-                <div className="flex items-center gap-2">
-                  <Switch
-                    checked={formLog}
-                    onCheckedChange={setFormLog}
-                  />
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">บันทึกล็อก (Log Packet)</span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <Switch
-                    checked={formStatus}
-                    onCheckedChange={setFormStatus}
-                  />
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">เปิดใช้งานทันที (Active)</span>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-border/40">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setIsModalOpen(false)}
-                  className="cursor-pointer"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  size="sm"
-                  className="cursor-pointer bg-primary hover:bg-primary/90 text-primary-foreground font-bold"
-                >
-                  Save Policy
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+            {/* Action Buttons */}
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-border/40">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsModalOpen(false)}
+                className="cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                className="cursor-pointer bg-primary hover:bg-primary/90 text-primary-foreground font-bold"
+              >
+                Save Policy
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
