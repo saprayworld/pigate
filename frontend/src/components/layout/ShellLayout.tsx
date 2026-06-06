@@ -21,6 +21,7 @@ import {
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Switch } from "@/components/ui/switch"
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -278,15 +279,10 @@ export default function ShellLayout() {
                     )}
                     <span>Dark Mode</span>
                   </div>
-                  <div
-                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${theme === "dark" ? "bg-primary" : "bg-neutral-300 dark:bg-neutral-700"
-                      }`}
-                  >
-                    <span
-                      className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${theme === "dark" ? "translate-x-[18px]" : "translate-x-[3px]"
-                        }`}
-                    />
-                  </div>
+                  <Switch
+                    checked={theme === "dark"}
+                    onCheckedChange={(checked) => setTheme(checked ? "dark" : "light")}
+                  />
                 </DropdownMenuItem>
 
                 <DropdownMenuSeparator />

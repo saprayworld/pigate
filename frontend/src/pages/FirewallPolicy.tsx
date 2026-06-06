@@ -15,6 +15,7 @@ import {
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
 
 // Dnd-kit imports
 import {
@@ -154,29 +155,21 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
 
       {/* 7. Log Switch */}
       <td className="p-3">
-        <label className="relative inline-flex items-center cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={rule.log}
-            onChange={() => onToggleLog(rule.id)}
-            className="sr-only peer"
-          />
-          <div className="w-8.5 h-4.5 bg-neutral-800 rounded-full peer peer-checked:after:translate-x-4 peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-450 after:border-neutral-400 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-primary/60 peer-checked:after:bg-primary"></div>
-        </label>
+        <Switch
+          size="sm"
+          checked={rule.log}
+          onCheckedChange={() => onToggleLog(rule.id)}
+        />
       </td>
 
       {/* 8. Status Enable Switch */}
       <td className="p-3">
         <div className="flex items-center gap-2">
-          <label className="relative inline-flex items-center cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={rule.status}
-              onChange={() => onToggleStatus(rule.id)}
-              className="sr-only peer"
-            />
-            <div className="w-8.5 h-4.5 bg-neutral-800 rounded-full peer peer-checked:after:translate-x-4 peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-450 after:border-neutral-400 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-primary/60 peer-checked:after:bg-primary"></div>
-          </label>
+          <Switch
+            size="sm"
+            checked={rule.status}
+            onCheckedChange={() => onToggleStatus(rule.id)}
+          />
           <span className={`text-xs ${rule.status ? "text-primary font-semibold" : "text-muted-foreground"}`}>
             {rule.status ? "Enable" : "Disable"}
           </span>
@@ -733,28 +726,18 @@ export default function FirewallPolicy() {
               {/* Switches Area */}
               <div className="flex items-center gap-6 pt-2">
                 <div className="flex items-center gap-2">
-                  <label className="relative inline-flex items-center cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={formLog}
-                      onChange={(e) => setFormLog(e.target.checked)}
-                      className="sr-only peer"
-                    />
-                    <div className="w-9 h-5 bg-neutral-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-450 after:border-neutral-400 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary/60 peer-checked:after:bg-primary"></div>
-                  </label>
+                  <Switch
+                    checked={formLog}
+                    onCheckedChange={setFormLog}
+                  />
                   <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">บันทึกล็อก (Log Packet)</span>
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <label className="relative inline-flex items-center cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={formStatus}
-                      onChange={(e) => setFormStatus(e.target.checked)}
-                      className="sr-only peer"
-                    />
-                    <div className="w-9 h-5 bg-neutral-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-450 after:border-neutral-400 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary/60 peer-checked:after:bg-primary"></div>
-                  </label>
+                  <Switch
+                    checked={formStatus}
+                    onCheckedChange={setFormStatus}
+                  />
                   <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">เปิดใช้งานทันที (Active)</span>
                 </div>
               </div>
