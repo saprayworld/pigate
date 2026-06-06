@@ -15,7 +15,9 @@ import {
   HardDrive,
   Thermometer,
   Zap,
-  Menu
+  Menu,
+  Moon,
+  Sun
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -24,13 +26,17 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator
+  DropdownMenuSeparator,
+  DropdownMenuLabel,
+  DropdownMenuGroup
 } from "@/components/ui/dropdown-menu"
+import { useTheme } from "@/components/ThemeProvider"
 
 export default function ShellLayout() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
+  const { theme, setTheme } = useTheme()
 
   // Map path to display title
   const getPageTitle = (pathname: string) => {
@@ -93,14 +99,14 @@ export default function ShellLayout() {
   ]
 
   const SidebarContent = () => (
-    <div className="flex h-full flex-col bg-neutral-950 border-r border-neutral-900 text-neutral-300">
+    <div className="flex h-full flex-col bg-sidebar border-r border-sidebar-border text-sidebar-foreground">
       {/* Brand Header */}
-      <div className="flex h-16 items-center gap-2 px-6 border-b border-neutral-900 bg-neutral-950">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+      <div className="flex h-16 items-center gap-2 px-6 border-b border-sidebar-border bg-sidebar">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 dark:text-emerald-400">
           <Flame className="h-5 w-5 fill-emerald-500/20" />
         </div>
-        <span className="text-xl font-bold tracking-wider text-white">PiGate</span>
-        <Badge variant="outline" className="bg-emerald-950/30 text-emerald-400 border-emerald-900/50 hover:bg-emerald-950/30 h-4.5 rounded-full px-1.5 text-[10px]">v1.0</Badge>
+        <span className="text-xl font-bold tracking-wider text-sidebar-foreground">PiGate</span>
+        <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 hover:bg-emerald-550/20 h-4.5 rounded-full px-1.5 text-[10px]">v1.0</Badge>
       </div>
 
       {/* Navigation Links */}
@@ -108,7 +114,7 @@ export default function ShellLayout() {
         {menuGroups.map((group, groupIdx) => (
           <div key={groupIdx} className="space-y-1">
             {group.title && (
-              <span className="px-3 text-xs font-semibold text-neutral-500 uppercase tracking-wider block">
+              <span className="px-3 text-xs font-semibold text-sidebar-foreground/50 uppercase tracking-wider block">
                 {group.title}
               </span>
             )}
@@ -120,8 +126,8 @@ export default function ShellLayout() {
                   onClick={() => setIsMobileMenuOpen(false)}
                   className={({ isActive }) =>
                     `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition duration-200 ${isActive
-                      ? "bg-neutral-900 text-emerald-400"
-                      : "hover:bg-neutral-900/50 hover:text-white text-neutral-400"
+                      ? "bg-sidebar-accent text-emerald-600 dark:text-emerald-400 font-semibold"
+                      : "hover:bg-sidebar-accent/50 hover:text-sidebar-foreground text-sidebar-foreground/75"
                     }`
                   }
                 >
@@ -135,10 +141,10 @@ export default function ShellLayout() {
       </div>
 
       {/* User footer */}
-      <div className="p-4 border-t border-neutral-900 bg-neutral-950/50">
+      <div className="p-4 border-t border-sidebar-border bg-sidebar/50">
         <button
           onClick={handleLogout}
-          className="flex w-full items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-neutral-400 hover:bg-red-950/20 hover:text-red-400 border border-transparent hover:border-red-900/50 transition duration-200"
+          className="flex w-full items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-sidebar-foreground/75 hover:bg-destructive/10 hover:text-destructive border border-transparent hover:border-destructive/20 transition duration-200 cursor-pointer"
         >
           <LogOut className="h-4.5 w-4.5" />
           <span>Sign Out</span>
@@ -148,7 +154,7 @@ export default function ShellLayout() {
   )
 
   return (
-    <div className="flex min-h-svh bg-neutral-950 text-neutral-100 font-sans antialiased">
+    <div className="flex min-h-svh bg-background text-foreground font-sans antialiased">
       {/* Desktop Sidebar (hidden on mobile) */}
       <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 z-20">
         <SidebarContent />
@@ -164,7 +170,7 @@ export default function ShellLayout() {
 
       {/* Mobile Sidebar Panel */}
       <div
-        className={`fixed top-0 bottom-0 left-0 w-64 bg-neutral-950 z-40 transform transition-transform duration-300 md:hidden ${isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
+        className={`fixed top-0 bottom-0 left-0 w-64 bg-sidebar z-40 transform transition-transform duration-300 md:hidden ${isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
           }`}
       >
         <SidebarContent />
@@ -173,16 +179,16 @@ export default function ShellLayout() {
       {/* Main Content Area */}
       <div className="flex-1 md:pl-64 flex flex-col min-w-0">
         {/* Topbar */}
-        <header className="sticky top-0 z-10 flex h-16 w-full items-center justify-between border-b border-neutral-900 bg-neutral-950/80 backdrop-blur-md px-6 shadow-sm">
+        <header className="sticky top-0 z-10 flex h-16 w-full items-center justify-between border-b border-border bg-background/80 backdrop-blur-md px-6 shadow-sm">
           {/* Topbar Left */}
           <div className="flex items-center gap-4">
             <button
               onClick={() => setIsMobileMenuOpen(true)}
-              className="md:hidden p-1.5 rounded-lg text-neutral-400 hover:bg-neutral-900 hover:text-white"
+              className="md:hidden p-1.5 rounded-lg text-muted-foreground hover:bg-accent hover:text-accent-foreground"
             >
               <Menu className="h-6 w-6" />
             </button>
-            <h2 className="text-lg font-semibold tracking-tight text-white hidden sm:block">
+            <h2 className="text-lg font-semibold tracking-tight text-foreground hidden sm:block">
               {getPageTitle(location.pathname)}
             </h2>
           </div>
@@ -192,59 +198,103 @@ export default function ShellLayout() {
             {/* Pi Resources Stats */}
             <div className="flex items-center gap-2 sm:gap-3">
               {/* CPU */}
-              <Badge variant="outline" className="flex items-center gap-1.5 rounded-full border-neutral-800 bg-neutral-900/60 px-3 py-1 text-neutral-300 hover:bg-neutral-900/60 h-7 text-xs font-normal">
-                <Cpu className="h-3.5 w-3.5 text-emerald-400" />
-                <span className="hidden lg:inline text-neutral-500">CPU</span>
-                <span className="font-semibold text-emerald-400">15%</span>
+              <Badge variant="outline" className="flex items-center gap-1.5 rounded-full border-border bg-card/60 px-3 py-1 text-foreground hover:bg-card/60 h-7 text-xs font-normal">
+                <Cpu className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />
+                <span className="hidden lg:inline text-muted-foreground">CPU</span>
+                <span className="font-semibold text-emerald-500 dark:text-emerald-400">15%</span>
               </Badge>
 
               {/* RAM */}
-              <Badge variant="outline" className="flex items-center gap-1.5 rounded-full border-neutral-800 bg-neutral-900/60 px-3 py-1 text-neutral-300 hover:bg-neutral-900/60 h-7 text-xs font-normal">
-                <HardDrive className="h-3.5 w-3.5 text-cyan-400" />
-                <span className="hidden lg:inline text-neutral-500">RAM</span>
-                <span className="font-semibold text-cyan-400">42%</span>
+              <Badge variant="outline" className="flex items-center gap-1.5 rounded-full border-border bg-card/60 px-3 py-1 text-foreground hover:bg-card/60 h-7 text-xs font-normal">
+                <HardDrive className="h-3.5 w-3.5 text-cyan-500 dark:text-cyan-400" />
+                <span className="hidden lg:inline text-muted-foreground">RAM</span>
+                <span className="font-semibold text-cyan-500 dark:text-cyan-400">42%</span>
               </Badge>
 
               {/* Temp */}
-              <Badge variant="outline" className="flex items-center gap-1.5 rounded-full border-neutral-800 bg-neutral-900/60 px-3 py-1 text-neutral-300 hover:bg-neutral-900/60 h-7 text-xs font-normal">
-                <Thermometer className="h-3.5 w-3.5 text-amber-400" />
-                <span className="hidden lg:inline text-neutral-500">Temp</span>
-                <span className="font-semibold text-amber-400">48°C</span>
+              <Badge variant="outline" className="flex items-center gap-1.5 rounded-full border-border bg-card/60 px-3 py-1 text-foreground hover:bg-card/60 h-7 text-xs font-normal">
+                <Thermometer className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
+                <span className="hidden lg:inline text-muted-foreground">Temp</span>
+                <span className="font-semibold text-amber-500 dark:text-amber-400">48°C</span>
               </Badge>
 
               {/* Power status */}
-              <Badge variant="outline" className="hidden sm:flex items-center gap-1.5 rounded-full border-neutral-800 bg-neutral-900/60 px-3 py-1 text-neutral-300 hover:bg-neutral-900/60 h-7 text-xs font-normal">
-                <Zap className="h-3.5 w-3.5 text-emerald-500" />
-                <span className="hidden lg:inline text-neutral-500">Power</span>
-                <span className="font-semibold text-emerald-500">OK</span>
+              <Badge variant="outline" className="hidden sm:flex items-center gap-1.5 rounded-full border-border bg-card/60 px-3 py-1 text-foreground hover:bg-card/60 h-7 text-xs font-normal">
+                <Zap className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />
+                <span className="hidden lg:inline text-muted-foreground">Power</span>
+                <span className="font-semibold text-emerald-500 dark:text-emerald-400">OK</span>
               </Badge>
             </div>
 
             {/* Profile Dropdown with shadcn components */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm font-medium hover:bg-neutral-800 transition outline-none cursor-pointer">
+                <button className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium hover:bg-accent hover:text-accent-foreground transition outline-none cursor-pointer">
                   <Avatar size="sm">
-                    <AvatarFallback className="bg-emerald-500/10 text-emerald-400">
+                    <AvatarFallback className="bg-emerald-500/10 text-emerald-500 dark:text-emerald-400">
                       AD
                     </AvatarFallback>
                   </Avatar>
-                  <span className="text-white hidden sm:inline">admin</span>
-                  <ChevronDown className="h-4 w-4 text-neutral-400" />
+                  <span className="text-foreground hidden sm:inline">admin</span>
+                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48 bg-neutral-900 border border-neutral-800 text-neutral-300 p-1 rounded-xl shadow-2xl">
+              <DropdownMenuContent align="end" className="w-56 p-1 rounded-xl shadow-2xl bg-popover text-popover-foreground border border-border">
+                <DropdownMenuLabel>
+                  <div className="flex flex-col space-y-1">
+                    <p className="text-sm font-medium leading-none text-foreground">admin</p>
+                    <p className="text-xs leading-none text-muted-foreground">admin@pigate.local</p>
+                  </div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                
+                <DropdownMenuGroup>
+                  <DropdownMenuItem
+                    onClick={() => navigate("/system/settings")}
+                    className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm cursor-pointer transition"
+                  >
+                    <Settings className="h-4 w-4" />
+                    <span>Settings</span>
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+
+                {/* Appearance Section */}
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+                  Appearance
+                </DropdownMenuLabel>
                 <DropdownMenuItem
-                  onClick={() => navigate("/system/settings")}
-                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-neutral-300 focus:bg-neutral-800 focus:text-white cursor-pointer transition"
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    setTheme(theme === "dark" ? "light" : "dark");
+                  }}
+                  className="cursor-pointer flex items-center justify-between"
                 >
-                  <Settings className="h-4 w-4" />
-                  <span>Settings</span>
+                  <div className="flex items-center">
+                    {theme === "dark" ? (
+                      <Moon className="w-4 h-4 mr-2 text-indigo-400" />
+                    ) : (
+                      <Sun className="w-4 h-4 mr-2 text-amber-500" />
+                    )}
+                    <span>Dark Mode</span>
+                  </div>
+                  <div
+                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                      theme === "dark" ? "bg-emerald-500" : "bg-neutral-300 dark:bg-neutral-700"
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
+                        theme === "dark" ? "translate-x-[18px]" : "translate-x-[3px]"
+                      }`}
+                    />
+                  </div>
                 </DropdownMenuItem>
-                <DropdownMenuSeparator className="bg-neutral-800" />
+
+                <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={handleLogout}
-                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-red-400 focus:bg-red-950/20 focus:text-red-300 cursor-pointer transition"
+                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-red-500 dark:text-red-400 focus:bg-destructive/10 focus:text-destructive cursor-pointer transition"
                 >
                   <LogOut className="h-4 w-4" />
                   <span>Sign Out</span>

@@ -24,6 +24,11 @@
   * พัฒนาหน้าจอจำลอง (Mock Pages) ครบถ้วนทั้ง 9 หน้า (Dashboard, Interfaces, Static Routes, DHCP, Firewall Policy, Addresses, Services, Settings, Login) รองรับการเปลี่ยนหน้าแบบ Single Page Application (SPA) สมบูรณ์
   * ทดสอบเรียกคำสั่งคอมไพล์ระบบจริงด้วย `yarn build` บิวด์ผ่านสำเร็จ 100% ปราศจากข้อผิดพลาด
 
+* **พัฒนาและติดตั้งระบบการจัดการธีม (Theme Management - Dark/Light Mode) [สำเร็จ]**:
+  * ออกแบบและสร้าง `ThemeProvider` เพื่อจัดการสถานะการสลับธีม และบันทึกข้อมูลลงใน `localStorage` (โดยเริ่มต้นที่ Dark Mode เพื่อรักษาความปลอดภัยทางสายตา)
+  * ปรับโครงสร้างสีของเลย์เอาต์หลัก คาร์ดข้อมูล และคอนเทนเนอร์ในหน้าจอหลักทั้งหมด (Dashboard, Login, Interfaces ฯลฯ) ให้เปลี่ยนสีสอดคล้องตามธีมโดยอัตโนมัติ
+  * ติดตั้งเมนูสลับ Dark Mode / Light Mode พร้อมไอคอน Sun/Moon และตัวเลือก Appearance เข้ากับ Dropdown เมนูผู้ใช้งานตรงหน้า Topbar สำเร็จ
+
 ---
 
 ## 2. ปัญหาและประเด็นที่ต้องพิจารณาในปัจจุบัน (Current Issues & Limitations)
