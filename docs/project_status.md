@@ -35,9 +35,14 @@
   * ออกแบบการจำลองดึงค่า CPU / RAM / Temp และเวลาการทำงานระบบ (Uptime) แบบเรียลไทม์ และตารางสรุปประวัติล่าสุด (Firewall Logs) ที่ค้นหาและกรองได้ พร้อมตัวจำลองสถานะ SSE
 
 * **พัฒนาหน้าจอและระบบจัดการกฎไฟร์วอลล์ (Firewall Policies) [สำเร็จ]**:
-  * พัฒนาหน้า [FirewallPolicy.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/FirewallPolicy.tsx) โดยใช้ UI components ของ shadcn/ui เป็นพื้นฐาน
+  * พัฒนาหน้า [FirewallPolicy.tsx](file:///home/sapray/Dev/pigate/frontend/src/pages/FirewallPolicy.tsx) โดยใช้ UI components ของ shadcn/ui เป็นพื้นฐาน
   * ติดตั้งระบบการลากสลับลำดับความสำคัญของกฎความปลอดภัย (Drag & Drop ด้วย `@dnd-kit/core` และ `@dnd-kit/sortable` ล็อคแกนการลากแนวตั้ง)
-  * พัฒนาโมดอลสำหรับการเพิ่ม (Create) และแก้ไข (Edit) กฎความปลอดภัย, ระบบ Switch inline เพื่อเปิด/ปิด หรือสตรีมล็อกบนแถว และการจำลองนำไปปรับใช้จริงผ่านปุ่ม "Apply Settings" เข้าเคอร์เนล `nftables`
+  * พัฒนาและเพิ่มประสิทธิภาพโมดอลสำหรับการเพิ่ม (Create) และแก้ไข (Edit) กฎความปลอดภัย:
+    * ปรับเพิ่มความกว้างการแสดงผลและปรับปรุงเลย์เอาต์จัดวางคอมโพเนนต์ให้มีความสวยงามและเป็นระเบียบมากยิ่งขึ้น (3 แถวหลัก)
+    * ปรับปรุงฟิลด์กรอกข้อมูล **ต้นทาง (Source)**, **ปลายทาง (Destination)** และ **บริการ/พอร์ต (Service/Port)** ให้ใช้งาน Multiple Selection Combobox แบบ Chips ของ Base UI / shadcn/ui
+    * ปรับปรุงวิธีการใช้งาน Combobox API ให้ถูกต้องตามคู่มืออ้างอิงของ shadcn (การใช้งาน `items` prop, `<ComboboxValue>` ด้วย render prop และ `<ComboboxList>` ด้วย children function)
+    * แก้ไขและบันทึกแนวทางปัญหาคลิกเลือกตัวเลือก Combobox dropdown ภายใน Dialog โดนบล็อกอันเกิดจากกลไก Focus/Pointer Blocker ของ Radix UI Dialog โดยการพอร์ตเนื้อหาเข้าภายใต้ DOM Tree ของ DialogContent ด้วย container ref
+  * ออกแบบระบบ Switch inline เพื่อเปิด/ปิด หรือสตรีมล็อกบนแถว และการจำลองนำไปปรับใช้จริงผ่านปุ่ม "Apply Settings" เข้าเคอร์เนล `nftables`
 
 ---
 
@@ -56,7 +61,7 @@
 * **สเตปที่ 2: พัฒนาเลย์เอาต์หลักของแอดมินพอร์ทัล (Shell Layout)** `[เสร็จสิ้น]`
 * **สเตปที่ 3: พัฒนาหน้า Dashboard (`01-dashboard.html`)** `[เสร็จสิ้น]`
 * **สเตปที่ 4: พัฒนาหน้าจอการตั้งค่าเครือข่ายและความปลอดภัย**:
-  * จัดสร้างหน้า Firewall Policies พร้อมติดตั้งความสามารถในการลากจัดเรียงลำดับความสำคัญ (Drag & Drop ด้วย `@dnd-kit`) `[เสร็จสิ้น]`
+  * จัดสร้างหน้า Firewall Policies พร้อมติดตั้งความสามารถในการลากจัดเรียงลำดับความสำคัญ (Drag & Drop ด้วย `@dnd-kit`) และปรับปรุงฟอร์มโมดอลให้ใช้งาน Multiple Selection Combobox แบบถูกต้องตามคู่มืออ้างอิงของ shadcn `[เสร็จสิ้น]`
   * พัฒนาหน้าจอการจัดการ Physical & Virtual Interfaces (eth0, wlan0) และระบบจำลองสำหรับคลิกแสกนหาคลื่น Wi-Fi (SSID Scanner) `[กำลังดำเนินการถัดไป]`
   * ทยอยพัฒนาส่วนหน้าจออื่น ๆ ได้แก่ Static Route, DHCP Server, Address/Service Objects, Settings, Maintenance และหน้าล็อกอินจริง
 * **สเตปที่ 5: จัดระเบียบการเรียกใช้ API และความปลอดภัย**:
