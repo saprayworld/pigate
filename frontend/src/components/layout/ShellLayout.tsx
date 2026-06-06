@@ -15,13 +15,20 @@ import {
   HardDrive,
   Thermometer,
   Zap,
-  User,
   Menu
 } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator
+} from "@/components/ui/dropdown-menu"
 
 export default function ShellLayout() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
-  const [isUserDropdownOpen, setIsUserDropdownOpen] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -93,7 +100,7 @@ export default function ShellLayout() {
           <Flame className="h-5 w-5 fill-emerald-500/20" />
         </div>
         <span className="text-xl font-bold tracking-wider text-white">PiGate</span>
-        <span className="rounded-full bg-emerald-950 px-2 py-0.5 text-[10px] font-medium text-emerald-400 border border-emerald-900/50">v1.0</span>
+        <Badge variant="outline" className="bg-emerald-950/30 text-emerald-400 border-emerald-900/50 hover:bg-emerald-950/30 h-4.5 rounded-full px-1.5 text-[10px]">v1.0</Badge>
       </div>
 
       {/* Navigation Links */}
@@ -183,81 +190,67 @@ export default function ShellLayout() {
           {/* Topbar Right (Stats & Profiles) */}
           <div className="flex items-center gap-4">
             {/* Pi Resources Stats */}
-            <div className="flex items-center gap-2 sm:gap-3 text-xs">
+            <div className="flex items-center gap-2 sm:gap-3">
               {/* CPU */}
-              <div className="flex items-center gap-1.5 rounded-full border border-neutral-800 bg-neutral-900/60 px-3 py-1 text-neutral-300">
+              <Badge variant="outline" className="flex items-center gap-1.5 rounded-full border-neutral-800 bg-neutral-900/60 px-3 py-1 text-neutral-300 hover:bg-neutral-900/60 h-7 text-xs font-normal">
                 <Cpu className="h-3.5 w-3.5 text-emerald-400" />
                 <span className="hidden lg:inline text-neutral-500">CPU</span>
                 <span className="font-semibold text-emerald-400">15%</span>
-              </div>
+              </Badge>
 
               {/* RAM */}
-              <div className="flex items-center gap-1.5 rounded-full border border-neutral-800 bg-neutral-900/60 px-3 py-1 text-neutral-300">
+              <Badge variant="outline" className="flex items-center gap-1.5 rounded-full border-neutral-800 bg-neutral-900/60 px-3 py-1 text-neutral-300 hover:bg-neutral-900/60 h-7 text-xs font-normal">
                 <HardDrive className="h-3.5 w-3.5 text-cyan-400" />
                 <span className="hidden lg:inline text-neutral-500">RAM</span>
                 <span className="font-semibold text-cyan-400">42%</span>
-              </div>
+              </Badge>
 
               {/* Temp */}
-              <div className="flex items-center gap-1.5 rounded-full border border-neutral-800 bg-neutral-900/60 px-3 py-1 text-neutral-300">
+              <Badge variant="outline" className="flex items-center gap-1.5 rounded-full border-neutral-800 bg-neutral-900/60 px-3 py-1 text-neutral-300 hover:bg-neutral-900/60 h-7 text-xs font-normal">
                 <Thermometer className="h-3.5 w-3.5 text-amber-400" />
                 <span className="hidden lg:inline text-neutral-500">Temp</span>
                 <span className="font-semibold text-amber-400">48°C</span>
-              </div>
+              </Badge>
 
               {/* Power status */}
-              <div className="hidden sm:flex items-center gap-1.5 rounded-full border border-neutral-800 bg-neutral-900/60 px-3 py-1 text-neutral-300">
+              <Badge variant="outline" className="hidden sm:flex items-center gap-1.5 rounded-full border-neutral-800 bg-neutral-900/60 px-3 py-1 text-neutral-300 hover:bg-neutral-900/60 h-7 text-xs font-normal">
                 <Zap className="h-3.5 w-3.5 text-emerald-500" />
                 <span className="hidden lg:inline text-neutral-500">Power</span>
                 <span className="font-semibold text-emerald-500">OK</span>
-              </div>
+              </Badge>
             </div>
 
-            {/* Profile Dropdown */}
-            <div className="relative">
-              <button
-                onClick={() => setIsUserDropdownOpen(!isUserDropdownOpen)}
-                className="flex items-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm font-medium hover:bg-neutral-800 transition"
-              >
-                <div className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-400">
-                  <User className="h-3 w-3" />
-                </div>
-                <span className="text-white hidden sm:inline">admin</span>
-                <ChevronDown className="h-4 w-4 text-neutral-400" />
-              </button>
-
-              {isUserDropdownOpen && (
-                <>
-                  <div
-                    className="fixed inset-0 z-10"
-                    onClick={() => setIsUserDropdownOpen(false)}
-                  />
-                  <div className="absolute right-0 mt-2 w-48 origin-top-right rounded-xl border border-neutral-800 bg-neutral-900 p-2 shadow-2xl ring-1 ring-black/5 focus:outline-none z-20">
-                    <button
-                      onClick={() => {
-                        setIsUserDropdownOpen(false)
-                        navigate("/system/settings")
-                      }}
-                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-neutral-300 hover:bg-neutral-800 transition"
-                    >
-                      <Settings className="h-4 w-4" />
-                      <span>Settings</span>
-                    </button>
-                    <hr className="border-neutral-800 my-1" />
-                    <button
-                      onClick={() => {
-                        setIsUserDropdownOpen(false)
-                        handleLogout()
-                      }}
-                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-red-400 hover:bg-red-950/20 transition"
-                    >
-                      <LogOut className="h-4 w-4" />
-                      <span>Sign Out</span>
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
+            {/* Profile Dropdown with shadcn components */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="flex items-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm font-medium hover:bg-neutral-800 transition outline-none cursor-pointer">
+                  <Avatar size="sm">
+                    <AvatarFallback className="bg-emerald-500/10 text-emerald-400">
+                      AD
+                    </AvatarFallback>
+                  </Avatar>
+                  <span className="text-white hidden sm:inline">admin</span>
+                  <ChevronDown className="h-4 w-4 text-neutral-400" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48 bg-neutral-900 border border-neutral-800 text-neutral-300 p-1 rounded-xl shadow-2xl">
+                <DropdownMenuItem
+                  onClick={() => navigate("/system/settings")}
+                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-neutral-300 focus:bg-neutral-800 focus:text-white cursor-pointer transition"
+                >
+                  <Settings className="h-4 w-4" />
+                  <span>Settings</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator className="bg-neutral-800" />
+                <DropdownMenuItem
+                  onClick={handleLogout}
+                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-red-400 focus:bg-red-950/20 focus:text-red-300 cursor-pointer transition"
+                >
+                  <LogOut className="h-4 w-4" />
+                  <span>Sign Out</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </header>
 

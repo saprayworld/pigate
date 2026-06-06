@@ -43,7 +43,9 @@ graph TD
 * **Deployment Pattern**:
   * เมื่อบิวด์โปรเจกต์เสร็จสิ้น (รัน `npm run build` หรือ `yarn build` ด้วย Yarn) ไฟล์ HTML, CSS, JS จะถูกนำมาฝังลงในตัวแอปพลิเคชันหลังบ้านผ่านฟีเจอร์ **`go:embed`** ของภาษา Go
 
+### 2.1 แนวทางการพัฒนาและข้อกำหนดการใช้งานคอมโพเนนต์ (Frontend Component Guidelines)
 
+* สำหรับแนวทางปฏิบัติ ข้อกำหนด และคู่มือการพัฒนาคอมโพเนนต์และการสไตล์หน้าเว็บ สามารถศึกษาเพิ่มเติมได้ที่คู่มือ [rules_of_work.md](file:///home/sapray/dev/pigate/docs/rules_of_work.md)
 
 ---
 
