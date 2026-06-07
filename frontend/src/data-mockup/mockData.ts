@@ -381,3 +381,70 @@ export const mockWifiScanResults: WifiScanResult[] = [
   { ssid: "Office_5G_Secured", signal: 62, security: "WPA2-Enterprise", channel: 149, frequency: "5 GHz" }
 ]
 
+// Types for Static Routing
+export interface StaticRoute {
+  id: string
+  destination: string     // e.g. "192.168.10.0/24"
+  gateway: string         // e.g. "192.168.1.250" or "" for direct
+  interface: string       // e.g. "eth0", "wlan0", "auto"
+  metric: number          // priority (default 0 or 100)
+  description: string
+  status: boolean         // true = Active, false = Disabled
+  type: "system" | "custom"
+}
+
+// Initial mockup data for Static Routes
+export const initialStaticRoutes: StaticRoute[] = [
+  {
+    id: "route-1",
+    destination: "0.0.0.0/0",
+    gateway: "10.0.0.1",
+    interface: "wlan0",
+    metric: 100,
+    description: "Default gateway route (WAN)",
+    status: true,
+    type: "system"
+  },
+  {
+    id: "route-2",
+    destination: "192.168.1.0/24",
+    gateway: "",
+    interface: "eth0",
+    metric: 0,
+    description: "Direct subnet route for LAN",
+    status: true,
+    type: "system"
+  },
+  {
+    id: "route-3",
+    destination: "10.0.0.0/24",
+    gateway: "",
+    interface: "wlan0",
+    metric: 0,
+    description: "Direct subnet route for WAN",
+    status: true,
+    type: "system"
+  },
+  {
+    id: "route-4",
+    destination: "192.168.10.0/24",
+    gateway: "192.168.1.250",
+    interface: "eth0",
+    metric: 10,
+    description: "Route to Branch office A network",
+    status: true,
+    type: "custom"
+  },
+  {
+    id: "route-5",
+    destination: "172.16.0.0/12",
+    gateway: "192.168.1.254",
+    interface: "eth0",
+    metric: 20,
+    description: "Internal Development Server cluster",
+    status: false,
+    type: "custom"
+  }
+]
+
+
