@@ -69,15 +69,14 @@ function SignalBar({ signal }: { signal: number }) {
       {Array.from({ length: bars }, (_, i) => (
         <div
           key={i}
-          className={`w-[3px] rounded-sm transition-all ${
-            i < filled
-              ? signal >= 70
-                ? "bg-primary"
-                : signal >= 40
-                  ? "bg-amber-400"
-                  : "bg-red-400"
-              : "bg-muted-foreground/20"
-          }`}
+          className={`w-[3px] rounded-sm transition-all ${i < filled
+            ? signal >= 70
+              ? "bg-primary"
+              : signal >= 40
+                ? "bg-amber-400"
+                : "bg-red-400"
+            : "bg-muted-foreground/20"
+            }`}
           style={{ height: `${((i + 1) / bars) * 100}%` }}
         />
       ))}
@@ -159,7 +158,7 @@ export default function Interfaces() {
     setFormAccess([...iface.adminAccess])
     setFormSSID(iface.connectedSSID || "")
     setFormWifiPassword("")
-    
+
     // MAC fields
     const defaultRandomMac = iface.randomizedMac || (iface.type === "wireless" ? generateRandomMac() : "")
     setFormMacMode(iface.macMode || "hardware")
@@ -201,7 +200,7 @@ export default function Interfaces() {
       prev.map(i => {
         if (i.id === id) {
           const nextStatus = i.status === "up" ? "down" : "up"
-          
+
           // Reconnect behavior: if toggling status to UP, type is wireless, macMode is randomized, and randomizeOnReconnect is true
           if (nextStatus === "up" && i.type === "wireless" && i.macMode === "randomized" && i.randomizeOnReconnect) {
             const newMac = generateRandomMac()
@@ -212,7 +211,7 @@ export default function Interfaces() {
               macAddress: newMac
             }
           }
-          
+
           return { ...i, status: nextStatus }
         }
         return i
@@ -270,7 +269,7 @@ export default function Interfaces() {
           setFormError("รูปแบบ LAA MAC Address ไม่ถูกต้อง (ตัวอย่าง: 9A:11:22:33:44:55)")
           return
         }
-        
+
         // Check LAA bit (first byte's second nibble must be 2, 6, A, E)
         const secondChar = formLaaMac.charAt(1).toUpperCase()
         if (!["2", "6", "A", "E"].includes(secondChar)) {
@@ -493,20 +492,19 @@ export default function Interfaces() {
                 )}
                 <span className="text-xs font-semibold text-foreground">{iface.name}</span>
                 {iface.type === "wireless" && iface.macMode && iface.macMode !== "hardware" && (
-                  <Badge 
-                    variant="outline" 
-                    className={`text-[9px] px-1 py-0 rounded font-normal ${
-                      iface.macMode === "randomized" 
-                        ? "bg-indigo-500/10 text-indigo-400 border-indigo-500/20" 
-                        : "bg-amber-500/10 text-amber-400 border-amber-500/20"
-                    }`}
+                  <Badge
+                    variant="outline"
+                    className={`text-[9px] px-1 py-0 rounded font-normal ${iface.macMode === "randomized"
+                      ? "bg-indigo-500/10 text-indigo-400 border-indigo-500/20"
+                      : "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                      }`}
                   >
                     {iface.macMode === "randomized" ? "Randomized" : "LAA"}
                   </Badge>
                 )}
                 {iface.type === "wireless" && iface.macMode === "randomized" && iface.randomizeOnReconnect && (
-                  <Badge 
-                    variant="outline" 
+                  <Badge
+                    variant="outline"
                     className="text-[9px] px-1 py-0 rounded font-normal bg-primary/10 text-primary border-primary/20"
                     title="สุ่มที่อยู่ MAC ใหม่ทุกครั้งที่มีการเชื่อมต่อ"
                   >
@@ -540,7 +538,7 @@ export default function Interfaces() {
 
       {/* 6. Edit Interface Dialog */}
       <Dialog open={isEditOpen} modal={false} onOpenChange={setIsEditOpen}>
-        <DialogContent className="max-w-[580px] w-full rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-full md:max-w-[920px] rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up max-h-[90vh] overflow-y-auto">
           <DialogHeader className="pb-3 border-b border-border/40">
             <DialogTitle className="text-lg font-bold text-foreground flex items-center gap-2">
               {editingIface?.type === "ethernet" ? (
@@ -587,22 +585,20 @@ export default function Interfaces() {
                 <button
                   type="button"
                   onClick={() => setFormMode("dhcp")}
-                  className={`px-4 py-1.5 text-xs font-bold rounded-md transition cursor-pointer ${
-                    formMode === "dhcp"
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
-                  }`}
+                  className={`px-4 py-1.5 text-xs font-bold rounded-md transition cursor-pointer ${formMode === "dhcp"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
+                    }`}
                 >
                   DHCP (Auto)
                 </button>
                 <button
                   type="button"
                   onClick={() => setFormMode("static")}
-                  className={`px-4 py-1.5 text-xs font-bold rounded-md transition cursor-pointer ${
-                    formMode === "static"
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
-                  }`}
+                  className={`px-4 py-1.5 text-xs font-bold rounded-md transition cursor-pointer ${formMode === "static"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
+                    }`}
                 >
                   Manual (Static)
                 </button>
@@ -728,9 +724,8 @@ export default function Interfaces() {
                               key={idx}
                               type="button"
                               onClick={() => selectSSID(wifi.ssid)}
-                              className={`w-full flex items-center justify-between px-3 py-2 text-xs transition cursor-pointer hover:bg-muted/20 border-b border-border/20 last:border-b-0 ${
-                                formSSID === wifi.ssid ? "bg-primary/10" : ""
-                              }`}
+                              className={`w-full flex items-center justify-between px-3 py-2 text-xs transition cursor-pointer hover:bg-muted/20 border-b border-border/20 last:border-b-0 ${formSSID === wifi.ssid ? "bg-primary/10" : ""
+                                }`}
                             >
                               <div className="flex items-center gap-2">
                                 <SignalBar signal={wifi.signal} />
@@ -903,15 +898,13 @@ export default function Interfaces() {
                       key={access}
                       type="button"
                       onClick={() => toggleAccess(access)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition cursor-pointer ${
-                        isActive
-                          ? "border-primary/40 bg-primary/10 text-primary"
-                          : "border-border/40 bg-muted/10 text-muted-foreground hover:bg-muted/20 hover:text-foreground"
-                      }`}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition cursor-pointer ${isActive
+                        ? "border-primary/40 bg-primary/10 text-primary"
+                        : "border-border/40 bg-muted/10 text-muted-foreground hover:bg-muted/20 hover:text-foreground"
+                        }`}
                     >
-                      <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center ${
-                        isActive ? "bg-primary border-primary" : "border-muted-foreground/40"
-                      }`}>
+                      <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center ${isActive ? "bg-primary border-primary" : "border-muted-foreground/40"
+                        }`}>
                         {isActive && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
                       </div>
                       {access}

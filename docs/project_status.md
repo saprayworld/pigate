@@ -44,12 +44,23 @@
     * แก้ไขและบันทึกแนวทางปัญหาคลิกเลือกตัวเลือก Combobox dropdown ภายใน Dialog โดนบล็อกอันเกิดจากกลไก Focus/Pointer Blocker ของ Radix UI Dialog โดยการพอร์ตเนื้อหาเข้าภายใต้ DOM Tree ของ DialogContent ด้วย container ref
   * ออกแบบระบบ Switch inline เพื่อเปิด/ปิด หรือสตรีมล็อกบนแถว และการจำลองนำไปปรับใช้จริงผ่านปุ่ม "Apply Settings" เข้าเคอร์เนล `nftables`
 
+* **พัฒนาหน้าจอการจัดการวัตถุเครือข่ายและพอร์ต (Addresses & Services Objects) [สำเร็จ]**:
+  * พัฒนาหน้า [Addresses.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/Addresses.tsx) สำหรับสร้างและควบคุม IP/Subnet, IP Range, หรือชื่อโดเมน FQDN
+  * พัฒนาหน้า [Services.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/Services.tsx) สำหรับควบคุมรายชื่อพอร์ต TCP/UDP/ICMP
+  * ทั้งสองหน้ารองรับการทำ CRUD ในตัว (เพิ่ม, แก้ไข, ลบ) และมีระบบความปลอดภัยล็อกไม่ให้ลบหรือแก้ไขวัตถุของระบบ (Predefined System Objects)
+  * หน้า Addresses รองรับการเลือกกล่องเครื่องหมายเพื่อลบทีละหลายวัตถุพร้อมกัน (Bulk Delete) และหน้า Services มีกล่อง Preview คำสั่ง Named Set ที่จำลองการส่งไปประมวลผลบน Linux Kernel `nftables` จริงแบบเรียลไทม์
+
+* **พัฒนาหน้าจอการตั้งค่าการ์ดเครือข่ายและระบบสุ่ม MAC Address (Network Interfaces) [สำเร็จ]**:
+  * พัฒนาหน้า [Interfaces.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/Interfaces.tsx) ครอบคลุมการแสดงผล eth0 (Ethernet) และ wlan0 (Wireless)
+  * ติดตั้งเครื่องมือสแกนหาคลื่น Wi-Fi (SSID Scanner) ที่มีระบบพรีวิวสัญญาณตามระดับความแรงช่องสัญญาณและความปลอดภัยของเครือข่าย
+  * เพิ่มฟีเจอร์ความปลอดภัยขั้นสูง ได้แก่ **MAC Address Randomization** สำหรับการสุ่ม MAC Address เพื่อความปลอดภัย และ **LAA MAC Address** (กำหนด MAC เองแบบ Locally Administered) สำหรับการ์ด Wi-Fi พร้อมระบบตรวจสอบมาตรฐานความถูกต้อง LAA (หลักที่สองของ Byte แรก ต้องเป็น 2, 6, A, E) และตัวสลับสุ่ม MAC ใหม่เมื่อ Reconnect โดยอัตโนมัติ
+
 ---
 
 ## 2. ปัญหาและประเด็นที่ต้องพิจารณาในปัจจุบัน (Current Issues & Limitations)
 
 * **การพัฒนาและเชื่อมโยงข้อมูลจริงของแต่ละหน้าจอ**:
-  * หน้าจอหลักบางส่วน (Interfaces, DHCP, ฯลฯ) ปัจจุบันยังเป็นหน้าจอจำลอง (Mock Pages)
+  * หน้าจอ DHCP, Static Route, Settings และ Login ปัจจุบันยังเป็นหน้าจอจำลอง (Mock Pages)
   * ต้องเริ่มเปลี่ยนตัวแปรข้อมูลและการทำงานของแต่ละหน้าให้เป็นฟังก์ชันใช้งานจริง
   * ขาดการเชื่อมต่อ API จริงกับฝั่ง Go Backend และระบบการอัปเดตแบบ Real-time ด้วย Server-Sent Events (SSE)
 
@@ -62,8 +73,9 @@
 * **สเตปที่ 3: พัฒนาหน้า Dashboard (`01-dashboard.html`)** `[เสร็จสิ้น]`
 * **สเตปที่ 4: พัฒนาหน้าจอการตั้งค่าเครือข่ายและความปลอดภัย**:
   * จัดสร้างหน้า Firewall Policies พร้อมติดตั้งความสามารถในการลากจัดเรียงลำดับความสำคัญ (Drag & Drop ด้วย `@dnd-kit`) และปรับปรุงฟอร์มโมดอลให้ใช้งาน Multiple Selection Combobox แบบถูกต้องตามคู่มืออ้างอิงของ shadcn `[เสร็จสิ้น]`
-  * พัฒนาหน้าจอการจัดการ Physical & Virtual Interfaces (eth0, wlan0) และระบบจำลองสำหรับคลิกแสกนหาคลื่น Wi-Fi (SSID Scanner) `[กำลังดำเนินการถัดไป]`
-  * ทยอยพัฒนาส่วนหน้าจออื่น ๆ ได้แก่ Static Route, DHCP Server, Address/Service Objects, Settings, Maintenance และหน้าล็อกอินจริง
+  * พัฒนาหน้าจอการจัดการ Physical & Virtual Interfaces (eth0, wlan0) และระบบจำลองสำหรับคลิกแสกนหาคลื่น Wi-Fi (SSID Scanner) พร้อมระบบสุ่ม MAC Address (MAC Randomization / LAA) `[เสร็จสิ้น]`
+  * พัฒนาหน้าจอจัดการที่อยู่ไอพี (Address Objects) และบริการพอร์ต (Service Objects) พร้อมระบบจำลองพรีวิว `nftables` `[เสร็จสิ้น]`
+  * ทยอยพัฒนาส่วนหน้าจออื่น ๆ ได้แก่ Static Route, DHCP Server, Settings, Maintenance และหน้าล็อกอินจริง `[กำลังดำเนินการถัดไป]`
 * **สเตปที่ 5: จัดระเบียบการเรียกใช้ API และความปลอดภัย**:
   * เตรียมโมเดลการดึงข้อมูลจาก API ของหลังบ้าน และระบบสตรีม SSE (Server-Sent Events)
   * ตรวจสอบความปลอดภัยระดับเบื้องต้น เช่น การรับมือเมื่อเซสชันหมดอายุ, การกรองฟิลด์ข้อมูลนำเข้า (Sanitization) และการเข้ารหัสการสื่อสาร
