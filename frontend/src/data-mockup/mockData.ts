@@ -159,3 +159,130 @@ export const initialPolicyRules: PolicyRule[] = [
     status: true
   }
 ]
+
+// Types for Address Objects
+export interface AddressObject {
+  id: string
+  name: string
+  type: "subnet" | "range" | "fqdn"
+  value: string
+  refPolicies: string[]
+}
+
+// Initial mockup data for Address Objects
+export const initialAddressObjects: AddressObject[] = [
+  {
+    id: "addr-1",
+    name: "LAN_Network",
+    type: "subnet",
+    value: "192.168.1.0/24",
+    refPolicies: ["Allow-DNS-Out", "Allow-Web-Out", "Block-BitTorrent"]
+  },
+  {
+    id: "addr-2",
+    name: "Admin_PC",
+    type: "subnet",
+    value: "192.168.1.10/32",
+    refPolicies: ["Allow-SSH-Admin"]
+  },
+  {
+    id: "addr-3",
+    name: "DHCP_Pool_Zone",
+    type: "range",
+    value: "192.168.1.100 - 192.168.1.200",
+    refPolicies: []
+  },
+  {
+    id: "addr-4",
+    name: "Update_Server",
+    type: "fqdn",
+    value: "pigate-update.com",
+    refPolicies: ["System-Update"]
+  },
+  {
+    id: "addr-5",
+    name: "Malicious_IP_List",
+    type: "subnet",
+    value: "198.51.100.0/22",
+    refPolicies: ["Block-Malicious-IPs"]
+  }
+]
+
+// Types for Service Objects
+export interface ServiceObject {
+  id: string
+  name: string
+  protocol: "TCP" | "UDP" | "TCP/UDP" | "ICMP"
+  port: string
+  type: "system" | "custom"
+  refPolicies: string[]
+}
+
+// Initial mockup data for Service Objects
+export const initialServiceObjects: ServiceObject[] = [
+  {
+    id: "svc-1",
+    name: "HTTP",
+    protocol: "TCP",
+    port: "80",
+    type: "system",
+    refPolicies: ["Allow-Web-Out"]
+  },
+  {
+    id: "svc-2",
+    name: "HTTPS",
+    protocol: "TCP",
+    port: "443",
+    type: "system",
+    refPolicies: ["Allow-Web-Out"]
+  },
+  {
+    id: "svc-3",
+    name: "SSH",
+    protocol: "TCP",
+    port: "22",
+    type: "system",
+    refPolicies: ["Allow-SSH-Admin"]
+  },
+  {
+    id: "svc-4",
+    name: "DNS",
+    protocol: "UDP",
+    port: "53",
+    type: "system",
+    refPolicies: ["Allow-DNS-Out"]
+  },
+  {
+    id: "svc-5",
+    name: "My_Minecraft_Server",
+    protocol: "TCP/UDP",
+    port: "25565",
+    type: "custom",
+    refPolicies: []
+  },
+  {
+    id: "svc-6",
+    name: "Web_Testing_Pool",
+    protocol: "TCP",
+    port: "8080-8085",
+    type: "custom",
+    refPolicies: []
+  },
+  {
+    id: "svc-7",
+    name: "BitTorrent_Ports",
+    protocol: "TCP/UDP",
+    port: "6881-6889",
+    type: "custom",
+    refPolicies: ["Block-BitTorrent"]
+  },
+  {
+    id: "svc-8",
+    name: "Ping_ICMP",
+    protocol: "ICMP",
+    port: "-",
+    type: "system",
+    refPolicies: []
+  }
+]
+
