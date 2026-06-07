@@ -310,7 +310,7 @@ export interface NetworkInterface {
   gateway: string             // e.g. "192.168.1.254" (used for static)
   dns1: string
   dns2: string
-  macAddress: string
+  macAddress: string          // Effective MAC address currently active
   adminAccess: AdminAccess[]
   status: "up" | "down"
   speed: string               // e.g. "1000 Mbps", "72 Mbps"
@@ -318,6 +318,12 @@ export interface NetworkInterface {
   connectedSSID?: string
   wifiPassword?: string       // masked
   wifiSecurity?: string       // e.g. "WPA2-PSK"
+  // MAC Address Randomization & LAA support
+  macMode?: "hardware" | "randomized" | "laa"
+  realMacAddress?: string
+  randomizedMac?: string
+  laaMacAddress?: string
+  randomizeOnReconnect?: boolean
 }
 
 // Initial mockup data for Network Interfaces
@@ -334,6 +340,8 @@ export const initialNetworkInterfaces: NetworkInterface[] = [
     dns1: "",
     dns2: "",
     macAddress: "DC:A6:32:AA:BB:C1",
+    realMacAddress: "DC:A6:32:AA:BB:C1",
+    macMode: "hardware",
     adminAccess: ["PING", "HTTP", "SSH"],
     status: "up",
     speed: "1000 Mbps"
@@ -349,7 +357,12 @@ export const initialNetworkInterfaces: NetworkInterface[] = [
     gateway: "10.0.0.1",
     dns1: "8.8.8.8",
     dns2: "1.1.1.1",
-    macAddress: "DC:A6:32:AA:BB:C2",
+    macAddress: "4E:88:2F:BC:A1:90", // effective MAC
+    realMacAddress: "DC:A6:32:AA:BB:C2", // hardware MAC
+    macMode: "randomized",
+    randomizedMac: "4E:88:2F:BC:A1:90",
+    laaMacAddress: "9A:11:22:33:44:55",
+    randomizeOnReconnect: true,
     adminAccess: ["PING"],
     status: "up",
     speed: "72 Mbps",
