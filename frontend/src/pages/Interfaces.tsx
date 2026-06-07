@@ -1,17 +1,725 @@
+import { useState, useMemo, useCallback } from "react"
+import {
+  Network,
+  Wifi,
+  Cable,
+  Edit,
+  RefreshCw,
+  Shield,
+  Signal,
+  Lock,
+  Unlock,
+  AlertCircle,
+  Activity,
+  ArrowUpDown,
+  Check
+} from "lucide-react"
+import { Card } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
+import { Switch } from "@/components/ui/switch"
+import {
+  type NetworkInterface,
+  type AdminAccess,
+  type AddressingMode,
+  type WifiScanResult,
+  initialNetworkInterfaces,
+  mockWifiScanResults
+} from "@/data-mockup/mockData"
+
+
+
+// Helper: Signal strength color
+function signalColor(signal: number): string {
+  if (signal >= 70) return "text-primary"
+  if (signal >= 40) return "text-amber-400"
+  return "text-red-400"
+}
+
+// Helper: Signal bar fill for visual indicator
+function SignalBar({ signal }: { signal: number }) {
+  const bars = 5
+  const filled = Math.round((signal / 100) * bars)
+  return (
+    <div className="flex items-end gap-0.5 h-3.5">
+      {Array.from({ length: bars }, (_, i) => (
+        <div
+          key={i}
+          className={`w-[3px] rounded-sm transition-all ${
+            i < filled
+              ? signal >= 70
+                ? "bg-primary"
+                : signal >= 40
+                  ? "bg-amber-400"
+                  : "bg-red-400"
+              : "bg-muted-foreground/20"
+          }`}
+          style={{ height: `${((i + 1) / bars) * 100}%` }}
+        />
+      ))}
+    </div>
+  )
+}
+
+const ALL_ACCESS_OPTIONS: AdminAccess[] = ["HTTPS", "HTTP", "PING", "SSH"]
+
 export default function Interfaces() {
+  // --- State ---
+  const [interfaces, setInterfaces] = useState<NetworkInterface[]>(initialNetworkInterfaces)
+
+  // Edit Dialog State
+  const [isEditOpen, setIsEditOpen] = useState(false)
+  const [editingIface, setEditingIface] = useState<NetworkInterface | null>(null)
+
+  // Form State
+  const [formAlias, setFormAlias] = useState("")
+  const [formMode, setFormMode] = useState<AddressingMode>("dhcp")
+  const [formIp, setFormIp] = useState("")
+  const [formNetmask, setFormNetmask] = useState("")
+  const [formGateway, setFormGateway] = useState("")
+  const [formDns1, setFormDns1] = useState("")
+  const [formDns2, setFormDns2] = useState("")
+  const [formAccess, setFormAccess] = useState<AdminAccess[]>([])
+  const [formError, setFormError] = useState("")
+
+  // Wi-Fi Form State
+  const [formSSID, setFormSSID] = useState("")
+  const [formWifiPassword, setFormWifiPassword] = useState("")
+
+  // Wi-Fi Scanner State
+  const [isScanning, setIsScanning] = useState(false)
+  const [scanResults, setScanResults] = useState<WifiScanResult[]>([])
+  const [showScanResults, setShowScanResults] = useState(false)
+
+  // --- Statistics ---
+  const stats = useMemo(() => {
+    const total = interfaces.length
+    const up = interfaces.filter(i => i.status === "up").length
+    const down = interfaces.filter(i => i.status === "down").length
+    const ethernet = interfaces.filter(i => i.type === "ethernet").length
+    const wireless = interfaces.filter(i => i.type === "wireless").length
+    return { total, up, down, ethernet, wireless }
+  }, [interfaces])
+
+  // --- Actions ---
+  const openEditDialog = useCallback((iface: NetworkInterface) => {
+    setEditingIface(iface)
+    setFormAlias(iface.alias)
+    setFormMode(iface.addressingMode)
+    setFormIp(iface.ip)
+    setFormNetmask(iface.netmask)
+    setFormGateway(iface.gateway)
+    setFormDns1(iface.dns1)
+    setFormDns2(iface.dns2)
+    setFormAccess([...iface.adminAccess])
+    setFormSSID(iface.connectedSSID || "")
+    setFormWifiPassword("")
+    setFormError("")
+    setScanResults([])
+    setShowScanResults(false)
+    setIsEditOpen(true)
+  }, [])
+
+  const toggleAccess = (access: AdminAccess) => {
+    setFormAccess(prev =>
+      prev.includes(access) ? prev.filter(a => a !== access) : [...prev, access]
+    )
+  }
+
+  const handleWifiScan = () => {
+    setIsScanning(true)
+    setScanResults([])
+    setShowScanResults(true)
+
+    // Simulate scanning delay
+    setTimeout(() => {
+      setScanResults(mockWifiScanResults)
+      setIsScanning(false)
+    }, 1800)
+  }
+
+  const selectSSID = (ssid: string) => {
+    setFormSSID(ssid)
+    setShowScanResults(false)
+  }
+
+  const handleToggleStatus = (id: string) => {
+    setInterfaces(prev =>
+      prev.map(i =>
+        i.id === id
+          ? { ...i, status: i.status === "up" ? "down" : "up" }
+          : i
+      )
+    )
+  }
+
+  const handleSave = (e: React.FormEvent) => {
+    e.preventDefault()
+    setFormError("")
+
+    if (!editingIface) return
+
+    // Validation: Alias
+    const aliasRegex = /^[a-zA-Z0-9_]+$/
+    if (!aliasRegex.test(formAlias)) {
+      setFormError("ชื่อ Alias ต้องใช้ภาษาอังกฤษ ตัวเลข หรือเครื่องหมาย _ เท่านั้น (ห้ามเว้นวรรค)")
+      return
+    }
+
+    // Duplicate alias check
+    const isDuplicate = interfaces.some(
+      i => i.alias.toLowerCase() === formAlias.toLowerCase() && i.id !== editingIface.id
+    )
+    if (isDuplicate) {
+      setFormError(`มีชื่อ Alias "${formAlias}" อยู่ในระบบแล้ว`)
+      return
+    }
+
+    // Validation for Static mode
+    if (formMode === "static") {
+      const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/
+      if (!ipRegex.test(formIp)) {
+        setFormError("กรุณากรอก IP Address ให้ถูกต้อง (เช่น 192.168.1.1)")
+        return
+      }
+      const maskNum = parseInt(formNetmask)
+      if (isNaN(maskNum) || maskNum < 0 || maskNum > 32) {
+        setFormError("Netmask ต้องอยู่ในช่วง 0-32")
+        return
+      }
+    }
+
+    // Validation for Wi-Fi
+    if (editingIface.type === "wireless" && !formSSID.trim()) {
+      setFormError("กรุณาเลือกหรือระบุ SSID ของเครือข่าย Wi-Fi")
+      return
+    }
+
+    // Save
+    setInterfaces(prev =>
+      prev.map(i =>
+        i.id === editingIface.id
+          ? {
+            ...i,
+            alias: formAlias,
+            addressingMode: formMode,
+            ip: formMode === "static" ? formIp : i.ip,
+            netmask: formMode === "static" ? formNetmask : i.netmask,
+            gateway: formMode === "static" ? formGateway : i.gateway,
+            dns1: formMode === "static" ? formDns1 : i.dns1,
+            dns2: formMode === "static" ? formDns2 : i.dns2,
+            adminAccess: formAccess,
+            connectedSSID: i.type === "wireless" ? formSSID : i.connectedSSID,
+          }
+          : i
+      )
+    )
+
+    setIsEditOpen(false)
+  }
+
   return (
     <div className="space-y-6">
-      {/* Welcome Header */}
+      {/* 1. Header Area */}
       <div>
-        <h1 className="text-3xl font-bold tracking-tight text-foreground">Network Interfaces</h1>
-        <p className="text-muted-foreground mt-1">Manage physical and virtual network adapters on your Raspberry Pi.</p>
+        <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
+          <Network className="h-7 w-7 text-primary fill-primary/10" />
+          Network Interfaces
+        </h1>
+        <p className="text-muted-foreground mt-1">
+          จัดการอินเทอร์เฟซเครือข่าย Physical และ Virtual บนบอร์ด Raspberry Pi
+        </p>
       </div>
 
-      <div className="rounded-xl border border-border bg-card/30 p-6">
-        <div className="flex h-60 items-center justify-center rounded-lg border border-dashed border-border bg-muted/40 text-muted-foreground">
-          [ Physical & Virtual Interfaces configuration page ]
-        </div>
+      {/* 2. Stats Dashboard Cards */}
+      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+        <Card className="bg-card/20 border border-border/50 p-4">
+          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">อินเทอร์เฟซทั้งหมด</div>
+          <div className="mt-2 text-2xl font-bold text-foreground font-mono">{stats.total}</div>
+        </Card>
+        <Card className="bg-card/20 border border-border/50 p-4">
+          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+            <Activity className="h-3.5 w-3.5 text-primary" /> Active (UP)
+          </div>
+          <div className="mt-2 text-2xl font-bold text-primary font-mono">{stats.up}</div>
+        </Card>
+        <Card className="bg-card/20 border border-border/50 p-4">
+          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+            <Cable className="h-3.5 w-3.5 text-cyan-400" /> Ethernet
+          </div>
+          <div className="mt-2 text-2xl font-bold text-cyan-400 font-mono">{stats.ethernet}</div>
+        </Card>
+        <Card className="bg-card/20 border border-border/50 p-4">
+          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+            <Wifi className="h-3.5 w-3.5 text-indigo-400" /> Wireless
+          </div>
+          <div className="mt-2 text-2xl font-bold text-indigo-400 font-mono">{stats.wireless}</div>
+        </Card>
       </div>
+
+      {/* 3. Interface Table */}
+      <Card className="bg-card/25 border border-border/50 overflow-hidden">
+        <Table>
+          <TableHeader>
+            <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
+              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[6%] font-semibold">Port</th>
+              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[18%] font-semibold">Name (Alias)</th>
+              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[20%] font-semibold">IP / Netmask</th>
+              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[20%] font-semibold">Admin Access</th>
+              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[10%] font-semibold">Speed</th>
+              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[10%] font-semibold">Status</th>
+              <TableHead className="p-3 w-[16%] text-right text-[11px] uppercase tracking-wider font-semibold">Action</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {interfaces.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={7} className="p-8 text-center text-muted-foreground text-xs">
+                  ไม่พบอินเทอร์เฟซเครือข่าย
+                </TableCell>
+              </TableRow>
+            ) : (
+              interfaces.map((iface) => (
+                <TableRow key={iface.id} className="border-b border-border/40 hover:bg-muted/15">
+                  {/* Port Icon */}
+                  <TableCell className="p-3 text-center">
+                    {iface.type === "ethernet" ? (
+                      <Cable className="h-5 w-5 text-cyan-400 mx-auto" />
+                    ) : (
+                      <Wifi className="h-5 w-5 text-indigo-400 mx-auto" />
+                    )}
+                  </TableCell>
+
+                  {/* Name (Alias) */}
+                  <TableCell className="p-3">
+                    <div className="font-semibold text-foreground">{iface.name}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">({iface.alias})</div>
+                    {iface.type === "wireless" && iface.connectedSSID && iface.status === "up" && (
+                      <div className="flex items-center gap-1 mt-1">
+                        <Signal className="h-3 w-3 text-indigo-400" />
+                        <span className="text-[10px] text-indigo-400 font-mono">{iface.connectedSSID}</span>
+                      </div>
+                    )}
+                  </TableCell>
+
+                  {/* IP / Netmask */}
+                  <TableCell className="p-3">
+                    <div className="font-mono text-xs text-foreground">
+                      {iface.status === "up" ? `${iface.ip} / ${iface.netmask}` : "—"}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground mt-0.5">
+                      {iface.addressingMode === "dhcp" ? "DHCP" : "Static"}
+                    </div>
+                  </TableCell>
+
+                  {/* Admin Access */}
+                  <TableCell className="p-3">
+                    <div className="flex flex-wrap gap-1">
+                      {iface.adminAccess.length === 0 ? (
+                        <span className="text-xs text-muted-foreground/45 italic">None</span>
+                      ) : (
+                        iface.adminAccess.map((access) => (
+                          <Badge
+                            key={access}
+                            variant="outline"
+                            className="bg-muted/30 text-muted-foreground border-border/40 text-[9px] px-1.5 py-0.5 rounded font-mono"
+                          >
+                            {access}
+                          </Badge>
+                        ))
+                      )}
+                    </div>
+                  </TableCell>
+
+                  {/* Speed */}
+                  <TableCell className="p-3">
+                    <span className="font-mono text-xs text-muted-foreground">
+                      {iface.status === "up" ? iface.speed : "—"}
+                    </span>
+                  </TableCell>
+
+                  {/* Status */}
+                  <TableCell className="p-3">
+                    {iface.status === "up" ? (
+                      <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px] px-2 py-0.5 rounded font-bold">
+                        UP
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/20 text-[10px] px-2 py-0.5 rounded font-bold">
+                        DOWN
+                      </Badge>
+                    )}
+                  </TableCell>
+
+                  {/* Action */}
+                  <TableCell className="p-3 text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-muted-foreground">{iface.status === "up" ? "ON" : "OFF"}</span>
+                        <Switch
+                          size="sm"
+                          checked={iface.status === "up"}
+                          onCheckedChange={() => handleToggleStatus(iface.id)}
+                        />
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={() => openEditDialog(iface)}
+                        className="cursor-pointer text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                        title="แก้ไขอินเทอร์เฟซ"
+                      >
+                        <Edit className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </Card>
+
+      {/* 4. MAC Address reference table */}
+      <Card className="bg-card/20 border border-border/50 p-4">
+        <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+          Hardware Address (MAC)
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {interfaces.map((iface) => (
+            <div key={iface.id} className="flex items-center justify-between bg-muted/10 px-3 py-2 rounded-lg border border-border/30">
+              <div className="flex items-center gap-2">
+                {iface.type === "ethernet" ? (
+                  <Cable className="h-3.5 w-3.5 text-cyan-400" />
+                ) : (
+                  <Wifi className="h-3.5 w-3.5 text-indigo-400" />
+                )}
+                <span className="text-xs font-semibold text-foreground">{iface.name}</span>
+              </div>
+              <span className="text-xs font-mono text-muted-foreground">{iface.macAddress}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* 5. Warning / Help Box */}
+      <Alert className="border-dashed border-border bg-card/10">
+        <AlertCircle className="h-4 w-4 text-muted-foreground" />
+        <AlertTitle className="font-bold text-foreground mb-0.5">ข้อมูลสำคัญ:</AlertTitle>
+        <AlertDescription className="text-xs text-muted-foreground leading-relaxed">
+          การเปลี่ยนค่า IP Address หรือ Addressing Mode ของอินเทอร์เฟซอาจทำให้เชื่อมต่อกับบอร์ดไม่ได้ชั่วคราว
+          กรุณาตรวจสอบค่าอย่างถี่ถ้วนก่อนบันทึก อินเทอร์เฟซที่ตั้งค่าเป็น <span className="font-semibold text-primary">"LAN"</span> ควรใช้ Static IP
+          และอินเทอร์เฟซ <span className="font-semibold text-primary">"WAN"</span> ควรใช้ DHCP เพื่อรับ IP จากเราเตอร์ต้นทาง
+        </AlertDescription>
+      </Alert>
+
+      {/* 6. Edit Interface Dialog */}
+      <Dialog open={isEditOpen} modal={false} onOpenChange={setIsEditOpen}>
+        <DialogContent className="max-w-[580px] w-full rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up max-h-[90vh] overflow-y-auto">
+          <DialogHeader className="pb-3 border-b border-border/40">
+            <DialogTitle className="text-lg font-bold text-foreground flex items-center gap-2">
+              {editingIface?.type === "ethernet" ? (
+                <Cable className="h-5 w-5 text-cyan-400" />
+              ) : (
+                <Wifi className="h-5 w-5 text-indigo-400" />
+              )}
+              Edit Interface: {editingIface?.name}
+              <span className="text-sm font-normal text-muted-foreground">({editingIface?.alias})</span>
+            </DialogTitle>
+          </DialogHeader>
+
+          <form onSubmit={handleSave} className="space-y-4 text-sm">
+            {formError && (
+              <Alert variant="destructive" className="border-red-500/20 bg-red-500/5 py-2.5 px-3">
+                <AlertCircle className="h-4 w-4 text-red-400" />
+                <AlertDescription className="text-red-400 text-xs">{formError}</AlertDescription>
+              </Alert>
+            )}
+
+            {/* Field: Alias Name */}
+            <div className="space-y-1.5">
+              <Label htmlFor="form-alias" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                Alias Name <span className="text-red-500">*</span>
+              </Label>
+              <Input
+                id="form-alias"
+                type="text"
+                required
+                value={formAlias}
+                onChange={(e) => setFormAlias(e.target.value)}
+                placeholder="เช่น LAN_Internal, WAN_WiFi"
+                className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono"
+              />
+              <p className="text-[11px] text-muted-foreground italic">ห้ามเว้นวรรค ใช้ได้เฉพาะอักษรภาษาอังกฤษ ตัวเลข และ _</p>
+            </div>
+
+            {/* Field: Addressing Mode */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                Addressing Mode
+              </Label>
+              <div className="flex rounded-lg border border-border bg-background p-0.5 gap-0.5 w-fit">
+                <button
+                  type="button"
+                  onClick={() => setFormMode("dhcp")}
+                  className={`px-4 py-1.5 text-xs font-bold rounded-md transition cursor-pointer ${
+                    formMode === "dhcp"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
+                  }`}
+                >
+                  DHCP (Auto)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFormMode("static")}
+                  className={`px-4 py-1.5 text-xs font-bold rounded-md transition cursor-pointer ${
+                    formMode === "static"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
+                  }`}
+                >
+                  Manual (Static)
+                </button>
+              </div>
+            </div>
+
+            {/* Static IP Fields (conditional) */}
+            {formMode === "static" && (
+              <div className="space-y-3 border border-border/40 rounded-lg p-4 bg-muted/5">
+                <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                  <ArrowUpDown className="h-3 w-3" /> Static IP Configuration
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="form-ip" className="text-[11px] text-muted-foreground">IP Address <span className="text-red-500">*</span></Label>
+                    <Input
+                      id="form-ip"
+                      type="text"
+                      value={formIp}
+                      onChange={(e) => setFormIp(e.target.value)}
+                      placeholder="192.168.1.1"
+                      className="bg-background/50 h-8 font-mono text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="form-netmask" className="text-[11px] text-muted-foreground">Netmask (CIDR) <span className="text-red-500">*</span></Label>
+                    <Input
+                      id="form-netmask"
+                      type="text"
+                      value={formNetmask}
+                      onChange={(e) => setFormNetmask(e.target.value)}
+                      placeholder="24"
+                      className="bg-background/50 h-8 font-mono text-xs"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="form-gateway" className="text-[11px] text-muted-foreground">Gateway</Label>
+                  <Input
+                    id="form-gateway"
+                    type="text"
+                    value={formGateway}
+                    onChange={(e) => setFormGateway(e.target.value)}
+                    placeholder="192.168.1.254"
+                    className="bg-background/50 h-8 font-mono text-xs"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="form-dns1" className="text-[11px] text-muted-foreground">DNS Primary</Label>
+                    <Input
+                      id="form-dns1"
+                      type="text"
+                      value={formDns1}
+                      onChange={(e) => setFormDns1(e.target.value)}
+                      placeholder="8.8.8.8"
+                      className="bg-background/50 h-8 font-mono text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="form-dns2" className="text-[11px] text-muted-foreground">DNS Secondary</Label>
+                    <Input
+                      id="form-dns2"
+                      type="text"
+                      value={formDns2}
+                      onChange={(e) => setFormDns2(e.target.value)}
+                      placeholder="1.1.1.1"
+                      className="bg-background/50 h-8 font-mono text-xs"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Wi-Fi Settings (only for wireless) */}
+            {editingIface?.type === "wireless" && (
+              <div className="space-y-3 border border-indigo-500/20 rounded-lg p-4 bg-indigo-500/5">
+                <div className="text-xs font-semibold text-indigo-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Wifi className="h-3.5 w-3.5" /> Wireless Client Settings
+                </div>
+
+                {/* SSID with Scanner */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="form-ssid" className="text-[11px] text-muted-foreground">
+                    SSID <span className="text-red-500">*</span>
+                  </Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="form-ssid"
+                      type="text"
+                      value={formSSID}
+                      onChange={(e) => setFormSSID(e.target.value)}
+                      placeholder="ชื่อเครือข่าย Wi-Fi"
+                      className="bg-background/50 h-8 font-mono text-xs flex-1"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleWifiScan}
+                      disabled={isScanning}
+                      className="cursor-pointer gap-1 text-xs h-8 px-3 border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10 hover:text-indigo-300"
+                    >
+                      <RefreshCw className={`h-3 w-3 ${isScanning ? "animate-spin" : ""}`} />
+                      {isScanning ? "Scanning..." : "Scan"}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Scan Results */}
+                {showScanResults && (
+                  <div className="rounded-lg border border-border/40 bg-background/30 overflow-hidden">
+                    {isScanning ? (
+                      <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
+                        <RefreshCw className="h-4 w-4 animate-spin text-indigo-400" />
+                        กำลังค้นหาเครือข่าย Wi-Fi...
+                      </div>
+                    ) : (
+                      <div className="max-h-[200px] overflow-y-auto">
+                        {scanResults.map((wifi, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => selectSSID(wifi.ssid)}
+                            className={`w-full flex items-center justify-between px-3 py-2 text-xs transition cursor-pointer hover:bg-muted/20 border-b border-border/20 last:border-b-0 ${
+                              formSSID === wifi.ssid ? "bg-primary/10" : ""
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <SignalBar signal={wifi.signal} />
+                              <span className="font-semibold text-foreground">{wifi.ssid}</span>
+                              {wifi.security !== "Open" ? (
+                                <Lock className="h-3 w-3 text-muted-foreground" />
+                              ) : (
+                                <Unlock className="h-3 w-3 text-amber-400" />
+                              )}
+                              {formSSID === wifi.ssid && (
+                                <Check className="h-3 w-3 text-primary" />
+                              )}
+                            </div>
+                            <div className="flex items-center gap-3 text-muted-foreground">
+                              <span className={signalColor(wifi.signal)}>{wifi.signal}%</span>
+                              <span className="text-[10px]">{wifi.security}</span>
+                              <span className="text-[10px]">Ch.{wifi.channel}</span>
+                              <Badge variant="outline" className="text-[9px] px-1 py-0 rounded border-border/40">
+                                {wifi.frequency}
+                              </Badge>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Wi-Fi Password */}
+                <div className="space-y-1">
+                  <Label htmlFor="form-wifi-password" className="text-[11px] text-muted-foreground">
+                    Password (PSK)
+                  </Label>
+                  <Input
+                    id="form-wifi-password"
+                    type="password"
+                    value={formWifiPassword}
+                    onChange={(e) => setFormWifiPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="bg-background/50 h-8 font-mono text-xs"
+                  />
+                  <p className="text-[10px] text-muted-foreground italic">เว้นว่างหากไม่ต้องการเปลี่ยนรหัสผ่าน</p>
+                </div>
+              </div>
+            )}
+
+            {/* Admin Access Checkboxes */}
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                <Shield className="h-3 w-3 inline mr-1" />
+                Admin Access (Management)
+              </Label>
+              <div className="flex flex-wrap gap-2">
+                {ALL_ACCESS_OPTIONS.map((access) => {
+                  const isActive = formAccess.includes(access)
+                  return (
+                    <button
+                      key={access}
+                      type="button"
+                      onClick={() => toggleAccess(access)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition cursor-pointer ${
+                        isActive
+                          ? "border-primary/40 bg-primary/10 text-primary"
+                          : "border-border/40 bg-muted/10 text-muted-foreground hover:bg-muted/20 hover:text-foreground"
+                      }`}
+                    >
+                      <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center ${
+                        isActive ? "bg-primary border-primary" : "border-muted-foreground/40"
+                      }`}>
+                        {isActive && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
+                      </div>
+                      {access}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-border/40">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setIsEditOpen(false)}
+                className="cursor-pointer text-muted-foreground hover:bg-muted/30"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/95 font-bold px-5"
+              >
+                Save Changes
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

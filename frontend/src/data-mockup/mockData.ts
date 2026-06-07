@@ -286,3 +286,85 @@ export const initialServiceObjects: ServiceObject[] = [
   }
 ]
 
+// Types for Network Interfaces
+export type AdminAccess = "HTTPS" | "HTTP" | "PING" | "SSH"
+export type AddressingMode = "dhcp" | "static"
+export type InterfaceType = "ethernet" | "wireless"
+
+export interface WifiScanResult {
+  ssid: string
+  signal: number       // 0-100 percent
+  security: string     // e.g. "WPA2-PSK", "WPA3", "Open"
+  channel: number
+  frequency: string    // "2.4 GHz" or "5 GHz"
+}
+
+export interface NetworkInterface {
+  id: string
+  name: string                // e.g. "eth0", "wlan0"
+  alias: string               // e.g. "LAN_Internal", "WAN_WiFi"
+  type: InterfaceType
+  addressingMode: AddressingMode
+  ip: string                  // e.g. "192.168.1.1"
+  netmask: string             // e.g. "24"
+  gateway: string             // e.g. "192.168.1.254" (used for static)
+  dns1: string
+  dns2: string
+  macAddress: string
+  adminAccess: AdminAccess[]
+  status: "up" | "down"
+  speed: string               // e.g. "1000 Mbps", "72 Mbps"
+  // Wi-Fi specific
+  connectedSSID?: string
+  wifiPassword?: string       // masked
+  wifiSecurity?: string       // e.g. "WPA2-PSK"
+}
+
+// Initial mockup data for Network Interfaces
+export const initialNetworkInterfaces: NetworkInterface[] = [
+  {
+    id: "iface-1",
+    name: "eth0",
+    alias: "LAN_Internal",
+    type: "ethernet",
+    addressingMode: "static",
+    ip: "192.168.1.1",
+    netmask: "24",
+    gateway: "",
+    dns1: "",
+    dns2: "",
+    macAddress: "DC:A6:32:AA:BB:C1",
+    adminAccess: ["PING", "HTTP", "SSH"],
+    status: "up",
+    speed: "1000 Mbps"
+  },
+  {
+    id: "iface-2",
+    name: "wlan0",
+    alias: "WAN_WiFi",
+    type: "wireless",
+    addressingMode: "dhcp",
+    ip: "10.0.0.45",
+    netmask: "24",
+    gateway: "10.0.0.1",
+    dns1: "8.8.8.8",
+    dns2: "1.1.1.1",
+    macAddress: "DC:A6:32:AA:BB:C2",
+    adminAccess: ["PING"],
+    status: "up",
+    speed: "72 Mbps",
+    connectedSSID: "MyHome_5G",
+    wifiPassword: "••••••••",
+    wifiSecurity: "WPA2-PSK"
+  }
+]
+
+// Mock Wi-Fi Scan results
+export const mockWifiScanResults: WifiScanResult[] = [
+  { ssid: "MyHome_5G", signal: 85, security: "WPA2-PSK", channel: 36, frequency: "5 GHz" },
+  { ssid: "MyHome_2G", signal: 72, security: "WPA2-PSK", channel: 6, frequency: "2.4 GHz" },
+  { ssid: "Neighbor_AP", signal: 45, security: "WPA3", channel: 11, frequency: "2.4 GHz" },
+  { ssid: "Cafe_Free_WiFi", signal: 30, security: "Open", channel: 1, frequency: "2.4 GHz" },
+  { ssid: "Office_5G_Secured", signal: 62, security: "WPA2-Enterprise", channel: 149, frequency: "5 GHz" }
+]
+
