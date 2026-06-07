@@ -527,5 +527,48 @@ export const initialActiveDhcpLeases: ActiveDhcpLease[] = [
   }
 ]
 
+// Types for Settings & Maintenance
+export interface SystemTimeSettings {
+  timezone: string
+  ntpSync: boolean
+  ntpServer: string
+}
+
+export interface NetworkServiceStatus {
+  id: string
+  name: string
+  serviceName: string
+  status: "running" | "stopped" | "failed"
+}
+
+// Initial mockup data for Settings & Maintenance
+export const initialSystemTimeSettings: SystemTimeSettings = {
+  timezone: "Asia/Bangkok (GMT+7:00)",
+  ntpSync: true,
+  ntpServer: "pool.ntp.org"
+}
+
+export const initialNetworkServices: NetworkServiceStatus[] = [
+  {
+    id: "srv-1",
+    name: "Firewall Engine",
+    serviceName: "nftables",
+    status: "running"
+  },
+  {
+    id: "srv-2",
+    name: "DHCP Server",
+    serviceName: "isc-dhcp-server",
+    status: "running"
+  },
+  {
+    id: "srv-3",
+    name: "Network Core Manager",
+    serviceName: "NetworkManager",
+    status: "running"
+  }
+]
+
+
 
 
