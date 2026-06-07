@@ -342,7 +342,7 @@ export default function StaticRoutes() {
               onClick={() => setSelectedTypeFilter("all")}
               className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${selectedTypeFilter === "all"
                 ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-neutral-800/30"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
                 }`}
             >
               All Types
@@ -351,7 +351,7 @@ export default function StaticRoutes() {
               onClick={() => setSelectedTypeFilter("system")}
               className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${selectedTypeFilter === "system"
                 ? "bg-cyan-500 text-neutral-950"
-                : "text-muted-foreground hover:text-foreground hover:bg-neutral-800/30"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
                 }`}
             >
               System
@@ -360,7 +360,7 @@ export default function StaticRoutes() {
               onClick={() => setSelectedTypeFilter("custom")}
               className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${selectedTypeFilter === "custom"
                 ? "bg-amber-500 text-neutral-950"
-                : "text-muted-foreground hover:text-foreground hover:bg-neutral-800/30"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
                 }`}
             >
               Custom
@@ -373,7 +373,7 @@ export default function StaticRoutes() {
               onClick={() => setSelectedStatusFilter("all")}
               className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${selectedStatusFilter === "all"
                 ? "bg-primary/20 text-primary border border-primary/20"
-                : "text-muted-foreground hover:text-foreground hover:bg-neutral-800/30 border border-transparent"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent"
                 }`}
             >
               All Status
@@ -382,7 +382,7 @@ export default function StaticRoutes() {
               onClick={() => setSelectedStatusFilter("active")}
               className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${selectedStatusFilter === "active"
                 ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-neutral-800/30"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
                 }`}
             >
               Active Only
@@ -390,8 +390,8 @@ export default function StaticRoutes() {
             <button
               onClick={() => setSelectedStatusFilter("inactive")}
               className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${selectedStatusFilter === "inactive"
-                ? "bg-neutral-800 text-neutral-400"
-                : "text-muted-foreground hover:text-foreground hover:bg-neutral-800/30"
+                ? "bg-muted text-foreground"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
                 }`}
             >
               Inactive
@@ -436,7 +436,7 @@ export default function StaticRoutes() {
                   disabled={selectableRoutes.length === 0}
                   checked={isAllSelected}
                   onChange={(e) => handleSelectAll(e.target.checked)}
-                  className="rounded border-neutral-700 bg-neutral-950 text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer accent-primary disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="rounded border-input bg-background text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer accent-primary disabled:opacity-30 disabled:cursor-not-allowed"
                 />
               </TableHead>
               <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[22%] font-semibold">Destination Network</th>
@@ -464,7 +464,7 @@ export default function StaticRoutes() {
                       disabled={route.type === "system"}
                       checked={selectedIds.includes(route.id)}
                       onChange={(e) => handleSelectRow(route.id, e.target.checked)}
-                      className="rounded border-neutral-700 bg-neutral-950 text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer accent-primary disabled:opacity-30 disabled:cursor-not-allowed"
+                      className="rounded border-input bg-background text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer accent-primary disabled:opacity-30 disabled:cursor-not-allowed"
                     />
                   </TableCell>
                   <TableCell className="p-3">
@@ -496,7 +496,7 @@ export default function StaticRoutes() {
                     )}
                   </TableCell>
                   <TableCell className="p-3">
-                    <Badge variant="secondary" className="bg-neutral-800 hover:bg-neutral-800 text-neutral-300 font-mono text-xs px-2 py-0.5 rounded border border-neutral-700">
+                    <Badge variant="secondary" className="font-mono text-xs px-2 py-0.5 rounded">
                       {route.interface}
                     </Badge>
                   </TableCell>

@@ -599,7 +599,7 @@ export default function FirewallPolicy() {
               </TableCell>
               <TableCell className="p-3">-</TableCell>
               <TableCell className="p-3 flex items-center gap-1.5 py-4">
-                <Badge variant="outline" className="text-[10px] bg-neutral-900 border-neutral-800 text-muted-foreground px-1.5 py-0.5">
+                <Badge variant="outline" className="text-[10px] bg-muted border-border text-muted-foreground px-1.5 py-0.5">
                   System
                 </Badge>
               </TableCell>
@@ -670,7 +670,7 @@ export default function FirewallPolicy() {
                       )}
                     </ComboboxValue>
                   </ComboboxChips>
-                  <ComboboxContent anchor={serviceAnchor} className="w-[var(--anchor-width)] bg-popover border border-border shadow-md rounded-lg overflow-hidden">
+                  <ComboboxContent anchor={serviceAnchor} className="w-[var(--anchor-width)] bg-popover border border-border rounded-lg overflow-hidden">
                     <ComboboxEmpty className="p-2 text-xs text-muted-foreground text-center">ไม่พบข้อมูล</ComboboxEmpty>
                     <ComboboxList className="p-1 max-h-48 overflow-y-auto">
                       {(opt: string) => (
@@ -710,7 +710,7 @@ export default function FirewallPolicy() {
                       )}
                     </ComboboxValue>
                   </ComboboxChips>
-                  <ComboboxContent anchor={sourceAnchor} className="w-[var(--anchor-width)] bg-popover border border-border shadow-md rounded-lg overflow-hidden">
+                  <ComboboxContent anchor={sourceAnchor} className="w-[var(--anchor-width)] bg-popover border border-border rounded-lg overflow-hidden">
                     <ComboboxEmpty className="p-2 text-xs text-muted-foreground text-center">ไม่พบข้อมูล</ComboboxEmpty>
                     <ComboboxList className="p-1 max-h-48 overflow-y-auto">
                       {(opt: string) => (
@@ -747,7 +747,7 @@ export default function FirewallPolicy() {
                       )}
                     </ComboboxValue>
                   </ComboboxChips>
-                  <ComboboxContent anchor={destAnchor} className="w-[var(--anchor-width)] bg-popover border border-border shadow-md rounded-lg overflow-hidden">
+                  <ComboboxContent anchor={destAnchor} className="w-[var(--anchor-width)] bg-popover border border-border rounded-lg overflow-hidden">
                     <ComboboxEmpty className="p-2 text-xs text-muted-foreground text-center">ไม่พบข้อมูล</ComboboxEmpty>
                     <ComboboxList className="p-1 max-h-48 overflow-y-auto">
                       {(opt: string) => (

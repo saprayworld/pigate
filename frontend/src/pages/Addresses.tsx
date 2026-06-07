@@ -250,7 +250,7 @@ export default function Addresses() {
               onClick={() => setSelectedTypeFilter("all")}
               className={`px-3 py-1 text-xs font-bold rounded-md transition ${selectedTypeFilter === "all"
                 ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-neutral-800/30"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
                 }`}
             >
               All
@@ -259,7 +259,7 @@ export default function Addresses() {
               onClick={() => setSelectedTypeFilter("subnet")}
               className={`px-3 py-1 text-xs font-bold rounded-md transition ${selectedTypeFilter === "subnet"
                 ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-neutral-800/30"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
                 }`}
             >
               Subnet
@@ -268,7 +268,7 @@ export default function Addresses() {
               onClick={() => setSelectedTypeFilter("range")}
               className={`px-3 py-1 text-xs font-bold rounded-md transition ${selectedTypeFilter === "range"
                 ? "bg-amber-500 text-neutral-950"
-                : "text-muted-foreground hover:text-foreground hover:bg-neutral-800/30"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
                 }`}
             >
               IP Range
@@ -277,7 +277,7 @@ export default function Addresses() {
               onClick={() => setSelectedTypeFilter("fqdn")}
               className={`px-3 py-1 text-xs font-bold rounded-md transition ${selectedTypeFilter === "fqdn"
                 ? "bg-cyan-500 text-neutral-950"
-                : "text-muted-foreground hover:text-foreground hover:bg-neutral-800/30"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
                 }`}
             >
               FQDN
@@ -321,7 +321,7 @@ export default function Addresses() {
                   type="checkbox"
                   checked={isAllSelected}
                   onChange={(e) => handleSelectAll(e.target.checked)}
-                  className="rounded border-neutral-700 bg-neutral-950 text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer accent-primary"
+                  className="rounded border-input bg-background text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer accent-primary"
                 />
               </TableHead>
               <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[25%] font-semibold">Name</th>
@@ -346,7 +346,7 @@ export default function Addresses() {
                       type="checkbox"
                       checked={selectedIds.includes(addr.id)}
                       onChange={(e) => handleSelectRow(addr.id, e.target.checked)}
-                      className="rounded border-neutral-700 bg-neutral-950 text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer accent-primary"
+                      className="rounded border-input bg-background text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer accent-primary"
                     />
                   </TableCell>
                   <TableCell className="p-3 font-semibold text-foreground">{addr.name}</TableCell>
@@ -377,7 +377,7 @@ export default function Addresses() {
                           <Badge
                             key={i}
                             variant="secondary"
-                            className="bg-neutral-800 text-neutral-300 font-mono text-[9px] px-1.5 py-0.2 rounded"
+                            className="bg-muted text-muted-foreground font-mono text-[9px] px-1.5 py-0.2 rounded"
                           >
                             {p}
                           </Badge>

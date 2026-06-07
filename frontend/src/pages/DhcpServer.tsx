@@ -373,7 +373,7 @@ export default function DhcpServer() {
               DHCP Service Active
             </div>
           )}
-          <div className="flex items-center gap-2 bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-1.5">
+          <div className="flex items-center gap-2 bg-card border border-border rounded-lg px-3 py-1.5">
             <span className="text-xs font-semibold text-muted-foreground uppercase">Service:</span>
             <Switch
               checked={config.enabled}

@@ -240,7 +240,7 @@ export default function ShellLayout() {
                   <ChevronDown className="h-4 w-4 text-muted-foreground" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56 p-1 rounded-xl shadow-2xl bg-popover text-popover-foreground border border-border">
+              <DropdownMenuContent align="end" className="w-56 p-1 rounded-xl bg-popover text-popover-foreground border border-border">
                 <DropdownMenuLabel>
                   <div className="flex flex-col space-y-1">
                     <p className="text-sm font-medium leading-none text-foreground">admin</p>

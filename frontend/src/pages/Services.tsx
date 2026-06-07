@@ -269,7 +269,7 @@ export default function Services() {
                   ? proto === "ICMP"
                     ? "bg-purple-650 text-purple-100 bg-purple-900"
                     : "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground hover:bg-neutral-800/30"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
                   }`}
               >
                 {proto}
@@ -396,11 +396,11 @@ export default function Services() {
 
         {/* Right 1 Column: Interactive Backend Integration Concept Preview */}
         <div className="space-y-4 lg:col-span-1">
-          <Card className="bg-neutral-900 border border-border p-5 rounded-xl flex flex-col gap-4 text-xs">
-            <div className="flex items-center gap-2 border-b border-neutral-800 pb-3">
+          <Card className="bg-card border border-border p-5 rounded-xl flex flex-col gap-4 text-xs">
+            <div className="flex items-center gap-2 border-b border-border/60 pb-3">
               <Terminal className="h-5 w-5 text-amber-500" />
               <div>
-                <h3 className="font-bold text-gray-200 text-sm">nftables Named Set Preview</h3>
+                <h3 className="font-bold text-foreground text-sm">nftables Named Set Preview</h3>
                 <p className="text-[10px] text-muted-foreground">โครงสร้างคำสั่งจำลองบน Linux Kernel</p>
               </div>
             </div>
@@ -413,7 +413,7 @@ export default function Services() {
                   </p>
                 </div>
 
-                <div className="bg-neutral-950 p-3 rounded-lg border border-neutral-800 font-mono text-[11px] leading-relaxed text-indigo-300 overflow-x-auto whitespace-pre">
+                <div className="bg-neutral-950 p-3 rounded-lg border border-border/60 font-mono text-[11px] leading-relaxed text-indigo-300 overflow-x-auto whitespace-pre">
                   {previewService.protocol === "ICMP" ? (
                     <>
                       <span className="text-muted-foreground/60"># 1. ICMP ไม่ใช้พอร์ต แต่จะกรองผ่าน protocol โดยตรง</span>

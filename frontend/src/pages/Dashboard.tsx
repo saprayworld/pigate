@@ -600,7 +600,7 @@ export default function Dashboard() {
                 <span className="text-muted-foreground font-medium">CPU Usage:</span>
                 <span className="font-semibold text-foreground">{cpuUsage}% (4 Cores)</span>
               </div>
-              <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-800">
+              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
                 <div
                   className={`h-full transition-all duration-500 ease-out ${getCpuColor(cpuUsage)}`}
                   style={{ width: `${cpuUsage}%` }}
@@ -614,7 +614,7 @@ export default function Dashboard() {
                 <span className="text-muted-foreground font-medium">Memory Usage:</span>
                 <span className="font-semibold text-foreground">1.2 GB / 7.6 GB ({memUsage}%)</span>
               </div>
-              <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-800">
+              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
                 <div
                   className="h-full bg-cyan-500 transition-all duration-500 ease-out"
                   style={{ width: `${memUsage}%` }}
@@ -640,7 +640,7 @@ export default function Dashboard() {
                 </span>
                 <span className="font-semibold text-foreground">24 GB / 58 GB (41%)</span>
               </div>
-              <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-800">
+              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
                 <div
                   className="h-full bg-indigo-500 transition-all duration-500 ease-out"
                   style={{ width: "41%" }}
