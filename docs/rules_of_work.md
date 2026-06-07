@@ -22,15 +22,12 @@
 ### 1.3 การจัดการ Portal Components ภายใน Dialog/Modal (Portal inside Dialog Rules)
 * **ข้อกำหนด:** หากมีการใช้งานคอมโพเนนต์ที่เป็น Portal (เช่น Combobox, Select, Dropdown หรือ Popover ของ Base UI / Radix UI) **ภายใน Dialog หรือ Modal ของโครงการ** อาจเกิดปัญหาคลิกดรอปดาวน์แล้วโดนบล็อกเนื่องจาก Focus/Pointer Blocker ของ Radix Dialog มองว่าเป็นกิจกรรมนอกขอบเขต (Interact Outside)
 * **แนวทางปฏิบัติ:**
-  * ห้ามเรนเดอร์ Combobox แบบไม่ใช้ Portal (เช่น ปลดแท็ก Portal ออกตรงๆ) เพราะจะขัดกับกฎ Context ของไลบรารีและอาจเกิด Error: `Base UI: <Combobox.Portal> is missing.`
-  * ให้ใช้วิธีส่งผ่าน container ref โดยสร้าง `useRef` ผูกเข้ากับ `<DialogContent>` เช่น:
+  * กำหนดให้ใส่คุณสมบัติ `modal={false}` ให้กับคอมโพเนนต์ `<Dialog>` เช่น:
     ```tsx
-    const dialogContentRef = useRef<HTMLDivElement | null>(null)
-    ...
-    <DialogContent ref={dialogContentRef}>
+    <Dialog open={isModalOpen} modal={false} onOpenChange={setIsModalOpen}>
     ```
-  * จากนั้นให้ตั้งค่า `container={dialogContentRef}` ให้กับคอมโพเนนต์ Content ของ Portal นั้น ๆ (เช่น `<ComboboxContent container={dialogContentRef}>`) เพื่อย้าย Portal เข้ามาเรนเดอร์ใต้ DOM Tree ของ Dialog Content วิธีนี้จะทำให้คลิกเลือกรายการได้สมบูรณ์และถูกต้อง
-* **เหตุผล:** เพื่อรองรับการทำงานร่วมกันระหว่างไลบรารีคอมโพเนนต์ต่างค่าย (Radix UI และ Base UI) ได้อย่างเสถียรและปลอดภัย
+  * การตั้งค่า `modal={false}` จะช่วยปิดกลไก Focus/Pointer Blocker ของ Radix Dialog ทำให้ผู้ใช้งานสามารถคลิกเลือกรายการใน Dropdown ของ Portal Components ได้ตามปกติ โดยไม่จำเป็นต้องใช้ container ref
+* **เหตุผล:** เพื่อให้กลไกการโฟกัสและการคลิกภายนอก (Interact Outside) ของ Dialog และ Portal ทำงานร่วมกันได้สมบูรณ์และลดความซับซ้อนของโค้ด
 
 ---
 

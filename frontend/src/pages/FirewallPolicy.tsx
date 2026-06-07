@@ -620,7 +620,7 @@ export default function FirewallPolicy() {
         </AlertDescription>
       </Alert>
 
-      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+      <Dialog open={isModalOpen} modal={false} onOpenChange={setIsModalOpen}>
         <DialogContent ref={dialogContentRef} className="md:max-w-[85vw] lg:max-w-[960px] w-full rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up">
           <DialogHeader className="pb-3 border-b border-border/40">
             <DialogTitle className="text-lg font-bold text-foreground">
@@ -670,7 +670,7 @@ export default function FirewallPolicy() {
                       )}
                     </ComboboxValue>
                   </ComboboxChips>
-                  <ComboboxContent container={dialogContentRef} anchor={serviceAnchor} className="w-[var(--anchor-width)] bg-popover border border-border shadow-md rounded-lg overflow-hidden">
+                  <ComboboxContent anchor={serviceAnchor} className="w-[var(--anchor-width)] bg-popover border border-border shadow-md rounded-lg overflow-hidden">
                     <ComboboxEmpty className="p-2 text-xs text-muted-foreground text-center">ไม่พบข้อมูล</ComboboxEmpty>
                     <ComboboxList className="p-1 max-h-48 overflow-y-auto">
                       {(opt: string) => (
@@ -710,7 +710,7 @@ export default function FirewallPolicy() {
                       )}
                     </ComboboxValue>
                   </ComboboxChips>
-                  <ComboboxContent container={dialogContentRef} anchor={sourceAnchor} className="w-[var(--anchor-width)] bg-popover border border-border shadow-md rounded-lg overflow-hidden">
+                  <ComboboxContent anchor={sourceAnchor} className="w-[var(--anchor-width)] bg-popover border border-border shadow-md rounded-lg overflow-hidden">
                     <ComboboxEmpty className="p-2 text-xs text-muted-foreground text-center">ไม่พบข้อมูล</ComboboxEmpty>
                     <ComboboxList className="p-1 max-h-48 overflow-y-auto">
                       {(opt: string) => (
@@ -747,7 +747,7 @@ export default function FirewallPolicy() {
                       )}
                     </ComboboxValue>
                   </ComboboxChips>
-                  <ComboboxContent container={dialogContentRef} anchor={destAnchor} className="w-[var(--anchor-width)] bg-popover border border-border shadow-md rounded-lg overflow-hidden">
+                  <ComboboxContent anchor={destAnchor} className="w-[var(--anchor-width)] bg-popover border border-border shadow-md rounded-lg overflow-hidden">
                     <ComboboxEmpty className="p-2 text-xs text-muted-foreground text-center">ไม่พบข้อมูล</ComboboxEmpty>
                     <ComboboxList className="p-1 max-h-48 overflow-y-auto">
                       {(opt: string) => (
