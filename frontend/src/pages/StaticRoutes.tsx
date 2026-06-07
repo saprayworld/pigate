@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from "react"
+import { useState, useMemo, useRef, useEffect } from "react"
 import {
   Route,
   Plus,
@@ -11,7 +11,8 @@ import {
   Check,
   CheckCircle2,
   SlidersHorizontal,
-  Info
+  Info,
+  Loader2
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -34,11 +35,13 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
-import { type StaticRoute, initialStaticRoutes } from "@/data-mockup/mockData"
+import { type StaticRoute } from "@/data-mockup/mockData"
+import { staticRouteService } from "@/services/staticRouteService"
 
 export default function StaticRoutes() {
   // --- State ---
-  const [routes, setRoutes] = useState<StaticRoute[]>(initialStaticRoutes)
+  const [routes, setRoutes] = useState<StaticRoute[]>([])
+  const [isLoading, setIsLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<"all" | "system" | "custom">("all")
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<"all" | "active" | "inactive">("all")
@@ -64,6 +67,24 @@ export default function StaticRoutes() {
   const [isApplied, setIsApplied] = useState(true) // Start with true, turn false when changes occur
 
   const dialogContentRef = useRef<HTMLDivElement | null>(null)
+
+  // Fetch logic
+  const loadRoutes = async (showLoading = true) => {
+    if (showLoading) setIsLoading(true)
+    try {
+      const data = await staticRouteService.getAll()
+      setRoutes(data)
+    } catch (err: any) {
+      console.error(err)
+      alert("ไม่สามารถโหลดตารางเส้นทางได้: " + (err.message || err))
+    } finally {
+      if (showLoading) setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadRoutes()
+  }, [])
 
   // --- Statistics ---
   const stats = useMemo(() => {
@@ -121,11 +142,14 @@ export default function StaticRoutes() {
   }, [selectableRoutes, selectedIds])
 
   // --- Toggle individual route status ---
-  const handleToggleStatus = (id: string, currentStatus: boolean) => {
-    setRoutes(prev => prev.map(r => 
-      r.id === id ? { ...r, status: !currentStatus } : r
-    ))
-    setIsApplied(false)
+  const handleToggleStatus = async (id: string) => {
+    try {
+      await staticRouteService.toggleStatus(id)
+      await loadRoutes(false)
+      setIsApplied(false)
+    } catch (err: any) {
+      alert("ไม่สามารถเปลี่ยนสถานะเส้นทางได้: " + (err.message || err))
+    }
   }
 
   // --- CRUD Actions ---
@@ -153,7 +177,7 @@ export default function StaticRoutes() {
     setIsModalOpen(true)
   }
 
-  const handleDelete = (id: string, dest: string) => {
+  const handleDelete = async (id: string, dest: string) => {
     const route = routes.find(r => r.id === id)
     if (route?.type === "system") {
       alert("ไม่สามารถลบ System Route ของระบบปฏิบัติการได้")
@@ -161,21 +185,31 @@ export default function StaticRoutes() {
     }
 
     if (confirm(`คุณต้องการลบเส้นทางไปยัง "${dest}" ใช่หรือไม่?`)) {
-      setRoutes(prev => prev.filter(r => r.id !== id))
-      setSelectedIds(prev => prev.filter(item => item !== id))
-      setIsApplied(false)
+      try {
+        await staticRouteService.delete(id)
+        setSelectedIds(prev => prev.filter(item => item !== id))
+        await loadRoutes(false)
+        setIsApplied(false)
+      } catch (err: any) {
+        alert("ไม่สามารถลบเส้นทางได้: " + (err.message || err))
+      }
     }
   }
 
-  const handleBulkDelete = () => {
+  const handleBulkDelete = async () => {
     if (confirm(`คุณต้องการลบเส้นทางที่เลือกจำนวน ${selectedIds.length} รายการใช่หรือไม่?`)) {
-      setRoutes(prev => prev.filter(r => !selectedIds.includes(r.id)))
-      setSelectedIds([])
-      setIsApplied(false)
+      try {
+        await staticRouteService.deleteMultiple(selectedIds)
+        setSelectedIds([])
+        await loadRoutes(false)
+        setIsApplied(false)
+      } catch (err: any) {
+        alert("ไม่สามารถลบเส้นทางได้: " + (err.message || err))
+      }
     }
   }
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
     setFormError("")
 
@@ -214,47 +248,47 @@ export default function StaticRoutes() {
       return
     }
 
-    if (editingRoute) {
-      // Edit
-      setRoutes(prev => prev.map(r =>
-        r.id === editingRoute.id
-          ? {
-              ...r,
-              destination: dest,
-              gateway: gw,
-              interface: formInterface,
-              metric: metricVal,
-              description: formDescription,
-              status: formStatus
-            }
-          : r
-      ))
-    } else {
-      // Create
-      const newRoute: StaticRoute = {
-        id: "route-" + Math.random().toString(36).substring(2, 9),
-        destination: dest,
-        gateway: gw,
-        interface: formInterface,
-        metric: metricVal,
-        description: formDescription,
-        status: formStatus,
-        type: "custom"
+    try {
+      if (editingRoute) {
+        // Edit
+        await staticRouteService.update(editingRoute.id, {
+          destination: dest,
+          gateway: gw,
+          interface: formInterface,
+          metric: metricVal,
+          description: formDescription,
+          status: formStatus
+        })
+      } else {
+        // Create
+        await staticRouteService.create({
+          destination: dest,
+          gateway: gw,
+          interface: formInterface,
+          metric: metricVal,
+          description: formDescription,
+          status: formStatus
+        })
       }
-      setRoutes(prev => [...prev, newRoute])
+      await loadRoutes(false)
+      setIsModalOpen(false)
+      setIsApplied(false)
+    } catch (err: any) {
+      setFormError(err.message || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
     }
-
-    setIsModalOpen(false)
-    setIsApplied(false)
   }
 
   // --- Apply Settings Simulation ---
-  const handleApplySettings = () => {
+  const handleApplySettings = async () => {
     setIsApplying(true)
-    setTimeout(() => {
+    try {
+      await staticRouteService.apply()
       setIsApplying(false)
       setIsApplied(true)
-    }, 1500)
+    } catch (err: any) {
+      setIsApplying(false)
+      alert("ไม่สามารถบันทึกการตั้งค่าเส้นทางเข้า Kernel ได้: " + (err.message || err))
+    }
   }
 
 
@@ -449,7 +483,16 @@ export default function StaticRoutes() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredRoutes.length === 0 ? (
+            {isLoading ? (
+              <TableRow>
+                <TableCell colSpan={8} className="p-12 text-center text-muted-foreground text-xs">
+                  <div className="flex flex-col items-center justify-center gap-2 py-4">
+                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                    <span>กำลังโหลดข้อมูล...</span>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ) : filteredRoutes.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={8} className="p-8 text-center text-muted-foreground text-xs">
                   ไม่พบเส้นทางเครือข่ายตามที่ค้นหา
@@ -507,7 +550,7 @@ export default function StaticRoutes() {
                   <TableCell className="p-3">
                     <Switch
                       checked={route.status}
-                      onCheckedChange={() => handleToggleStatus(route.id, route.status)}
+                      onCheckedChange={() => handleToggleStatus(route.id)}
                       className="data-[state=checked]:bg-primary"
                     />
                   </TableCell>

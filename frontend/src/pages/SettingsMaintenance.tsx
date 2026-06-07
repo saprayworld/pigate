@@ -1,4 +1,4 @@
-import React, { useState } from "react"
+import React, { useState, useEffect } from "react"
 import {
   Settings,
   Activity,
@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   Table,
   TableBody,
@@ -37,11 +37,10 @@ import {
 } from "@/components/ui/dialog"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import {
-  initialSystemTimeSettings,
-  initialNetworkServices,
   type SystemTimeSettings,
   type NetworkServiceStatus
 } from "@/data-mockup/mockData"
+import { systemService } from "@/services/systemService"
 
 export default function SettingsMaintenance() {
   // --- States ---
@@ -54,7 +53,11 @@ export default function SettingsMaintenance() {
   const [passwordFeedback, setPasswordFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null)
 
   // Time & NTP States
-  const [timeSettings, setTimeSettings] = useState<SystemTimeSettings>(initialSystemTimeSettings)
+  const [timeSettings, setTimeSettings] = useState<SystemTimeSettings>({
+    timezone: "Asia/Bangkok (GMT+7:00)",
+    ntpSync: true,
+    ntpServer: "pool.ntp.org"
+  })
   const [timeFeedback, setTimeFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null)
 
   // Power control States
@@ -69,13 +72,37 @@ export default function SettingsMaintenance() {
   const [isImporting, setIsImporting] = useState(false)
 
   // Services States
-  const [services, setServices] = useState<NetworkServiceStatus[]>(initialNetworkServices)
+  const [services, setServices] = useState<NetworkServiceStatus[]>([])
   const [restartingServiceId, setRestartingServiceId] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState("")
+
+  // --- Load Data ---
+  const loadData = async () => {
+    setIsLoading(true)
+    setError("")
+    try {
+      const [timeData, servicesData] = await Promise.all([
+        systemService.getTimeSettings(),
+        systemService.getServices(),
+      ])
+      setTimeSettings(timeData)
+      setServices(servicesData)
+    } catch (err: any) {
+      setError(err.message || "Failed to load system settings.")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadData()
+  }, [])
 
   // --- Handlers ---
 
   // Password Update
-  const handlePasswordChange = (e: React.FormEvent) => {
+  const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault()
     setPasswordFeedback(null)
 
@@ -94,15 +121,19 @@ export default function SettingsMaintenance() {
       return
     }
 
-    // Simulate Success
-    setPasswordFeedback({ type: "success", message: "เปลี่ยนรหัสผ่านผู้ดูแลระบบเรียบร้อยแล้ว!" })
-    setCurrentPassword("")
-    setNewPassword("")
-    setConfirmNewPassword("")
+    try {
+      await systemService.changePassword(currentPassword, newPassword)
+      setPasswordFeedback({ type: "success", message: "เปลี่ยนรหัสผ่านผู้ดูแลระบบเรียบร้อยแล้ว!" })
+      setCurrentPassword("")
+      setNewPassword("")
+      setConfirmNewPassword("")
+    } catch (err: any) {
+      setPasswordFeedback({ type: "error", message: err.message || "ไม่สามารถเปลี่ยนรหัสผ่านได้" })
+    }
   }
 
   // Save Time & NTP Settings
-  const handleSaveTimeSettings = (e: React.FormEvent) => {
+  const handleSaveTimeSettings = async (e: React.FormEvent) => {
     e.preventDefault()
     setTimeFeedback(null)
 
@@ -111,14 +142,26 @@ export default function SettingsMaintenance() {
       return
     }
 
-    // Simulate Success
-    setTimeFeedback({ type: "success", message: "บันทึกการตั้งค่าระบบเวลา และ NTP สำเร็จ!" })
+    try {
+      await systemService.updateTimeSettings(timeSettings)
+      setTimeFeedback({ type: "success", message: "บันทึกการตั้งค่าระบบเวลา และ NTP สำเร็จ!" })
+    } catch (err: any) {
+      setTimeFeedback({ type: "error", message: err.message || "ไม่สามารถบันทึกการตั้งค่าเวลาได้" })
+    }
   }
 
   // Reboot Action
-  const handleConfirmReboot = () => {
+  const handleConfirmReboot = async () => {
     setPowerDialog(null)
     setPowerStatus("rebooting")
+    try {
+      await systemService.reboot()
+    } catch (err: any) {
+      alert("Failed to reboot system: " + err.message)
+      setPowerStatus("idle")
+      return
+    }
+
     let count = 5
     setRebootCountdown(count)
 
@@ -133,12 +176,18 @@ export default function SettingsMaintenance() {
   }
 
   // Shutdown Action
-  const handleConfirmShutdown = () => {
+  const handleConfirmShutdown = async () => {
     setPowerDialog(null)
     setPowerStatus("shutting-down")
-    setTimeout(() => {
-      setPowerStatus("powered-off")
-    }, 3000)
+    try {
+      await systemService.shutdown()
+      setTimeout(() => {
+        setPowerStatus("powered-off")
+      }, 3000)
+    } catch (err: any) {
+      alert("Failed to shutdown system: " + err.message)
+      setPowerStatus("idle")
+    }
   }
 
   // Simulated Power On
@@ -157,30 +206,14 @@ export default function SettingsMaintenance() {
     }, 1000)
   }
 
-  // Export Config (Download actual Mock Config JSON)
-  const handleExportConfig = () => {
+  // Export Config
+  const handleExportConfig = async () => {
     setIsExporting(true)
     setBackupFeedback(null)
 
-    setTimeout(() => {
-      const mockConfigPayload = {
-        device: "PiGate Firewall Gateway",
-        version: "v1.5.0-Release",
-        exportedAt: new Date().toISOString(),
-        systemSettings: timeSettings,
-        servicesStatus: services.map(s => ({ service: s.serviceName, status: s.status })),
-        networks: [
-          { name: "eth0", type: "static", ip: "192.168.1.1/24" },
-          { name: "wlan0", type: "dhcp", ip: "10.0.0.45/24" }
-        ],
-        firewallSummary: {
-          rulesCount: 5,
-          addressObjectsCount: 5,
-          serviceObjectsCount: 8
-        }
-      }
-
-      const blob = new Blob([JSON.stringify(mockConfigPayload, null, 2)], { type: "application/json" })
+    try {
+      const payload = await systemService.exportConfig()
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
@@ -190,13 +223,16 @@ export default function SettingsMaintenance() {
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
 
-      setIsExporting(false)
       setBackupFeedback({ type: "success", message: "ส่งออกไฟล์สำรองข้อมูล (Configuration Export) สำเร็จแล้ว!" })
-    }, 1200)
+    } catch (err: any) {
+      setBackupFeedback({ type: "error", message: err.message || "ไม่สามารถส่งออกไฟล์สำรองข้อมูลได้" })
+    } finally {
+      setIsExporting(false)
+    }
   }
 
   // Import Config Simulation
-  const handleImportConfig = (e: React.FormEvent) => {
+  const handleImportConfig = async (e: React.FormEvent) => {
     e.preventDefault()
     setBackupFeedback(null)
 
@@ -211,30 +247,62 @@ export default function SettingsMaintenance() {
     }
 
     setIsImporting(true)
-    setTimeout(() => {
-      setIsImporting(false)
+    try {
+      const text = await importFile.text()
+      const parsedConfig = JSON.parse(text)
+      await systemService.importConfig(parsedConfig)
+      
       setBackupFeedback({
         type: "success",
-        message: `นำเข้าไฟล์ "${importFile.name}" สำเร็จ! คืนค่าการตั้งค่า 2 Interfaces, 5 Address Objects, 8 Service Objects และเปิดใช้งานระบบไฟร์วอลล์ใหม่แล้ว`
+        message: `นำเข้าไฟล์ "${importFile.name}" สำเร็จ! คืนค่าการตั้งค่าคอนฟิกเรียบร้อยแล้ว`
       })
       setImportFile(null)
-      // reset file input
+      
       const fileInput = document.getElementById("import-file-input") as HTMLInputElement
       if (fileInput) fileInput.value = ""
-    }, 2000)
+
+      await loadData()
+    } catch (err: any) {
+      setBackupFeedback({ type: "error", message: err.message || "ไม่สามารถนำเข้าไฟล์สำรองข้อมูลได้" })
+    } finally {
+      setIsImporting(false)
+    }
   }
 
   // Restart Service Action
-  const handleRestartService = (id: string) => {
+  const handleRestartService = async (id: string) => {
     setRestartingServiceId(id)
-
-    // Simulate stopping, then running again
-    setServices(prev => prev.map(s => s.id === id ? { ...s, status: "stopped" } : s))
-
-    setTimeout(() => {
-      setServices(prev => prev.map(s => s.id === id ? { ...s, status: "running" } : s))
+    try {
+      await systemService.restartService(id)
+      const updatedServices = await systemService.getServices()
+      setServices(updatedServices)
+    } catch (err: any) {
+      alert("Failed to restart service: " + err.message)
+    } finally {
       setRestartingServiceId(null)
-    }, 2000)
+    }
+  }
+
+  // --- Render Loading / Error States ---
+  if (isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <span className="text-sm text-muted-foreground font-semibold">กำลังโหลดข้อมูล Settings...</span>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="p-6">
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4 text-red-400" />
+          <AlertTitle>Error Loading Settings</AlertTitle>
+          <AlertDescription className="text-xs text-red-400">{error}</AlertDescription>
+        </Alert>
+      </div>
+    )
   }
 
   // --- Render Reboot / Shutdown Full-Screen Overlays ---

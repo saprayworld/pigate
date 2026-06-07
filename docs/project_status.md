@@ -72,14 +72,19 @@
   * แท็บ Setup Settings: รองรับฟอร์มเปลี่ยนรหัสผ่านแอดมิน, ตั้งค่า Time Zone, และการตั้งค่าซิงค์เวลาอัตโนมัติ (NTP Server)
   * แท็บ Maintenance: จัดการปุ่มรีบูต (Reboot) พร้อม Overlay นับถอยหลังจำลอง, ปุ่มปิดระบบ (Shutdown) พร้อม Overlay หน้าจอระบบปิดที่กด Power On กลับมาได้, ฟังก์ชันดาวน์โหลดสำรองข้อมูลเป็นไฟล์ JSON และนำเข้าฟื้นคืนข้อมูล รวมถึงตารางสั่ง Restart บริการย่อย (`nftables`, `isc-dhcp-server`, `NetworkManager`)
 
+* **พัฒนาโครงสร้าง Service API Layer และเชื่อมต่อครบทุกหน้าจอ (Service Layer & Pages Integration) [สำเร็จ]**:
+  * ออกแบบระบบสวิตช์ควบคุม `IS_MOCK_MODE` ป้องกันสเตตหายเมื่อรีเฟรชหน้าเว็บด้วยระบบ LocalStorage Mocking ผ่าน [config.ts](file:///home/sapray/dev/pigate/frontend/src/services/config.ts)
+  * พัฒนารายการ Service ครบทั้ง 9 บริการหลัก ได้แก่ `addressService`, `serviceObjectService`, `policyService`, `staticRouteService`, `dhcpService`, `interfaceService`, `systemService`, `dashboardService`, และ `authService`
+  * ปรับแก้หน้าจอ UI ทุกหน้า (`Addresses`, `Services`, `FirewallPolicy`, `StaticRoutes`, `DhcpServer`, `Interfaces`, `SettingsMaintenance`, `Dashboard`, `Login`) ให้ดึงข้อมูลและทำรายการแบบ Asynchronous ผ่าน Service API Layer ทั้งหมด
+  * ตรวจสอบโค้ดบิวด์ระดับ Production ด้วย `yarn build` ผ่าน 100% ไม่มีข้อผิดพลาดของ TypeScript หรือ Syntax Warnings
+
 ---
 
 ## 2. ปัญหาและประเด็นที่ต้องพิจารณาในปัจจุบัน (Current Issues & Limitations)
 
-* **การพัฒนาและเชื่อมโยงข้อมูลจริงของแต่ละหน้าจอ**:
-  * หน้าจอ Login ปัจจุบันยังเป็นหน้าจอจำลอง (Mock Pages)
-  * ต้องเริ่มเปลี่ยนตัวแปรข้อมูลและการทำงานของแต่ละหน้าให้เป็นฟังก์ชันใช้งานจริง
-  * ขาดการเชื่อมต่อ API จริงกับฝั่ง Go Backend และระบบการอัปเดตแบบ Real-time ด้วย Server-Sent Events (SSE)
+> [!WARNING]
+> **การทดสอบระบบที่ยังไม่ครอบคลุม (Unverified Runtime UI & API Integration):**
+> โค้ดทั้งหมดได้รับการพัฒนา ตรวจสอบโครงสร้างภาษา (Syntax Checks) และคอมไพล์ผ่านการบิวด์ระดับโปรดักชัน (`yarn build`) ผ่าน 100% เรียบร้อยแล้ว **อย่างไรก็ตาม เรายังไม่ได้ทดสอบการใช้งานจริง (Runtime UI & CRUD Manual Testing) ผ่านเบราว์เซอร์** เพื่อดูผลตอบสนองของหน้าเว็บและสถานะ Loading สปินเนอร์ในการใช้งานเบราว์เซอร์จริง
 
 ---
 
@@ -95,7 +100,9 @@
   * พัฒนาหน้าจอและระบบ Static Route สำเร็จเรียบร้อย `[เสร็จสิ้น]`
   * พัฒนาหน้าจอและระบบ DHCP Server สำเร็จเรียบร้อย `[เสร็จสิ้น]`
   * พัฒนาหน้าจอและระบบ Settings & Maintenance สำเร็จเรียบร้อย `[เสร็จสิ้น]`
-  * ทยอยพัฒนาส่วนหน้าจออื่น ๆ ได้แก่ หน้าล็อกอินจริง `[กำลังดำเนินการถัดไป]`
+  * ทยอยพัฒนาส่วนหน้าจออื่น ๆ ได้แก่ หน้าล็อกอินจริง `[เสร็จสิ้น]`
 * **สเตปที่ 5: จัดระเบียบการเรียกใช้ API และความปลอดภัย**:
-  * เตรียมโมเดลการดึงข้อมูลจาก API ของหลังบ้าน และระบบสตรีม SSE (Server-Sent Events)
+  * พัฒนาโครงสร้าง Service API Layer รองรับ LocalStorage Mocking และ Go API Swappable `[เสร็จสิ้น]`
+  * ทดสอบการทำงานของปุ่ม ฟังก์ชัน CRUD และ UI ต่างๆ บนเบราว์เซอร์จริง (Runtime Manual Verification & UI Validation) `[กำลังดำเนินการถัดไป]`
   * ตรวจสอบความปลอดภัยระดับเบื้องต้น เช่น การรับมือเมื่อเซสชันหมดอายุ, การกรองฟิลด์ข้อมูลนำเข้า (Sanitization) และการเข้ารหัสการสื่อสาร
+  * เชื่อมต่อ API จริงกับฝั่ง Go Backend และระบบการอัปเดตแบบ Real-time ด้วย Server-Sent Events (SSE) เมื่อฝั่ง API พร้อมใช้งาน

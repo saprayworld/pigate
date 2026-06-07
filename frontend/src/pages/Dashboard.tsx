@@ -22,13 +22,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts"
-import {
-  type FirewallLog,
-  initialFirewallLogs,
-  mockSources,
-  mockDestinations,
-  mockLogServices
-} from "@/data-mockup/mockData"
+import { type FirewallLog } from "@/data-mockup/mockData"
+import { dashboardService, type DashboardStats } from "@/services/dashboardService"
 
 // Structure for Recharts data
 interface TrafficData {
@@ -76,33 +71,45 @@ export default function Dashboard() {
     return `${String(d).padStart(2, "0")} วัน ${String(h).padStart(2, "0")} ชั่วโมง ${String(m).padStart(2, "0")} นาที ${String(s).padStart(2, "0")} วินาที`
   }, [uptimeSeconds])
 
-  // --- 2. Live Performance Metrics ---
+  // --- 2. Live Performance Metrics & Stats ---
   const [cpuUsage, setCpuUsage] = useState<number>(14)
   const [memUsage, setMemUsage] = useState<number>(15)
   const [boardTemp, setBoardTemp] = useState<number>(48.5)
 
-  useEffect(() => {
-    const perfInterval = setInterval(() => {
-      // CPU fluctuates between 11% and 22%
-      setCpuUsage((prev) => {
-        const diff = (Math.random() - 0.5) * 4
-        const next = Math.max(10, Math.min(60, prev + diff))
-        return Math.round(next * 10) / 10
-      })
-      // RAM fluctuates between 14.8% and 15.5%
-      setMemUsage((prev) => {
-        const diff = (Math.random() - 0.5) * 0.2
-        const next = Math.max(14, Math.min(16, prev + diff))
-        return Math.round(next * 10) / 10
-      })
-      // Temp fluctuates between 48.0°C and 49.8°C
-      setBoardTemp((prev) => {
-        const diff = (Math.random() - 0.5) * 0.4
-        const next = Math.max(45, Math.min(52, prev + diff))
-        return Math.round(next * 10) / 10
-      })
-    }, 3000)
+  const [stats, setStats] = useState<DashboardStats>({
+    firewallStatus: "Active",
+    totalTrafficIn: "8.7 GB",
+    totalTrafficOut: "3.7 GB",
+    dhcpLeasesCount: 18,
+    wifiStatus: "wlan0 Master",
+    wifiSSID: "PiGate-Secure",
+  })
 
+  const fetchStats = async () => {
+    try {
+      const data = await dashboardService.getStats()
+      setStats(data)
+    } catch (err) {}
+  }
+
+  useEffect(() => {
+    fetchStats()
+    const statsInterval = setInterval(fetchStats, 10000)
+    return () => clearInterval(statsInterval)
+  }, [])
+
+  useEffect(() => {
+    const fetchPerf = async () => {
+      try {
+        const perf = await dashboardService.getPerformanceMetrics()
+        setCpuUsage(perf.cpu)
+        setMemUsage(perf.memory)
+        setBoardTemp(perf.temp)
+      } catch (err) {}
+    }
+
+    fetchPerf() // initial fetch
+    const perfInterval = setInterval(fetchPerf, 3000)
     return () => clearInterval(perfInterval)
   }, [])
 
@@ -156,40 +163,28 @@ export default function Dashboard() {
   }, [])
 
   // --- 4. Firewall Logs Streaming ---
-  const [logs, setLogs] = useState<FirewallLog[]>(initialFirewallLogs)
-
+  const [logs, setLogs] = useState<FirewallLog[]>([])
   const [isLiveStreaming, setIsLiveStreaming] = useState<boolean>(true)
   const [searchQuery, setSearchQuery] = useState<string>("")
   const [actionFilter, setActionFilter] = useState<"ALL" | "PASS" | "DROP">("ALL")
+
+  // Load initial logs
+  useEffect(() => {
+    const loadLogs = async () => {
+      try {
+        const initialLogs = await dashboardService.getRecentLogs()
+        setLogs(initialLogs)
+      } catch (err) {}
+    }
+    loadLogs()
+  }, [])
 
   // Simulator for SSE / Log Append
   useEffect(() => {
     if (!isLiveStreaming) return
 
     const logGenerator = setInterval(() => {
-      const randomSrc = mockSources[Math.floor(Math.random() * mockSources.length)]
-      const randomDest = mockDestinations[Math.floor(Math.random() * mockDestinations.length)]
-      const randomSvc = mockLogServices[Math.floor(Math.random() * mockLogServices.length)]
-
-      const t = new Date()
-      const timeStr =
-        String(t.getHours()).padStart(2, "0") +
-        ":" +
-        String(t.getMinutes()).padStart(2, "0") +
-        ":" +
-        String(t.getSeconds()).padStart(2, "0")
-
-      const newLog: FirewallLog = {
-        id: "log-" + Math.random().toString(36).substring(2, 9),
-        time: timeStr,
-        action: randomSvc.action as "PASS" | "DROP",
-        src: randomSrc,
-        dest: randomDest,
-        port: randomSvc.port,
-        proto: randomSvc.proto,
-        reason: randomSvc.reason
-      }
-
+      const newLog = dashboardService.generateMockLog()
       setLogs((prev) => {
         const combined = [newLog, ...prev]
         return combined.slice(0, 50) // Keep at most 50 elements
@@ -233,6 +228,25 @@ export default function Dashboard() {
     return "bg-red-500"
   }
 
+  const handleRefresh = async () => {
+    fetchStats()
+    try {
+      const perf = await dashboardService.getPerformanceMetrics()
+      setCpuUsage(perf.cpu)
+      setMemUsage(perf.memory)
+      setBoardTemp(perf.temp)
+    } catch (err) {}
+  }
+
+  const handleClearLogs = async () => {
+    try {
+      await dashboardService.clearLogs()
+      setLogs([])
+    } catch (err: any) {
+      alert("Failed to clear logs: " + err.message)
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* 1. Header Overview */}
@@ -252,15 +266,11 @@ export default function Dashboard() {
             </span>
             SSE Connected
           </Badge>
+
           <Button
             variant="outline"
             size="sm"
-            onClick={() => {
-              // Manual Refresh triggers brief animation and updates state
-              setCpuUsage(Math.round((12 + Math.random() * 5) * 10) / 10)
-              setMemUsage(Math.round((14.5 + Math.random() * 1.5) * 10) / 10)
-              setBoardTemp(Math.round((47 + Math.random() * 3) * 10) / 10)
-            }}
+            onClick={handleRefresh}
             className="cursor-pointer gap-2"
           >
             <RefreshCw className="h-4 w-4" />
@@ -281,7 +291,7 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent className="space-y-1">
             <div className="flex items-center gap-2">
-              <span className="text-2xl font-bold text-foreground">Active</span>
+              <span className="text-2xl font-bold text-foreground">{stats.firewallStatus}</span>
               <span className="flex h-2.5 w-2.5 rounded-full bg-primary animate-pulse"></span>
             </div>
             <CardDescription className="text-xs text-muted-foreground">nftables kernel module active</CardDescription>
@@ -299,9 +309,9 @@ export default function Dashboard() {
           <CardContent className="space-y-1">
             <span className="text-2xl font-bold text-foreground">12.4 GB</span>
             <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-              <span className="flex items-center text-cyan-500"><ArrowUpRight className="h-3 w-3 mr-0.5" /> 8.7 GB In</span>
+              <span className="flex items-center text-cyan-500"><ArrowUpRight className="h-3 w-3 mr-0.5" /> {stats.totalTrafficIn} In</span>
               <span className="mx-1">•</span>
-              <span className="flex items-center text-indigo-400"><ArrowDownLeft className="h-3 w-3 mr-0.5" /> 3.7 GB Out</span>
+              <span className="flex items-center text-indigo-400"><ArrowDownLeft className="h-3 w-3 mr-0.5" /> {stats.totalTrafficOut} Out</span>
             </div>
           </CardContent>
         </Card>
@@ -315,8 +325,8 @@ export default function Dashboard() {
             </div>
           </CardHeader>
           <CardContent className="space-y-1">
-            <span className="text-2xl font-bold text-foreground">18 Clients</span>
-            <CardDescription className="text-xs text-muted-foreground">Active IP allocations (Pool: 18/50)</CardDescription>
+            <span className="text-2xl font-bold text-foreground">{stats.dhcpLeasesCount} Clients</span>
+            <CardDescription className="text-xs text-muted-foreground">Active IP allocations (Pool: {stats.dhcpLeasesCount}/50)</CardDescription>
           </CardContent>
         </Card>
 
@@ -329,13 +339,11 @@ export default function Dashboard() {
             </div>
           </CardHeader>
           <CardContent className="space-y-1">
-            <span className="text-2xl font-bold text-foreground">wlan0 Master</span>
-            <CardDescription className="text-xs text-muted-foreground truncate">SSID: PiGate-Secure (8 Clients)</CardDescription>
+            <span className="text-2xl font-bold text-foreground">{stats.wifiStatus}</span>
+            <CardDescription className="text-xs text-muted-foreground truncate">SSID: {stats.wifiSSID} (8 Clients)</CardDescription>
           </CardContent>
         </Card>
       </div>
-
-      {/* 3. Main Chart & Log Grid */}
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Recharts Area Chart */}
         <Card className="lg:col-span-2 bg-card/25 border border-border/50 overflow-hidden">
@@ -458,7 +466,7 @@ export default function Dashboard() {
               <Button
                 variant="outline"
                 size="icon-xs"
-                onClick={() => setLogs([])}
+                onClick={handleClearLogs}
                 title="Clear Logs"
                 className="cursor-pointer text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
               >

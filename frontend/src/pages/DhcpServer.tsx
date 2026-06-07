@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from "react"
+import { useState, useMemo, useRef, useEffect } from "react"
 import {
   Radio,
   Plus,
@@ -13,7 +13,8 @@ import {
   Server,
   Network,
   Save,
-  ArrowRightLeft
+  ArrowRightLeft,
+  Loader2
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -39,17 +40,16 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
 import {
   type DhcpConfig,
   type DhcpReservation,
-  type ActiveDhcpLease,
-  initialDhcpConfig,
-  initialDhcpReservations,
-  initialActiveDhcpLeases
+  type ActiveDhcpLease
 } from "@/data-mockup/mockData"
+import { dhcpService } from "@/services/dhcpService"
 
 export default function DhcpServer() {
   // --- State ---
-  const [config, setConfig] = useState<DhcpConfig>(initialDhcpConfig)
-  const [reservations, setReservations] = useState<DhcpReservation[]>(initialDhcpReservations)
-  const [activeLeases, setActiveLeases] = useState<ActiveDhcpLease[]>(initialActiveDhcpLeases)
+  const [config, setConfig] = useState<DhcpConfig | null>(null)
+  const [reservations, setReservations] = useState<DhcpReservation[]>([])
+  const [activeLeases, setActiveLeases] = useState<ActiveDhcpLease[]>([])
+  const [isLoading, setIsLoading] = useState(true)
 
   // Search queries
   const [resSearchQuery, setResSearchQuery] = useState("")
@@ -60,14 +60,14 @@ export default function DhcpServer() {
   const [editingReservation, setEditingReservation] = useState<DhcpReservation | null>(null)
 
   // Form states - Configuration Pool
-  const [formInterface, setFormInterface] = useState(config.interface)
-  const [formStartIp, setFormStartIp] = useState(config.startIp)
-  const [formEndIp, setFormEndIp] = useState(config.endIp)
-  const [formGateway, setFormGateway] = useState(config.gateway)
-  const [formNetmask, setFormNetmask] = useState(config.netmask)
-  const [formDns1, setFormDns1] = useState(config.dns1)
-  const [formDns2, setFormDns2] = useState(config.dns2)
-  const [formLeaseTime, setFormLeaseTime] = useState(config.leaseTime.toString())
+  const [formInterface, setFormInterface] = useState("")
+  const [formStartIp, setFormStartIp] = useState("")
+  const [formEndIp, setFormEndIp] = useState("")
+  const [formGateway, setFormGateway] = useState("")
+  const [formNetmask, setFormNetmask] = useState("")
+  const [formDns1, setFormDns1] = useState("")
+  const [formDns2, setFormDns2] = useState("")
+  const [formLeaseTime, setFormLeaseTime] = useState("")
   const [configError, setConfigError] = useState("")
   const [configSuccess, setConfigSuccess] = useState("")
 
@@ -84,6 +84,40 @@ export default function DhcpServer() {
   const [isRefreshingLeases, setIsRefreshingLeases] = useState(false)
 
   const dialogContentRef = useRef<HTMLDivElement | null>(null)
+
+  // Fetch logic
+  const loadDhcpData = async (showLoading = true) => {
+    if (showLoading) setIsLoading(true)
+    try {
+      const [cfg, res, leases] = await Promise.all([
+        dhcpService.getConfig(),
+        dhcpService.getReservations(),
+        dhcpService.getActiveLeases()
+      ])
+      setConfig(cfg)
+      setReservations(res)
+      setActiveLeases(leases)
+
+      // Initialize form fields
+      setFormInterface(cfg.interface)
+      setFormStartIp(cfg.startIp)
+      setFormEndIp(cfg.endIp)
+      setFormGateway(cfg.gateway)
+      setFormNetmask(cfg.netmask)
+      setFormDns1(cfg.dns1)
+      setFormDns2(cfg.dns2)
+      setFormLeaseTime(cfg.leaseTime.toString())
+    } catch (err: any) {
+      console.error(err)
+      alert("ไม่สามารถโหลดข้อมูล DHCP ได้: " + (err.message || err))
+    } finally {
+      if (showLoading) setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadDhcpData()
+  }, [])
 
   // --- Helpers ---
   const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/
@@ -103,8 +137,8 @@ export default function DhcpServer() {
   // --- Statistics ---
   const stats = useMemo(() => {
     return {
-      status: config.enabled ? "Active" : "Inactive",
-      poolRange: `${config.startIp} - ${config.endIp}`,
+      status: config?.enabled ? "Active" : "Inactive",
+      poolRange: config ? `${config.startIp} - ${config.endIp}` : "—",
       reservationsCount: reservations.length,
       activeLeasesCount: activeLeases.length
     }
@@ -134,13 +168,21 @@ export default function DhcpServer() {
   }, [activeLeases, leaseSearchQuery])
 
   // --- Handlers ---
-  const handleToggleService = (checked: boolean) => {
-    setConfig(prev => ({ ...prev, enabled: checked }))
+  const handleToggleService = async (checked: boolean) => {
+    if (!config) return
+    const updatedConfig = { ...config, enabled: checked }
+    setConfig(updatedConfig)
     setIsApplied(false)
+    try {
+      await dhcpService.updateConfig(updatedConfig)
+    } catch (err: any) {
+      alert("ไม่สามารถเปิด/ปิดบริการ DHCP ได้: " + (err.message || err))
+    }
   }
 
-  const handleSaveConfig = (e: React.FormEvent) => {
+  const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!config) return
     setConfigError("")
     setConfigSuccess("")
     setIsSavingConfig(true)
@@ -191,8 +233,8 @@ export default function DhcpServer() {
       return
     }
 
-    setTimeout(() => {
-      setConfig({
+    try {
+      const updatedConfig = {
         enabled: config.enabled,
         interface: formInterface,
         startIp: formStartIp,
@@ -202,40 +244,41 @@ export default function DhcpServer() {
         dns1: formDns1,
         dns2: formDns2,
         leaseTime: leaseTimeVal
-      })
+      }
+      await dhcpService.updateConfig(updatedConfig)
+      setConfig(updatedConfig)
       setIsSavingConfig(false)
       setConfigSuccess("บันทึกการตั้งค่า DHCP Pool เรียบร้อยแล้ว")
       setIsApplied(false)
       setTimeout(() => setConfigSuccess(""), 4000)
-    }, 1000)
+    } catch (err: any) {
+      setIsSavingConfig(false)
+      setConfigError(err.message || "เกิดข้อผิดพลาดในการบันทึกการตั้งค่า")
+    }
   }
 
-  const handleApplySettings = () => {
+  const handleApplySettings = async () => {
     setIsApplying(true)
-    setTimeout(() => {
+    try {
+      await dhcpService.apply()
       setIsApplying(false)
       setIsApplied(true)
-    }, 1500)
+    } catch (err: any) {
+      setIsApplying(false)
+      alert("ไม่สามารถเริ่มระบบ DHCP เข้ากับ OS Kernel ได้: " + (err.message || err))
+    }
   }
 
-  const handleRefreshLeases = () => {
+  const handleRefreshLeases = async () => {
     setIsRefreshingLeases(true)
-    setTimeout(() => {
+    try {
+      const leases = await dhcpService.getActiveLeases(true)
+      setActiveLeases(leases)
+    } catch (err: any) {
+      console.error(err)
+    } finally {
       setIsRefreshingLeases(false)
-      // Simulate adding a lease sometimes on refresh just for visuals
-      if (activeLeases.length === 3) {
-        setActiveLeases(prev => [
-          ...prev,
-          {
-            id: "lease-4",
-            ipAddress: "192.168.1.109",
-            macAddress: "40:A3:CC:11:D3:55",
-            hostname: "Smart-Thermostat",
-            expiresIn: "23 hours, 59 mins"
-          }
-        ])
-      }
-    }, 1000)
+    }
   }
 
   // --- Static Reservations CRUD ---
@@ -257,14 +300,19 @@ export default function DhcpServer() {
     setIsResModalOpen(true)
   }
 
-  const handleDeleteReservation = (id: string, name: string) => {
+  const handleDeleteReservation = async (id: string, name: string) => {
     if (confirm(`คุณต้องการลบการจองไอพีของอุปกรณ์ "${name}" ใช่หรือไม่?`)) {
-      setReservations(prev => prev.filter(res => res.id !== id))
-      setIsApplied(false)
+      try {
+        await dhcpService.deleteReservation(id)
+        setReservations(prev => prev.filter(res => res.id !== id))
+        setIsApplied(false)
+      } catch (err: any) {
+        alert("ไม่สามารถลบข้อมูลการจองได้: " + (err.message || err))
+      }
     }
   }
 
-  const handleSaveReservation = (e: React.FormEvent) => {
+  const handleSaveReservation = async (e: React.FormEvent) => {
     e.preventDefault()
     setResError("")
 
@@ -302,26 +350,33 @@ export default function DhcpServer() {
       return
     }
 
-    if (editingReservation) {
-      // Edit
-      setReservations(prev => prev.map(r =>
-        r.id === editingReservation.id
-          ? { ...r, deviceName: name, macAddress: mac, ipAddress: ip }
-          : r
-      ))
-    } else {
-      // Create
-      const newRes: DhcpReservation = {
-        id: "res-" + Math.random().toString(36).substring(2, 9),
-        deviceName: name,
-        macAddress: mac,
-        ipAddress: ip
+    try {
+      if (editingReservation) {
+        // Edit
+        await dhcpService.updateReservation(editingReservation.id, {
+          deviceName: name,
+          macAddress: mac,
+          ipAddress: ip
+        })
+        setReservations(prev => prev.map(r =>
+          r.id === editingReservation.id
+            ? { ...r, deviceName: name, macAddress: mac, ipAddress: ip }
+            : r
+        ))
+      } else {
+        // Create
+        const newRes = await dhcpService.createReservation({
+          deviceName: name,
+          macAddress: mac,
+          ipAddress: ip
+        })
+        setReservations(prev => [...prev, newRes])
       }
-      setReservations(prev => [...prev, newRes])
+      setIsResModalOpen(false)
+      setIsApplied(false)
+    } catch (err: any) {
+      setResError(err.message || "เกิดข้อผิดพลาดในการบันทึกข้อมูลการจอง")
     }
-
-    setIsResModalOpen(false)
-    setIsApplied(false)
   }
 
   // Convert an active lease directly into a reservation
@@ -332,6 +387,15 @@ export default function DhcpServer() {
     setResIpAddress(lease.ipAddress)
     setResError("")
     setIsResModalOpen(true)
+  }
+
+  if (isLoading || !config) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <span className="ml-2 text-sm text-muted-foreground">กำลังโหลดข้อมูล DHCP...</span>
+      </div>
+    )
   }
 
   return (

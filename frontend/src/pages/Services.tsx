@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from "react"
+import { useState, useMemo, useRef, useEffect } from "react"
 import {
   Sliders,
   Plus,
@@ -8,7 +8,8 @@ import {
   Lock,
   AlertCircle,
   Info,
-  Terminal
+  Terminal,
+  Loader2
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -30,11 +31,13 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { type ServiceObject, initialServiceObjects } from "@/data-mockup/mockData"
+import { type ServiceObject } from "@/data-mockup/mockData"
+import { serviceObjectService } from "@/services/serviceObjectService"
 
 export default function Services() {
   // --- State ---
-  const [services, setServices] = useState<ServiceObject[]>(initialServiceObjects)
+  const [services, setServices] = useState<ServiceObject[]>([])
+  const [isLoading, setIsLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
   const [protoFilter, setProtoFilter] = useState<"All" | "TCP" | "UDP" | "TCP/UDP" | "ICMP">("All")
 
@@ -50,6 +53,24 @@ export default function Services() {
   const [formProto, setFormProto] = useState<"TCP" | "UDP" | "TCP/UDP" | "ICMP">("TCP")
   const [formPort, setFormPort] = useState("")
   const [formError, setFormError] = useState("")
+
+  // Fetch logic
+  const loadServices = async (showLoading = true) => {
+    if (showLoading) setIsLoading(true)
+    try {
+      const data = await serviceObjectService.getAll()
+      setServices(data)
+    } catch (err: any) {
+      console.error(err)
+      alert("ไม่สามารถโหลดข้อมูลวัตถุบริการได้: " + (err.message || err))
+    } finally {
+      if (showLoading) setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadServices()
+  }, [])
 
   const dialogContentRef = useRef<HTMLDivElement | null>(null)
 
@@ -107,7 +128,7 @@ export default function Services() {
     setIsModalOpen(true)
   }
 
-  const handleDelete = (id: string, name: string) => {
+  const handleDelete = async (id: string, name: string) => {
     const svc = services.find(s => s.id === id)
     if (!svc) return
     if (svc.type === "system") {
@@ -121,15 +142,20 @@ export default function Services() {
     }
 
     if (confirm(`คุณต้องการลบวัตถุบริการ "${name}" ใช่หรือไม่?`)) {
-      setServices(prev => prev.filter(s => s.id !== id))
-      // If we deleted the preview item, reset preview selection
-      if (selectedPreviewId === id) {
-        setSelectedPreviewId("svc-1")
+      try {
+        await serviceObjectService.delete(id)
+        // If we deleted the preview item, reset preview selection
+        if (selectedPreviewId === id) {
+          setSelectedPreviewId("svc-1")
+        }
+        await loadServices(false)
+      } catch (err: any) {
+        alert("ไม่สามารถลบข้อมูลได้: " + (err.message || err))
       }
     }
   }
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
     setFormError("")
 
@@ -189,28 +215,28 @@ export default function Services() {
       }
     }
 
-    if (editingObject) {
-      // Edit
-      setServices(prev => prev.map(s =>
-        s.id === editingObject.id
-          ? { ...s, name: formName, protocol: formProto, port: finalPort }
-          : s
-      ))
-    } else {
-      // Create
-      const newSvc: ServiceObject = {
-        id: "svc-" + Math.random().toString(36).substring(2, 9),
-        name: formName,
-        protocol: formProto,
-        port: finalPort,
-        type: "custom",
-        refPolicies: []
+    try {
+      if (editingObject) {
+        // Edit
+        await serviceObjectService.update(editingObject.id, {
+          name: formName,
+          protocol: formProto,
+          port: finalPort
+        })
+      } else {
+        // Create
+        const newSvc = await serviceObjectService.create({
+          name: formName,
+          protocol: formProto,
+          port: finalPort
+        })
+        setSelectedPreviewId(newSvc.id)
       }
-      setServices(prev => [...prev, newSvc])
-      setSelectedPreviewId(newSvc.id)
+      await loadServices(false)
+      setIsModalOpen(false)
+    } catch (err: any) {
+      setFormError(err.message || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
     }
-
-    setIsModalOpen(false)
   }
 
   return (
@@ -306,7 +332,16 @@ export default function Services() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredServices.length === 0 ? (
+              {isLoading ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="p-12 text-center text-muted-foreground text-xs">
+                    <div className="flex flex-col items-center justify-center gap-2 py-4">
+                      <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                      <span>กำลังโหลดข้อมูล...</span>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : filteredServices.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={5} className="p-8 text-center text-muted-foreground text-xs">
                     ไม่พบข้อมูลวัตถุบริการที่ค้นหา

@@ -1,22 +1,27 @@
 import { useState } from "react"
 import type { FormEvent } from "react"
 import { useNavigate } from "react-router-dom"
-import { Shield, Lock, User, AlertCircle } from "lucide-react"
+import { Shield, Lock, User, AlertCircle, Loader2 } from "lucide-react"
+import { authService } from "@/services/authService"
 
 export default function Login() {
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const navigate = useNavigate()
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
-    if (username === "admin" && password === "admin") {
-      // Mock successful login
-      localStorage.setItem("pigate_session", "mock_session_id")
+    setError("")
+    setIsSubmitting(true)
+    try {
+      await authService.login(username, password)
       navigate("/")
-    } else {
-      setError("Invalid username or password. (Use admin / admin)")
+    } catch (err: any) {
+      setError(err.message || "Invalid username or password.")
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -81,9 +86,17 @@ export default function Login() {
           <div>
             <button
               type="submit"
-              className="group relative flex w-full justify-center rounded-lg border border-primary/20 bg-primary px-4 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background transition cursor-pointer"
+              disabled={isSubmitting}
+              className="group relative flex w-full justify-center items-center rounded-lg border border-primary/20 bg-primary px-4 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Sign In
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  Signing In...
+                </>
+              ) : (
+                "Sign In"
+              )}
             </button>
           </div>
         </form>

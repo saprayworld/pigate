@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react"
+import { useState, useMemo, useCallback, useEffect } from "react"
 import {
   Network,
   Wifi,
@@ -46,10 +46,9 @@ import {
   type NetworkInterface,
   type AdminAccess,
   type AddressingMode,
-  type WifiScanResult,
-  initialNetworkInterfaces,
-  mockWifiScanResults
+  type WifiScanResult
 } from "@/data-mockup/mockData"
+import { interfaceService } from "@/services/interfaceService"
 
 
 
@@ -103,7 +102,9 @@ const ALL_ACCESS_OPTIONS: AdminAccess[] = ["HTTPS", "HTTP", "PING", "SSH"]
 
 export default function Interfaces() {
   // --- State ---
-  const [interfaces, setInterfaces] = useState<NetworkInterface[]>(initialNetworkInterfaces)
+  const [interfaces, setInterfaces] = useState<NetworkInterface[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState("")
 
   // Edit Dialog State
   const [isEditOpen, setIsEditOpen] = useState(false)
@@ -134,6 +135,24 @@ export default function Interfaces() {
   const [isScanning, setIsScanning] = useState(false)
   const [scanResults, setScanResults] = useState<WifiScanResult[]>([])
   const [showScanResults, setShowScanResults] = useState(false)
+
+  // --- Load Data ---
+  const loadData = async () => {
+    setIsLoading(true)
+    setError("")
+    try {
+      const data = await interfaceService.getAll()
+      setInterfaces(data)
+    } catch (err: any) {
+      setError(err.message || "Failed to load interfaces.")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadData()
+  }, [])
 
   // --- Statistics ---
   const stats = useMemo(() => {
@@ -178,16 +197,19 @@ export default function Interfaces() {
     )
   }
 
-  const handleWifiScan = () => {
+  const handleWifiScan = async () => {
+    if (!editingIface) return
     setIsScanning(true)
     setScanResults([])
     setShowScanResults(true)
-
-    // Simulate scanning delay
-    setTimeout(() => {
-      setScanResults(mockWifiScanResults)
+    try {
+      const results = await interfaceService.scanWifi(editingIface.id)
+      setScanResults(results)
+    } catch (err: any) {
+      setFormError(err.message || "Failed to scan Wi-Fi.")
+    } finally {
       setIsScanning(false)
-    }, 1800)
+    }
   }
 
   const selectSSID = (ssid: string) => {
@@ -195,31 +217,17 @@ export default function Interfaces() {
     setShowScanResults(false)
   }
 
-  const handleToggleStatus = (id: string) => {
-    setInterfaces(prev =>
-      prev.map(i => {
-        if (i.id === id) {
-          const nextStatus = i.status === "up" ? "down" : "up"
-
-          // Reconnect behavior: if toggling status to UP, type is wireless, macMode is randomized, and randomizeOnReconnect is true
-          if (nextStatus === "up" && i.type === "wireless" && i.macMode === "randomized" && i.randomizeOnReconnect) {
-            const newMac = generateRandomMac()
-            return {
-              ...i,
-              status: nextStatus,
-              randomizedMac: newMac,
-              macAddress: newMac
-            }
-          }
-
-          return { ...i, status: nextStatus }
-        }
-        return i
-      })
-    )
+  const handleToggleStatus = async (id: string) => {
+    try {
+      await interfaceService.toggleStatus(id)
+      const data = await interfaceService.getAll()
+      setInterfaces(data)
+    } catch (err: any) {
+      alert("Failed to toggle interface status: " + err.message)
+    }
   }
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
     setFormError("")
 
@@ -279,39 +287,56 @@ export default function Interfaces() {
       }
     }
 
-    // Save
-    setInterfaces(prev =>
-      prev.map(i =>
-        i.id === editingIface.id
-          ? {
-            ...i,
-            alias: formAlias,
-            addressingMode: formMode,
-            ip: formMode === "static" ? formIp : i.ip,
-            netmask: formMode === "static" ? formNetmask : i.netmask,
-            gateway: formMode === "static" ? formGateway : i.gateway,
-            dns1: formMode === "static" ? formDns1 : i.dns1,
-            dns2: formMode === "static" ? formDns2 : i.dns2,
-            adminAccess: formAccess,
-            connectedSSID: i.type === "wireless" ? formSSID : i.connectedSSID,
-            // Save MAC settings
-            ...(i.type === "wireless" ? {
-              macMode: formMacMode,
-              randomizedMac: formRandomizedMac,
-              laaMacAddress: formLaaMac,
-              randomizeOnReconnect: formRandomizeOnReconnect,
-              macAddress: formMacMode === "hardware"
-                ? (i.realMacAddress || i.macAddress)
-                : formMacMode === "randomized"
-                  ? formRandomizedMac
-                  : formLaaMac
-            } : {})
-          }
-          : i
-      )
-    )
+    try {
+      const updates: Partial<NetworkInterface> = {
+        alias: formAlias,
+        addressingMode: formMode,
+        ip: formMode === "static" ? formIp : editingIface.ip,
+        netmask: formMode === "static" ? formNetmask : editingIface.netmask,
+        gateway: formMode === "static" ? formGateway : editingIface.gateway,
+        dns1: formMode === "static" ? formDns1 : editingIface.dns1,
+        dns2: formMode === "static" ? formDns2 : editingIface.dns2,
+        adminAccess: formAccess,
+      }
 
-    setIsEditOpen(false)
+      if (editingIface.type === "wireless") {
+        updates.connectedSSID = formSSID
+        updates.macMode = formMacMode
+        updates.randomizedMac = formRandomizedMac
+        updates.laaMacAddress = formLaaMac
+        updates.randomizeOnReconnect = formRandomizeOnReconnect
+        if (formWifiPassword) {
+          updates.wifiPassword = formWifiPassword
+        }
+      }
+
+      await interfaceService.update(editingIface.id, updates)
+      await loadData()
+      setIsEditOpen(false)
+    } catch (err: any) {
+      setFormError(err.message || "Failed to update interface.")
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4">
+        <RefreshCw className="h-8 w-8 animate-spin text-primary" />
+        <span className="text-sm text-muted-foreground font-semibold">กำลังโหลดข้อมูล Interfaces...</span>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="p-6">
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4 text-red-400" />
+          <AlertTitle>Error Loading Interfaces</AlertTitle>
+          <AlertDescription className="text-xs text-red-400">{error}</AlertDescription>
+        </Alert>
+      </div>
+    )
   }
 
   return (

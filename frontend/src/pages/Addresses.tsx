@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from "react"
+import { useState, useMemo, useRef, useEffect } from "react"
 import {
   BookOpen,
   Plus,
@@ -9,7 +9,8 @@ import {
   Network,
   Globe,
   Layers,
-  Trash
+  Trash,
+  Loader2
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -31,11 +32,13 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
-import { type AddressObject, initialAddressObjects } from "@/data-mockup/mockData"
+import { type AddressObject } from "@/data-mockup/mockData"
+import { addressService } from "@/services/addressService"
 
 export default function Addresses() {
   // --- State ---
-  const [addresses, setAddresses] = useState<AddressObject[]>(initialAddressObjects)
+  const [addresses, setAddresses] = useState<AddressObject[]>([])
+  const [isLoading, setIsLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<"all" | "subnet" | "range" | "fqdn">("all")
 
@@ -51,6 +54,24 @@ export default function Addresses() {
   const [formType, setFormType] = useState<"subnet" | "range" | "fqdn">("subnet")
   const [formValue, setFormValue] = useState("")
   const [formError, setFormError] = useState("")
+
+  // Fetch logic
+  const loadAddresses = async (showLoading = true) => {
+    if (showLoading) setIsLoading(true)
+    try {
+      const data = await addressService.getAll()
+      setAddresses(data)
+    } catch (err: any) {
+      console.error(err)
+      alert("ไม่สามารถโหลดข้อมูลที่อยู่ไอพีได้: " + (err.message || err))
+    } finally {
+      if (showLoading) setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadAddresses()
+  }, [])
 
   const dialogContentRef = useRef<HTMLDivElement | null>(null)
 
@@ -118,7 +139,7 @@ export default function Addresses() {
     setIsModalOpen(true)
   }
 
-  const handleDelete = (id: string, name: string) => {
+  const handleDelete = async (id: string, name: string) => {
     const obj = addresses.find(a => a.id === id)
     if (obj && obj.refPolicies.length > 0) {
       alert(`ไม่สามารถลบ "${name}" ได้ เนื่องจากถูกอ้างอิงอยู่ในนโยบายไฟร์วอลล์: ${obj.refPolicies.join(", ")}`)
@@ -126,12 +147,17 @@ export default function Addresses() {
     }
 
     if (confirm(`คุณต้องการลบวัตถุที่อยู่ "${name}" ใช่หรือไม่?`)) {
-      setAddresses(prev => prev.filter(a => a.id !== id))
-      setSelectedIds(prev => prev.filter(item => item !== id))
+      try {
+        await addressService.delete(id)
+        setSelectedIds(prev => prev.filter(item => item !== id))
+        await loadAddresses(false)
+      } catch (err: any) {
+        alert("ไม่สามารถลบข้อมูลได้: " + (err.message || err))
+      }
     }
   }
 
-  const handleBulkDelete = () => {
+  const handleBulkDelete = async () => {
     // Check if any selected items are in use
     const usedObjects = addresses.filter(a => selectedIds.includes(a.id) && a.refPolicies.length > 0)
     if (usedObjects.length > 0) {
@@ -141,12 +167,17 @@ export default function Addresses() {
     }
 
     if (confirm(`คุณต้องการลบวัตถุที่เลือกจำนวน ${selectedIds.length} รายการใช่หรือไม่?`)) {
-      setAddresses(prev => prev.filter(a => !selectedIds.includes(a.id)))
-      setSelectedIds([])
+      try {
+        await addressService.deleteMultiple(selectedIds)
+        setSelectedIds([])
+        await loadAddresses(false)
+      } catch (err: any) {
+        alert("ไม่สามารถลบข้อมูลได้: " + (err.message || err))
+      }
     }
   }
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
     setFormError("")
 
@@ -172,26 +203,27 @@ export default function Addresses() {
       return
     }
 
-    if (editingObject) {
-      // Edit
-      setAddresses(prev => prev.map(a =>
-        a.id === editingObject.id
-          ? { ...a, name: formName, type: formType, value: formValue }
-          : a
-      ))
-    } else {
-      // Create
-      const newObj: AddressObject = {
-        id: "addr-" + Math.random().toString(36).substring(2, 9),
-        name: formName,
-        type: formType,
-        value: formValue,
-        refPolicies: []
+    try {
+      if (editingObject) {
+        // Edit
+        await addressService.update(editingObject.id, {
+          name: formName,
+          type: formType,
+          value: formValue
+        })
+      } else {
+        // Create
+        await addressService.create({
+          name: formName,
+          type: formType,
+          value: formValue
+        })
       }
-      setAddresses(prev => [...prev, newObj])
+      await loadAddresses(false)
+      setIsModalOpen(false)
+    } catch (err: any) {
+      setFormError(err.message || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
     }
-
-    setIsModalOpen(false)
   }
 
   return (
@@ -332,7 +364,16 @@ export default function Addresses() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredAddresses.length === 0 ? (
+            {isLoading ? (
+              <TableRow>
+                <TableCell colSpan={6} className="p-12 text-center text-muted-foreground text-xs">
+                  <div className="flex flex-col items-center justify-center gap-2 py-4">
+                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                    <span>กำลังโหลดข้อมูล...</span>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ) : filteredAddresses.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={6} className="p-8 text-center text-muted-foreground text-xs">
                   ไม่พบวัตถุที่อยู่ไอพีตามที่ค้นหา

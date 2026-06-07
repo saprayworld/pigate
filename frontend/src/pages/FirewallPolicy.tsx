@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from "react"
+import { useState, useMemo, useRef, useEffect } from "react"
 import {
   Flame,
   Plus,
@@ -10,13 +10,15 @@ import {
   Trash2,
   RefreshCw,
   Lock,
-  AlertCircle
+  AlertCircle,
+  Loader2
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { type PolicyRule, initialPolicyRules } from "@/data-mockup/mockData"
+import { type PolicyRule } from "@/data-mockup/mockData"
+import { policyService } from "@/services/policyService"
 
 // shadcn UI component imports
 import {
@@ -267,7 +269,8 @@ const serviceOptions = [
 
 export default function FirewallPolicy() {
   // --- State for Policies ---
-  const [rules, setRules] = useState<PolicyRule[]>(initialPolicyRules)
+  const [rules, setRules] = useState<PolicyRule[]>([])
+  const [isLoading, setIsLoading] = useState(true)
 
   // --- Search and Filters State ---
   const [searchQuery, setSearchQuery] = useState<string>("")
@@ -277,13 +280,33 @@ export default function FirewallPolicy() {
   const [showApplySuccess, setShowApplySuccess] = useState<boolean>(false)
   const [applyProgress, setApplyProgress] = useState<string>("")
 
-  const handleApplySettings = () => {
+  // Fetch logic
+  const loadPolicies = async (showLoading = true) => {
+    if (showLoading) setIsLoading(true)
+    try {
+      const data = await policyService.getAll()
+      setRules(data)
+    } catch (err: any) {
+      console.error(err)
+      alert("ไม่สามารถโหลดนโยบายไฟร์วอลล์ได้: " + (err.message || err))
+    } finally {
+      if (showLoading) setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadPolicies()
+  }, [])
+
+  const handleApplySettings = async () => {
     setIsApplying(true)
     setShowApplySuccess(false)
     setApplyProgress("กำลังตรวจสอบโครงสร้างของกฎไฟร์วอลล์...")
 
-    setTimeout(() => {
+    try {
+      await policyService.apply()
       setApplyProgress("กำลังรวบรวมคำสั่ง nftables สำหรับ Linux Kernel...")
+      
       setTimeout(() => {
         setApplyProgress("กำลังโหลดตารางและโซนความปลอดภัยเข้าไปที่ Netfilter...")
         setTimeout(() => {
@@ -295,7 +318,10 @@ export default function FirewallPolicy() {
           }, 5000)
         }, 600)
       }, 600)
-    }, 600)
+    } catch (err: any) {
+      setIsApplying(false)
+      alert("ไม่สามารถใช้การตั้งค่าได้: " + (err.message || err))
+    }
   }
 
   // --- Modal Forms State ---
@@ -344,61 +370,71 @@ export default function FirewallPolicy() {
     setIsModalOpen(true)
   }
 
-  const handleSaveForm = (e: React.FormEvent) => {
+  const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault()
 
     if (!formName.trim()) return
 
     const parsedSvcs = formService.length ? formService : ["ALL"]
 
-    if (editingRule) {
-      // Edit mode
-      setRules((prev) =>
-        prev.map((r) =>
-          r.id === editingRule.id
-            ? {
-              ...r,
-              name: formName,
-              source: formSource,
-              destination: formDest,
-              service: parsedSvcs,
-              action: formAction,
-              log: formLog,
-              status: formStatus
-            }
-            : r
-        )
-      )
-    } else {
-      // Create mode
-      const newRule: PolicyRule = {
-        id: "rule-" + Math.random().toString(36).substring(2, 9),
-        name: formName,
-        source: formSource.length ? formSource : ["ALL"],
-        destination: formDest.length ? formDest : ["ALL"],
-        service: parsedSvcs,
-        action: formAction,
-        log: formLog,
-        status: formStatus
+    try {
+      if (editingRule) {
+        // Edit mode
+        await policyService.update(editingRule.id, {
+          name: formName,
+          source: formSource.length ? formSource : ["ALL"],
+          destination: formDest.length ? formDest : ["ALL"],
+          service: parsedSvcs,
+          action: formAction,
+          log: formLog,
+          status: formStatus
+        })
+      } else {
+        // Create mode
+        await policyService.create({
+          name: formName,
+          source: formSource.length ? formSource : ["ALL"],
+          destination: formDest.length ? formDest : ["ALL"],
+          service: parsedSvcs,
+          action: formAction,
+          log: formLog,
+          status: formStatus
+        })
       }
-      setRules((prev) => [...prev, newRule])
+      await loadPolicies(false)
+      setIsModalOpen(false)
+    } catch (err: any) {
+      alert("ไม่สามารถบันทึกกฎไฟร์วอลล์ได้: " + (err.message || err))
     }
-
-    setIsModalOpen(false)
   }
 
   // --- Action Toggles inside Row ---
-  const handleToggleLog = (id: string) => {
-    setRules((prev) => prev.map((r) => (r.id === id ? { ...r, log: !r.log } : r)))
+  const handleToggleLog = async (id: string) => {
+    try {
+      await policyService.toggleLog(id)
+      await loadPolicies(false)
+    } catch (err: any) {
+      alert("ไม่สามารถเปลี่ยนค่าสถานะ Log ได้: " + (err.message || err))
+    }
   }
 
-  const handleToggleStatus = (id: string) => {
-    setRules((prev) => prev.map((r) => (r.id === id ? { ...r, status: !r.status } : r)))
+  const handleToggleStatus = async (id: string) => {
+    try {
+      await policyService.toggleStatus(id)
+      await loadPolicies(false)
+    } catch (err: any) {
+      alert("ไม่สามารถเปลี่ยนสถานะใช้งานกฎได้: " + (err.message || err))
+    }
   }
 
-  const handleDeleteRule = (id: string) => {
+  const handleDeleteRule = async (id: string) => {
     if (confirm("คุณแน่ใจหรือไม่ที่จะลบนโยบายความปลอดภัยนี้?")) {
-      setRules((prev) => prev.filter((r) => r.id !== id))
+      try {
+        await policyService.delete(id)
+        await loadPolicies(false)
+      } catch (err: any) {
+        alert("ไม่สามารถลบกฎได้: " + (err.message || err))
+      }
     }
   }
 
@@ -414,15 +450,23 @@ export default function FirewallPolicy() {
     })
   )
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event
 
     if (over && active.id !== over.id) {
-      setRules((items) => {
-        const oldIndex = items.findIndex((item) => item.id === active.id)
-        const newIndex = items.findIndex((item) => item.id === over.id)
-        return arrayMove(items, oldIndex, newIndex)
-      })
+      const oldIndex = rules.findIndex((item) => item.id === active.id)
+      const newIndex = rules.findIndex((item) => item.id === over.id)
+      const newRules = arrayMove(rules, oldIndex, newIndex)
+      
+      // Optimistically update local state to render immediately
+      setRules(newRules)
+      
+      try {
+        await policyService.saveAll(newRules)
+      } catch (err: any) {
+        alert("ไม่สามารถบันทึกการจัดลำดับกฎใหม่ได้: " + (err.message || err))
+        await loadPolicies(false)
+      }
     }
   }
 
@@ -553,7 +597,16 @@ export default function FirewallPolicy() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredRules.length === 0 ? (
+            {isLoading ? (
+              <TableRow>
+                <TableCell colSpan={9} className="p-12 text-center text-muted-foreground text-xs">
+                  <div className="flex flex-col items-center justify-center gap-2 py-4">
+                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                    <span>กำลังโหลดข้อมูล...</span>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ) : filteredRules.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={9} className="p-8 text-center text-muted-foreground text-xs">
                   ไม่พบนโยบายไฟร์วอลล์ที่ค้นหา
