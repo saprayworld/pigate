@@ -447,4 +447,85 @@ export const initialStaticRoutes: StaticRoute[] = [
   }
 ]
 
+// Types for DHCP Server
+export interface DhcpConfig {
+  enabled: boolean
+  interface: string
+  startIp: string
+  endIp: string
+  gateway: string
+  netmask: string
+  dns1: string
+  dns2: string
+  leaseTime: number // in seconds
+}
+
+export interface DhcpReservation {
+  id: string
+  deviceName: string
+  macAddress: string
+  ipAddress: string
+}
+
+export interface ActiveDhcpLease {
+  id: string
+  ipAddress: string
+  macAddress: string
+  hostname: string
+  expiresIn: string
+}
+
+// Initial mockup data for DHCP Server
+export const initialDhcpConfig: DhcpConfig = {
+  enabled: true,
+  interface: "eth0",
+  startIp: "192.168.1.100",
+  endIp: "192.168.1.200",
+  gateway: "192.168.1.1",
+  netmask: "255.255.255.0",
+  dns1: "8.8.8.8",
+  dns2: "1.1.1.1",
+  leaseTime: 86400 // 24 hours
+}
+
+export const initialDhcpReservations: DhcpReservation[] = [
+  {
+    id: "res-1",
+    deviceName: "CEO_Laptop",
+    macAddress: "A1:B2:C3:D4:E5:F6",
+    ipAddress: "192.168.1.10"
+  },
+  {
+    id: "res-2",
+    deviceName: "Network_Printer",
+    macAddress: "11:22:33:44:55:66",
+    ipAddress: "192.168.1.50"
+  }
+]
+
+export const initialActiveDhcpLeases: ActiveDhcpLease[] = [
+  {
+    id: "lease-1",
+    ipAddress: "192.168.1.101",
+    macAddress: "99:88:77:66:55:44",
+    hostname: "iPhone-13",
+    expiresIn: "11 hours, 45 mins"
+  },
+  {
+    id: "lease-2",
+    ipAddress: "192.168.1.102",
+    macAddress: "AA:BB:CC:DD:EE:FF",
+    hostname: "Android-SmartTV",
+    expiresIn: "23 hours, 10 mins"
+  },
+  {
+    id: "lease-3",
+    ipAddress: "192.168.1.105",
+    macAddress: "B4:F1:DA:C8:E2:10",
+    hostname: "iPad-Pro",
+    expiresIn: "2 hours, 15 mins"
+  }
+]
+
+
 
