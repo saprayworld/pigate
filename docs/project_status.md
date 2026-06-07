@@ -68,7 +68,7 @@
   * รองรับการทำ IP Reservations (จองไอพีตาม MAC) และมีตารางแสดงรายการ Active Leases ปัจจุบัน
 
 * **พัฒนาหน้าจอการตั้งค่ารวมถึงการดูแลรักษา (Settings & Maintenance) [สำเร็จ]**:
-  * พัฒนาหน้า [SettingsMaintenance.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/SettingsMaintenance.tsx) สไตล์ Sleek Dark Mode แบ่งออกเป็นแท็บ Setup Settings และ Maintenance
+  * พัฒนาหน้า [SettingsMaintenance.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/SettingsMaintenance.tsx) สไตล์ Premium Design (รองรับ Dark/Light Mode) แบ่งออกเป็นแท็บ Setup Settings และ Maintenance
   * แท็บ Setup Settings: รองรับฟอร์มเปลี่ยนรหัสผ่านแอดมิน, ตั้งค่า Time Zone, และการตั้งค่าซิงค์เวลาอัตโนมัติ (NTP Server)
   * แท็บ Maintenance: จัดการปุ่มรีบูต (Reboot) พร้อม Overlay นับถอยหลังจำลอง, ปุ่มปิดระบบ (Shutdown) พร้อม Overlay หน้าจอระบบปิดที่กด Power On กลับมาได้, ฟังก์ชันดาวน์โหลดสำรองข้อมูลเป็นไฟล์ JSON และนำเข้าฟื้นคืนข้อมูล รวมถึงตารางสั่ง Restart บริการย่อย (`nftables`, `isc-dhcp-server`, `NetworkManager`)
 
