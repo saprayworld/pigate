@@ -12,7 +12,10 @@ import {
   AlertCircle,
   Activity,
   ArrowUpDown,
-  Check
+  Check,
+  Radio,
+  Play,
+  Terminal
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -132,6 +135,14 @@ export default function Interfaces() {
   const [formRandomizedMac, setFormRandomizedMac] = useState("")
   const [formRandomizeOnReconnect, setFormRandomizeOnReconnect] = useState(false)
 
+  // Wi-Fi Backup & Failover Form State
+  const [formFailoverEnabled, setFormFailoverEnabled] = useState(false)
+  const [formBackupSSID, setFormBackupSSID] = useState("")
+  const [formBackupWifiPassword, setFormBackupWifiPassword] = useState("")
+  const [formIpCheckTimeout, setFormIpCheckTimeout] = useState(15)
+  const [formPrimaryMaxRetries, setFormPrimaryMaxRetries] = useState(3)
+  const [formFailoverCooldown, setFormFailoverCooldown] = useState(60)
+
   // Wi-Fi Scanner State
   const [isScanning, setIsScanning] = useState(false)
   const [scanResults, setScanResults] = useState<WifiScanResult[]>([])
@@ -187,6 +198,14 @@ export default function Interfaces() {
     setFormRandomizedMac(defaultRandomMac)
     setFormRandomizeOnReconnect(iface.randomizeOnReconnect ?? false)
 
+    // Failover fields
+    setFormFailoverEnabled(iface.failoverEnabled ?? false)
+    setFormBackupSSID(iface.backupSsid || "")
+    setFormBackupWifiPassword(iface.backupWifiPassword || "")
+    setFormIpCheckTimeout(iface.ipCheckTimeout ?? 15)
+    setFormPrimaryMaxRetries(iface.primaryMaxRetries ?? 3)
+    setFormFailoverCooldown(iface.failoverCooldown ?? 60)
+
     setFormError("")
     setScanResults([])
     setShowScanResults(false)
@@ -218,6 +237,74 @@ export default function Interfaces() {
     setFormSSID(ssid)
     setShowScanResults(false)
   }
+
+  const [simActive, setSimActive] = useState(false)
+  const [simLogs, setSimLogs] = useState<string[]>([])
+
+  const runFailoverSimulation = () => {
+    if (simActive) return
+    setSimActive(true)
+    setSimLogs([])
+
+    const addLog = (msg: string) => {
+      const time = new Date().toLocaleTimeString()
+      setSimLogs((prev) => [...prev, `[${time}] ${msg}`])
+    }
+
+    addLog("เริ่มการจำลองสถานการณ์ Wi-Fi Failover...")
+    
+    // Step 1: Connect primary
+    setTimeout(() => {
+      addLog(`[SSID หลัก: ${formSSID || "wlan0_primary"}] กำลังตรวจสอบการได้รับ IP Address...`)
+      
+      // Step 2: Failed retry 1
+      setTimeout(() => {
+        addLog(`[SSID หลัก: ${formSSID || "wlan0_primary"}] ตรวจสอบ: ไม่พบ IP Address (IP: 0.0.0.0)`)
+        addLog(`[SSID หลัก: ${formSSID || "wlan0_primary"}] กำลังสั่งปิด/เปิดอินเตอร์เฟสใหม่ (Restart Interface ครั้งที่ 1/${formPrimaryMaxRetries})...`)
+        
+        // Step 3: Failed retry 2
+        setTimeout(() => {
+          addLog(`[SSID หลัก: ${formSSID || "wlan0_primary"}] ตรวจสอบ: ยังไม่พบ IP Address`)
+          
+          if (formPrimaryMaxRetries >= 2) {
+            addLog(`[SSID หลัก: ${formSSID || "wlan0_primary"}] กำลังสั่งปิด/เปิดอินเตอร์เฟสใหม่ (Restart Interface ครั้งที่ 2/${formPrimaryMaxRetries})...`)
+          }
+          
+          // Step 4: Failover action
+          setTimeout(() => {
+            addLog(`[SSID หลัก: ${formSSID || "wlan0_primary"}] การเชื่อมต่อ SSID หลักล้มเหลว (ลองใหม่ครบ ${formPrimaryMaxRetries} ครั้ง)`)
+            
+            if (formBackupSSID) {
+              addLog(`[สลับคลื่นสำรอง] กำลังเปลี่ยนไปใช้ SSID สำรอง: "${formBackupSSID}"...`)
+              
+              // Step 5: Backup connection
+              setTimeout(() => {
+                addLog(`[SSID สำรอง: ${formBackupSSID}] กำลังพยายามเชื่อมต่อและตรวจสอบ IP Address...`)
+                
+                // Step 6: Backup success
+                setTimeout(() => {
+                  addLog(`[SSID สำรอง: ${formBackupSSID}] ได้รับ IP Address (10.0.50.222) สำเร็จ!`)
+                  addLog(`สถานะปัจจุบัน: ทำงานปกติผ่านเครือข่ายสำรอง (Failover Active)`)
+                  setSimActive(false)
+                }, 1500)
+              }, 1200)
+            } else {
+              addLog(`[ผลลัพธ์] ไม่พบ SSID สำรองระบุไว้ (Optional Backup SSID is empty)`)
+              addLog(`[Cooldown] หน่วงเวลา ${formFailoverCooldown} วินาที ก่อนเริ่มสลับกลับมาลองเชื่อมต่อ SSID หลักอีกครั้ง...`)
+              setSimActive(false)
+            }
+          }, 1500)
+        }, 1500)
+      }, 1500)
+    }, 1000)
+  }
+
+  useEffect(() => {
+    if (!isEditOpen) {
+      setSimActive(false)
+      setSimLogs([])
+    }
+  }, [isEditOpen])
 
   const handleToggleStatus = async (id: string) => {
     try {
@@ -287,6 +374,22 @@ export default function Interfaces() {
           return
         }
       }
+
+      // Wi-Fi Failover validations
+      if (formFailoverEnabled) {
+        if (formIpCheckTimeout < 5) {
+          setFormError("เวลาตรวจสอบ IP ต้องไม่น้อยกว่า 5 วินาที")
+          return
+        }
+        if (formPrimaryMaxRetries < 1) {
+          setFormError("จำนวนครั้งในการลองเชื่อมต่อต้องไม่น้อยกว่า 1 ครั้ง")
+          return
+        }
+        if (formFailoverCooldown < 10) {
+          setFormError("ระยะหน่วงเวลาลองใหม่ต้องไม่น้อยกว่า 10 วินาที")
+          return
+        }
+      }
     }
 
     try {
@@ -311,6 +414,13 @@ export default function Interfaces() {
         if (formWifiPassword) {
           updates.wifiPassword = formWifiPassword
         }
+        // Failover properties
+        updates.failoverEnabled = formFailoverEnabled
+        updates.backupSsid = formBackupSSID
+        updates.backupWifiPassword = formBackupWifiPassword
+        updates.ipCheckTimeout = formIpCheckTimeout
+        updates.primaryMaxRetries = formPrimaryMaxRetries
+        updates.failoverCooldown = formFailoverCooldown
       }
 
       await interfaceService.update(editingIface.id, updates)
@@ -942,6 +1052,127 @@ export default function Interfaces() {
                       </span>
                     </div>
                   </div>
+                </div>
+
+                {/* Wi-Fi Failover / Backup SSID Settings */}
+                <div className="space-y-3 border border-indigo-500/20 rounded-lg p-4 bg-indigo-500/5 mt-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-semibold text-indigo-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Radio className="h-3.5 w-3.5" /> Wi-Fi Backup & Failover (ฟีเจอร์สำรองข้อมูลคลื่น)
+                    </div>
+                    <Switch
+                      size="sm"
+                      checked={formFailoverEnabled}
+                      onCheckedChange={setFormFailoverEnabled}
+                    />
+                  </div>
+
+                  {formFailoverEnabled && (
+                    <div className="space-y-4 pt-1 animate-fade-in text-xs">
+                      {/* Optional Backup SSID */}
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="space-y-1.5">
+                          <Label htmlFor="form-backup-ssid" className="text-[11px] text-muted-foreground">
+                            Backup SSID (ชื่อ Wi-Fi สำรอง)
+                          </Label>
+                          <Input
+                            id="form-backup-ssid"
+                            type="text"
+                            value={formBackupSSID}
+                            onChange={(e) => setFormBackupSSID(e.target.value)}
+                            placeholder="ชื่อเครือข่าย Wi-Fi สำรอง"
+                            className="bg-background/50 h-8 font-mono text-xs"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="form-backup-wifi-password" className="text-[11px] text-muted-foreground">
+                            Backup Password (รหัสผ่านสำรอง)
+                          </Label>
+                          <Input
+                            id="form-backup-wifi-password"
+                            type="password"
+                            value={formBackupWifiPassword}
+                            onChange={(e) => setFormBackupWifiPassword(e.target.value)}
+                            placeholder="รหัสผ่านสำรอง"
+                            className="bg-background/50 h-8 font-mono text-xs"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Settings grid */}
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <div className="space-y-1.5">
+                          <Label htmlFor="form-ip-check-timeout" className="text-[11px] text-muted-foreground block" title="เวลาที่ใช้ในการตรวจสอบการตอบกลับ IP ก่อนพิจารณาว่าล้มเหลว">
+                            IP Check Timeout (วินาที)
+                          </Label>
+                          <Input
+                            id="form-ip-check-timeout"
+                            type="number"
+                            min="5"
+                            max="300"
+                            value={formIpCheckTimeout}
+                            onChange={(e) => setFormIpCheckTimeout(parseInt(e.target.value) || 15)}
+                            className="bg-background/50 h-8 font-mono text-xs"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="form-primary-max-retries" className="text-[11px] text-muted-foreground block" title="จำนวนครั้งในการเปิด/ปิดพอร์ตใหม่เพื่อเชื่อมต่อ SSID หลัก">
+                            Max Retries (ครั้ง)
+                          </Label>
+                          <Input
+                            id="form-primary-max-retries"
+                            type="number"
+                            min="1"
+                            max="10"
+                            value={formPrimaryMaxRetries}
+                            onChange={(e) => setFormPrimaryMaxRetries(parseInt(e.target.value) || 3)}
+                            className="bg-background/50 h-8 font-mono text-xs"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="form-failover-cooldown" className="text-[11px] text-muted-foreground block" title="ระยะหน่วงเวลาก่อนสลับกลับมาลองเชื่อมต่อ SSID หลักอีกครั้ง">
+                            Cooldown Delay (วินาที)
+                          </Label>
+                          <Input
+                            id="form-failover-cooldown"
+                            type="number"
+                            min="10"
+                            max="3600"
+                            value={formFailoverCooldown}
+                            onChange={(e) => setFormFailoverCooldown(parseInt(e.target.value) || 60)}
+                            className="bg-background/50 h-8 font-mono text-xs"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Interactive Simulator Section */}
+                      <div className="border border-border/60 rounded-lg p-3 bg-background/40 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-xs text-foreground flex items-center gap-1.5">
+                            <Terminal className="h-3.5 w-3.5 text-indigo-400" /> Failover Simulator (ตัวจำลองการสลับคลื่น)
+                          </span>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={runFailoverSimulation}
+                            disabled={simActive}
+                            className="cursor-pointer h-7 px-2.5 bg-indigo-500 text-neutral-950 hover:bg-indigo-400 font-bold gap-1 text-[11px]"
+                          >
+                            <Play className="h-3 w-3 fill-neutral-950" />
+                            {simActive ? "Simulating..." : "Simulate Failover"}
+                          </Button>
+                        </div>
+
+                        {simLogs.length > 0 && (
+                          <div className="bg-muted/50 dark:bg-black/60 rounded p-2 text-[10px] font-mono text-cyan-600 dark:text-cyan-400 max-h-[140px] overflow-y-auto space-y-1 border border-border/50 dark:border-border/20 scrollbar-thin">
+                            {simLogs.map((log, idx) => (
+                              <div key={idx} className="leading-relaxed whitespace-pre-wrap">{log}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </>
             )}

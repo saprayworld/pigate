@@ -274,6 +274,13 @@ export interface NetworkInterface {
   randomizedMac?: string
   laaMacAddress?: string
   randomizeOnReconnect?: boolean
+  // Wi-Fi Backup & Failover Settings
+  failoverEnabled?: boolean
+  backupSsid?: string
+  backupWifiPassword?: string
+  ipCheckTimeout?: number
+  primaryMaxRetries?: number
+  failoverCooldown?: number
 }
 
 // Initial mockup data for Network Interfaces
@@ -320,7 +327,13 @@ export const initialNetworkInterfaces: NetworkInterface[] = [
     speed: "72 Mbps",
     connectedSSID: "MyHome_5G",
     wifiPassword: "••••••••",
-    wifiSecurity: "WPA2-PSK"
+    wifiSecurity: "WPA2-PSK",
+    failoverEnabled: false,
+    backupSsid: "MyHome_2G",
+    backupWifiPassword: "backupPassword123",
+    ipCheckTimeout: 15,
+    primaryMaxRetries: 3,
+    failoverCooldown: 60
   }
 ]
 
