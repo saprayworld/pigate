@@ -81,6 +81,7 @@ import { restrictToVerticalAxis } from "@dnd-kit/modifiers"
 interface SortableRowProps {
   rule: PolicyRule
   index: number
+  interfaces: NetworkInterface[]
   onEdit: (rule: PolicyRule) => void
   onDelete: (id: string) => void
   onToggleStatus: (id: string) => void
@@ -88,7 +89,7 @@ interface SortableRowProps {
 }
 
 // Drag & Drop Row component
-function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLog }: SortableRowProps) {
+function SortableRow({ rule, index, interfaces, onEdit, onDelete, onToggleStatus, onToggleLog }: SortableRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: rule.id })
 
   const style = {
@@ -127,9 +128,14 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
       <TableCell className="p-3">
         <Badge
           variant="outline"
-          className="bg-neutral-850/10 text-neutral-500 border-neutral-700/25 dark:text-neutral-400 font-mono text-[10.5px] px-1.5 py-0.5 rounded"
+          className="bg-neutral-850/10 text-neutral-500 border-neutral-700/25 dark:text-neutral-400 font-mono text-[10.5px] px-1.5 py-0.5 rounded whitespace-nowrap"
         >
-          {rule.inInterface || "ALL"}
+          {(() => {
+            const val = rule.inInterface || "ALL";
+            if (val === "ALL") return "ALL";
+            const iface = interfaces.find((i) => i.name === val);
+            return iface ? `${iface.alias || iface.name} (${iface.name})` : val;
+          })()}
         </Badge>
       </TableCell>
 
@@ -137,9 +143,14 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
       <TableCell className="p-3">
         <Badge
           variant="outline"
-          className="bg-neutral-850/10 text-neutral-500 border-neutral-700/25 dark:text-neutral-400 font-mono text-[10.5px] px-1.5 py-0.5 rounded"
+          className="bg-neutral-850/10 text-neutral-500 border-neutral-700/25 dark:text-neutral-400 font-mono text-[10.5px] px-1.5 py-0.5 rounded whitespace-nowrap"
         >
-          {rule.outInterface || "ALL"}
+          {(() => {
+            const val = rule.outInterface || "ALL";
+            if (val === "ALL") return "ALL";
+            const iface = interfaces.find((i) => i.name === val);
+            return iface ? `${iface.alias || iface.name} (${iface.name})` : val;
+          })()}
         </Badge>
       </TableCell>
 
@@ -665,6 +676,7 @@ export default function FirewallPolicy() {
                       key={rule.id}
                       rule={rule}
                       index={idx}
+                      interfaces={interfaces}
                       onEdit={openEditModal}
                       onDelete={handleDeleteRule}
                       onToggleStatus={handleToggleStatus}
@@ -794,7 +806,10 @@ export default function FirewallPolicy() {
                 >
                   {interfaceOptions.map((opt) => (
                     <option key={opt} value={opt}>
-                      {opt}
+                      {opt === "ALL" ? "ALL (ทุกอินเตอร์เฟส)" : (() => {
+                        const iface = interfaces.find(i => i.name === opt);
+                        return iface ? `${iface.alias || iface.name} (${iface.name})` : opt;
+                      })()}
                     </option>
                   ))}
                 </select>
@@ -811,7 +826,10 @@ export default function FirewallPolicy() {
                 >
                   {interfaceOptions.map((opt) => (
                     <option key={opt} value={opt}>
-                      {opt}
+                      {opt === "ALL" ? "ALL (ทุกอินเตอร์เฟส)" : (() => {
+                        const iface = interfaces.find(i => i.name === opt);
+                        return iface ? `${iface.alias || iface.name} (${iface.name})` : opt;
+                      })()}
                     </option>
                   ))}
                 </select>

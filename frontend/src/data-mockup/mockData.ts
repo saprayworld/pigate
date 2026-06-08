@@ -252,6 +252,7 @@ export interface NetworkInterface {
   id: string
   name: string                // e.g. "eth0", "wlan0"
   alias: string               // e.g. "LAN_Internal", "WAN_WiFi"
+  role: "LAN" | "WAN"
   type: InterfaceType
   addressingMode: AddressingMode
   ip: string                  // e.g. "192.168.1.1"
@@ -281,6 +282,7 @@ export const initialNetworkInterfaces: NetworkInterface[] = [
     id: "iface-1",
     name: "eth0",
     alias: "LAN_Internal",
+    role: "LAN",
     type: "ethernet",
     addressingMode: "static",
     ip: "192.168.1.1",
@@ -299,6 +301,7 @@ export const initialNetworkInterfaces: NetworkInterface[] = [
     id: "iface-2",
     name: "wlan0",
     alias: "WAN_WiFi",
+    role: "WAN",
     type: "wireless",
     addressingMode: "dhcp",
     ip: "10.0.0.45",

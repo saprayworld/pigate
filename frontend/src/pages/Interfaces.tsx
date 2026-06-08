@@ -112,6 +112,7 @@ export default function Interfaces() {
 
   // Form State
   const [formAlias, setFormAlias] = useState("")
+  const [formRole, setFormRole] = useState<"LAN" | "WAN">("LAN")
   const [formMode, setFormMode] = useState<AddressingMode>("dhcp")
   const [formIp, setFormIp] = useState("")
   const [formNetmask, setFormNetmask] = useState("")
@@ -168,6 +169,7 @@ export default function Interfaces() {
   const openEditDialog = useCallback((iface: NetworkInterface) => {
     setEditingIface(iface)
     setFormAlias(iface.alias)
+    setFormRole(iface.role || "LAN")
     setFormMode(iface.addressingMode)
     setFormIp(iface.ip)
     setFormNetmask(iface.netmask)
@@ -290,6 +292,7 @@ export default function Interfaces() {
     try {
       const updates: Partial<NetworkInterface> = {
         alias: formAlias,
+        role: formRole,
         addressingMode: formMode,
         ip: formMode === "static" ? formIp : editingIface.ip,
         netmask: formMode === "static" ? formNetmask : editingIface.netmask,
@@ -384,18 +387,19 @@ export default function Interfaces() {
           <TableHeader>
             <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
               <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[6%] font-semibold">Port</th>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[18%] font-semibold">Name (Alias)</th>
+              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[15%] font-semibold">Name (Alias)</th>
+              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[8%] font-semibold">Role</th>
               <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[20%] font-semibold">IP / Netmask</th>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[20%] font-semibold">Admin Access</th>
+              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[18%] font-semibold">Admin Access</th>
               <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[10%] font-semibold">Speed</th>
               <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[10%] font-semibold">Status</th>
-              <TableHead className="p-3 w-[16%] text-right text-[11px] uppercase tracking-wider font-semibold">Action</TableHead>
+              <TableHead className="p-3 w-[13%] text-right text-[11px] uppercase tracking-wider font-semibold">Action</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {interfaces.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="p-8 text-center text-muted-foreground text-xs">
+                <TableCell colSpan={8} className="p-8 text-center text-muted-foreground text-xs">
                   ไม่พบอินเทอร์เฟซเครือข่าย
                 </TableCell>
               </TableRow>
@@ -420,6 +424,19 @@ export default function Interfaces() {
                         <Signal className="h-3 w-3 text-indigo-400" />
                         <span className="text-[10px] text-indigo-400 font-mono">{iface.connectedSSID}</span>
                       </div>
+                    )}
+                  </TableCell>
+
+                  {/* Role */}
+                  <TableCell className="p-3">
+                    {iface.role === "WAN" ? (
+                      <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/20 text-[10px] px-2 py-0.5 rounded font-bold">
+                        WAN
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20 text-[10px] px-2 py-0.5 rounded font-bold">
+                        LAN
+                      </Badge>
                     )}
                   </TableCell>
 
@@ -478,7 +495,7 @@ export default function Interfaces() {
                       <div className="flex items-center gap-1.5">
                         <span className="text-[10px] text-muted-foreground">{iface.status === "up" ? "ON" : "OFF"}</span>
                         <Switch
-                          size="sm"
+                           size="sm"
                           checked={iface.status === "up"}
                           onCheckedChange={() => handleToggleStatus(iface.id)}
                         />
@@ -584,21 +601,41 @@ export default function Interfaces() {
               </Alert>
             )}
 
-            {/* Field: Alias Name */}
-            <div className="space-y-1.5">
-              <Label htmlFor="form-alias" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                Alias Name <span className="text-red-500">*</span>
-              </Label>
-              <Input
-                id="form-alias"
-                type="text"
-                required
-                value={formAlias}
-                onChange={(e) => setFormAlias(e.target.value)}
-                placeholder="เช่น LAN_Internal, WAN_WiFi"
-                className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono"
-              />
-              <p className="text-[11px] text-muted-foreground italic">ห้ามเว้นวรรค ใช้ได้เฉพาะอักษรภาษาอังกฤษ ตัวเลข และ _</p>
+            {/* Row 1: Alias Name & Port Role */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="form-alias" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                  Alias Name <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="form-alias"
+                  type="text"
+                  required
+                  value={formAlias}
+                  onChange={(e) => setFormAlias(e.target.value)}
+                  placeholder="เช่น LAN_Internal, WAN_WiFi"
+                  className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono"
+                />
+                <p className="text-[11px] text-muted-foreground italic">ห้ามเว้นวรรค ใช้ได้เฉพาะอักษรภาษาอังกฤษ ตัวเลข และ _</p>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="form-role" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                  Port Role (หน้าที่ของพอร์ต) <span className="text-red-500">*</span>
+                </Label>
+                <Select
+                  value={formRole}
+                  onValueChange={(value: "LAN" | "WAN") => setFormRole(value)}
+                >
+                  <SelectTrigger id="form-role" className="bg-background/50 border-border/80 h-9 text-xs font-semibold text-foreground">
+                    <SelectValue placeholder="เลือกประเภทพอร์ต" />
+                  </SelectTrigger>
+                  <SelectContent className="border border-border/80 bg-popover text-foreground rounded-md text-xs font-semibold">
+                    <SelectItem value="LAN">LAN (วงภายใน)</SelectItem>
+                    <SelectItem value="WAN">WAN (ต่อขายนอก / อินเทอร์เน็ต)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground italic">LAN สำหรับเครือข่ายภายใน และ WAN สำหรับเชื่อมต่อเครือข่ายภายนอก</p>
+              </div>
             </div>
 
             {/* Field: Addressing Mode */}
