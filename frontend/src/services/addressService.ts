@@ -1,5 +1,6 @@
 import { type AddressObject, initialAddressObjects } from "@/data-mockup/mockData"
 import { IS_MOCK_MODE, API_BASE_URL } from "./config"
+import { syncReferences, propagateAddressRename } from "./mockSync"
 
 const LOCAL_STORAGE_KEY = "pigate_addresses";
 
@@ -30,6 +31,7 @@ export const addressService = {
     if (IS_MOCK_MODE) {
       // Simulate network latency
       await new Promise((resolve) => setTimeout(resolve, 300));
+      syncReferences();
       return getLocalAddresses();
     }
 
@@ -42,7 +44,7 @@ export const addressService = {
 
   // Create a new address object
   create: async (
-    obj: Omit<AddressObject, "id" | "refPolicies">
+    obj: Omit<AddressObject, "id" | "refPolicies" | "system">
   ): Promise<AddressObject> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 350));
@@ -50,9 +52,11 @@ export const addressService = {
       const newAddress: AddressObject = {
         ...obj,
         id: "addr-" + Math.random().toString(36).substring(2, 9),
+        system: false,
         refPolicies: [], // New objects start with no policies referencing them
       };
       saveLocalAddresses([...current, newAddress]);
+      syncReferences();
       return newAddress;
     }
 
@@ -72,7 +76,7 @@ export const addressService = {
   // Update an existing address object
   update: async (
     id: string,
-    obj: Omit<AddressObject, "id" | "refPolicies">
+    obj: Omit<AddressObject, "id" | "refPolicies" | "system">
   ): Promise<AddressObject> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 350));
@@ -81,12 +85,21 @@ export const addressService = {
       if (!target) {
         throw new Error(`Address object with id ${id} not found`);
       }
+      if (target.system) {
+        throw new Error(`Cannot update system predefined address objects`);
+      }
+      const oldName = target.name;
+      const newName = obj.name;
       const updatedAddress: AddressObject = {
         ...target,
         ...obj,
       };
       const updatedList = current.map((a) => (a.id === id ? updatedAddress : a));
       saveLocalAddresses(updatedList);
+      if (oldName !== newName) {
+        propagateAddressRename(oldName, newName);
+      }
+      syncReferences();
       return updatedAddress;
     }
 
@@ -109,11 +122,18 @@ export const addressService = {
       await new Promise((resolve) => setTimeout(resolve, 200));
       const current = getLocalAddresses();
       const target = current.find((a) => a.id === id);
-      if (target && target.refPolicies.length > 0) {
+      if (!target) {
+        throw new Error(`Address object with id ${id} not found`);
+      }
+      if (target.system) {
+        throw new Error(`Cannot delete system predefined address objects`);
+      }
+      if (target.refPolicies.length > 0) {
         throw new Error(`Cannot delete address referenced by firewall policies.`);
       }
       const updatedList = current.filter((a) => a.id !== id);
       saveLocalAddresses(updatedList);
+      syncReferences();
       return true;
     }
 
@@ -132,6 +152,14 @@ export const addressService = {
       await new Promise((resolve) => setTimeout(resolve, 300));
       const current = getLocalAddresses();
       const targets = current.filter((a) => ids.includes(a.id));
+      const systemObjects = targets.filter((a) => a.system);
+      if (systemObjects.length > 0) {
+        throw new Error(
+          `Cannot delete system predefined address objects: ${systemObjects
+            .map((a) => a.name)
+            .join(", ")}`
+        );
+      }
       const usedInPolicies = targets.filter((a) => a.refPolicies.length > 0);
       if (usedInPolicies.length > 0) {
         throw new Error(
@@ -142,6 +170,7 @@ export const addressService = {
       }
       const updatedList = current.filter((a) => !ids.includes(a.id));
       saveLocalAddresses(updatedList);
+      syncReferences();
       return true;
     }
 

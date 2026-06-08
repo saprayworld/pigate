@@ -35,20 +35,25 @@
   * ออกแบบการจำลองดึงค่า CPU / RAM / Temp และเวลาการทำงานระบบ (Uptime) แบบเรียลไทม์ และตารางสรุปประวัติล่าสุด (Firewall Logs) ที่ค้นหาและกรองได้ พร้อมตัวจำลองสถานะ SSE
 
 * **พัฒนาหน้าจอและระบบจัดการกฎไฟร์วอลล์ (Firewall Policies) [สำเร็จ]**:
-  * พัฒนาหน้า [FirewallPolicy.tsx](file:///home/sapray/Dev/pigate/frontend/src/pages/FirewallPolicy.tsx) โดยใช้ UI components ของ shadcn/ui เป็นพื้นฐาน
+  * พัฒนาหน้า [FirewallPolicy.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/FirewallPolicy.tsx) โดยใช้ UI components ของ shadcn/ui เป็นพื้นฐาน
   * ติดตั้งระบบการลากสลับลำดับความสำคัญของกฎความปลอดภัย (Drag & Drop ด้วย `@dnd-kit/core` และ `@dnd-kit/sortable` ล็อคแกนการลากแนวตั้ง)
   * พัฒนาและเพิ่มประสิทธิภาพโมดอลสำหรับการเพิ่ม (Create) และแก้ไข (Edit) กฎความปลอดภัย:
     * ปรับเพิ่มความกว้างการแสดงผลและปรับปรุงเลย์เอาต์จัดวางคอมโพเนนต์ให้มีความสวยงามและเป็นระเบียบมากยิ่งขึ้น (3 แถวหลัก)
-    * ปรับปรุงฟิลด์กรอกข้อมูล **ต้นทาง (Source)**, **ปลายทาง (Destination)** และ **บริการ/พอร์ต (Service/Port)** ให้ใช้งาน Multiple Selection Combobox แบบ Chips ของ Base UI / shadcn/ui
+    * เพิ่มฟิลด์เลือก **การ์ดขาเข้า (In Interface)** และ **การ์ดขาออก (Out Interface)** ดึงรายชื่อการ์ดเครือข่ายที่มีในระบบแบบไดนามิกผ่าน `interfaceService` พร้อมทั้งแสดงผลคอลัมน์ In/Out และ Badges ในตารางนโยบายอย่างเรียบร้อย
+    * ปรับปรุงฟิลด์กรอกข้อมูล **ต้นทาง (Source)**, **ปลายทาง (Destination)** และ **บริการ/พอร์ต (Service/Port)** ให้ใช้งาน Multiple Selection Combobox แบบ Chips ดึงข้อมูลตัวเลือกจาก Addresses และ Services Mock Database จริงที่ผู้ใช้บันทึก
     * ปรับปรุงวิธีการใช้งาน Combobox API ให้ถูกต้องตามคู่มืออ้างอิงของ shadcn (การใช้งาน `items` prop, `<ComboboxValue>` ด้วย render prop และ `<ComboboxList>` ด้วย children function)
-    * แก้ไขและบันทึกแนวทางปัญหาคลิกเลือกตัวเลือก Combobox dropdown ภายใน Dialog โดนบล็อกอันเกิดจากกลไก Focus/Pointer Blocker ของ Radix UI Dialog โดยการพอร์ตเนื้อหาเข้าภายใต้ DOM Tree ของ DialogContent ด้วย container ref
+    * แก้ไขและบันทึกแนวทางปัญหาคลิกเลือกตัวเลือก Combobox dropdown ภายใน Dialog โดนบล็อกอันเกิดจากกลไก Focus/Pointer Blocker ของ Radix UI Dialog โดยการกำหนด `modal={false}` บน Dialog
   * ออกแบบระบบ Switch inline เพื่อเปิด/ปิด หรือสตรีมล็อกบนแถว และการจำลองนำไปปรับใช้จริงผ่านปุ่ม "Apply Settings" เข้าเคอร์เนล `nftables`
 
 * **พัฒนาหน้าจอการจัดการวัตถุเครือข่ายและพอร์ต (Addresses & Services Objects) [สำเร็จ]**:
   * พัฒนาหน้า [Addresses.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/Addresses.tsx) สำหรับสร้างและควบคุม IP/Subnet, IP Range, หรือชื่อโดเมน FQDN
   * พัฒนาหน้า [Services.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/Services.tsx) สำหรับควบคุมรายชื่อพอร์ต TCP/UDP/ICMP
-  * ทั้งสองหน้ารองรับการทำ CRUD ในตัว (เพิ่ม, แก้ไข, ลบ) และมีระบบความปลอดภัยล็อกไม่ให้ลบหรือแก้ไขวัตถุของระบบ (Predefined System Objects)
+  * ทั้งสองหน้ารองรับการทำ CRUD ในตัว (เพิ่ม, แก้ไข, ลบ) และมีระบบความปลอดภัยล็อกไม่ให้ลบหรือแก้ไขวัตถุของระบบ (Predefined System Objects เช่น `ALL` หรือ `HTTP`) พร้อมทั้งแสดงไอคอน Lock 🔒 ในแถวนั้น ๆ
   * หน้า Addresses รองรับการเลือกกล่องเครื่องหมายเพื่อลบทีละหลายวัตถุพร้อมกัน (Bulk Delete) และหน้า Services มีกล่อง Preview คำสั่ง Named Set ที่จำลองการส่งไปประมวลผลบน Linux Kernel `nftables` จริงแบบเรียลไทม์
+  * พัฒนาระบบเชื่อมโยงความสัมพันธ์และส่งต่อข้อมูลจำลอง (Mock Data Synchronization - [mockSync.ts](file:///home/sapray/dev/pigate/frontend/src/services/mockSync.ts)):
+    * คำนวณหาค่า `refPolicies` สำหรับแสดงรายการกฎไฟร์วอลล์ที่อ้างอิงถึงวัตถุที่อยู่หรือวัตถุบริการนั้น ๆ สดแบบเรียลไทม์
+    * บล็อกความสามารถในการลบ Address หรือ Service ใด ๆ ตราบใดที่ยังถูกกฎ Firewall อ้างอิงการใช้งานอยู่
+    * รองรับการส่งต่อการแก้ไขชื่อ (Rename Propagation): เมื่อเปลี่ยนชื่อวัตถุ เช่น `LAN_Network` -> `LAN_Internal` ระบบจะตามไปค้นหาและเปลี่ยนชื่อในกฎ Firewall Policy ทุกกฎที่ใช้วัตถุนั้นให้อัตโนมัติใน Mock LocalStorage Database
 
 * **พัฒนาหน้าจอการตั้งค่าการ์ดเครือข่ายและระบบสุ่ม MAC Address (Network Interfaces) [สำเร็จ]**:
   * พัฒนาหน้า [Interfaces.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/Interfaces.tsx) ครอบคลุมการแสดงผล eth0 (Ethernet) และ wlan0 (Wireless)

@@ -10,7 +10,8 @@ import {
   Globe,
   Layers,
   Trash,
-  Loader2
+  Loader2,
+  Lock
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -141,6 +142,10 @@ export default function Addresses() {
 
   const handleDelete = async (id: string, name: string) => {
     const obj = addresses.find(a => a.id === id)
+    if (obj && obj.system) {
+      alert(`ไม่สามารถลบวัตถุระบบ "${name}" ได้`)
+      return
+    }
     if (obj && obj.refPolicies.length > 0) {
       alert(`ไม่สามารถลบ "${name}" ได้ เนื่องจากถูกอ้างอิงอยู่ในนโยบายไฟร์วอลล์: ${obj.refPolicies.join(", ")}`)
       return
@@ -158,6 +163,14 @@ export default function Addresses() {
   }
 
   const handleBulkDelete = async () => {
+    // Check if any selected items are system objects
+    const systemObjects = addresses.filter(a => selectedIds.includes(a.id) && a.system)
+    if (systemObjects.length > 0) {
+      const names = systemObjects.map(o => o.name).join(", ")
+      alert(`ไม่สามารถลบวัตถุระบบต่อไปนี้ได้: ${names}`)
+      return
+    }
+
     // Check if any selected items are in use
     const usedObjects = addresses.filter(a => selectedIds.includes(a.id) && a.refPolicies.length > 0)
     if (usedObjects.length > 0) {
@@ -428,24 +441,32 @@ export default function Addresses() {
                   </TableCell>
                   <TableCell className="p-3 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={() => openEditModal(addr)}
-                        className="cursor-pointer text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                        title="แก้ไขวัตถุ"
-                      >
-                        <Edit className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={() => handleDelete(addr.id, addr.name)}
-                        className="cursor-pointer text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
-                        title="ลบวัตถุ"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
+                      {addr.system ? (
+                        <span className="p-1 rounded text-muted-foreground/45 flex items-center justify-center" title="ระบบกำหนดไว้เริ่มต้น (แก้ไขไม่ได้)">
+                          <Lock className="h-3.5 w-3.5" />
+                        </span>
+                      ) : (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={() => openEditModal(addr)}
+                            className="cursor-pointer text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                            title="แก้ไขวัตถุ"
+                          >
+                            <Edit className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={() => handleDelete(addr.id, addr.name)}
+                            className="cursor-pointer text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
+                            title="ลบวัตถุ"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>

@@ -1,5 +1,6 @@
 import { type PolicyRule, initialPolicyRules } from "@/data-mockup/mockData"
 import { IS_MOCK_MODE, API_BASE_URL } from "./config"
+import { syncReferences } from "./mockSync"
 
 const LOCAL_STORAGE_KEY = "pigate_firewall_policies";
 
@@ -29,6 +30,7 @@ export const policyService = {
   getAll: async (): Promise<PolicyRule[]> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 300));
+      syncReferences();
       return getLocalPolicies();
     }
 
@@ -44,6 +46,7 @@ export const policyService = {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 200));
       saveLocalPolicies(policies);
+      syncReferences();
       return policies;
     }
 
@@ -72,6 +75,7 @@ export const policyService = {
         id: "rule-" + Math.random().toString(36).substring(2, 9),
       };
       saveLocalPolicies([...current, newRule]);
+      syncReferences();
       return newRule;
     }
 
@@ -106,6 +110,7 @@ export const policyService = {
       };
       const updatedList = current.map((r) => (r.id === id ? updatedRule : r));
       saveLocalPolicies(updatedList);
+      syncReferences();
       return updatedRule;
     }
 
@@ -129,6 +134,7 @@ export const policyService = {
       const current = getLocalPolicies();
       const updatedList = current.filter((r) => r.id !== id);
       saveLocalPolicies(updatedList);
+      syncReferences();
       return true;
     }
 
@@ -150,6 +156,7 @@ export const policyService = {
         r.id === id ? { ...r, log: !r.log } : r
       );
       saveLocalPolicies(updatedList);
+      syncReferences();
       return updatedList.find((r) => r.id === id)!;
     }
 
@@ -171,6 +178,7 @@ export const policyService = {
         r.id === id ? { ...r, status: !r.status } : r
       );
       saveLocalPolicies(updatedList);
+      syncReferences();
       return updatedList.find((r) => r.id === id)!;
     }
 

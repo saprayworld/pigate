@@ -1,5 +1,6 @@
 import { type ServiceObject, initialServiceObjects } from "@/data-mockup/mockData"
 import { IS_MOCK_MODE, API_BASE_URL } from "./config"
+import { syncReferences, propagateServiceRename } from "./mockSync"
 
 const LOCAL_STORAGE_KEY = "pigate_service_objects";
 
@@ -30,6 +31,7 @@ export const serviceObjectService = {
     if (IS_MOCK_MODE) {
       // Simulate network latency
       await new Promise((resolve) => setTimeout(resolve, 300));
+      syncReferences();
       return getLocalServices();
     }
 
@@ -54,6 +56,7 @@ export const serviceObjectService = {
         refPolicies: [], // New objects start with no policies referencing them
       };
       saveLocalServices([...current, newService]);
+      syncReferences();
       return newService;
     }
 
@@ -85,12 +88,25 @@ export const serviceObjectService = {
       if (target.type === "system") {
         throw new Error(`Cannot update system predefined service objects`);
       }
+      const oldName = target.name;
+      const oldPort = target.port;
+      const oldProto = target.protocol;
+      const newName = obj.name;
+      const newPort = obj.port;
+      const newProto = obj.protocol;
+
       const updatedService: ServiceObject = {
         ...target,
         ...obj,
       };
       const updatedList = current.map((s) => (s.id === id ? updatedService : s));
       saveLocalServices(updatedList);
+
+      if (oldName !== newName || oldPort !== newPort || oldProto !== newProto) {
+        propagateServiceRename(oldName, oldPort, oldProto, newName, newPort, newProto);
+      }
+      syncReferences();
+
       return updatedService;
     }
 
@@ -124,6 +140,7 @@ export const serviceObjectService = {
       }
       const updatedList = current.filter((s) => s.id !== id);
       saveLocalServices(updatedList);
+      syncReferences();
       return true;
     }
 

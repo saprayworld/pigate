@@ -17,8 +17,11 @@ import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { type PolicyRule } from "@/data-mockup/mockData"
+import { type PolicyRule, type AddressObject, type ServiceObject, type NetworkInterface } from "@/data-mockup/mockData"
 import { policyService } from "@/services/policyService"
+import { addressService } from "@/services/addressService"
+import { serviceObjectService } from "@/services/serviceObjectService"
+import { interfaceService } from "@/services/interfaceService"
 
 // shadcn UI component imports
 import {
@@ -119,6 +122,26 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
 
       {/* 2. Name */}
       <TableCell className="p-3 font-semibold text-foreground">{rule.name}</TableCell>
+
+      {/* 2.1 In Interface */}
+      <TableCell className="p-3">
+        <Badge
+          variant="outline"
+          className="bg-neutral-850/10 text-neutral-500 border-neutral-700/25 dark:text-neutral-400 font-mono text-[10.5px] px-1.5 py-0.5 rounded"
+        >
+          {rule.inInterface || "ALL"}
+        </Badge>
+      </TableCell>
+
+      {/* 2.2 Out Interface */}
+      <TableCell className="p-3">
+        <Badge
+          variant="outline"
+          className="bg-neutral-850/10 text-neutral-500 border-neutral-700/25 dark:text-neutral-400 font-mono text-[10.5px] px-1.5 py-0.5 rounded"
+        >
+          {rule.outInterface || "ALL"}
+        </Badge>
+      </TableCell>
 
       {/* 3. Source */}
       <TableCell className="p-3">
@@ -228,48 +251,12 @@ function SortableRow({ rule, index, onEdit, onDelete, onToggleStatus, onToggleLo
   )
 }
 
-// Options for Source and Destination multiple selection comboboxes
-const sourceOptions = [
-  "ALL",
-  "LAN_Network",
-  "192.168.1.0/24",
-  "Admin_Host",
-  "192.168.1.100",
-  "PiGate_Host",
-  "WAN_Network"
-]
-
-const destinationOptions = [
-  "ALL",
-  "ALL (Internet)",
-  "LAN_Network",
-  "192.168.1.1",
-  "8.8.8.8",
-  "1.1.1.1",
-  "PiGate_Host",
-  "Malicious_IP_List",
-  "LAN_Printer"
-]
-
-const serviceOptions = [
-  "ALL",
-  "HTTP (80)",
-  "HTTPS (443)",
-  "SSH (22)",
-  "TCP (53)",
-  "UDP (53)",
-  "DNS (53)",
-  "DHCP (67/68)",
-  "FTP (20/21)",
-  "SMTP (25)",
-  "NTP (123)",
-  "ICMP",
-  "BitTorrent_Ports"
-]
-
 export default function FirewallPolicy() {
-  // --- State for Policies ---
+  // --- State for Policies, Addresses, Services, and Interfaces ---
   const [rules, setRules] = useState<PolicyRule[]>([])
+  const [addressObjects, setAddressObjects] = useState<AddressObject[]>([])
+  const [serviceObjects, setServiceObjects] = useState<ServiceObject[]>([])
+  const [interfaces, setInterfaces] = useState<NetworkInterface[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
   // --- Search and Filters State ---
@@ -284,15 +271,56 @@ export default function FirewallPolicy() {
   const loadPolicies = async (showLoading = true) => {
     if (showLoading) setIsLoading(true)
     try {
-      const data = await policyService.getAll()
-      setRules(data)
+      const [policyData, addressData, serviceData, interfaceData] = await Promise.all([
+        policyService.getAll(),
+        addressService.getAll(),
+        serviceObjectService.getAll(),
+        interfaceService.getAll()
+      ])
+      setRules(policyData)
+      setAddressObjects(addressData)
+      setServiceObjects(serviceData)
+      setInterfaces(interfaceData)
     } catch (err: any) {
       console.error(err)
-      alert("ไม่สามารถโหลดนโยบายไฟร์วอลล์ได้: " + (err.message || err))
+      alert("ไม่สามารถโหลดข้อมูลไฟร์วอลล์ได้: " + (err.message || err))
     } finally {
       if (showLoading) setIsLoading(false)
     }
   }
+
+  // Generate options dynamically from current address and service objects
+  const sourceOptions = useMemo(() => {
+    const base = ["ALL"]
+    addressObjects.forEach((a) => {
+      if (!base.includes(a.name)) base.push(a.name)
+    })
+    return base
+  }, [addressObjects])
+
+  const destinationOptions = useMemo(() => {
+    const base = ["ALL"]
+    addressObjects.forEach((a) => {
+      if (!base.includes(a.name)) base.push(a.name)
+    })
+    return base
+  }, [addressObjects])
+
+  const serviceOptions = useMemo(() => {
+    const base = ["ALL"]
+    serviceObjects.forEach((s) => {
+      if (!base.includes(s.name)) base.push(s.name)
+    })
+    return base
+  }, [serviceObjects])
+
+  const interfaceOptions = useMemo(() => {
+    const base = ["ALL"]
+    interfaces.forEach((i) => {
+      if (!base.includes(i.name)) base.push(i.name)
+    })
+    return base
+  }, [interfaces])
 
   useEffect(() => {
     loadPolicies()
@@ -306,7 +334,7 @@ export default function FirewallPolicy() {
     try {
       await policyService.apply()
       setApplyProgress("กำลังรวบรวมคำสั่ง nftables สำหรับ Linux Kernel...")
-      
+
       setTimeout(() => {
         setApplyProgress("กำลังโหลดตารางและโซนความปลอดภัยเข้าไปที่ Netfilter...")
         setTimeout(() => {
@@ -338,6 +366,8 @@ export default function FirewallPolicy() {
 
   // Form Fields
   const [formName, setFormName] = useState<string>("")
+  const [formInInterface, setFormInInterface] = useState<string>("ALL")
+  const [formOutInterface, setFormOutInterface] = useState<string>("ALL")
   const [formSource, setFormSource] = useState<string[]>([])
   const [formDest, setFormDest] = useState<string[]>([])
   const [formService, setFormService] = useState<string[]>([])
@@ -349,9 +379,11 @@ export default function FirewallPolicy() {
   const openCreateModal = () => {
     setEditingRule(null)
     setFormName("")
-    setFormSource(["LAN_Network"])
-    setFormDest(["ALL (Internet)"])
-    setFormService(["HTTPS (443)"])
+    setFormInInterface("ALL")
+    setFormOutInterface("ALL")
+    setFormSource([])
+    setFormDest([])
+    setFormService([])
     setFormAction("ACCEPT")
     setFormLog(false)
     setFormStatus(true)
@@ -361,6 +393,8 @@ export default function FirewallPolicy() {
   const openEditModal = (rule: PolicyRule) => {
     setEditingRule(rule)
     setFormName(rule.name)
+    setFormInInterface(rule.inInterface || "ALL")
+    setFormOutInterface(rule.outInterface || "ALL")
     setFormSource([...rule.source])
     setFormDest([...rule.destination])
     setFormService([...rule.service])
@@ -382,6 +416,8 @@ export default function FirewallPolicy() {
         // Edit mode
         await policyService.update(editingRule.id, {
           name: formName,
+          inInterface: formInInterface,
+          outInterface: formOutInterface,
           source: formSource.length ? formSource : ["ALL"],
           destination: formDest.length ? formDest : ["ALL"],
           service: parsedSvcs,
@@ -393,6 +429,8 @@ export default function FirewallPolicy() {
         // Create mode
         await policyService.create({
           name: formName,
+          inInterface: formInInterface,
+          outInterface: formOutInterface,
           source: formSource.length ? formSource : ["ALL"],
           destination: formDest.length ? formDest : ["ALL"],
           service: parsedSvcs,
@@ -457,10 +495,10 @@ export default function FirewallPolicy() {
       const oldIndex = rules.findIndex((item) => item.id === active.id)
       const newIndex = rules.findIndex((item) => item.id === over.id)
       const newRules = arrayMove(rules, oldIndex, newIndex)
-      
+
       // Optimistically update local state to render immediately
       setRules(newRules)
-      
+
       try {
         await policyService.saveAll(newRules)
       } catch (err: any) {
@@ -585,13 +623,15 @@ export default function FirewallPolicy() {
         <Table>
           <TableHeader>
             <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
-              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[8%] h-auto">Seq.</TableHead>
-              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[15%] h-auto">Name</TableHead>
-              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[18%] h-auto">Source</TableHead>
-              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[18%] h-auto">Destination</TableHead>
-              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[18%] h-auto">Service / Port</TableHead>
+              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[5%] h-auto">Seq.</TableHead>
+              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[12%] h-auto">Name</TableHead>
+              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[8%] h-auto">In</TableHead>
+              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[8%] h-auto">Out</TableHead>
+              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[15%] h-auto">Source</TableHead>
+              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[15%] h-auto">Destination</TableHead>
+              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[15%] h-auto">Service / Port</TableHead>
               <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[8%] h-auto">Action</TableHead>
-              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[8%] h-auto">Log</TableHead>
+              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[6%] h-auto">Log</TableHead>
               <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[10%] h-auto">Status</TableHead>
               <TableHead className="p-3 w-[8%] text-right h-auto"></TableHead>
             </TableRow>
@@ -599,7 +639,7 @@ export default function FirewallPolicy() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={9} className="p-12 text-center text-muted-foreground text-xs">
+                <TableCell colSpan={11} className="p-12 text-center text-muted-foreground text-xs">
                   <div className="flex flex-col items-center justify-center gap-2 py-4">
                     <Loader2 className="h-6 w-6 animate-spin text-primary" />
                     <span>กำลังโหลดข้อมูล...</span>
@@ -608,7 +648,7 @@ export default function FirewallPolicy() {
               </TableRow>
             ) : filteredRules.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="p-8 text-center text-muted-foreground text-xs">
+                <TableCell colSpan={11} className="p-8 text-center text-muted-foreground text-xs">
                   ไม่พบนโยบายไฟร์วอลล์ที่ค้นหา
                 </TableCell>
               </TableRow>
@@ -642,6 +682,8 @@ export default function FirewallPolicy() {
                 -
               </TableCell>
               <TableCell className="p-3 italic">Implicit Deny</TableCell>
+              <TableCell className="p-3 italic">-</TableCell>
+              <TableCell className="p-3 italic">-</TableCell>
               <TableCell className="p-3 italic">ALL</TableCell>
               <TableCell className="p-3 italic">ALL</TableCell>
               <TableCell className="p-3 italic">ALL</TableCell>
@@ -701,10 +743,11 @@ export default function FirewallPolicy() {
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                  บริการ / พอร์ต (Service/Port)
+                  บริการ / พอร์ต (Service/Port) <span className="text-red-500">*</span>
                 </Label>
                 <Combobox
                   multiple={true}
+                  required
                   value={formService}
                   onValueChange={(val) => setFormService(val as string[])}
                   items={serviceOptions}
@@ -737,14 +780,53 @@ export default function FirewallPolicy() {
               </div>
             </div>
 
+            {/* Row 1.5: In Interface & Out Interface */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="form-in-interface" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                  การ์ดขาเข้า (In Interface) <span className="text-red-500">*</span>
+                </Label>
+                <select
+                  id="form-in-interface"
+                  value={formInInterface}
+                  onChange={(e) => setFormInInterface(e.target.value)}
+                  className="w-full bg-background border border-border rounded-lg h-9 px-2.5 text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                >
+                  {interfaceOptions.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="form-out-interface" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                  การ์ดขาออก (Out Interface) <span className="text-red-500">*</span>
+                </Label>
+                <select
+                  id="form-out-interface"
+                  value={formOutInterface}
+                  onChange={(e) => setFormOutInterface(e.target.value)}
+                  className="w-full bg-background border border-border rounded-lg h-9 px-2.5 text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                >
+                  {interfaceOptions.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
             {/* Row 2: Source & Destination with Multiple Selection Combobox */}
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                  ต้นทาง (Source IP/Network)
+                  ต้นทาง (Source IP/Network) <span className="text-red-500">*</span>
                 </Label>
                 <Combobox
                   multiple={true}
+                  required
                   value={formSource}
                   onValueChange={(val) => setFormSource(val as string[])}
                   items={sourceOptions}
@@ -778,10 +860,11 @@ export default function FirewallPolicy() {
 
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                  ปลายทาง (Destination IP/Network)
+                  ปลายทาง (Destination IP/Network) <span className="text-red-500">*</span>
                 </Label>
                 <Combobox
                   multiple={true}
+                  required
                   value={formDest}
                   onValueChange={(val) => setFormDest(val as string[])}
                   items={destinationOptions}

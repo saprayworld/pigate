@@ -98,6 +98,8 @@ export const mockLogServices = [
 export interface PolicyRule {
   id: string
   name: string
+  inInterface: string // e.g. "ALL", "eth0", "wlan0"
+  outInterface: string // e.g. "ALL", "eth0", "wlan0"
   source: string[]
   destination: string[]
   service: string[]
@@ -107,58 +109,7 @@ export interface PolicyRule {
 }
 
 // Initial mockup rules for Firewall Policy
-export const initialPolicyRules: PolicyRule[] = [
-  {
-    id: "rule-1",
-    name: "Allow-DNS-Out",
-    source: ["LAN_Network", "192.168.1.0/24"],
-    destination: ["8.8.8.8", "1.1.1.1"],
-    service: ["UDP (53)", "TCP (53)"],
-    action: "ACCEPT",
-    log: false,
-    status: true
-  },
-  {
-    id: "rule-2",
-    name: "Allow-Web-Out",
-    source: ["LAN_Network"],
-    destination: ["ALL (Internet)"],
-    service: ["HTTP (80)", "HTTPS (443)"],
-    action: "ACCEPT",
-    log: false,
-    status: true
-  },
-  {
-    id: "rule-3",
-    name: "Block-BitTorrent",
-    source: ["LAN_Network"],
-    destination: ["ALL"],
-    service: ["BitTorrent_Ports"],
-    action: "DROP",
-    log: true,
-    status: true
-  },
-  {
-    id: "rule-4",
-    name: "Block-Malicious-IPs",
-    source: ["ALL"],
-    destination: ["Malicious_IP_List"],
-    service: ["ALL"],
-    action: "DROP",
-    log: true,
-    status: true
-  },
-  {
-    id: "rule-5",
-    name: "Allow-SSH-Admin",
-    source: ["Admin_Host", "192.168.1.100"],
-    destination: ["PiGate_Host"],
-    service: ["SSH (22)"],
-    action: "ACCEPT",
-    log: true,
-    status: true
-  }
-]
+export const initialPolicyRules: PolicyRule[] = []
 
 // Types for Address Objects
 export interface AddressObject {
@@ -166,6 +117,7 @@ export interface AddressObject {
   name: string
   type: "subnet" | "range" | "fqdn"
   value: string
+  system: boolean
   refPolicies: string[]
 }
 
@@ -173,38 +125,51 @@ export interface AddressObject {
 export const initialAddressObjects: AddressObject[] = [
   {
     id: "addr-1",
-    name: "LAN_Network",
+    name: "ALL",
     type: "subnet",
-    value: "192.168.1.0/24",
-    refPolicies: ["Allow-DNS-Out", "Allow-Web-Out", "Block-BitTorrent"]
+    value: "0.0.0.0/0",
+    system: true,
+    refPolicies: []
   },
   {
     id: "addr-2",
-    name: "Admin_PC",
+    name: "LAN_Network",
     type: "subnet",
-    value: "192.168.1.10/32",
-    refPolicies: ["Allow-SSH-Admin"]
+    value: "192.168.1.0/24",
+    system: false,
+    refPolicies: []
   },
   {
     id: "addr-3",
-    name: "DHCP_Pool_Zone",
-    type: "range",
-    value: "192.168.1.100 - 192.168.1.200",
+    name: "Admin_PC",
+    type: "subnet",
+    system: false,
+    value: "192.168.1.10/32",
     refPolicies: []
   },
   {
     id: "addr-4",
-    name: "Update_Server",
-    type: "fqdn",
-    value: "pigate-update.com",
-    refPolicies: ["System-Update"]
+    name: "DHCP_Pool_Zone",
+    type: "range",
+    system: false,
+    value: "192.168.1.100 - 192.168.1.200",
+    refPolicies: []
   },
   {
     id: "addr-5",
+    name: "Update_Server",
+    type: "fqdn",
+    system: false,
+    value: "pigate-update.com",
+    refPolicies: []
+  },
+  {
+    id: "addr-6",
     name: "Malicious_IP_List",
     type: "subnet",
+    system: false,
     value: "198.51.100.0/22",
-    refPolicies: ["Block-Malicious-IPs"]
+    refPolicies: []
   }
 ]
 
@@ -226,7 +191,7 @@ export const initialServiceObjects: ServiceObject[] = [
     protocol: "TCP",
     port: "80",
     type: "system",
-    refPolicies: ["Allow-Web-Out"]
+    refPolicies: []
   },
   {
     id: "svc-2",
@@ -234,7 +199,7 @@ export const initialServiceObjects: ServiceObject[] = [
     protocol: "TCP",
     port: "443",
     type: "system",
-    refPolicies: ["Allow-Web-Out"]
+    refPolicies: []
   },
   {
     id: "svc-3",
@@ -242,7 +207,7 @@ export const initialServiceObjects: ServiceObject[] = [
     protocol: "TCP",
     port: "22",
     type: "system",
-    refPolicies: ["Allow-SSH-Admin"]
+    refPolicies: []
   },
   {
     id: "svc-4",
@@ -250,37 +215,21 @@ export const initialServiceObjects: ServiceObject[] = [
     protocol: "UDP",
     port: "53",
     type: "system",
-    refPolicies: ["Allow-DNS-Out"]
+    refPolicies: []
   },
   {
     id: "svc-5",
-    name: "My_Minecraft_Server",
-    protocol: "TCP/UDP",
-    port: "25565",
-    type: "custom",
+    name: "ICMP",
+    protocol: "ICMP",
+    port: "-",
+    type: "system",
     refPolicies: []
   },
   {
     id: "svc-6",
-    name: "Web_Testing_Pool",
-    protocol: "TCP",
-    port: "8080-8085",
-    type: "custom",
-    refPolicies: []
-  },
-  {
-    id: "svc-7",
-    name: "BitTorrent_Ports",
+    name: "ALL",
     protocol: "TCP/UDP",
-    port: "6881-6889",
-    type: "custom",
-    refPolicies: ["Block-BitTorrent"]
-  },
-  {
-    id: "svc-8",
-    name: "Ping_ICMP",
-    protocol: "ICMP",
-    port: "-",
+    port: "1-65535",
     type: "system",
     refPolicies: []
   }
