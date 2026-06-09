@@ -45,7 +45,7 @@ export default function StaticRoutes() {
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<"all" | "system" | "custom">("all")
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<"all" | "active" | "inactive">("all")
-  
+
   // Selection state for checkboxes (custom routes only)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
 
@@ -105,10 +105,10 @@ export default function StaticRoutes() {
         route.description.toLowerCase().includes(searchQuery.toLowerCase())
 
       const matchType = selectedTypeFilter === "all" || route.type === selectedTypeFilter
-      
-      const matchStatus = 
-        selectedStatusFilter === "all" || 
-        (selectedStatusFilter === "active" && route.status) || 
+
+      const matchStatus =
+        selectedStatusFilter === "all" ||
+        (selectedStatusFilter === "active" && route.status) ||
         (selectedStatusFilter === "inactive" && !route.status)
 
       return matchSearch && matchType && matchStatus
@@ -240,8 +240,8 @@ export default function StaticRoutes() {
     // 4. Duplicate Check
     const isDuplicate = routes.some(
       r => r.destination === dest &&
-           r.metric === metricVal &&
-           (!editingRoute || r.id !== editingRoute.id)
+        r.metric === metricVal &&
+        (!editingRoute || r.id !== editingRoute.id)
     )
     if (isDuplicate) {
       setFormError(`มีเส้นทางเครือข่าย "${dest}" ที่มี Metric ${metricVal} อยู่แล้ว`)
@@ -460,7 +460,7 @@ export default function StaticRoutes() {
       </div>
 
       {/* 5. Table view */}
-      <Card className="bg-card/25 border border-border/50 overflow-hidden">
+      <Card className="bg-card/25 border border-border/50 overflow-hidden py-0">
         <Table>
           <TableHeader>
             <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
@@ -590,7 +590,7 @@ export default function StaticRoutes() {
         <Info className="h-4 w-4 text-muted-foreground" />
         <AlertTitle className="font-bold text-foreground mb-0.5">การทำงานของ Routing Table:</AlertTitle>
         <AlertDescription className="text-xs text-muted-foreground leading-relaxed">
-          เมื่อแพ็กเก็ตวิ่งเข้ามาในตัว PiGate ระบบปฏิบัติการจะตรวจสอบ Destination Network จากบนลงล่างตามลำดับของ <span className="font-semibold text-primary">Metric</span> (ค่ายิ่งต่ำยิ่งมีความสำคัญสูง) 
+          เมื่อแพ็กเก็ตวิ่งเข้ามาในตัว PiGate ระบบปฏิบัติการจะตรวจสอบ Destination Network จากบนลงล่างตามลำดับของ <span className="font-semibold text-primary">Metric</span> (ค่ายิ่งต่ำยิ่งมีความสำคัญสูง)
           คุณสามารถจำลองการสลับการเปิด/ปิดสถานะเพื่ออัปเดตตารางและทดลองรันคำสั่งจริงในตัวกล่องจำลอง Linux Terminal ได้ทันที
         </AlertDescription>
       </Alert>

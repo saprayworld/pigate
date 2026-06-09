@@ -252,35 +252,35 @@ export default function Interfaces() {
     }
 
     addLog("เริ่มการจำลองสถานการณ์ Wi-Fi Failover...")
-    
+
     // Step 1: Connect primary
     setTimeout(() => {
       addLog(`[SSID หลัก: ${formSSID || "wlan0_primary"}] กำลังตรวจสอบการได้รับ IP Address...`)
-      
+
       // Step 2: Failed retry 1
       setTimeout(() => {
         addLog(`[SSID หลัก: ${formSSID || "wlan0_primary"}] ตรวจสอบ: ไม่พบ IP Address (IP: 0.0.0.0)`)
         addLog(`[SSID หลัก: ${formSSID || "wlan0_primary"}] กำลังสั่งปิด/เปิดอินเตอร์เฟสใหม่ (Restart Interface ครั้งที่ 1/${formPrimaryMaxRetries})...`)
-        
+
         // Step 3: Failed retry 2
         setTimeout(() => {
           addLog(`[SSID หลัก: ${formSSID || "wlan0_primary"}] ตรวจสอบ: ยังไม่พบ IP Address`)
-          
+
           if (formPrimaryMaxRetries >= 2) {
             addLog(`[SSID หลัก: ${formSSID || "wlan0_primary"}] กำลังสั่งปิด/เปิดอินเตอร์เฟสใหม่ (Restart Interface ครั้งที่ 2/${formPrimaryMaxRetries})...`)
           }
-          
+
           // Step 4: Failover action
           setTimeout(() => {
             addLog(`[SSID หลัก: ${formSSID || "wlan0_primary"}] การเชื่อมต่อ SSID หลักล้มเหลว (ลองใหม่ครบ ${formPrimaryMaxRetries} ครั้ง)`)
-            
+
             if (formBackupSSID) {
               addLog(`[สลับคลื่นสำรอง] กำลังเปลี่ยนไปใช้ SSID สำรอง: "${formBackupSSID}"...`)
-              
+
               // Step 5: Backup connection
               setTimeout(() => {
                 addLog(`[SSID สำรอง: ${formBackupSSID}] กำลังพยายามเชื่อมต่อและตรวจสอบ IP Address...`)
-                
+
                 // Step 6: Backup success
                 setTimeout(() => {
                   addLog(`[SSID สำรอง: ${formBackupSSID}] ได้รับ IP Address (10.0.50.222) สำเร็จ!`)
@@ -492,7 +492,7 @@ export default function Interfaces() {
       </div>
 
       {/* 3. Interface Table */}
-      <Card className="bg-card/25 border border-border/50 overflow-hidden">
+      <Card className="bg-card/25 border border-border/50 overflow-hidden py-0">
         <Table>
           <TableHeader>
             <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
@@ -605,7 +605,7 @@ export default function Interfaces() {
                       <div className="flex items-center gap-1.5">
                         <span className="text-[10px] text-muted-foreground">{iface.status === "up" ? "ON" : "OFF"}</span>
                         <Switch
-                           size="sm"
+                          size="sm"
                           checked={iface.status === "up"}
                           onCheckedChange={() => handleToggleStatus(iface.id)}
                         />

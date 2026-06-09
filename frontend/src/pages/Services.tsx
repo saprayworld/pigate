@@ -320,7 +320,7 @@ export default function Services() {
       {/* 4. Table view */}
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Left 2 Columns: Services Table */}
-        <Card className="lg:col-span-2 bg-card/25 border border-border/50 overflow-hidden h-fit">
+        <Card className="lg:col-span-2 bg-card/25 border border-border/50 overflow-hidden h-fit py-0">
           <Table>
             <TableHeader>
               <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">

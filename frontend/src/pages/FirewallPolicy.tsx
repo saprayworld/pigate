@@ -630,7 +630,7 @@ export default function FirewallPolicy() {
       </div>
 
       {/* 4. Policies Table Container */}
-      <Card className="bg-card/25 border border-border/50 overflow-hidden">
+      <Card className="bg-card/25 border border-border/50 overflow-hidden py-0">
         <Table>
           <TableHeader>
             <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">

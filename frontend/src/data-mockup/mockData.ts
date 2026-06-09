@@ -187,6 +187,14 @@ export interface ServiceObject {
 export const initialServiceObjects: ServiceObject[] = [
   {
     id: "svc-1",
+    name: "ALL",
+    protocol: "TCP/UDP",
+    port: "1-65535",
+    type: "system",
+    refPolicies: []
+  },
+  {
+    id: "svc-2",
     name: "HTTP",
     protocol: "TCP",
     port: "80",
@@ -194,7 +202,7 @@ export const initialServiceObjects: ServiceObject[] = [
     refPolicies: []
   },
   {
-    id: "svc-2",
+    id: "svc-3",
     name: "HTTPS",
     protocol: "TCP",
     port: "443",
@@ -202,7 +210,7 @@ export const initialServiceObjects: ServiceObject[] = [
     refPolicies: []
   },
   {
-    id: "svc-3",
+    id: "svc-4",
     name: "SSH",
     protocol: "TCP",
     port: "22",
@@ -210,7 +218,7 @@ export const initialServiceObjects: ServiceObject[] = [
     refPolicies: []
   },
   {
-    id: "svc-4",
+    id: "svc-5",
     name: "DNS",
     protocol: "UDP",
     port: "53",
@@ -218,18 +226,10 @@ export const initialServiceObjects: ServiceObject[] = [
     refPolicies: []
   },
   {
-    id: "svc-5",
+    id: "svc-6",
     name: "ICMP",
     protocol: "ICMP",
     port: "-",
-    type: "system",
-    refPolicies: []
-  },
-  {
-    id: "svc-6",
-    name: "ALL",
-    protocol: "TCP/UDP",
-    port: "1-65535",
     type: "system",
     refPolicies: []
   }
@@ -389,26 +389,6 @@ export const initialStaticRoutes: StaticRoute[] = [
     description: "Direct subnet route for WAN",
     status: true,
     type: "system"
-  },
-  {
-    id: "route-4",
-    destination: "192.168.10.0/24",
-    gateway: "192.168.1.250",
-    interface: "eth0",
-    metric: 10,
-    description: "Route to Branch office A network",
-    status: true,
-    type: "custom"
-  },
-  {
-    id: "route-5",
-    destination: "172.16.0.0/12",
-    gateway: "192.168.1.254",
-    interface: "eth0",
-    metric: 20,
-    description: "Internal Development Server cluster",
-    status: false,
-    type: "custom"
   }
 ]
 
