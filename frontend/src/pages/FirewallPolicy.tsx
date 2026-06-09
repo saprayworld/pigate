@@ -22,6 +22,7 @@ import { policyService } from "@/services/policyService"
 import { addressService } from "@/services/addressService"
 import { serviceObjectService } from "@/services/serviceObjectService"
 import { interfaceService } from "@/services/interfaceService"
+import { useAlert } from "@/components/AlertDialogProvider"
 
 // shadcn UI component imports
 import {
@@ -263,6 +264,7 @@ function SortableRow({ rule, index, interfaces, onEdit, onDelete, onToggleStatus
 }
 
 export default function FirewallPolicy() {
+  const { alert, confirm } = useAlert()
   // --- State for Policies, Addresses, Services, and Interfaces ---
   const [rules, setRules] = useState<PolicyRule[]>([])
   const [addressObjects, setAddressObjects] = useState<AddressObject[]>([])
@@ -294,7 +296,7 @@ export default function FirewallPolicy() {
       setInterfaces(interfaceData)
     } catch (err: any) {
       console.error(err)
-      alert("ไม่สามารถโหลดข้อมูลไฟร์วอลล์ได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูลไฟร์วอลล์ได้: " + (err.message || err))
     } finally {
       if (showLoading) setIsLoading(false)
     }
@@ -359,7 +361,7 @@ export default function FirewallPolicy() {
       }, 600)
     } catch (err: any) {
       setIsApplying(false)
-      alert("ไม่สามารถใช้การตั้งค่าได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถใช้การตั้งค่าได้: " + (err.message || err))
     }
   }
 
@@ -453,7 +455,7 @@ export default function FirewallPolicy() {
       await loadPolicies(false)
       setIsModalOpen(false)
     } catch (err: any) {
-      alert("ไม่สามารถบันทึกกฎไฟร์วอลล์ได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถบันทึกกฎไฟร์วอลล์ได้: " + (err.message || err))
     }
   }
 
@@ -463,7 +465,7 @@ export default function FirewallPolicy() {
       await policyService.toggleLog(id)
       await loadPolicies(false)
     } catch (err: any) {
-      alert("ไม่สามารถเปลี่ยนค่าสถานะ Log ได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถเปลี่ยนค่าสถานะ Log ได้: " + (err.message || err))
     }
   }
 
@@ -472,17 +474,17 @@ export default function FirewallPolicy() {
       await policyService.toggleStatus(id)
       await loadPolicies(false)
     } catch (err: any) {
-      alert("ไม่สามารถเปลี่ยนสถานะใช้งานกฎได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถเปลี่ยนสถานะใช้งานกฎได้: " + (err.message || err))
     }
   }
 
   const handleDeleteRule = async (id: string) => {
-    if (confirm("คุณแน่ใจหรือไม่ที่จะลบนโยบายความปลอดภัยนี้?")) {
+    if (await confirm("ยืนยันการลบ", "คุณแน่ใจหรือไม่ที่จะลบนโยบายความปลอดภัยนี้?")) {
       try {
         await policyService.delete(id)
         await loadPolicies(false)
       } catch (err: any) {
-        alert("ไม่สามารถลบกฎได้: " + (err.message || err))
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบกฎได้: " + (err.message || err))
       }
     }
   }
@@ -513,7 +515,7 @@ export default function FirewallPolicy() {
       try {
         await policyService.saveAll(newRules)
       } catch (err: any) {
-        alert("ไม่สามารถบันทึกการจัดลำดับกฎใหม่ได้: " + (err.message || err))
+        await alert("ข้อผิดพลาด", "ไม่สามารถบันทึกการจัดลำดับกฎใหม่ได้: " + (err.message || err))
         await loadPolicies(false)
       }
     }
@@ -631,89 +633,91 @@ export default function FirewallPolicy() {
 
       {/* 4. Policies Table Container */}
       <Card className="bg-card/25 border border-border/50 overflow-hidden py-0">
-        <Table>
-          <TableHeader>
-            <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
-              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[5%] h-auto">Seq.</TableHead>
-              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[12%] h-auto">Name</TableHead>
-              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[8%] h-auto">In</TableHead>
-              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[8%] h-auto">Out</TableHead>
-              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[15%] h-auto">Source</TableHead>
-              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[15%] h-auto">Destination</TableHead>
-              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[15%] h-auto">Service / Port</TableHead>
-              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[8%] h-auto">Action</TableHead>
-              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[6%] h-auto">Log</TableHead>
-              <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[10%] h-auto">Status</TableHead>
-              <TableHead className="p-3 w-[8%] text-right h-auto"></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={11} className="p-12 text-center text-muted-foreground text-xs">
-                  <div className="flex flex-col items-center justify-center gap-2 py-4">
-                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                    <span>กำลังโหลดข้อมูล...</span>
-                  </div>
-                </TableCell>
+        <div className="overflow-x-auto w-full">
+          <Table>
+            <TableHeader>
+              <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
+                <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[5%] h-auto">Seq.</TableHead>
+                <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[12%] h-auto">Name</TableHead>
+                <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[8%] h-auto">In</TableHead>
+                <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[8%] h-auto">Out</TableHead>
+                <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[15%] h-auto">Source</TableHead>
+                <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[15%] h-auto">Destination</TableHead>
+                <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[15%] h-auto">Service / Port</TableHead>
+                <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[8%] h-auto">Action</TableHead>
+                <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[6%] h-auto">Log</TableHead>
+                <TableHead className="p-3 text-[11px] uppercase tracking-wider w-[10%] h-auto">Status</TableHead>
+                <TableHead className="p-3 w-[8%] text-right h-auto"></TableHead>
               </TableRow>
-            ) : filteredRules.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={11} className="p-8 text-center text-muted-foreground text-xs">
-                  ไม่พบนโยบายไฟร์วอลล์ที่ค้นหา
-                </TableCell>
-              </TableRow>
-            ) : (
-              <DndContext
-                sensors={sensors}
-                collisionDetection={closestCenter}
-                onDragEnd={handleDragEnd}
-                modifiers={[restrictToVerticalAxis]}
-              >
-                <SortableContext items={filteredRules.map((r) => r.id)} strategy={verticalListSortingStrategy}>
-                  {filteredRules.map((rule, idx) => (
-                    <SortableRow
-                      key={rule.id}
-                      rule={rule}
-                      index={idx}
-                      interfaces={interfaces}
-                      onEdit={openEditModal}
-                      onDelete={handleDeleteRule}
-                      onToggleStatus={handleToggleStatus}
-                      onToggleLog={handleToggleLog}
-                    />
-                  ))}
-                </SortableContext>
-              </DndContext>
-            )}
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                <TableRow>
+                  <TableCell colSpan={11} className="p-12 text-center text-muted-foreground text-xs">
+                    <div className="flex flex-col items-center justify-center gap-2 py-4">
+                      <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                      <span>กำลังโหลดข้อมูล...</span>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : filteredRules.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={11} className="p-8 text-center text-muted-foreground text-xs">
+                    ไม่พบนโยบายไฟร์วอลล์ที่ค้นหา
+                  </TableCell>
+                </TableRow>
+              ) : (
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={handleDragEnd}
+                  modifiers={[restrictToVerticalAxis]}
+                >
+                  <SortableContext items={filteredRules.map((r) => r.id)} strategy={verticalListSortingStrategy}>
+                    {filteredRules.map((rule, idx) => (
+                      <SortableRow
+                        key={rule.id}
+                        rule={rule}
+                        index={idx}
+                        interfaces={interfaces}
+                        onEdit={openEditModal}
+                        onDelete={handleDeleteRule}
+                        onToggleStatus={handleToggleStatus}
+                        onToggleLog={handleToggleLog}
+                      />
+                    ))}
+                  </SortableContext>
+                </DndContext>
+              )}
 
-            {/* 5. Default Implicit Deny Row */}
-            <TableRow className="bg-muted/10 border-t border-border/40 text-muted-foreground/70 hover:bg-muted/10">
-              <TableCell className="p-3 text-xs font-mono flex items-center gap-2 pl-6.5">
-                <Lock className="h-3.5 w-3.5 text-muted-foreground/50" />
-                -
-              </TableCell>
-              <TableCell className="p-3 italic">Implicit Deny</TableCell>
-              <TableCell className="p-3 italic">-</TableCell>
-              <TableCell className="p-3 italic">-</TableCell>
-              <TableCell className="p-3 italic">ALL</TableCell>
-              <TableCell className="p-3 italic">ALL</TableCell>
-              <TableCell className="p-3 italic">ALL</TableCell>
-              <TableCell className="p-3">
-                <Badge variant="destructive" className="font-bold text-[10px] px-2 py-0.5 rounded bg-red-500/10 text-red-500/80 border-red-500/20">
-                  DROP
-                </Badge>
-              </TableCell>
-              <TableCell className="p-3">-</TableCell>
-              <TableCell className="p-3 flex items-center gap-1.5 py-4">
-                <Badge variant="outline" className="text-[10px] bg-muted border-border text-muted-foreground px-1.5 py-0.5">
-                  System
-                </Badge>
-              </TableCell>
-              <TableCell></TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
+              {/* 5. Default Implicit Deny Row */}
+              <TableRow className="bg-muted/10 border-t border-border/40 text-muted-foreground/70 hover:bg-muted/10">
+                <TableCell className="p-3 text-xs font-mono flex items-center gap-2 pl-6.5">
+                  <Lock className="h-3.5 w-3.5 text-muted-foreground/50" />
+                  -
+                </TableCell>
+                <TableCell className="p-3 italic">Implicit Deny</TableCell>
+                <TableCell className="p-3 italic">-</TableCell>
+                <TableCell className="p-3 italic">-</TableCell>
+                <TableCell className="p-3 italic">ALL</TableCell>
+                <TableCell className="p-3 italic">ALL</TableCell>
+                <TableCell className="p-3 italic">ALL</TableCell>
+                <TableCell className="p-3">
+                  <Badge variant="destructive" className="font-bold text-[10px] px-2 py-0.5 rounded bg-red-500/10 text-red-500/80 border-red-500/20">
+                    DROP
+                  </Badge>
+                </TableCell>
+                <TableCell className="p-3">-</TableCell>
+                <TableCell className="p-3 flex items-center gap-1.5 py-4">
+                  <Badge variant="outline" className="text-[10px] bg-muted border-border text-muted-foreground px-1.5 py-0.5">
+                    System
+                  </Badge>
+                </TableCell>
+                <TableCell></TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
       </Card>
 
       {/* 6. Footer warnings */}

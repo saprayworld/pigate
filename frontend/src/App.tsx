@@ -1,6 +1,7 @@
 import React from "react"
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom"
 import { ThemeProvider } from "@/components/ThemeProvider"
+import { AlertDialogProvider } from "@/components/AlertDialogProvider"
 import ShellLayout from "@/components/layout/ShellLayout"
 import Dashboard from "@/pages/Dashboard"
 import Interfaces from "@/pages/Interfaces"
@@ -21,7 +22,9 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <ThemeProvider defaultTheme="dark" storageKey="pigate-ui-theme">
-      <BrowserRouter>
+      <AlertDialogProvider>
+        <BrowserRouter>
+
         <Routes>
           {/* Public Login Route */}
           <Route path="/login" element={<Login />} />
@@ -64,6 +67,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
+     </AlertDialogProvider>
     </ThemeProvider>
   )
 }

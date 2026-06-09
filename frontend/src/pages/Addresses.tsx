@@ -35,8 +35,12 @@ import { Label } from "@/components/ui/label"
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
 import { type AddressObject } from "@/data-mockup/mockData"
 import { addressService } from "@/services/addressService"
+import { useAlert } from "@/components/AlertDialogProvider"
+import { isValidCidr, isValidIpRange } from "@/lib/utils"
 
 export default function Addresses() {
+  const { alert, confirm } = useAlert()
+
   // --- State ---
   const [addresses, setAddresses] = useState<AddressObject[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -64,7 +68,7 @@ export default function Addresses() {
       setAddresses(data)
     } catch (err: any) {
       console.error(err)
-      alert("ไม่สามารถโหลดข้อมูลที่อยู่ไอพีได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูลที่อยู่ไอพีได้: " + (err.message || err))
     } finally {
       if (showLoading) setIsLoading(false)
     }
@@ -143,21 +147,21 @@ export default function Addresses() {
   const handleDelete = async (id: string, name: string) => {
     const obj = addresses.find(a => a.id === id)
     if (obj && obj.system) {
-      alert(`ไม่สามารถลบวัตถุระบบ "${name}" ได้`)
+      await alert("การดำเนินการล้มเหลว", `ไม่สามารถลบวัตถุระบบ "${name}" ได้`)
       return
     }
     if (obj && obj.refPolicies.length > 0) {
-      alert(`ไม่สามารถลบ "${name}" ได้ เนื่องจากถูกอ้างอิงอยู่ในนโยบายไฟร์วอลล์: ${obj.refPolicies.join(", ")}`)
+      await alert("การดำเนินการล้มเหลว", `ไม่สามารถลบ "${name}" ได้ เนื่องจากถูกอ้างอิงอยู่ในนโยบายไฟร์วอลล์: ${obj.refPolicies.join(", ")}`)
       return
     }
 
-    if (confirm(`คุณต้องการลบวัตถุที่อยู่ "${name}" ใช่หรือไม่?`)) {
+    if (await confirm("ยืนยันการลบ", `คุณต้องการลบวัตถุที่อยู่ "${name}" ใช่หรือไม่?`)) {
       try {
         await addressService.delete(id)
         setSelectedIds(prev => prev.filter(item => item !== id))
         await loadAddresses(false)
       } catch (err: any) {
-        alert("ไม่สามารถลบข้อมูลได้: " + (err.message || err))
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบข้อมูลได้: " + (err.message || err))
       }
     }
   }
@@ -167,7 +171,7 @@ export default function Addresses() {
     const systemObjects = addresses.filter(a => selectedIds.includes(a.id) && a.system)
     if (systemObjects.length > 0) {
       const names = systemObjects.map(o => o.name).join(", ")
-      alert(`ไม่สามารถลบวัตถุระบบต่อไปนี้ได้: ${names}`)
+      await alert("การดำเนินการล้มเหลว", `ไม่สามารถลบวัตถุระบบต่อไปนี้ได้: ${names}`)
       return
     }
 
@@ -175,17 +179,17 @@ export default function Addresses() {
     const usedObjects = addresses.filter(a => selectedIds.includes(a.id) && a.refPolicies.length > 0)
     if (usedObjects.length > 0) {
       const names = usedObjects.map(o => o.name).join(", ")
-      alert(`ไม่สามารถลบวัตถุต่อไปนี้ได้เนื่องจากถูกอ้างอิงอยู่: ${names}`)
+      await alert("การดำเนินการล้มเหลว", `ไม่สามารถลบวัตถุต่อไปนี้ได้เนื่องจากถูกอ้างอิงอยู่: ${names}`)
       return
     }
 
-    if (confirm(`คุณต้องการลบวัตถุที่เลือกจำนวน ${selectedIds.length} รายการใช่หรือไม่?`)) {
+    if (await confirm("ยืนยันการลบ", `คุณต้องการลบวัตถุที่เลือกจำนวน ${selectedIds.length} รายการใช่หรือไม่?`)) {
       try {
         await addressService.deleteMultiple(selectedIds)
         setSelectedIds([])
         await loadAddresses(false)
       } catch (err: any) {
-        alert("ไม่สามารถลบข้อมูลได้: " + (err.message || err))
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบข้อมูลได้: " + (err.message || err))
       }
     }
   }
@@ -210,10 +214,28 @@ export default function Addresses() {
       return
     }
 
-    // 3. Simple Value validation based on type
-    if (!formValue.trim()) {
+    // 3. Strict Value validation based on type
+    const trimmedVal = formValue.trim()
+    if (!trimmedVal) {
       setFormError("กรุณากรอกข้อมูลค่าที่อยู่ไอพี")
       return
+    }
+    if (formType === "subnet") {
+      if (!isValidCidr(trimmedVal)) {
+        setFormError("รูปแบบ Subnet ไม่ถูกต้อง (เช่น 192.168.1.0/24 หรือ 10.0.0.1/32) และค่า Octet ต้องอยู่ในช่วง 0-255")
+        return
+      }
+    } else if (formType === "range") {
+      if (!isValidIpRange(trimmedVal)) {
+        setFormError("รูปแบบ IP Range ไม่ถูกต้อง (เช่น 192.168.1.100 - 192.168.1.200) และค่าเริ่มต้นต้องน้อยกว่าหรือเท่ากับสิ้นสุด (0-255)")
+        return
+      }
+    } else if (formType === "fqdn") {
+      const fqdnRegex = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,6}$/
+      if (!fqdnRegex.test(trimmedVal)) {
+        setFormError("รูปแบบ FQDN ไม่ถูกต้อง (เช่น google.com หรือ updates.raspberrypi.org)")
+        return
+      }
     }
 
     try {
@@ -222,14 +244,14 @@ export default function Addresses() {
         await addressService.update(editingObject.id, {
           name: formName,
           type: formType,
-          value: formValue
+          value: trimmedVal
         })
       } else {
         // Create
         await addressService.create({
           name: formName,
           type: formType,
-          value: formValue
+          value: trimmedVal
         })
       }
       await loadAddresses(false)

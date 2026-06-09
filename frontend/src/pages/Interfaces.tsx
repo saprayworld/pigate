@@ -52,6 +52,8 @@ import {
   type WifiScanResult
 } from "@/data-mockup/mockData"
 import { interfaceService } from "@/services/interfaceService"
+import { useAlert } from "@/components/AlertDialogProvider"
+import { isValidIp } from "@/lib/utils"
 
 
 
@@ -104,6 +106,7 @@ function generateRandomMac(): string {
 const ALL_ACCESS_OPTIONS: AdminAccess[] = ["HTTPS", "HTTP", "PING", "SSH"]
 
 export default function Interfaces() {
+  const { alert } = useAlert()
   // --- State ---
   const [interfaces, setInterfaces] = useState<NetworkInterface[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -312,7 +315,7 @@ export default function Interfaces() {
       const data = await interfaceService.getAll()
       setInterfaces(data)
     } catch (err: any) {
-      alert("Failed to toggle interface status: " + err.message)
+      await alert("ข้อผิดพลาด", "Failed to toggle interface status: " + err.message)
     }
   }
 
@@ -340,9 +343,8 @@ export default function Interfaces() {
 
     // Validation for Static mode
     if (formMode === "static") {
-      const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/
-      if (!ipRegex.test(formIp)) {
-        setFormError("กรุณากรอก IP Address ให้ถูกต้อง (เช่น 192.168.1.1)")
+      if (!isValidIp(formIp)) {
+        setFormError("กรุณากรอก IP Address ให้ถูกต้อง (เช่น 192.168.1.1) และค่า Octet ต้องอยู่ในช่วง 0-255")
         return
       }
       const maskNum = parseInt(formNetmask)
@@ -493,139 +495,141 @@ export default function Interfaces() {
 
       {/* 3. Interface Table */}
       <Card className="bg-card/25 border border-border/50 overflow-hidden py-0">
-        <Table>
-          <TableHeader>
-            <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[6%] font-semibold">Port</th>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[15%] font-semibold">Name (Alias)</th>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[8%] font-semibold">Role</th>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[20%] font-semibold">IP / Netmask</th>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[18%] font-semibold">Admin Access</th>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[10%] font-semibold">Speed</th>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[10%] font-semibold">Status</th>
-              <TableHead className="p-3 w-[13%] text-right text-[11px] uppercase tracking-wider font-semibold">Action</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {interfaces.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={8} className="p-8 text-center text-muted-foreground text-xs">
-                  ไม่พบอินเทอร์เฟซเครือข่าย
-                </TableCell>
+        <div className="overflow-x-auto w-full">
+          <Table>
+            <TableHeader>
+              <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
+                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[6%] font-semibold">Port</th>
+                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[15%] font-semibold">Name (Alias)</th>
+                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[8%] font-semibold">Role</th>
+                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[20%] font-semibold">IP / Netmask</th>
+                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[18%] font-semibold">Admin Access</th>
+                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[10%] font-semibold">Speed</th>
+                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[10%] font-semibold">Status</th>
+                <TableHead className="p-3 w-[13%] text-right text-[11px] uppercase tracking-wider font-semibold">Action</TableHead>
               </TableRow>
-            ) : (
-              interfaces.map((iface) => (
-                <TableRow key={iface.id} className="border-b border-border/40 hover:bg-muted/15">
-                  {/* Port Icon */}
-                  <TableCell className="p-3 text-center">
-                    {iface.type === "ethernet" ? (
-                      <Cable className="h-5 w-5 text-cyan-400 mx-auto" />
-                    ) : (
-                      <Wifi className="h-5 w-5 text-indigo-400 mx-auto" />
-                    )}
-                  </TableCell>
-
-                  {/* Name (Alias) */}
-                  <TableCell className="p-3">
-                    <div className="font-semibold text-foreground">{iface.name}</div>
-                    <div className="text-xs text-muted-foreground mt-0.5">({iface.alias})</div>
-                    {iface.type === "wireless" && iface.connectedSSID && iface.status === "up" && (
-                      <div className="flex items-center gap-1 mt-1">
-                        <Signal className="h-3 w-3 text-indigo-400" />
-                        <span className="text-[10px] text-indigo-400 font-mono">{iface.connectedSSID}</span>
-                      </div>
-                    )}
-                  </TableCell>
-
-                  {/* Role */}
-                  <TableCell className="p-3">
-                    {iface.role === "WAN" ? (
-                      <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/20 text-[10px] px-2 py-0.5 rounded font-bold">
-                        WAN
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20 text-[10px] px-2 py-0.5 rounded font-bold">
-                        LAN
-                      </Badge>
-                    )}
-                  </TableCell>
-
-                  {/* IP / Netmask */}
-                  <TableCell className="p-3">
-                    <div className="font-mono text-xs text-foreground">
-                      {iface.status === "up" ? `${iface.ip} / ${iface.netmask}` : "—"}
-                    </div>
-                    <div className="text-[10px] text-muted-foreground mt-0.5">
-                      {iface.addressingMode === "dhcp" ? "DHCP" : "Static"}
-                    </div>
-                  </TableCell>
-
-                  {/* Admin Access */}
-                  <TableCell className="p-3">
-                    <div className="flex flex-wrap gap-1">
-                      {iface.adminAccess.length === 0 ? (
-                        <span className="text-xs text-muted-foreground/45 italic">None</span>
-                      ) : (
-                        iface.adminAccess.map((access) => (
-                          <Badge
-                            key={access}
-                            variant="outline"
-                            className="bg-muted/30 text-muted-foreground border-border/40 text-[9px] px-1.5 py-0.5 rounded font-mono"
-                          >
-                            {access}
-                          </Badge>
-                        ))
-                      )}
-                    </div>
-                  </TableCell>
-
-                  {/* Speed */}
-                  <TableCell className="p-3">
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {iface.status === "up" ? iface.speed : "—"}
-                    </span>
-                  </TableCell>
-
-                  {/* Status */}
-                  <TableCell className="p-3">
-                    {iface.status === "up" ? (
-                      <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px] px-2 py-0.5 rounded font-bold">
-                        UP
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/20 text-[10px] px-2 py-0.5 rounded font-bold">
-                        DOWN
-                      </Badge>
-                    )}
-                  </TableCell>
-
-                  {/* Action */}
-                  <TableCell className="p-3 text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] text-muted-foreground">{iface.status === "up" ? "ON" : "OFF"}</span>
-                        <Switch
-                          size="sm"
-                          checked={iface.status === "up"}
-                          onCheckedChange={() => handleToggleStatus(iface.id)}
-                        />
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={() => openEditDialog(iface)}
-                        className="cursor-pointer text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                        title="แก้ไขอินเทอร์เฟซ"
-                      >
-                        <Edit className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
+            </TableHeader>
+            <TableBody>
+              {interfaces.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="p-8 text-center text-muted-foreground text-xs">
+                    ไม่พบอินเทอร์เฟซเครือข่าย
                   </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+              ) : (
+                interfaces.map((iface) => (
+                  <TableRow key={iface.id} className="border-b border-border/40 hover:bg-muted/15">
+                    {/* Port Icon */}
+                    <TableCell className="p-3 text-center">
+                      {iface.type === "ethernet" ? (
+                        <Cable className="h-5 w-5 text-cyan-400 mx-auto" />
+                      ) : (
+                        <Wifi className="h-5 w-5 text-indigo-400 mx-auto" />
+                      )}
+                    </TableCell>
+
+                    {/* Name (Alias) */}
+                    <TableCell className="p-3">
+                      <div className="font-semibold text-foreground">{iface.name}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">({iface.alias})</div>
+                      {iface.type === "wireless" && iface.connectedSSID && iface.status === "up" && (
+                        <div className="flex items-center gap-1 mt-1">
+                          <Signal className="h-3 w-3 text-indigo-400" />
+                          <span className="text-[10px] text-indigo-400 font-mono">{iface.connectedSSID}</span>
+                        </div>
+                      )}
+                    </TableCell>
+
+                    {/* Role */}
+                    <TableCell className="p-3">
+                      {iface.role === "WAN" ? (
+                        <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/20 text-[10px] px-2 py-0.5 rounded font-bold">
+                          WAN
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20 text-[10px] px-2 py-0.5 rounded font-bold">
+                          LAN
+                        </Badge>
+                      )}
+                    </TableCell>
+
+                    {/* IP / Netmask */}
+                    <TableCell className="p-3">
+                      <div className="font-mono text-xs text-foreground">
+                        {iface.status === "up" ? `${iface.ip} / ${iface.netmask}` : "—"}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground mt-0.5">
+                        {iface.addressingMode === "dhcp" ? "DHCP" : "Static"}
+                      </div>
+                    </TableCell>
+
+                    {/* Admin Access */}
+                    <TableCell className="p-3">
+                      <div className="flex flex-wrap gap-1">
+                        {iface.adminAccess.length === 0 ? (
+                          <span className="text-xs text-muted-foreground/45 italic">None</span>
+                        ) : (
+                          iface.adminAccess.map((access) => (
+                            <Badge
+                              key={access}
+                              variant="outline"
+                              className="bg-muted/30 text-muted-foreground border-border/40 text-[9px] px-1.5 py-0.5 rounded font-mono"
+                            >
+                              {access}
+                            </Badge>
+                          ))
+                        )}
+                      </div>
+                    </TableCell>
+
+                    {/* Speed */}
+                    <TableCell className="p-3">
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {iface.status === "up" ? iface.speed : "—"}
+                      </span>
+                    </TableCell>
+
+                    {/* Status */}
+                    <TableCell className="p-3">
+                      {iface.status === "up" ? (
+                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px] px-2 py-0.5 rounded font-bold">
+                          UP
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/20 text-[10px] px-2 py-0.5 rounded font-bold">
+                          DOWN
+                        </Badge>
+                      )}
+                    </TableCell>
+
+                    {/* Action */}
+                    <TableCell className="p-3 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] text-muted-foreground">{iface.status === "up" ? "ON" : "OFF"}</span>
+                          <Switch
+                            size="sm"
+                            checked={iface.status === "up"}
+                            onCheckedChange={() => handleToggleStatus(iface.id)}
+                          />
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={() => openEditDialog(iface)}
+                          className="cursor-pointer text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                          title="แก้ไขอินเทอร์เฟซ"
+                        >
+                          <Edit className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
       </Card>
 
       {/* 4. MAC Address reference table */}

@@ -43,8 +43,12 @@ import {
   type ActiveDhcpLease
 } from "@/data-mockup/mockData"
 import { dhcpService } from "@/services/dhcpService"
+import { useAlert } from "@/components/AlertDialogProvider"
+import { isValidIp } from "@/lib/utils"
 
 export default function DhcpServer() {
+  const { alert, confirm } = useAlert()
+
   // --- State ---
   const [config, setConfig] = useState<DhcpConfig | null>(null)
   const [reservations, setReservations] = useState<DhcpReservation[]>([])
@@ -109,7 +113,7 @@ export default function DhcpServer() {
       setFormLeaseTime(cfg.leaseTime.toString())
     } catch (err: any) {
       console.error(err)
-      alert("ไม่สามารถโหลดข้อมูล DHCP ได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูล DHCP ได้: " + (err.message || err))
     } finally {
       if (showLoading) setIsLoading(false)
     }
@@ -120,14 +124,7 @@ export default function DhcpServer() {
   }, [])
 
   // --- Helpers ---
-  const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/
   const macRegex = /^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$/
-
-  const isValidIp = (ip: string) => {
-    if (!ipRegex.test(ip)) return false
-    const parts = ip.split(".").map(Number)
-    return parts.every(part => part >= 0 && part <= 255)
-  }
 
   const ipToNum = (ip: string) => {
     const parts = ip.split(".").map(Number)
@@ -176,7 +173,7 @@ export default function DhcpServer() {
     try {
       await dhcpService.updateConfig(updatedConfig)
     } catch (err: any) {
-      alert("ไม่สามารถเปิด/ปิดบริการ DHCP ได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถเปิด/ปิดบริการ DHCP ได้: " + (err.message || err))
     }
   }
 
@@ -265,7 +262,7 @@ export default function DhcpServer() {
       setIsApplied(true)
     } catch (err: any) {
       setIsApplying(false)
-      alert("ไม่สามารถเริ่มระบบ DHCP เข้ากับ OS Kernel ได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถเริ่มระบบ DHCP เข้ากับ OS Kernel ได้: " + (err.message || err))
     }
   }
 
@@ -301,13 +298,13 @@ export default function DhcpServer() {
   }
 
   const handleDeleteReservation = async (id: string, name: string) => {
-    if (confirm(`คุณต้องการลบการจองไอพีของอุปกรณ์ "${name}" ใช่หรือไม่?`)) {
+    if (await confirm("ยืนยันการลบ", `คุณต้องการลบการจองไอพีของอุปกรณ์ "${name}" ใช่หรือไม่?`)) {
       try {
         await dhcpService.deleteReservation(id)
         setReservations(prev => prev.filter(res => res.id !== id))
         setIsApplied(false)
       } catch (err: any) {
-        alert("ไม่สามารถลบข้อมูลการจองได้: " + (err.message || err))
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบข้อมูลการจองได้: " + (err.message || err))
       }
     }
   }

@@ -37,8 +37,12 @@ import { Label } from "@/components/ui/label"
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
 import { type StaticRoute } from "@/data-mockup/mockData"
 import { staticRouteService } from "@/services/staticRouteService"
+import { useAlert } from "@/components/AlertDialogProvider"
+import { isValidIp, isValidCidr } from "@/lib/utils"
 
 export default function StaticRoutes() {
+  const { alert, confirm } = useAlert()
+
   // --- State ---
   const [routes, setRoutes] = useState<StaticRoute[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -76,7 +80,7 @@ export default function StaticRoutes() {
       setRoutes(data)
     } catch (err: any) {
       console.error(err)
-      alert("ไม่สามารถโหลดตารางเส้นทางได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดตารางเส้นทางได้: " + (err.message || err))
     } finally {
       if (showLoading) setIsLoading(false)
     }
@@ -148,7 +152,7 @@ export default function StaticRoutes() {
       await loadRoutes(false)
       setIsApplied(false)
     } catch (err: any) {
-      alert("ไม่สามารถเปลี่ยนสถานะเส้นทางได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถเปลี่ยนสถานะเส้นทางได้: " + (err.message || err))
     }
   }
 
@@ -180,31 +184,31 @@ export default function StaticRoutes() {
   const handleDelete = async (id: string, dest: string) => {
     const route = routes.find(r => r.id === id)
     if (route?.type === "system") {
-      alert("ไม่สามารถลบ System Route ของระบบปฏิบัติการได้")
+      await alert("การดำเนินการล้มเหลว", "ไม่สามารถลบ System Route ของระบบปฏิบัติการได้")
       return
     }
 
-    if (confirm(`คุณต้องการลบเส้นทางไปยัง "${dest}" ใช่หรือไม่?`)) {
+    if (await confirm("ยืนยันการลบ", `คุณต้องการลบเส้นทางไปยัง "${dest}" ใช่หรือไม่?`)) {
       try {
         await staticRouteService.delete(id)
         setSelectedIds(prev => prev.filter(item => item !== id))
         await loadRoutes(false)
         setIsApplied(false)
       } catch (err: any) {
-        alert("ไม่สามารถลบเส้นทางได้: " + (err.message || err))
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบเส้นทางได้: " + (err.message || err))
       }
     }
   }
 
   const handleBulkDelete = async () => {
-    if (confirm(`คุณต้องการลบเส้นทางที่เลือกจำนวน ${selectedIds.length} รายการใช่หรือไม่?`)) {
+    if (await confirm("ยืนยันการลบ", `คุณต้องการลบเส้นทางที่เลือกจำนวน ${selectedIds.length} รายการใช่หรือไม่?`)) {
       try {
         await staticRouteService.deleteMultiple(selectedIds)
         setSelectedIds([])
         await loadRoutes(false)
         setIsApplied(false)
       } catch (err: any) {
-        alert("ไม่สามารถลบเส้นทางได้: " + (err.message || err))
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบเส้นทางได้: " + (err.message || err))
       }
     }
   }
@@ -218,16 +222,14 @@ export default function StaticRoutes() {
     const metricVal = parseInt(formMetric, 10)
 
     // 1. Validation Destination CIDR format (must be valid CIDR, or 0.0.0.0/0 for default route)
-    const cidrRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}\/(?:[0-9]|[1-2][0-9]|3[0-2])$/
-    if (dest !== "0.0.0.0/0" && !cidrRegex.test(dest)) {
-      setFormError("รูปแบบ Destination Network ไม่ถูกต้อง (เช่น 192.168.10.0/24 หรือ 0.0.0.0/0 สำหรับ Default)")
+    if (dest !== "0.0.0.0/0" && !isValidCidr(dest)) {
+      setFormError("รูปแบบ Destination Network ไม่ถูกต้อง (เช่น 192.168.10.0/24 หรือ 0.0.0.0/0 สำหรับ Default) และค่า Octet ต้องอยู่ในช่วง 0-255")
       return
     }
 
     // 2. Validation Gateway IP format (if provided)
-    const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/
-    if (gw && !ipRegex.test(gw)) {
-      setFormError("รูปแบบ Gateway IP Address ไม่ถูกต้อง (ต้องเป็น IP เช่น 192.168.1.254)")
+    if (gw && !isValidIp(gw)) {
+      setFormError("รูปแบบ Gateway IP Address ไม่ถูกต้อง (ต้องเป็น IP เช่น 192.168.1.254) และค่า Octet ต้องอยู่ในช่วง 0-255")
       return
     }
 
@@ -287,7 +289,7 @@ export default function StaticRoutes() {
       setIsApplied(true)
     } catch (err: any) {
       setIsApplying(false)
-      alert("ไม่สามารถบันทึกการตั้งค่าเส้นทางเข้า Kernel ได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถบันทึกการตั้งค่าเส้นทางเข้า Kernel ได้: " + (err.message || err))
     }
   }
 

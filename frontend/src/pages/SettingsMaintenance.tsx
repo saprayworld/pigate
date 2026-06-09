@@ -41,8 +41,10 @@ import {
   type NetworkServiceStatus
 } from "@/data-mockup/mockData"
 import { systemService } from "@/services/systemService"
+import { useAlert } from "@/components/AlertDialogProvider"
 
 export default function SettingsMaintenance() {
+  const { alert } = useAlert()
   // --- States ---
   const [activeTab, setActiveTab] = useState("settings")
 
@@ -157,7 +159,7 @@ export default function SettingsMaintenance() {
     try {
       await systemService.reboot()
     } catch (err: any) {
-      alert("Failed to reboot system: " + err.message)
+      await alert("ข้อผิดพลาด", "Failed to reboot system: " + err.message)
       setPowerStatus("idle")
       return
     }
@@ -185,7 +187,7 @@ export default function SettingsMaintenance() {
         setPowerStatus("powered-off")
       }, 3000)
     } catch (err: any) {
-      alert("Failed to shutdown system: " + err.message)
+      await alert("ข้อผิดพลาด", "Failed to shutdown system: " + err.message)
       setPowerStatus("idle")
     }
   }
@@ -277,7 +279,7 @@ export default function SettingsMaintenance() {
       const updatedServices = await systemService.getServices()
       setServices(updatedServices)
     } catch (err: any) {
-      alert("Failed to restart service: " + err.message)
+      await alert("ข้อผิดพลาด", "Failed to restart service: " + err.message)
     } finally {
       setRestartingServiceId(null)
     }

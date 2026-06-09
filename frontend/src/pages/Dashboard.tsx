@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button"
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts"
 import { type FirewallLog } from "@/data-mockup/mockData"
 import { dashboardService, type DashboardStats } from "@/services/dashboardService"
+import { useAlert } from "@/components/AlertDialogProvider"
 
 // Structure for Recharts data
 interface TrafficData {
@@ -35,6 +36,7 @@ interface TrafficData {
 
 
 export default function Dashboard() {
+  const { alert } = useAlert()
   // --- 1. Real-time Uptime & Live Time ---
   const [systemTime, setSystemTime] = useState<string>("")
   const [uptimeSeconds, setUptimeSeconds] = useState<number>(2 * 24 * 3600 + 14 * 3600 + 32 * 60 + 15) // Init at 2d 14h 32m 15s
@@ -243,7 +245,7 @@ export default function Dashboard() {
       await dashboardService.clearLogs()
       setLogs([])
     } catch (err: any) {
-      alert("Failed to clear logs: " + err.message)
+      await alert("ข้อผิดพลาด", "Failed to clear logs: " + err.message)
     }
   }
 

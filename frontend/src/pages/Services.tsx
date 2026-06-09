@@ -33,8 +33,11 @@ import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { type ServiceObject } from "@/data-mockup/mockData"
 import { serviceObjectService } from "@/services/serviceObjectService"
+import { useAlert } from "@/components/AlertDialogProvider"
 
 export default function Services() {
+  const { alert, confirm } = useAlert()
+
   // --- State ---
   const [services, setServices] = useState<ServiceObject[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -62,7 +65,7 @@ export default function Services() {
       setServices(data)
     } catch (err: any) {
       console.error(err)
-      alert("ไม่สามารถโหลดข้อมูลวัตถุบริการได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูลวัตถุบริการได้: " + (err.message || err))
     } finally {
       if (showLoading) setIsLoading(false)
     }
@@ -132,16 +135,16 @@ export default function Services() {
     const svc = services.find(s => s.id === id)
     if (!svc) return
     if (svc.type === "system") {
-      alert(`ไม่สามารถลบวัตถุบริการของระบบ (System Predefined) "${name}" ได้`)
+      await alert("การดำเนินการล้มเหลว", `ไม่สามารถลบวัตถุบริการของระบบ (System Predefined) "${name}" ได้`)
       return
     }
 
     if (svc.refPolicies.length > 0) {
-      alert(`ไม่สามารถลบ "${name}" ได้ เนื่องจากถูกอ้างอิงอยู่ในนโยบายไฟร์วอลล์: ${svc.refPolicies.join(", ")}`)
+      await alert("การดำเนินการล้มเหลว", `ไม่สามารถลบ "${name}" ได้ เนื่องจากถูกอ้างอิงอยู่ในนโยบายไฟร์วอลล์: ${svc.refPolicies.join(", ")}`)
       return
     }
 
-    if (confirm(`คุณต้องการลบวัตถุบริการ "${name}" ใช่หรือไม่?`)) {
+    if (await confirm("ยืนยันการลบ", `คุณต้องการลบวัตถุบริการ "${name}" ใช่หรือไม่?`)) {
       try {
         await serviceObjectService.delete(id)
         // If we deleted the preview item, reset preview selection
@@ -150,7 +153,7 @@ export default function Services() {
         }
         await loadServices(false)
       } catch (err: any) {
-        alert("ไม่สามารถลบข้อมูลได้: " + (err.message || err))
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบข้อมูลได้: " + (err.message || err))
       }
     }
   }
