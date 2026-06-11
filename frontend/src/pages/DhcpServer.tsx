@@ -846,8 +846,8 @@ export default function DhcpServer() {
         <Info className="h-4 w-4 text-muted-foreground" />
         <AlertTitle className="font-bold text-foreground mb-0.5">ระบบ DHCP Server (Dynamic Host Configuration Protocol):</AlertTitle>
         <AlertDescription className="text-xs text-muted-foreground leading-relaxed">
-          มีหน้าที่ในการแจกจ่ายข้อมูลการเชื่อมต่อเครือข่าย ได้แก่ IP Address, Netmask, Gateway และ DNS Server โดยอัตโนมัติ 
-          การประยุกต์ใช้งาน <span className="font-semibold text-cyan-400">MAC / IP Reservation</span> จะช่วยล็อก MAC Address 
+          มีหน้าที่ในการแจกจ่ายข้อมูลการเชื่อมต่อเครือข่าย ได้แก่ IP Address, Netmask, Gateway และ DNS Server โดยอัตโนมัติ
+          การประยุกต์ใช้งาน <span className="font-semibold text-cyan-400">MAC / IP Reservation</span> จะช่วยล็อก MAC Address
           ของอุปกรณ์สำคัญ (เช่น NAS, Printer หรือ Server) เข้ากับไอพีเฉพาะเจาะจง เพื่อไม่ให้อุปกรณ์นั้นได้รับไอพีแอดเดรสเปลี่ยนไปเมื่อหมดเวลาเช่า (Lease Time)
         </AlertDescription>
       </Alert>

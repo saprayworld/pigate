@@ -1,0 +1,19 @@
+# Binaries
+pigate-backend
+pigate-backend-*
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+pigate.db
+pigate.db-shm
+pigate.db-wal
+
+# Go workspaces
+go.work
+go.work.sum
+
+# IDE/Editor config
+.vscode/
+.idea/

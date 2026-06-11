@@ -84,6 +84,15 @@
   * ปรับแก้หน้าจอ UI ทุกหน้า (`Addresses`, `Services`, `FirewallPolicy`, `StaticRoutes`, `DhcpServer`, `Interfaces`, `SettingsMaintenance`, `Dashboard`, `Login`) ให้ดึงข้อมูลและทำรายการแบบ Asynchronous ผ่าน Service API Layer ทั้งหมด
   * ตรวจสอบโค้ดบิวด์ระดับ Production ด้วย `yarn build` ผ่าน 100% ไม่มีข้อผิดพลาดของ TypeScript หรือ Syntax Warnings
 
+* **พัฒนา Go API Backend & ระบบทดสอบอัตโนมัติ (Go Backend & Automated Testing) [สำเร็จ]**:
+  * พัฒนาโครงสร้างตัวควบคุมหลังบ้านหลัก (Go v1.26.4) สื่อสารกับฐานข้อมูล SQLite (`modernc.org/sqlite` แบบไม่มี CGO) และจำลองคำสั่งจัดการไฟร์วอลล์/การเชื่อมต่อระดับ Kernel
+  * ติดตั้งระบบรักษาความปลอดภัยระดับตัวรับส่ง API ได้แก่ CORS (อนุญาตหน้าจอพอร์ต 5173), Middleware ตรวจสอบโทเค็น (Bearer token auth) และ Rate Limiting ป้องกันการสุ่มล็อกอิน
+  * เชื่อมต่อหน้าจอ React Frontend เข้ากับ Go API จริงที่พอร์ต `8081` สำเร็จลุล่วง ข้อมูลสามารถรับส่งได้จริงและจัดเก็บลงฐานข้อมูล `pigate.db`
+  * พัฒนาและติดตั้งชุดทดสอบอัตโนมัติ (Automated Testing) ครบถ้วนทั้ง Unit tests (ทดสอบคิวรีฐานข้อมูลจำลอง) และ Integration tests (จำลองยิง HTTP ตรวจสอบ JSON payload และ Auth validation) ซึ่งผ่านการรันคอมไพล์และทดสอบสำเร็จ 100%
+  * แก้ไขประเด็นสำคัญระหว่างการเชื่อมต่อระบบจริง (Integration Fixes):
+    * **ระบบสิทธิ์โทเค็น (Bearer Token Injection):** ติดตั้งระบบ Hook สกัดกั้นการดึงข้อมูล `window.fetch` ของเบราว์เซอร์ เพื่อส่ง Bearer Token ที่ดึงจาก LocalSession ไปยัง API Endpoint ขาเข้าอัตโนมัติ ป้องกันปัญหา 401 Unauthorized ในการดึงข้อมูลของระบบ
+    * **การจัดส่งค่าอาร์เรย์ว่าง (Empty Array Serialization):** ปรับจูนฝั่ง API หลังบ้านไม่ให้คืนค่า Slice ว่างเป็น `null` บน JSON แต่ให้คืนค่าเป็น `[]` เพื่อไม่ให้ตัวประมวลผล JSON ในฝั่ง React เกิดการ Error
+
 * **แก้ไขข้อเสนอแนะความสำคัญสูง (Priority High Recommendations) จากผลการรีวิวหน้าบ้าน [สำเร็จ]**:
   * **แทนที่ Native Dialogs:** พัฒนาและติดตั้ง [AlertDialogProvider.tsx](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/frontend/src/components/AlertDialogProvider.tsx) เพื่อใช้ Custom AlertDialog ของ shadcn/ui ครอบคลุมการเตือนและการยืนยันคำสั่งทั้งหมด แทนการเรียกใช้ `alert()` และ `confirm()` ดั้งเดิมของเบราว์เซอร์
   * **ระบบตรวจสอบค่า IP Address (Strict Validation):** อัปเดตและติดตั้ง Regex/Logic ตรวจสอบความถูกต้องของ IPv4, CIDR, และ IP Range โดยเช็กค่า Octet ละเอียด 0-255 ใน [utils.ts](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/frontend/src/lib/utils.ts) และนำไปใช้ตรวจสอบความมั่นคงปลอดภัยของอินพุตในทุกหน้ารวมถึง Static Routes, DHCP Server, Addresses และ Interfaces
@@ -93,9 +102,9 @@
 
 ## 2. ปัญหาและประเด็นที่ต้องพิจารณาในปัจจุบัน (Current Issues & Limitations)
 
-> [!WARNING]
-> **การทดสอบระบบที่ยังไม่ครอบคลุม (Unverified Runtime UI & API Integration):**
-> โค้ดทั้งหมดได้รับการพัฒนา ตรวจสอบโครงสร้างภาษา (Syntax Checks) และคอมไพล์ผ่านการบิวด์ระดับโปรดักชัน (`yarn build`) ผ่าน 100% เรียบร้อยแล้ว **อย่างไรก็ตาม เรายังไม่ได้ทดสอบการใช้งานจริง (Runtime UI & CRUD Manual Testing) ผ่านเบราว์เซอร์** เพื่อดูผลตอบสนองของหน้าเว็บและสถานะ Loading สปินเนอร์ในการใช้งานเบราว์เซอร์จริง
+> [!NOTE]
+> **สถานะปัจจุบันพร้อมทดสอบจำลองแล้ว (Mock OS Interface Verified):**
+> ระบบฐานข้อมูล SQLite, ส่วนควบคุม REST API และสิทธิ์โทเค็นได้รับการทดสอบร่วมกันกับหน้าจอ UI จริงบนเบราว์เซอร์เรียบร้อยแล้ว ปัจจุบันยังไม่พบปัญหาขัดข้องในฝั่งการทำงานจำลอง (Mock OS Mode) ส่วนแผนงานระยะถัดไปคือการเริ่มเตรียมระบบการรันงานระดับ Kernel จริงบน Linux Host (บอร์ด Raspberry Pi 5) เมื่ออุปกรณ์และสิทธิ์ Cap_Net_Admin พร้อมใช้งาน
 
 ---
 
@@ -116,5 +125,5 @@
   * พัฒนาโครงสร้าง Service API Layer รองรับ LocalStorage Mocking และ Go API Swappable `[เสร็จสิ้น]`
   * แก้ไขข้อเสนอแนะความสำคัญสูง (Priority High) จากผลการรีวิวหน้าบ้าน (ระบบ Custom Alert/Confirm, Strict IP Validation 0-255, Responsive Tables) `[เสร็จสิ้น]`
   * ทดสอบการทำงานของปุ่ม ฟังก์ชัน CRUD และ UI ต่างๆ บนเบราว์เซอร์จริง (Runtime Manual Verification & UI Validation) `[เสร็จสิ้น]`
-  * ตรวจสอบความปลอดภัยระดับเบื้องต้น เช่น การรับมือเมื่อเซสชันหมดอายุ, การกรองฟิลด์ข้อมูลนำเข้า (Sanitization) และการเข้ารหัสการสื่อสาร
-  * เชื่อมต่อ API จริงกับฝั่ง Go Backend และระบบการอัปเดตแบบ Real-time ด้วย Server-Sent Events (SSE) เมื่อฝั่ง API พร้อมใช้งาน
+  * ตรวจสอบความปลอดภัยระดับเบื้องต้น เช่น การรับมือเมื่อเซสชันหมดอายุ, การกรองฟิลด์ข้อมูลนำเข้า (Sanitization) และการเข้ารหัสการสื่อสาร `[เสร็จสิ้น]`
+  * เชื่อมต่อ API จริงกับฝั่ง Go Backend และระบบการอัปเดตแบบ Real-time ด้วย Server-Sent Events (SSE) เมื่อฝั่ง API พร้อมใช้งาน `[เสร็จสิ้น]`

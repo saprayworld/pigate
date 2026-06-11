@@ -1,0 +1,1716 @@
+openapi: 3.0.0
+info:
+  title: PiGate API Specification
+  description: API endpoints for PiGate - Raspberry Pi 5 Firewall & Gateway Controller. This spec is synchronized with the React frontend service layer.
+  version: 1.0.0
+servers:
+  - url: /api
+    description: Default base path for PiGate Go Backend
+
+security:
+  - BearerAuth: []
+
+paths:
+  # =========================================================================
+  # AUTHENTICATION
+  # =========================================================================
+  /auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: Administrator login
+      security: [] # No auth required
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - password
+              properties:
+                username:
+                  type: string
+                  example: admin
+                password:
+                  type: string
+                  format: password
+                  example: admin
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    example: mock_session_id_xyz123
+        '401':
+          description: Invalid username or password
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Invalid username or password
+
+  /auth/logout:
+    post:
+      tags:
+        - Authentication
+      summary: Log out from the system
+      responses:
+        '200':
+          description: Logout successful
+
+  # =========================================================================
+  # DASHBOARD
+  # =========================================================================
+  /dashboard/stats:
+    get:
+      tags:
+        - Dashboard
+      summary: Get general dashboard metrics and summary status
+      responses:
+        '200':
+          description: General stats retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardStats'
+
+  /dashboard/performance:
+    get:
+      tags:
+        - Dashboard
+      summary: Get live hardware performance metrics (CPU, RAM, Temp)
+      responses:
+        '200':
+          description: Performance metrics retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PerformanceMetrics'
+
+  /dashboard/logs:
+    get:
+      tags:
+        - Dashboard
+      summary: Get recent firewall filter packet logs (nftables block logs)
+      responses:
+        '200':
+          description: List of firewall logs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FirewallLog'
+
+  /dashboard/logs/clear:
+    post:
+      tags:
+        - Dashboard
+      summary: Clear all firewall packet filter logs
+      responses:
+        '200':
+          description: Logs cleared successfully
+
+  /dashboard/logs/stream:
+    get:
+      tags:
+        - Dashboard
+      summary: Server-Sent Events (SSE) stream for live firewall block logs
+      description: Establishes a text/event-stream connection to push live firewall logs.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: SSE stream initiated
+          headers:
+            Content-Type:
+              schema:
+                type: string
+                example: text/event-stream
+            Cache-Control:
+              schema:
+                type: string
+                example: no-cache
+            Connection:
+              schema:
+                type: string
+                example: keep-alive
+
+  # =========================================================================
+  # NETWORK INTERFACES
+  # =========================================================================
+  /interfaces:
+    get:
+      tags:
+        - Network Interfaces
+      summary: Get all network interfaces (Ethernet & Wireless)
+      responses:
+        '200':
+          description: List of interfaces
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NetworkInterface'
+
+  /interfaces/{id}:
+    put:
+      tags:
+        - Network Interfaces
+      summary: Update configuration of a network interface
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                alias:
+                  type: string
+                role:
+                  type: string
+                  enum: [LAN, WAN]
+                addressingMode:
+                  type: string
+                  enum: [dhcp, static]
+                ip:
+                  type: string
+                netmask:
+                  type: string
+                gateway:
+                  type: string
+                dns1:
+                  type: string
+                dns2:
+                  type: string
+                adminAccess:
+                  type: array
+                  items:
+                    type: string
+                    enum: [HTTPS, HTTP, PING, SSH]
+                # Wireless specific
+                connectedSSID:
+                  type: string
+                wifiPassword:
+                  type: string
+                wifiSecurity:
+                  type: string
+                macMode:
+                  type: string
+                  enum: [hardware, randomized, laa]
+                laaMacAddress:
+                  type: string
+                randomizeOnReconnect:
+                  type: boolean
+                failoverEnabled:
+                  type: boolean
+                backupSsid:
+                  type: string
+                backupWifiPassword:
+                  type: string
+                ipCheckTimeout:
+                  type: integer
+                primaryMaxRetries:
+                  type: integer
+                failoverCooldown:
+                  type: integer
+      responses:
+        '200':
+          description: Interface updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NetworkInterface'
+
+  /interfaces/{id}/toggle:
+    post:
+      tags:
+        - Network Interfaces
+      summary: Toggle interface status UP or DOWN (ifconfig up/down)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Toggle state changed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NetworkInterface'
+
+  /interfaces/{id}/scan:
+    get:
+      tags:
+        - Network Interfaces
+      summary: Scan for available Wi-Fi access points (Wireless interfaces only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Wi-Fi scan results retrieved
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WifiScanResult'
+
+  # =========================================================================
+  # FIREWALL POLICIES
+  # =========================================================================
+  /policies:
+    get:
+      tags:
+        - Firewall Policies
+      summary: Retrieve all firewall policy rules ordered by precedence
+      responses:
+        '200':
+          description: List of policy rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PolicyRule'
+    post:
+      tags:
+        - Firewall Policies
+      summary: Create a new firewall policy rule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyRuleInput'
+      responses:
+        '200':
+          description: Policy created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyRule'
+
+  /policies/{id}:
+    put:
+      tags:
+        - Firewall Policies
+      summary: Update an existing firewall policy rule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyRuleInput'
+      responses:
+        '200':
+          description: Policy updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyRule'
+    delete:
+      tags:
+        - Firewall Policies
+      summary: Delete a firewall policy rule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Policy deleted successfully
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  /policies/reorder:
+    put:
+      tags:
+        - Firewall Policies
+      summary: Save the full rules list in the new order (Drag and Drop sequence)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - policies
+              properties:
+                policies:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/PolicyRule'
+      responses:
+        '200':
+          description: Reordered list saved
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PolicyRule'
+
+  /policies/{id}/toggle-log:
+    post:
+      tags:
+        - Firewall Policies
+      summary: Toggle logging state for a specific rule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Logging status toggled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyRule'
+
+  /policies/{id}/toggle-status:
+    post:
+      tags:
+        - Firewall Policies
+      summary: Enable or disable a specific firewall rule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Rule active status toggled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyRule'
+
+  /policies/apply:
+    post:
+      tags:
+        - Firewall Policies
+      summary: Apply current firewall rules to Kernel space (loads configuration to nftables)
+      responses:
+        '200':
+          description: Policies successfully loaded into nftables kernel engine
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  # =========================================================================
+  # ADDRESS OBJECTS
+  # =========================================================================
+  /addresses:
+    get:
+      tags:
+        - Address Objects
+      summary: Get all address objects (IP/Subnets, Ranges, FQDNs)
+      responses:
+        '200':
+          description: List of address objects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AddressObject'
+    post:
+      tags:
+        - Address Objects
+      summary: Create a new address object
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddressObjectInput'
+      responses:
+        '200':
+          description: Address object created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddressObject'
+
+  /addresses/{id}:
+    put:
+      tags:
+        - Address Objects
+      summary: Update an existing custom address object (System-predefined objects are protected)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddressObjectInput'
+      responses:
+        '200':
+          description: Address object updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddressObject'
+    delete:
+      tags:
+        - Address Objects
+      summary: Delete an address object (Fails if object is predefined or referenced by policies)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Address object deleted
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  /addresses/bulk-delete:
+    post:
+      tags:
+        - Address Objects
+      summary: Bulk delete multiple custom address objects
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - ids
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Selected addresses deleted
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  # =========================================================================
+  # SERVICE OBJECTS
+  # =========================================================================
+  /services:
+    get:
+      tags:
+        - Service Objects
+      summary: Get all service objects (protocols and port definitions)
+      responses:
+        '200':
+          description: List of service objects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ServiceObject'
+    post:
+      tags:
+        - Service Objects
+      summary: Create a new custom service object
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceObjectInput'
+      responses:
+        '200':
+          description: Service object created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceObject'
+
+  /services/{id}:
+    put:
+      tags:
+        - Service Objects
+      summary: Update a custom service object (Predefined objects are protected)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceObjectInput'
+      responses:
+        '200':
+          description: Service object updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceObject'
+    delete:
+      tags:
+        - Service Objects
+      summary: Delete a custom service object (Fails if predefined or referenced by policies)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Service object deleted
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  # =========================================================================
+  # STATIC ROUTES
+  # =========================================================================
+  /routes:
+    get:
+      tags:
+        - Static Routes
+      summary: Get all static routing table rows
+      responses:
+        '200':
+          description: List of static routes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StaticRoute'
+    post:
+      tags:
+        - Static Routes
+      summary: Create a new custom static route
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StaticRouteInput'
+      responses:
+        '200':
+          description: Static route created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaticRoute'
+
+  /routes/{id}:
+    put:
+      tags:
+        - Static Routes
+      summary: Update an existing custom static route (System-defined routes are protected)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StaticRouteInput'
+      responses:
+        '200':
+          description: Static route updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaticRoute'
+    delete:
+      tags:
+        - Static Routes
+      summary: Delete a custom static route
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Static route deleted
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  /routes/bulk-delete:
+    post:
+      tags:
+        - Static Routes
+      summary: Delete multiple custom static routes in bulk
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - ids
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Custom routes deleted
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  /routes/{id}/toggle:
+    post:
+      tags:
+        - Static Routes
+      summary: Toggle active status (enable/disable) of a route
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Route status toggled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaticRoute'
+
+  /routes/apply:
+    post:
+      tags:
+        - Static Routes
+      summary: Apply routing table changes to Kernel (netlink socket update)
+      responses:
+        '200':
+          description: Routes loaded successfully into Kernel routing tables
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  # =========================================================================
+  # DHCP SERVER
+  # =========================================================================
+  /dhcp/config:
+    get:
+      tags:
+        - DHCP Server
+      summary: Get DHCP Server main configuration parameters
+      responses:
+        '200':
+          description: DHCP configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DhcpConfig'
+    put:
+      tags:
+        - DHCP Server
+      summary: Update DHCP Server configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DhcpConfig'
+      responses:
+        '200':
+          description: Configuration updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DhcpConfig'
+
+  /dhcp/reservations:
+    get:
+      tags:
+        - DHCP Server
+      summary: Get all static IP reservations
+      responses:
+        '200':
+          description: List of reservations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DhcpReservation'
+    post:
+      tags:
+        - DHCP Server
+      summary: Add a static IP reservation mapping device MAC to a reserved IP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DhcpReservationInput'
+      responses:
+        '200':
+          description: Reservation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DhcpReservation'
+
+  /dhcp/reservations/{id}:
+    put:
+      tags:
+        - DHCP Server
+      summary: Update an IP reservation mapping
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DhcpReservationInput'
+      responses:
+        '200':
+          description: Reservation updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DhcpReservation'
+    delete:
+      tags:
+        - DHCP Server
+      summary: Delete an IP reservation mapping
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Reservation deleted
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  /dhcp/leases:
+    get:
+      tags:
+        - DHCP Server
+      summary: Get active IP leases from DHCP lease log database
+      parameters:
+        - name: refresh
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Force reading and updating leases from system logs
+      responses:
+        '200':
+          description: List of active leases
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ActiveDhcpLease'
+
+  /dhcp/apply:
+    post:
+      tags:
+        - DHCP Server
+      summary: Restart daemon with new configuration changes (apply parameters)
+      responses:
+        '200':
+          description: Config applied successfully
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  # =========================================================================
+  # SYSTEM & MAINTENANCE
+  # =========================================================================
+  /system/time:
+    get:
+      tags:
+        - System & Maintenance
+      summary: Get timezone and NTP network time synchronization configuration
+      responses:
+        '200':
+          description: System time settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemTimeSettings'
+    put:
+      tags:
+        - System & Maintenance
+      summary: Save timezone and NTP server configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SystemTimeSettings'
+      responses:
+        '200':
+          description: Time settings updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemTimeSettings'
+
+  /system/password:
+    put:
+      tags:
+        - System & Maintenance
+      summary: Change administrator dashboard login password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - currentPassword
+                - newPassword
+              properties:
+                currentPassword:
+                  type: string
+                  format: password
+                newPassword:
+                  type: string
+                  format: password
+      responses:
+        '200':
+          description: Password updated successfully
+        '400':
+          description: Current password incorrect or validation failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: รหัสผ่านปัจจุบันไม่ถูกต้อง
+
+  /system/services:
+    get:
+      tags:
+        - System & Maintenance
+      summary: Get statuses of critical network service daemons (nftables, isc-dhcp-server, NetworkManager)
+      responses:
+        '200':
+          description: Services status list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NetworkServiceStatus'
+
+  /system/services/{id}/restart:
+    post:
+      tags:
+        - System & Maintenance
+      summary: Restart a system service daemon by service ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Service restart command executed
+
+  /system/reboot:
+    post:
+      tags:
+        - System & Maintenance
+      summary: Reboot the Raspberry Pi 5 board host
+      responses:
+        '200':
+          description: Reboot command received, board restarting
+
+  /system/shutdown:
+    post:
+      tags:
+        - System & Maintenance
+      summary: Shutdown/halt the Raspberry Pi 5 board host
+      responses:
+        '200':
+          description: Shutdown command received, board halting
+
+  /system/config/export:
+    get:
+      tags:
+        - System & Maintenance
+      summary: Export full configuration JSON payload (all settings & object databases backup)
+      responses:
+        '200':
+          description: Settings backup export payload
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /system/config/import:
+    post:
+      tags:
+        - System & Maintenance
+      summary: Import configuration JSON payload (overwrites current tables and restores configs)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Import completed successfully and configs restored
+
+# =========================================================================
+# COMPONENTS & SCHEMAS
+# =========================================================================
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Enter the Bearer session token generated during login.
+
+  schemas:
+    # --- Dashboard Schemas ---
+    DashboardStats:
+      type: object
+      required:
+        - firewallStatus
+        - totalTrafficIn
+        - totalTrafficOut
+        - dhcpLeasesCount
+        - wifiStatus
+        - wifiSSID
+      properties:
+        firewallStatus:
+          type: string
+          example: Active
+        totalTrafficIn:
+          type: string
+          example: 8.7 GB
+        totalTrafficOut:
+          type: string
+          example: 3.7 GB
+        dhcpLeasesCount:
+          type: integer
+          example: 18
+        wifiStatus:
+          type: string
+          example: wlan0 Master
+        wifiSSID:
+          type: string
+          example: PiGate-Secure
+
+    PerformanceMetrics:
+      type: object
+      required:
+        - cpu
+        - memory
+        - temp
+      properties:
+        cpu:
+          type: number
+          format: float
+          example: 14.2
+        memory:
+          type: number
+          format: float
+          example: 15.5
+        temp:
+          type: number
+          format: float
+          example: 48.5
+
+    FirewallLog:
+      type: object
+      required:
+        - id
+        - time
+        - action
+        - src
+        - dest
+        - port
+        - proto
+        - reason
+      properties:
+        id:
+          type: string
+          example: log-1
+        time:
+          type: string
+          example: "14:31:02"
+        action:
+          type: string
+          enum: [PASS, DROP]
+          example: DROP
+        src:
+          type: string
+          example: 185.220.101.4
+        dest:
+          type: string
+          example: 10.0.0.45
+        port:
+          type: string
+          example: "445"
+        proto:
+          type: string
+          example: TCP
+        reason:
+          type: string
+          example: Blocked Port (SMB)
+
+    # --- Network Interface Schemas ---
+    NetworkInterface:
+      type: object
+      required:
+        - id
+        - name
+        - alias
+        - role
+        - type
+        - addressingMode
+        - ip
+        - netmask
+        - gateway
+        - dns1
+        - dns2
+        - macAddress
+        - adminAccess
+        - status
+        - speed
+      properties:
+        id:
+          type: string
+          example: iface-1
+        name:
+          type: string
+          example: eth0
+        alias:
+          type: string
+          example: LAN_Internal
+        role:
+          type: string
+          enum: [LAN, WAN]
+          example: LAN
+        type:
+          type: string
+          enum: [ethernet, wireless]
+          example: ethernet
+        addressingMode:
+          type: string
+          enum: [dhcp, static]
+          example: static
+        ip:
+          type: string
+          example: 192.168.1.1
+        netmask:
+          type: string
+          example: "24"
+        gateway:
+          type: string
+          example: ""
+        dns1:
+          type: string
+          example: ""
+        dns2:
+          type: string
+          example: ""
+        macAddress:
+          type: string
+          example: "DC:A6:32:AA:BB:C1"
+        adminAccess:
+          type: array
+          items:
+            type: string
+            enum: [HTTPS, HTTP, PING, SSH]
+          example: [PING, HTTP, SSH]
+        status:
+          type: string
+          enum: [up, down]
+          example: up
+        speed:
+          type: string
+          example: "1000 Mbps"
+        # Optional Wireless Fields
+        connectedSSID:
+          type: string
+          example: MyHome_5G
+        wifiPassword:
+          type: string
+          example: "••••••••"
+        wifiSecurity:
+          type: string
+          example: WPA2-PSK
+        macMode:
+          type: string
+          enum: [hardware, randomized, laa]
+          example: hardware
+        realMacAddress:
+          type: string
+          example: "DC:A6:32:AA:BB:C1"
+        randomizedMac:
+          type: string
+          example: "4E:88:2F:BC:A1:90"
+        laaMacAddress:
+          type: string
+          example: "9A:11:22:33:44:55"
+        randomizeOnReconnect:
+          type: boolean
+          example: true
+        failoverEnabled:
+          type: boolean
+          example: false
+        backupSsid:
+          type: string
+          example: MyHome_2G
+        backupWifiPassword:
+          type: string
+          example: backupPassword123
+        ipCheckTimeout:
+          type: integer
+          example: 15
+        primaryMaxRetries:
+          type: integer
+          example: 3
+        failoverCooldown:
+          type: integer
+          example: 60
+
+    WifiScanResult:
+      type: object
+      required:
+        - ssid
+        - signal
+        - security
+        - channel
+        - frequency
+      properties:
+        ssid:
+          type: string
+          example: MyHome_5G
+        signal:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 85
+        security:
+          type: string
+          example: WPA2-PSK
+        channel:
+          type: integer
+          example: 36
+        frequency:
+          type: string
+          example: "5 GHz"
+
+    # --- Firewall Policy Schemas ---
+    PolicyRule:
+      type: object
+      required:
+        - id
+        - name
+        - inInterface
+        - outInterface
+        - source
+        - destination
+        - service
+        - action
+        - log
+        - status
+      properties:
+        id:
+          type: string
+          example: rule-a1b2
+        name:
+          type: string
+          example: Block_Malicious
+        inInterface:
+          type: string
+          example: eth0
+        outInterface:
+          type: string
+          example: wlan0
+        source:
+          type: array
+          items:
+            type: string
+          example: [LAN_Network]
+        destination:
+          type: array
+          items:
+            type: string
+          example: [Malicious_IP_List]
+        service:
+          type: array
+          items:
+            type: string
+          example: [ALL]
+        action:
+          type: string
+          enum: [ACCEPT, DROP]
+          example: DROP
+        log:
+          type: boolean
+          example: true
+        status:
+          type: boolean
+          example: true
+
+    PolicyRuleInput:
+      type: object
+      required:
+        - name
+        - inInterface
+        - outInterface
+        - source
+        - destination
+        - service
+        - action
+        - log
+        - status
+      properties:
+        name:
+          type: string
+          example: Block_Malicious
+        inInterface:
+          type: string
+          example: eth0
+        outInterface:
+          type: string
+          example: wlan0
+        source:
+          type: array
+          items:
+            type: string
+          example: [LAN_Network]
+        destination:
+          type: array
+          items:
+            type: string
+          example: [Malicious_IP_List]
+        service:
+          type: array
+          items:
+            type: string
+          example: [ALL]
+        action:
+          type: string
+          enum: [ACCEPT, DROP]
+          example: DROP
+        log:
+          type: boolean
+          example: true
+        status:
+          type: boolean
+          example: true
+
+    # --- Address Object Schemas ---
+    AddressObject:
+      type: object
+      required:
+        - id
+        - name
+        - type
+        - value
+        - system
+        - refPolicies
+      properties:
+        id:
+          type: string
+          example: addr-2
+        name:
+          type: string
+          example: LAN_Network
+        type:
+          type: string
+          enum: [subnet, range, fqdn]
+          example: subnet
+        value:
+          type: string
+          example: 192.168.1.0/24
+        system:
+          type: boolean
+          example: false
+        refPolicies:
+          type: array
+          items:
+            type: string
+          example: [rule-a1b2]
+
+    AddressObjectInput:
+      type: object
+      required:
+        - name
+        - type
+        - value
+      properties:
+        name:
+          type: string
+          example: LAN_Network
+        type:
+          type: string
+          enum: [subnet, range, fqdn]
+          example: subnet
+        value:
+          type: string
+          example: 192.168.1.0/24
+        comment:
+          type: string
+          example: Local LAN network subnet card
+
+    # --- Service Object Schemas ---
+    ServiceObject:
+      type: object
+      required:
+        - id
+        - name
+        - protocol
+        - port
+        - type
+        - refPolicies
+      properties:
+        id:
+          type: string
+          example: svc-2
+        name:
+          type: string
+          example: HTTP
+        protocol:
+          type: string
+          enum: [TCP, UDP, TCP/UDP, ICMP]
+          example: TCP
+        port:
+          type: string
+          example: "80"
+        type:
+          type: string
+          enum: [system, custom]
+          example: system
+        refPolicies:
+          type: array
+          items:
+            type: string
+          example: []
+
+    ServiceObjectInput:
+      type: object
+      required:
+        - name
+        - protocol
+        - port
+      properties:
+        name:
+          type: string
+          example: Custom_Web_Port
+        protocol:
+          type: string
+          enum: [TCP, UDP, TCP/UDP, ICMP]
+          example: TCP
+        port:
+          type: string
+          example: "8080"
+        comment:
+          type: string
+          example: Alternative HTTP web port
+
+    # --- Static Route Schemas ---
+    StaticRoute:
+      type: object
+      required:
+        - id
+        - destination
+        - gateway
+        - interface
+        - metric
+        - description
+        - status
+        - type
+      properties:
+        id:
+          type: string
+          example: route-1
+        destination:
+          type: string
+          example: 0.0.0.0/0
+        gateway:
+          type: string
+          example: 10.0.0.1
+        interface:
+          type: string
+          example: wlan0
+        metric:
+          type: integer
+          example: 100
+        description:
+          type: string
+          example: Default gateway route (WAN)
+        status:
+          type: boolean
+          example: true
+        type:
+          type: string
+          enum: [system, custom]
+          example: system
+
+    StaticRouteInput:
+      type: object
+      required:
+        - destination
+        - gateway
+        - interface
+        - metric
+        - description
+        - status
+      properties:
+        destination:
+          type: string
+          example: 192.168.10.0/24
+        gateway:
+          type: string
+          example: 192.168.1.250
+        interface:
+          type: string
+          example: eth0
+        metric:
+          type: integer
+          example: 10
+        description:
+          type: string
+          example: Connection route to branch office
+        status:
+          type: boolean
+          example: true
+
+    # --- DHCP Server Schemas ---
+    DhcpConfig:
+      type: object
+      required:
+        - enabled
+        - interface
+        - startIp
+        - endIp
+        - gateway
+        - netmask
+        - dns1
+        - dns2
+        - leaseTime
+      properties:
+        enabled:
+          type: boolean
+          example: true
+        interface:
+          type: string
+          example: eth0
+        startIp:
+          type: string
+          example: 192.168.1.100
+        endIp:
+          type: string
+          example: 192.168.1.200
+        gateway:
+          type: string
+          example: 192.168.1.1
+        netmask:
+          type: string
+          example: 255.255.255.0
+        dns1:
+          type: string
+          example: 8.8.8.8
+        dns2:
+          type: string
+          example: 1.1.1.1
+        leaseTime:
+          type: integer
+          description: Lease duration in seconds
+          example: 86400
+
+    DhcpReservation:
+      type: object
+      required:
+        - id
+        - deviceName
+        - macAddress
+        - ipAddress
+      properties:
+        id:
+          type: string
+          example: res-1
+        deviceName:
+          type: string
+          example: CEO_Laptop
+        macAddress:
+          type: string
+          example: "A1:B2:C3:D4:E5:F6"
+        ipAddress:
+          type: string
+          example: 192.168.1.10
+
+    DhcpReservationInput:
+      type: object
+      required:
+        - deviceName
+        - macAddress
+        - ipAddress
+      properties:
+        deviceName:
+          type: string
+          example: CEO_Laptop
+        macAddress:
+          type: string
+          example: "A1:B2:C3:D4:E5:F6"
+        ipAddress:
+          type: string
+          example: 192.168.1.10
+
+    ActiveDhcpLease:
+      type: object
+      required:
+        - id
+        - ipAddress
+        - macAddress
+        - hostname
+        - expiresIn
+      properties:
+        id:
+          type: string
+          example: lease-1
+        ipAddress:
+          type: string
+          example: 192.168.1.101
+        macAddress:
+          type: string
+          example: "99:88:77:66:55:44"
+        hostname:
+          type: string
+          example: iPhone-13
+        expiresIn:
+          type: string
+          example: 11 hours, 45 mins
+
+    # --- System & Maintenance Schemas ---
+    SystemTimeSettings:
+      type: object
+      required:
+        - timezone
+        - ntpSync
+        - ntpServer
+      properties:
+        timezone:
+          type: string
+          example: "Asia/Bangkok (GMT+7:00)"
+        ntpSync:
+          type: boolean
+          example: true
+        ntpServer:
+          type: string
+          example: pool.ntp.org
+
+    NetworkServiceStatus:
+      type: object
+      required:
+        - id
+        - name
+        - serviceName
+        - status
+      properties:
+        id:
+          type: string
+          example: srv-1
+        name:
+          type: string
+          example: Firewall Engine
+        serviceName:
+          type: string
+          example: nftables
+        status:
+          type: string
+          enum: [running, stopped, failed]
+          example: running
