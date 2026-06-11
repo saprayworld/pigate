@@ -105,8 +105,8 @@
 - `modal={false}` ใน Dialog ถูกต้องตามกฎ
 
 **ปรับปรุง:**
-- ⚠️ ตาราง 11 คอลัมน์ค่อนข้างกว้าง — บนจอเล็กอาจจะ overflow ควรเพิ่ม `overflow-x-auto` wrapper
-- ⚠️ ใช้ `confirm()` / `alert()` (browser native) สำหรับ confirm delete → ควรเปลี่ยนเป็น AlertDialog ของ shadcn
+- ✅ ตาราง 11 คอลัมน์กว้างได้รับการปรับปรุงโดยเพิ่ม `overflow-x-auto` wrapper เรียบร้อยแล้ว
+- ✅ แทนที่ `confirm()` / `alert()` (browser native) ด้วย AlertDialog ของ shadcn เรียบร้อยแล้ว
 
 ---
 
@@ -137,7 +137,7 @@
 - Apply Routing Config button
 
 **ปรับปรุง:**
-- ⚠️ ใช้ `alert()`/`confirm()` native → ควรใช้ AlertDialog
+- ✅ แทนที่ `alert()`/`confirm()` native ด้วย AlertDialog เรียบร้อยแล้ว
 
 ---
 
@@ -150,7 +150,7 @@
 - Configuration form ครบ (IP range, Gateway, DNS, Lease time)
 
 **ปรับปรุง:**
-- ⚠️ ใช้ `alert()`/`confirm()` native
+- ✅ แทนที่ `alert()`/`confirm()` native เรียบร้อยแล้ว
 
 ---
 
@@ -201,7 +201,7 @@
 | Mobile (<768px) | ⚠️ ปานกลาง — ตารางหลายคอลัมน์ (Firewall Policy 11 col, Interfaces 8 col) อาจ overflow |
 
 > [!IMPORTANT]
-> **แนะนำ:** เพิ่ม `overflow-x-auto` หรือ responsive table wrapper สำหรับตารางที่มีหลายคอลัมน์
+> **แนะนำ:** เพิ่ม `overflow-x-auto` หรือ responsive table wrapper สำหรับตารางที่มีหลายคอลัมน์ `[แก้ไขแล้ว: เพิ่ม overflow-x-auto ครอบตาราง Firewall Policy และ Interfaces เรียบร้อยแล้ว]`
 
 ### 5.2 Accessibility (a11y)
 - ✅ ใช้ Radix UI primitives (มี ARIA built-in)
@@ -221,17 +221,17 @@
 |---|---|---|
 | Auth bypass | ⚠️ ระวัง | `ProtectedRoute` ตรวจสอบ `localStorage.getItem("pigate_session")` เท่านั้น ไม่มี token validation — เมื่อเชื่อม Backend จริงต้องเพิ่ม JWT verification |
 | XSS Protection | ✅ | React auto-escapes, ไม่พบ `dangerouslySetInnerHTML` |
-| Input Sanitization | ⚠️ | Regex validation มี แต่ยังไม่ครอบคลุมทุก field (เช่น IP validation ใช้ `^(\d{1,3}\.){3}\d{1,3}$` ซึ่งรับ `999.999.999.999`) |
+| Input Sanitization | ✅ | ปรับปรุงระบบตรวจสอบ IP ให้มีความแม่นยำสูง (ตรวจสอบค่า Octet 0-255, CIDR, และ IP Range อย่างเข้มงวด) เรียบร้อยแล้ว |
 | CORS | — | ยังไม่ได้เชื่อมต่อ Backend จริง ต้องกำหนดนโยบาย CORS |
 
 ---
 
 ## 6. Summary of Recommendations
 
-### 🔴 Priority High (ควรแก้ไขก่อนเชื่อม Backend)
-1. **แทนที่ `alert()`/`confirm()` native** ด้วย `AlertDialog` component ของ shadcn ทุกหน้า
-2. **ปรับ IP validation regex** ให้ตรวจสอบ octet range (0-255) อย่างถูกต้อง
-3. **เพิ่ม `overflow-x-auto`** wrapper รอบตาราง Firewall Policy และ Interfaces
+### 🔴 Priority High (ควรแก้ไขก่อนเชื่อม Backend) [แก้ไขเสร็จสิ้นแล้ว]
+1. **แทนที่ `alert()`/`confirm()` native** ด้วย `AlertDialog` component ของ shadcn ทุกหน้า `[เสร็จสิ้น]`
+2. **ปรับ IP validation regex** ให้ตรวจสอบ octet range (0-255) อย่างถูกต้อง `[เสร็จสิ้น]`
+3. **เพิ่ม `overflow-x-auto`** wrapper รอบตาราง Firewall Policy และ Interfaces `[เสร็จสิ้น]`
 
 ### 🟡 Priority Medium (ควรทำก่อน Production)
 4. **ลบ [App.css](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/frontend/src/App.css)** ที่เป็น Vite template CSS ที่ไม่ได้ใช้

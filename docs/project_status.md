@@ -84,6 +84,11 @@
   * ปรับแก้หน้าจอ UI ทุกหน้า (`Addresses`, `Services`, `FirewallPolicy`, `StaticRoutes`, `DhcpServer`, `Interfaces`, `SettingsMaintenance`, `Dashboard`, `Login`) ให้ดึงข้อมูลและทำรายการแบบ Asynchronous ผ่าน Service API Layer ทั้งหมด
   * ตรวจสอบโค้ดบิวด์ระดับ Production ด้วย `yarn build` ผ่าน 100% ไม่มีข้อผิดพลาดของ TypeScript หรือ Syntax Warnings
 
+* **แก้ไขข้อเสนอแนะความสำคัญสูง (Priority High Recommendations) จากผลการรีวิวหน้าบ้าน [สำเร็จ]**:
+  * **แทนที่ Native Dialogs:** พัฒนาและติดตั้ง [AlertDialogProvider.tsx](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/frontend/src/components/AlertDialogProvider.tsx) เพื่อใช้ Custom AlertDialog ของ shadcn/ui ครอบคลุมการเตือนและการยืนยันคำสั่งทั้งหมด แทนการเรียกใช้ `alert()` และ `confirm()` ดั้งเดิมของเบราว์เซอร์
+  * **ระบบตรวจสอบค่า IP Address (Strict Validation):** อัปเดตและติดตั้ง Regex/Logic ตรวจสอบความถูกต้องของ IPv4, CIDR, และ IP Range โดยเช็กค่า Octet ละเอียด 0-255 ใน [utils.ts](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/frontend/src/lib/utils.ts) และนำไปใช้ตรวจสอบความมั่นคงปลอดภัยของอินพุตในทุกหน้ารวมถึง Static Routes, DHCP Server, Addresses และ Interfaces
+  * **ตารางแบบ Responsive:** ครอบตารางแสดงข้อมูลกฎความปลอดภัย (Firewall Policies) และตารางพอร์ตเชื่อมต่อ (Interfaces) ด้วย `<div className="overflow-x-auto w-full">` ป้องกันเนื้อหาล้น (overflow) เมื่อแสดงผลบนหน้าจอขนาดเล็ก/สมาร์ทโฟน
+
 ---
 
 ## 2. ปัญหาและประเด็นที่ต้องพิจารณาในปัจจุบัน (Current Issues & Limitations)
@@ -109,6 +114,7 @@
   * ทยอยพัฒนาส่วนหน้าจออื่น ๆ ได้แก่ หน้าล็อกอินจริง `[เสร็จสิ้น]`
 * **สเตปที่ 5: จัดระเบียบการเรียกใช้ API และความปลอดภัย**:
   * พัฒนาโครงสร้าง Service API Layer รองรับ LocalStorage Mocking และ Go API Swappable `[เสร็จสิ้น]`
-  * ทดสอบการทำงานของปุ่ม ฟังก์ชัน CRUD และ UI ต่างๆ บนเบราว์เซอร์จริง (Runtime Manual Verification & UI Validation) `[กำลังดำเนินการถัดไป]`
+  * แก้ไขข้อเสนอแนะความสำคัญสูง (Priority High) จากผลการรีวิวหน้าบ้าน (ระบบ Custom Alert/Confirm, Strict IP Validation 0-255, Responsive Tables) `[เสร็จสิ้น]`
+  * ทดสอบการทำงานของปุ่ม ฟังก์ชัน CRUD และ UI ต่างๆ บนเบราว์เซอร์จริง (Runtime Manual Verification & UI Validation) `[เสร็จสิ้น]`
   * ตรวจสอบความปลอดภัยระดับเบื้องต้น เช่น การรับมือเมื่อเซสชันหมดอายุ, การกรองฟิลด์ข้อมูลนำเข้า (Sanitization) และการเข้ารหัสการสื่อสาร
   * เชื่อมต่อ API จริงกับฝั่ง Go Backend และระบบการอัปเดตแบบ Real-time ด้วย Server-Sent Events (SSE) เมื่อฝั่ง API พร้อมใช้งาน
