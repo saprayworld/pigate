@@ -12,6 +12,7 @@ import Addresses from "@/pages/Addresses"
 import Services from "@/pages/Services"
 import SettingsMaintenance from "@/pages/SettingsMaintenance"
 import Login from "@/pages/Login"
+import ApiDocs from "./pages/ApiDocs"
 
 // A simple authentication route guard
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -25,49 +26,51 @@ export default function App() {
       <AlertDialogProvider>
         <BrowserRouter>
 
-        <Routes>
-          {/* Public Login Route */}
-          <Route path="/login" element={<Login />} />
+          <Routes>
+            {/* Public Login Route */}
+            <Route path="/login" element={<Login />} />
 
-          {/* Protected Admin Routes under Shell Layout */}
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute>
-                <ShellLayout />
-              </ProtectedRoute>
-            }
-          >
-            {/* Index route redirects to /dashboard */}
-            <Route index element={<Navigate to="/dashboard" replace />} />
-            
-            <Route path="dashboard" element={<Dashboard />} />
-            
-            {/* Network Routes */}
-            <Route path="network">
-              <Route path="interfaces" element={<Interfaces />} />
-              <Route path="routes" element={<StaticRoutes />} />
-              <Route path="dhcp" element={<DhcpServer />} />
+            <Route path="/api-docs" element={<ApiDocs />} />
+
+            {/* Protected Admin Routes under Shell Layout */}
+            <Route
+              path="/"
+              element={
+                <ProtectedRoute>
+                  <ShellLayout />
+                </ProtectedRoute>
+              }
+            >
+              {/* Index route redirects to /dashboard */}
+              <Route index element={<Navigate to="/dashboard" replace />} />
+
+              <Route path="dashboard" element={<Dashboard />} />
+
+              {/* Network Routes */}
+              <Route path="network">
+                <Route path="interfaces" element={<Interfaces />} />
+                <Route path="routes" element={<StaticRoutes />} />
+                <Route path="dhcp" element={<DhcpServer />} />
+              </Route>
+
+              {/* Policy & Objects Routes */}
+              <Route path="policy">
+                <Route path="firewall" element={<FirewallPolicy />} />
+                <Route path="addresses" element={<Addresses />} />
+                <Route path="services" element={<Services />} />
+              </Route>
+
+              {/* System Routes */}
+              <Route path="system">
+                <Route path="settings" element={<SettingsMaintenance />} />
+              </Route>
             </Route>
 
-            {/* Policy & Objects Routes */}
-            <Route path="policy">
-              <Route path="firewall" element={<FirewallPolicy />} />
-              <Route path="addresses" element={<Addresses />} />
-              <Route path="services" element={<Services />} />
-            </Route>
-
-            {/* System Routes */}
-            <Route path="system">
-              <Route path="settings" element={<SettingsMaintenance />} />
-            </Route>
-          </Route>
-
-          {/* Fallback Catch-All Redirect */}
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </BrowserRouter>
-     </AlertDialogProvider>
+            {/* Fallback Catch-All Redirect */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </BrowserRouter>
+      </AlertDialogProvider>
     </ThemeProvider>
   )
 }

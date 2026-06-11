@@ -147,3 +147,251 @@
     @apply font-sans;
     }
 }
+
+/* Swagger UI Custom Theme Overrides (Light & Dark modes) */
+.swagger-ui {
+  color: var(--foreground) !important;
+  font-family: 'Inter Variable', sans-serif !important;
+  background-color: transparent !important;
+}
+
+.swagger-ui .info .title,
+.swagger-ui .info h1,
+.swagger-ui .info h2,
+.swagger-ui .info h3,
+.swagger-ui .info h4,
+.swagger-ui .info h5,
+.swagger-ui .info p,
+.swagger-ui .info li,
+.swagger-ui .info a,
+.swagger-ui .info table,
+.swagger-ui .renderedMarkdown p,
+.swagger-ui .renderedMarkdown li {
+  color: var(--foreground) !important;
+}
+
+.swagger-ui .scheme-container {
+  background-color: var(--card) !important;
+  box-shadow: none !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-lg) !important;
+  padding: 1.5rem !important;
+}
+
+.swagger-ui .opblock {
+  border-radius: var(--radius-lg) !important;
+  box-shadow: none !important;
+  background-color: var(--card) !important;
+}
+
+.swagger-ui .opblock .opblock-summary {
+  border-bottom: 1px solid var(--border) !important;
+}
+
+.swagger-ui .opblock .opblock-section-header {
+  background-color: var(--card) !important;
+  box-shadow: none !important;
+  border-bottom: 1px solid var(--border) !important;
+}
+
+.swagger-ui .opblock .opblock-section-header h4 {
+  color: var(--foreground) !important;
+}
+
+.swagger-ui .opblock .opblock-section-header label {
+  color: var(--muted-foreground) !important;
+}
+
+.swagger-ui .opblock-description-wrapper p {
+  color: var(--foreground) !important;
+}
+
+.swagger-ui .opblock-body pre {
+  background-color: var(--background) !important;
+  color: var(--foreground) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-md) !important;
+}
+
+.swagger-ui .opblock-body pre span {
+  color: inherit !important;
+}
+
+.swagger-ui .opblock-tag {
+  color: var(--foreground) !important;
+  border-bottom: 1px solid var(--border) !important;
+  font-family: inherit !important;
+}
+
+.swagger-ui .opblock-tag:hover {
+  background-color: var(--accent) !important;
+}
+
+.swagger-ui .opblock-tag small {
+  color: var(--muted-foreground) !important;
+}
+
+.swagger-ui .opblock .opblock-summary-path,
+.swagger-ui .opblock .opblock-summary-path__deprecated {
+  color: var(--foreground) !important;
+  font-family: inherit !important;
+}
+
+.swagger-ui .opblock .opblock-summary-description {
+  color: var(--muted-foreground) !important;
+}
+
+.swagger-ui table thead tr td,
+.swagger-ui table thead tr th {
+  color: var(--foreground) !important;
+  border-bottom: 1px solid var(--border) !important;
+}
+
+.swagger-ui .parameter__name {
+  color: var(--foreground) !important;
+}
+
+.swagger-ui .parameter__type {
+  color: var(--muted-foreground) !important;
+}
+
+.swagger-ui .parameter__in {
+  color: var(--muted-foreground) !important;
+}
+
+.swagger-ui .response-col_status {
+  color: var(--foreground) !important;
+}
+
+.swagger-ui .response-col_description {
+  color: var(--foreground) !important;
+}
+
+.swagger-ui .model-box {
+  background-color: var(--background) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-md) !important;
+  padding: 10px !important;
+}
+
+.swagger-ui .model {
+  color: var(--foreground) !important;
+  font-family: inherit !important;
+}
+
+.swagger-ui .prop-type {
+  color: var(--primary) !important;
+}
+
+.swagger-ui .btn {
+  background-color: var(--card) !important;
+  color: var(--foreground) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: none !important;
+  transition: all 0.2s ease !important;
+}
+
+.swagger-ui .btn:hover {
+  background-color: var(--accent) !important;
+  color: var(--accent-foreground) !important;
+}
+
+.swagger-ui .btn.execute {
+  background-color: var(--primary) !important;
+  color: var(--primary-foreground) !important;
+  border-color: var(--primary) !important;
+}
+
+.swagger-ui .btn.execute:hover {
+  opacity: 0.9 !important;
+}
+
+.swagger-ui select {
+  background-color: var(--card) !important;
+  color: var(--foreground) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: none !important;
+  padding: 6px 12px !important;
+}
+
+.swagger-ui input[type=text] {
+  background-color: var(--card) !important;
+  color: var(--foreground) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-md) !important;
+  padding: 6px 12px !important;
+}
+
+/* Dialog / Authorizations Popup */
+.swagger-ui .dialog-ux .modal-ux {
+  background-color: var(--card) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: none !important;
+}
+
+.swagger-ui .dialog-ux .modal-ux-header {
+  border-bottom: 1px solid var(--border) !important;
+}
+
+.swagger-ui .dialog-ux .modal-ux-header h3 {
+  color: var(--foreground) !important;
+}
+
+.swagger-ui .dialog-ux .modal-ux-content {
+  color: var(--foreground) !important;
+}
+
+.swagger-ui .dialog-ux .modal-ux-content h4 {
+  color: var(--foreground) !important;
+}
+
+.swagger-ui .dialog-ux .backdrop-ux {
+  background-color: rgba(0, 0, 0, 0.5) !important;
+}
+
+.swagger-ui .auth-btn-wrapper {
+  justify-content: flex-end !important;
+}
+
+.swagger-ui .auth-container {
+  color: var(--foreground) !important;
+  border-bottom: 1px solid var(--border) !important;
+}
+
+.swagger-ui .auth-container .wrapper {
+  padding: 0 !important;
+}
+
+.swagger-ui .tabli {
+  border-color: var(--border) !important;
+}
+
+.swagger-ui .tabli a {
+  color: var(--muted-foreground) !important;
+}
+
+.swagger-ui .tabli.active a {
+  color: var(--foreground) !important;
+}
+
+/* Highlight blocks inside swagger dark mode */
+.dark .swagger-ui .highlight-code pre {
+  background-color: var(--background) !important;
+  color: var(--foreground) !important;
+}
+
+/* Swagger method tags style customization */
+.swagger-ui .opblock.opblock-get .opblock-summary-method { background: #61affe !important; }
+.swagger-ui .opblock.opblock-post .opblock-summary-method { background: var(--primary) !important; }
+.swagger-ui .opblock.opblock-put .opblock-summary-method { background: oklch(0.64 0.18 45) !important; }
+.swagger-ui .opblock.opblock-delete .opblock-summary-method { background: var(--destructive) !important; }
+
+/* Invert icons in dark mode */
+.dark .swagger-ui .copy-to-clipboard,
+.dark .swagger-ui button.close,
+.dark .swagger-ui .dialog-ux .modal-ux-header .close-btn {
+  filter: invert(1) !important;
+}
