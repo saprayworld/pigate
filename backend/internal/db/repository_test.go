@@ -308,3 +308,97 @@ func TestFirewallPolicyValidation(t *testing.T) {
 		t.Errorf("Expected rule name 'Valid Rule', got '%s'", fetched.Name)
 	}
 }
+
+func TestAddressObjectValidation(t *testing.T) {
+	db, _ := InitDB(":memory:")
+	defer db.Close()
+	repo := NewRepository(db)
+
+	// Case 1: Invalid Subnet (has extra letters)
+	addrBadSubnet := model.AddressObject{
+		ID:    "addr-bad-sub",
+		Name:  "Bad_Subnet",
+		Type:  "subnet",
+		Value: "192.168.1.0w/24",
+	}
+	if err := repo.CreateAddress(addrBadSubnet); err == nil {
+		t.Error("Expected error for invalid subnet, but got nil")
+	}
+
+	// Case 2: Valid Subnet
+	addrOkSubnet := model.AddressObject{
+		ID:    "addr-ok-sub",
+		Name:  "Ok_Subnet",
+		Type:  "subnet",
+		Value: "192.168.1.0/24",
+	}
+	if err := repo.CreateAddress(addrOkSubnet); err != nil {
+		t.Errorf("Expected valid subnet creation to succeed, got: %v", err)
+	}
+
+	// Case 3: Invalid Range (wrong delimiter or format)
+	addrBadRange1 := model.AddressObject{
+		ID:    "addr-bad-rng1",
+		Name:  "Bad_Range1",
+		Type:  "range",
+		Value: "10.0.0.1_10.0.0.10",
+	}
+	if err := repo.CreateAddress(addrBadRange1); err == nil {
+		t.Error("Expected error for range without hyphen, but got nil")
+	}
+
+	// Case 4: Invalid Range (invalid IP address)
+	addrBadRange2 := model.AddressObject{
+		ID:    "addr-bad-rng2",
+		Name:  "Bad_Range2",
+		Type:  "range",
+		Value: "10.0.0.999-10.0.0.10",
+	}
+	if err := repo.CreateAddress(addrBadRange2); err == nil {
+		t.Error("Expected error for invalid start IP in range, but got nil")
+	}
+
+	// Case 5: Invalid Range (IPv4/IPv6 family mismatch)
+	addrBadRange3 := model.AddressObject{
+		ID:    "addr-bad-rng3",
+		Name:  "Bad_Range3",
+		Type:  "range",
+		Value: "10.0.0.1-2001:db8::1",
+	}
+	if err := repo.CreateAddress(addrBadRange3); err == nil {
+		t.Error("Expected error for IP version mismatch in range, but got nil")
+	}
+
+	// Case 6: Valid Range
+	addrOkRange := model.AddressObject{
+		ID:    "addr-ok-rng",
+		Name:  "Ok_Range",
+		Type:  "range",
+		Value: "10.0.0.1 - 10.0.0.10",
+	}
+	if err := repo.CreateAddress(addrOkRange); err != nil {
+		t.Errorf("Expected valid range creation to succeed, got: %v", err)
+	}
+
+	// Case 7: Invalid FQDN (has invalid characters)
+	addrBadFQDN := model.AddressObject{
+		ID:    "addr-bad-fqdn",
+		Name:  "Bad_FQDN",
+		Type:  "fqdn",
+		Value: "example$.com",
+	}
+	if err := repo.CreateAddress(addrBadFQDN); err == nil {
+		t.Error("Expected error for invalid FQDN, but got nil")
+	}
+
+	// Case 8: Valid FQDN
+	addrOkFQDN := model.AddressObject{
+		ID:    "addr-ok-fqdn",
+		Name:  "Ok_FQDN",
+		Type:  "fqdn",
+		Value: "api.pigate.local",
+	}
+	if err := repo.CreateAddress(addrOkFQDN); err != nil {
+		t.Errorf("Expected valid FQDN creation to succeed, got: %v", err)
+	}
+}

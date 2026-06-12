@@ -461,7 +461,7 @@ func (s *Server) HandleCreateAddress(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.repo.CreateAddress(addr); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.writeJSON(w, http.StatusOK, addr)
@@ -490,7 +490,7 @@ func (s *Server) HandleUpdateAddress(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.repo.UpdateAddress(addr); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.writeJSON(w, http.StatusOK, addr)

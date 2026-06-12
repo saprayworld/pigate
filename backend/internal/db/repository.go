@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 
 	"pigate/internal/model"
@@ -113,7 +114,71 @@ func (r *Repository) GetAddressByID(id string) (*model.AddressObject, error) {
 	return &addr, nil
 }
 
+func isValidFQDN(s string) bool {
+	if len(s) == 0 || len(s) > 253 {
+		return false
+	}
+	labels := strings.Split(s, ".")
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 {
+			return false
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range label {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (r *Repository) validateAddressObject(addr model.AddressObject) error {
+	if len(strings.TrimSpace(addr.Name)) == 0 {
+		return errors.New("address object name cannot be empty")
+	}
+	if addr.Type != "subnet" && addr.Type != "range" && addr.Type != "fqdn" {
+		return fmt.Errorf("invalid address object type: %s", addr.Type)
+	}
+
+	switch addr.Type {
+	case "subnet":
+		_, _, err := net.ParseCIDR(addr.Value)
+		if err != nil {
+			return fmt.Errorf("invalid subnet value %q: %w", addr.Value, err)
+		}
+	case "range":
+		parts := strings.Split(addr.Value, "-")
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid IP range value %q: must be in format START-END", addr.Value)
+		}
+		ipStartStr := strings.TrimSpace(parts[0])
+		ipEndStr := strings.TrimSpace(parts[1])
+		ipStart := net.ParseIP(ipStartStr)
+		ipEnd := net.ParseIP(ipEndStr)
+		if ipStart == nil {
+			return fmt.Errorf("invalid start IP %q in range %q", ipStartStr, addr.Value)
+		}
+		if ipEnd == nil {
+			return fmt.Errorf("invalid end IP %q in range %q", ipEndStr, addr.Value)
+		}
+		if (ipStart.To4() != nil) != (ipEnd.To4() != nil) {
+			return fmt.Errorf("IP range family mismatch: %s and %s must be of same IP version", ipStartStr, ipEndStr)
+		}
+	case "fqdn":
+		if !isValidFQDN(addr.Value) {
+			return fmt.Errorf("invalid FQDN value %q", addr.Value)
+		}
+	}
+	return nil
+}
+
 func (r *Repository) CreateAddress(addr model.AddressObject) error {
+	if err := r.validateAddressObject(addr); err != nil {
+		return err
+	}
 	sysVal := 0
 	if addr.System {
 		sysVal = 1
@@ -124,6 +189,9 @@ func (r *Repository) CreateAddress(addr model.AddressObject) error {
 }
 
 func (r *Repository) UpdateAddress(addr model.AddressObject) error {
+	if err := r.validateAddressObject(addr); err != nil {
+		return err
+	}
 	// Check system lock
 	var system int
 	err := r.db.QueryRow("SELECT system FROM address_objects WHERE id = ?", addr.ID).Scan(&system)
