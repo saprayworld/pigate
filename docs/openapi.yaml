@@ -4,8 +4,9 @@ info:
   description: API endpoints for PiGate - Raspberry Pi 5 Firewall & Gateway Controller. This spec is synchronized with the React frontend service layer.
   version: 1.0.0
 servers:
-  - url: /api
+  - url: http://localhost:8081/api
     description: Default base path for PiGate Go Backend
+  - url: http://localhost:2479/api
 
 security:
   - BearerAuth: []
