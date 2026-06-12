@@ -402,3 +402,117 @@ func TestAddressObjectValidation(t *testing.T) {
 		t.Errorf("Expected valid FQDN creation to succeed, got: %v", err)
 	}
 }
+
+func TestServiceObjectValidation(t *testing.T) {
+	db, _ := InitDB(":memory:")
+	defer db.Close()
+	repo := NewRepository(db)
+
+	// Case 1: Invalid port format (letters)
+	svcBadPort1 := model.ServiceObject{
+		ID:       "svc-bad-p1",
+		Name:     "Bad_Port1",
+		Protocol: "TCP",
+		Port:     "8080ss",
+		Type:     "custom",
+	}
+	if err := repo.CreateService(svcBadPort1); err == nil {
+		t.Error("Expected error for port containing letters, but got nil")
+	}
+
+	// Case 2: Invalid port range (letters)
+	svcBadPort2 := model.ServiceObject{
+		ID:       "svc-bad-p2",
+		Name:     "Bad_Port2",
+		Protocol: "TCP",
+		Port:     "80-88xx",
+		Type:     "custom",
+	}
+	if err := repo.CreateService(svcBadPort2); err == nil {
+		t.Error("Expected error for range containing letters, but got nil")
+	}
+
+	// Case 3: Invalid protocol
+	svcBadProto := model.ServiceObject{
+		ID:       "svc-bad-proto",
+		Name:     "Bad_Proto",
+		Protocol: "SCTP",
+		Port:     "80",
+		Type:     "custom",
+	}
+	if err := repo.CreateService(svcBadProto); err == nil {
+		t.Error("Expected error for unsupported protocol, but got nil")
+	}
+
+	// Case 4: Invalid port number range (> 65535)
+	svcBadPortRange1 := model.ServiceObject{
+		ID:       "svc-bad-pr1",
+		Name:     "Bad_PortRange1",
+		Protocol: "TCP",
+		Port:     "70000",
+		Type:     "custom",
+	}
+	if err := repo.CreateService(svcBadPortRange1); err == nil {
+		t.Error("Expected error for port > 65535, but got nil")
+	}
+
+	// Case 5: Invalid port range values (start > end)
+	svcBadPortRange2 := model.ServiceObject{
+		ID:       "svc-bad-pr2",
+		Name:     "Bad_PortRange2",
+		Protocol: "TCP",
+		Port:     "8080-8000",
+		Type:     "custom",
+	}
+	if err := repo.CreateService(svcBadPortRange2); err == nil {
+		t.Error("Expected error for range where start > end, but got nil")
+	}
+
+	// Case 6: ICMP protocol with wrong port value
+	svcBadICMP := model.ServiceObject{
+		ID:       "svc-bad-icmp",
+		Name:     "Bad_ICMP",
+		Protocol: "ICMP",
+		Port:     "80",
+		Type:     "custom",
+	}
+	if err := repo.CreateService(svcBadICMP); err == nil {
+		t.Error("Expected error for ICMP with numeric port, but got nil")
+	}
+
+	// Case 7: Valid single port
+	svcOk1 := model.ServiceObject{
+		ID:       "svc-ok1",
+		Name:     "Ok_HTTP",
+		Protocol: "TCP",
+		Port:     "80",
+		Type:     "custom",
+	}
+	if err := repo.CreateService(svcOk1); err != nil {
+		t.Errorf("Expected valid HTTP service creation to succeed, got: %v", err)
+	}
+
+	// Case 8: Valid port range
+	svcOk2 := model.ServiceObject{
+		ID:       "svc-ok2",
+		Name:     "Ok_Ephemeral",
+		Protocol: "UDP",
+		Port:     "32768-61000",
+		Type:     "custom",
+	}
+	if err := repo.CreateService(svcOk2); err != nil {
+		t.Errorf("Expected valid port range service creation to succeed, got: %v", err)
+	}
+
+	// Case 9: Valid ICMP
+	svcOkICMP := model.ServiceObject{
+		ID:       "svc-ok-icmp",
+		Name:     "Ok_ICMP",
+		Protocol: "ICMP",
+		Port:     "-",
+		Type:     "custom",
+	}
+	if err := repo.CreateService(svcOkICMP); err != nil {
+		t.Errorf("Expected valid ICMP service creation to succeed, got: %v", err)
+	}
+}

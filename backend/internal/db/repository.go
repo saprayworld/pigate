@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
 	"pigate/internal/model"
@@ -346,13 +347,71 @@ func (r *Repository) GetServiceByID(id string) (*model.ServiceObject, error) {
 	return &svc, nil
 }
 
+func isValidPort(pStr string) bool {
+	pStr = strings.TrimSpace(pStr)
+	port, err := strconv.Atoi(pStr)
+	if err != nil {
+		return false
+	}
+	return port >= 1 && port <= 65535
+}
+
+func (r *Repository) validateServiceObject(svc model.ServiceObject) error {
+	if len(strings.TrimSpace(svc.Name)) == 0 {
+		return errors.New("service object name cannot be empty")
+	}
+	if svc.Protocol != "TCP" && svc.Protocol != "UDP" && svc.Protocol != "TCP/UDP" && svc.Protocol != "ICMP" {
+		return fmt.Errorf("invalid protocol: %s", svc.Protocol)
+	}
+
+	portStr := strings.TrimSpace(svc.Port)
+	if svc.Protocol == "ICMP" {
+		if portStr != "-" {
+			return fmt.Errorf("ICMP service port must be '-'")
+		}
+		return nil
+	}
+
+	// Non-ICMP protocols require valid numeric ports or port ranges
+	parts := strings.Split(portStr, "-")
+	if len(parts) == 1 {
+		if !isValidPort(parts[0]) {
+			return fmt.Errorf("invalid port %q: must be a number between 1 and 65535", parts[0])
+		}
+	} else if len(parts) == 2 {
+		startStr := strings.TrimSpace(parts[0])
+		endStr := strings.TrimSpace(parts[1])
+		if !isValidPort(startStr) {
+			return fmt.Errorf("invalid start port %q in range %q: must be a number between 1 and 65535", startStr, portStr)
+		}
+		if !isValidPort(endStr) {
+			return fmt.Errorf("invalid end port %q in range %q: must be a number between 1 and 65535", endStr, portStr)
+		}
+		start, _ := strconv.Atoi(startStr)
+		end, _ := strconv.Atoi(endStr)
+		if start > end {
+			return fmt.Errorf("invalid port range %q: start port %d cannot be greater than end port %d", portStr, start, end)
+		}
+	} else {
+		return fmt.Errorf("invalid port format %q: must be a single port or range (e.g. 80 or 80-88)", portStr)
+	}
+
+	return nil
+}
+
 func (r *Repository) CreateService(svc model.ServiceObject) error {
+	if err := r.validateServiceObject(svc); err != nil {
+		return err
+	}
 	_, err := r.db.Exec("INSERT INTO service_objects (id, name, protocol, port, type) VALUES (?, ?, ?, ?, ?)",
 		svc.ID, svc.Name, svc.Protocol, svc.Port, svc.Type)
 	return err
 }
 
 func (r *Repository) UpdateService(svc model.ServiceObject) error {
+	if err := r.validateServiceObject(svc); err != nil {
+		return err
+	}
 	var sType string
 	err := r.db.QueryRow("SELECT type FROM service_objects WHERE id = ?", svc.ID).Scan(&sType)
 	if err != nil {

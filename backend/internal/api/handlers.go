@@ -551,7 +551,7 @@ func (s *Server) HandleCreateService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.repo.CreateService(svc); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.writeJSON(w, http.StatusOK, svc)
@@ -580,7 +580,7 @@ func (s *Server) HandleUpdateService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.repo.UpdateService(svc); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.writeJSON(w, http.StatusOK, svc)
