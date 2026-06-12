@@ -450,6 +450,22 @@ func (r *Repository) GetPolicyByID(id string) (*model.PolicyRule, error) {
 }
 
 func (r *Repository) CreatePolicy(p model.PolicyRule) error {
+	if len(strings.TrimSpace(p.Name)) == 0 {
+		return errors.New("policy name cannot be empty")
+	}
+	if p.Action != "ACCEPT" && p.Action != "DROP" {
+		return errors.New("policy action must be ACCEPT or DROP")
+	}
+	if len(p.Source) == 0 {
+		return errors.New("policy must have at least one source address object")
+	}
+	if len(p.Destination) == 0 {
+		return errors.New("policy must have at least one destination address object")
+	}
+	if len(p.Service) == 0 {
+		return errors.New("policy must have at least one service object")
+	}
+
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
@@ -487,6 +503,22 @@ func (r *Repository) CreatePolicy(p model.PolicyRule) error {
 }
 
 func (r *Repository) UpdatePolicy(p model.PolicyRule) error {
+	if len(strings.TrimSpace(p.Name)) == 0 {
+		return errors.New("policy name cannot be empty")
+	}
+	if p.Action != "ACCEPT" && p.Action != "DROP" {
+		return errors.New("policy action must be ACCEPT or DROP")
+	}
+	if len(p.Source) == 0 {
+		return errors.New("policy must have at least one source address object")
+	}
+	if len(p.Destination) == 0 {
+		return errors.New("policy must have at least one destination address object")
+	}
+	if len(p.Service) == 0 {
+		return errors.New("policy must have at least one service object")
+	}
+
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
@@ -532,9 +564,7 @@ func (r *Repository) savePolicyRelations(tx *sql.Tx, policyID string, sources, d
 		var addrID string
 		err := tx.QueryRow("SELECT id FROM address_objects WHERE name = ?", srcName).Scan(&addrID)
 		if err != nil {
-			// Skip or throw error? Let's check: if name is a raw IP value, let's create a temporary address object or throw.
-			// Standard behavior is to verify. If not found, skip.
-			continue
+			return fmt.Errorf("source address object %q does not exist", srcName)
 		}
 		_, err = tx.Exec("INSERT INTO policy_addresses (policy_id, address_id, association_type) VALUES (?, ?, 'SOURCE')", policyID, addrID)
 		if err != nil {
@@ -547,7 +577,7 @@ func (r *Repository) savePolicyRelations(tx *sql.Tx, policyID string, sources, d
 		var addrID string
 		err := tx.QueryRow("SELECT id FROM address_objects WHERE name = ?", destName).Scan(&addrID)
 		if err != nil {
-			continue
+			return fmt.Errorf("destination address object %q does not exist", destName)
 		}
 		_, err = tx.Exec("INSERT INTO policy_addresses (policy_id, address_id, association_type) VALUES (?, ?, 'DESTINATION')", policyID, addrID)
 		if err != nil {
@@ -560,18 +590,18 @@ func (r *Repository) savePolicyRelations(tx *sql.Tx, policyID string, sources, d
 		var svcID string
 		err := tx.QueryRow("SELECT id FROM service_objects WHERE name = ?", svcName).Scan(&svcID)
 		if err != nil {
-			// Sometimes it is formatted like "HTTP (TCP 80)", try to search by prefix name
-			// Splitting by whitespace and finding matching prefix
+			// Try matching prefix name for e.g. "HTTP (TCP 80)"
 			parts := strings.Split(svcName, " ")
 			if len(parts) > 0 {
-				_ = tx.QueryRow("SELECT id FROM service_objects WHERE name = ?", parts[0]).Scan(&svcID)
+				err = tx.QueryRow("SELECT id FROM service_objects WHERE name = ?", parts[0]).Scan(&svcID)
 			}
 		}
-		if svcID != "" {
-			_, err = tx.Exec("INSERT INTO policy_services (policy_id, service_id) VALUES (?, ?)", policyID, svcID)
-			if err != nil {
-				return err
-			}
+		if err != nil || svcID == "" {
+			return fmt.Errorf("service object %q does not exist", svcName)
+		}
+		_, err = tx.Exec("INSERT INTO policy_services (policy_id, service_id) VALUES (?, ?)", policyID, svcID)
+		if err != nil {
+			return err
 		}
 	}
 

@@ -172,3 +172,139 @@ func TestFirewallPolicyAndReferentialIntegrity(t *testing.T) {
 		t.Errorf("Failed to delete address after policy removal: %v", err)
 	}
 }
+
+func TestFirewallPolicyValidation(t *testing.T) {
+	db, _ := InitDB(":memory:")
+	defer db.Close()
+	repo := NewRepository(db)
+
+	// Create valid address and service objects to satisfy foreign keys
+	addrSrc := model.AddressObject{ID: "addr-src", Name: "SRC_OK", Type: "subnet", Value: "10.0.0.0/24"}
+	addrDst := model.AddressObject{ID: "addr-dst", Name: "DST_OK", Type: "subnet", Value: "192.168.1.0/24"}
+	svc := model.ServiceObject{ID: "svc-http", Name: "HTTP_OK", Protocol: "TCP", Port: "80", Type: "custom"}
+
+	_ = repo.CreateAddress(addrSrc)
+	_ = repo.CreateAddress(addrDst)
+	_ = repo.CreateService(svc)
+
+	// Case 1: Empty name
+	ruleEmptyName := model.PolicyRule{
+		ID:           "rule-empty-name",
+		Name:         "   ",
+		InInterface:  "eth0",
+		OutInterface: "wlan0",
+		Source:       []string{"SRC_OK"},
+		Destination:  []string{"DST_OK"},
+		Service:      []string{"HTTP_OK"},
+		Action:       "ACCEPT",
+	}
+	if err := repo.CreatePolicy(ruleEmptyName); err == nil || err.Error() != "policy name cannot be empty" {
+		t.Errorf("Expected empty name validation error, got: %v", err)
+	}
+
+	// Case 2: Invalid Action
+	ruleInvalidAction := model.PolicyRule{
+		ID:           "rule-invalid-action",
+		Name:         "Invalid Action Rule",
+		InInterface:  "eth0",
+		OutInterface: "wlan0",
+		Source:       []string{"SRC_OK"},
+		Destination:  []string{"DST_OK"},
+		Service:      []string{"HTTP_OK"},
+		Action:       "REJECT",
+	}
+	if err := repo.CreatePolicy(ruleInvalidAction); err == nil || err.Error() != "policy action must be ACCEPT or DROP" {
+		t.Errorf("Expected invalid action validation error, got: %v", err)
+	}
+
+	// Case 3: Empty Source
+	ruleEmptySource := model.PolicyRule{
+		ID:           "rule-empty-src",
+		Name:         "Empty Src Rule",
+		InInterface:  "eth0",
+		OutInterface: "wlan0",
+		Source:       []string{},
+		Destination:  []string{"DST_OK"},
+		Service:      []string{"HTTP_OK"},
+		Action:       "ACCEPT",
+	}
+	if err := repo.CreatePolicy(ruleEmptySource); err == nil || err.Error() != "policy must have at least one source address object" {
+		t.Errorf("Expected empty source validation error, got: %v", err)
+	}
+
+	// Case 4: Non-existent Source
+	ruleBadSource := model.PolicyRule{
+		ID:           "rule-bad-src",
+		Name:         "Bad Src Rule",
+		InInterface:  "eth0",
+		OutInterface: "wlan0",
+		Source:       []string{"NON_EXISTENT_SRC"},
+		Destination:  []string{"DST_OK"},
+		Service:      []string{"HTTP_OK"},
+		Action:       "ACCEPT",
+	}
+	if err := repo.CreatePolicy(ruleBadSource); err == nil || err.Error() != `source address object "NON_EXISTENT_SRC" does not exist` {
+		t.Errorf("Expected bad source validation error, got: %v", err)
+	}
+
+	// Case 5: Non-existent Destination
+	ruleBadDest := model.PolicyRule{
+		ID:           "rule-bad-dest",
+		Name:         "Bad Dest Rule",
+		InInterface:  "eth0",
+		OutInterface: "wlan0",
+		Source:       []string{"SRC_OK"},
+		Destination:  []string{"NON_EXISTENT_DST"},
+		Service:      []string{"HTTP_OK"},
+		Action:       "ACCEPT",
+	}
+	if err := repo.CreatePolicy(ruleBadDest); err == nil || err.Error() != `destination address object "NON_EXISTENT_DST" does not exist` {
+		t.Errorf("Expected bad destination validation error, got: %v", err)
+	}
+
+	// Case 6: Non-existent Service
+	ruleBadSvc := model.PolicyRule{
+		ID:           "rule-bad-svc",
+		Name:         "Bad Svc Rule",
+		InInterface:  "eth0",
+		OutInterface: "wlan0",
+		Source:       []string{"SRC_OK"},
+		Destination:  []string{"DST_OK"},
+		Service:      []string{"NON_EXISTENT_SVC"},
+		Action:       "ACCEPT",
+	}
+	if err := repo.CreatePolicy(ruleBadSvc); err == nil || err.Error() != `service object "NON_EXISTENT_SVC" does not exist` {
+		t.Errorf("Expected bad service validation error, got: %v", err)
+	}
+
+	// Verify that none of the invalid rules are actually present in the firewall_policies table
+	var count int
+	_ = db.QueryRow("SELECT COUNT(*) FROM firewall_policies WHERE id IN ('rule-empty-name', 'rule-invalid-action', 'rule-empty-src', 'rule-bad-src', 'rule-bad-dest', 'rule-bad-svc')").Scan(&count)
+	if count > 0 {
+		t.Errorf("Expected 0 invalid rules to be saved, found %d in database", count)
+	}
+
+	// Case 7: Valid Rule
+	ruleOk := model.PolicyRule{
+		ID:           "rule-ok",
+		Name:         "Valid Rule",
+		InInterface:  "eth0",
+		OutInterface: "wlan0",
+		Source:       []string{"SRC_OK"},
+		Destination:  []string{"DST_OK"},
+		Service:      []string{"HTTP_OK"},
+		Action:       "ACCEPT",
+	}
+	if err := repo.CreatePolicy(ruleOk); err != nil {
+		t.Fatalf("Expected valid policy creation to succeed, got: %v", err)
+	}
+
+	// Fetch and confirm
+	fetched, err := repo.GetPolicyByID("rule-ok")
+	if err != nil || fetched == nil {
+		t.Fatalf("Failed to fetch rule-ok: %v", err)
+	}
+	if fetched.Name != "Valid Rule" {
+		t.Errorf("Expected rule name 'Valid Rule', got '%s'", fetched.Name)
+	}
+}
