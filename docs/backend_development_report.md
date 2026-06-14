@@ -38,12 +38,25 @@
 รันคำสั่งทดสอบแบบตัดแคชด้วย `-count=1` ผลลัพธ์ผ่านสำเร็จ 100% ปราศจากข้อผิดพลาด:
 
 ```text
-?       pigate/cmd/pigate       [no test files]
-ok      pigate/internal/api     0.164s
-ok      pigate/internal/db      0.024s
-?       pigate/internal/kernel  [no test files]
-?       pigate/internal/logs    [no test files]
-?       pigate/internal/model   [no test files]
+=== RUN   TestInitDBAndSeeding
+--- PASS: TestInitDBAndSeeding (0.00s)
+=== RUN   TestAddressCRUDAndLocks
+--- PASS: TestAddressCRUDAndLocks (0.00s)
+=== RUN   TestFirewallPolicyAndReferentialIntegrity
+--- PASS: TestFirewallPolicyAndReferentialIntegrity (0.00s)
+=== RUN   TestFirewallPolicyValidation
+--- PASS: TestFirewallPolicyValidation (0.00s)
+=== RUN   TestAddressObjectValidation
+--- PASS: TestAddressObjectValidation (0.00s)
+=== RUN   TestServiceObjectValidation
+--- PASS: TestServiceObjectValidation (0.00s)
+=== RUN   TestHexIPParserAndRouteSyncFallback
+    repository_test.go:602: DNS config after sync: Mode=static, Primary=10.255.255.254, Secondary=8.8.8.8, LocalDomain=siam.edu
+    repository_test.go:624: Found 3 interfaces in DB after sync from OS (including injected wifi if host lacks it)
+    repository_test.go:630: Found 126 routes in DB after sync from OS
+--- PASS: TestHexIPParserAndRouteSyncFallback (0.05s)
+PASS
+ok      pigate/internal/db      0.067s
 ```
 
 ### 2.2 วิธีการรันระบบทดสอบด้วยตัวคุณเอง (How to Run Tests)
@@ -75,10 +88,13 @@ go build -o pigate-backend ./cmd/pigate
 
 # 3. สั่งรันขึ้นมาใช้งานจริงที่พอร์ต 8080 (รันไฟล์ SQLite ชื่อ pigate.db ในโฟลเดอร์)
 ./pigate-backend -port=8080 -db=pigate.db -mock=true
+
+# 4. สั่งรันโหมดดึงข้อมูลจริงจากระบบ (Mock from Real Data)
+./pigate-backend -port=8081 -db=pigate.db -mock-from-real=true
 ```
 เมื่อระบบขึ้นมาแล้ว จะปรากฏข้อความล็อกบนคอนโซล:
 `[date] [time] PiGate API Backend is listening at http://localhost:8080`
-คุณสามารถเปิดโปรแกรมทดสอบ API (เช่น Postman, REST Client, หรือ curl) ยิงไปที่ http://localhost:8080 เพื่อทดลองเรียกใช้งานได้ทันที
+คุณสามารถเปิดโปรแกรมทดสอบ API (เช่น Postman, REST Client, หรือ curl) ยิงไปที่ http://localhost:8080 หรือ 8081 เพื่อทดลองเรียกใช้งานได้ทันที
 
 ---
 
@@ -86,9 +102,27 @@ go build -o pigate-backend ./cmd/pigate
 
 ### 4.1 ปัญหาการส่งคืนค่าอาร์เรย์ว่างเป็น null (Empty Array returns null)
 * **ปัญหาที่พบ:** เมื่อระบบหลังบ้านเรียกดูข้อมูลจากตารางเปล่า เช่น `/api/dhcp/reservations` ระบบจะแปลงค่า Slice ของ Go ที่เป็น `nil` ออกมาเป็นค่า `null` ในรูปแบบ JSON แทนการส่งเป็น `[]` ส่งผลให้หน้าจอควบคุมฝั่งหน้าบ้านเกิดการขัดข้องทางตัววิเคราะห์ข้อมูล (JSON Parser Error)
-* **แนวทางแก้ไข:** ปรับปรุงไฟล์ [internal/db/repository.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/internal/db/repository.go) โดยเปลี่ยนการประกาศ Slice จาก `var list []model.SomeType` เป็นการประกาศจองหน่วยความจำเริ่มต้น `list := []model.SomeType{}` ครบทุกฟังก์ชันของการคิวรีรายการ ผลลัพธ์ได้รับการทดสอบและรันคอมไพล์ผ่านสมบูรณ์ ส่งกลับคืนค่า `[]` ถูกต้องในรูปแบบ JSON เพื่อป้อนความต้องการของ Frontend
+* **แนวทางแก้ไข:** ปรับปรุงไฟล์ [internal/db/repository.go](file:///home/sapray/dev/pigate/backend/internal/db/repository.go) โดยเปลี่ยนการประกาศ Slice จาก `var list []model.SomeType` เป็นการประกาศจองหน่วยความจำเริ่มต้น `list := []model.SomeType{}` ครบทุกฟังก์ชันของการคิวรีรายการ ผลลัพธ์ได้รับการทดสอบและรันคอมไพล์ผ่านสมบูรณ์ ส่งกลับคืนค่า `[]` ถูกต้องในรูปแบบ JSON เพื่อป้อนความต้องการของ Frontend
 
 ### 4.2 ปัญหาการเชื่อมต่อระบบหลังบ้านแล้วติดสิทธิ์เข้าถึง (401 Unauthorized on API requests)
 * **ปัญหาที่พบ:** หลังจากผู้ใช้งานล็อกอินเข้าสู่ระบบเรียบร้อยแล้ว ทุกคำร้องขอที่ส่งไปยัง API เส้นย่อยต่างๆ จะได้รับสถานะ `401 Unauthorized` เนื่องจากระบบ API Services ของหน้าบ้าน (`frontend/src/services`) ไม่ได้ทำการแนบ Bearer Token เข้าไปในส่วนหัว (Authorization Header) ของคำร้องขอ HTTP
-* **แนวทางแก้ไข:** ทำการปรับปรุงส่วนกำหนดค่า [frontend/src/services/config.ts](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/frontend/src/services/config.ts) โดยการเขียน Hook เข้าไปที่ฟังก์ชัน `window.fetch` ของเบราว์เซอร์ เพื่อให้ตรวจสอบและทำการแทรกส่วนหัว `Authorization: Bearer <token>` (ดึงจาก `localStorage` ที่ชื่อ `pigate_session`) เข้าไปในทุกคำร้องขอ API ที่มีพาร์ท `/api/` โดยอัตโนมัติ ทำให้ผู้ใช้เข้าถึงหน้าระบบและทำงานได้ปกติโดยไม่ต้องเข้าไปแก้ไขการเรียก fetch ใน Service ทุกไฟล์โดยตรง
+* **แนวทางแก้ไข:** ทำการปรับปรุงส่วนกำหนดค่า [frontend/src/services/config.ts](file:///home/sapray/dev/pigate/frontend/src/services/config.ts) โดยการเขียน Hook เข้าไปที่ฟังก์ชัน `window.fetch` ของเบราว์เซอร์ เพื่อให้ตรวจสอบและทำการแทรกส่วนหัว `Authorization: Bearer <token>` (ดึงจาก `localStorage` ที่ชื่อ `pigate_session`) เข้าไปในทุกคำร้องขอ API ที่มีพาร์ท `/api/` โดยอัตโนมัติ ทำให้ผู้ใช้เข้าถึงหน้าระบบและทำงานได้ปกติโดยไม่ต้องเข้าไปแก้ไขการเรียก fetch ใน Service ทุกไฟล์โดยตรง
+
+### 4.3 ฟีเจอร์จำลองจากข้อมูลจริง (Mock from Real Data Mode)
+* **ปัญหาที่พบ:** ในการทดสอบและพัฒนาระบบหลังบ้านฝั่งนักพัฒนา ข้อมูลจำลอง (Mock Data) มักจะไม่ตรงกับสภาวะแวดล้อมหรือการตั้งค่าของบอร์ดจริง แต่ในทางกลับกันการเปิดการใช้งานเชื่อมต่อระดับ OS จริงก็อาจเป็นอันตรายหรือส่งผลกระทบต่อสภาวะของโฮสต์เครื่องที่นักพัฒนากำลังเขียนโค้ดอยู่
+* **แนวทางแก้ไข:** พัฒนาตัวเลือก `-mock-from-real` เพื่อให้ backend ดึงการกำหนดค่าจริงจากระบบปฏิบัติการ Linux เมื่อเริ่มทำงาน (Startup) เพียงครั้งเดียว โดยมีการซิงค์ข้อมูล DNS จริงจาก `/etc/resolv.conf`, ตาราง Routing จริงจาก `/proc/net/route` และ Interfaces จริงผ่าน `net.Interfaces()` โดยเมื่อมีการกระทำใดๆ เพิ่มเติม (เช่น CRUD) จะปรับปรุงข้อมูลลง SQLite database เท่านั้นและไม่มีผลย้อนกลับไปแก้ไขระบบปฏิบัติการจริง พร้อมกับการสกัดหากไม่พบตัวปล่อยคลื่น Wi-Fi บนโฮสต์จริง จะมีการสร้างตัวจำลอง `wlan0` อัตโนมัติเพื่อช่วยเหลือหน้าต่างสแกน Wi-Fi ฝั่ง Frontend ให้รันได้ปกติ
+
+### 4.4 ฟีเจอร์จำกัดสิทธิ์แก้ไขข้อมูลจำลอง (Disable Edit Mode)
+* **ปัญหาที่พบ:** ในบางกรณีของการทดสอบระบบหลังบ้านที่เปิดเผยสู่สาธารณะ หรือสภาวะแวดล้อมแซนด์บ็อกซ์ (Sandbox) การอนุญาตให้ผู้ใช้แก้ไขข้อมูลผ่านทาง REST API อาจทำให้ข้อมูลทดสอบเสียหายหรือเสื่อมสภาพ
+* **แนวทางแก้ไข:** พัฒนาตัวเลือก `-disable-edit` เพื่อบังคับให้ระบบหลังบ้านเปิดใช้งานในโหมด "อ่านอย่างเดียว" (Read-Only) ในโหมดจำลอง (Mock Mode) โดยฝั่งหลังบ้านจะส่งกลับคืนรหัสข้อผิดพลาดและปิดการทำ CRUD ที่จะบันทึกหรือปรับปรุงฐานข้อมูล SQLite
+
+### 4.5 การจัดการและตั้งค่า DNS เซิร์ฟเวอร์และชื่อโดเมนท้องถิ่น (DNS & Domain Management)
+* **ปัญหาที่พบ:** ความต้องการในการตั้งค่าระบบ DNS ของไฟร์วอลล์/เกตเวย์ให้เป็นแบบรวมศูนย์ โดยรองรับได้ทั้งที่อยู่ DNS แบบคงที่ (Static DNS Servers) และแบบไดนามิกที่ดึงจากเครือข่ายภายนอก (Dynamic DNS Servers) รวมถึงการตั้งค่าชื่อโดเมนเครื่องภายในระบบ (Local Domain Name)
+* **แนวทางแก้ไข:** พัฒนา API `/system/dns` และเชื่อมต่อกับพื้นที่จัดเก็บ SQLite ในการสืบค้นและปรับปรุงข้อมูล พร้อมกำหนดโครงสร้าง Schemas สำหรับรับส่งข้อมูลที่ตรงตามข้อกำหนดของ OpenAPI Spec ใหม่อย่างครบถ้วน
+
+### 4.6 ปัญหาการเรียก Wi-Fi Scan บนการ์ดเครือข่ายธรรมดา (Wireless Scan Validation)
+* **ปัญหาที่พบ:** หากมีการร้องขอทำรายการ Wi-Fi Scan (ค้นหาคลื่นวิทยุแลนไร้สาย) ผ่านทาง Endpoint `/api/interfaces/scan` โดยระบุการ์ดที่เป็นพอร์ตแลนมีสาย (เช่น `eth0`) อาจจะก่อให้เกิดความล้มเหลวระดับล่าง หรือเกิดความผิดปกติในระบบปฏิบัติการได้
+* **แนวทางแก้ไข:** เพิ่มส่วนการตรวจสอบและแจ้งเตือนความถูกต้อง (Validation Check) ใน Handler คัดกรองว่าพอร์ตที่จะทำการสแกนหา Wi-Fi จะต้องมีชนิดข้อมูลเป็น `wireless` ในฐานข้อมูลเท่านั้น หากไม่ใช่จะส่งข้อผิดพลาด `400 Bad Request` กลับไป เพื่อป้องกันผลกระทบที่ไม่พึงประสงค์
+
+
 

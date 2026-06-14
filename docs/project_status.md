@@ -92,6 +92,11 @@
   * แก้ไขประเด็นสำคัญระหว่างการเชื่อมต่อระบบจริง (Integration Fixes):
     * **ระบบสิทธิ์โทเค็น (Bearer Token Injection):** ติดตั้งระบบ Hook สกัดกั้นการดึงข้อมูล `window.fetch` ของเบราว์เซอร์ เพื่อส่ง Bearer Token ที่ดึงจาก LocalSession ไปยัง API Endpoint ขาเข้าอัตโนมัติ ป้องกันปัญหา 401 Unauthorized ในการดึงข้อมูลของระบบ
     * **การจัดส่งค่าอาร์เรย์ว่าง (Empty Array Serialization):** ปรับจูนฝั่ง API หลังบ้านไม่ให้คืนค่า Slice ว่างเป็น `null` บน JSON แต่ให้คืนค่าเป็น `[]` เพื่อไม่ให้ตัวประมวลผล JSON ในฝั่ง React เกิดการ Error
+    * **ฟีเจอร์จำลองการทำงานจากระบบจริง (Mock from Real Data Mode) [สำเร็จ]:** พัฒนาแฟล็ก `-mock-from-real` สำหรับการดึงข้อมูลการตั้งค่าจริงบนเครื่องคอมพิวเตอร์แม่ข่าย Linux เข้าสู่ฐานข้อมูล SQLite ตอนเริ่มระบบครั้งแรก (ซิงค์ Network Interfaces, Static Routes และ DNS จาก `/etc/resolv.conf`) โดยไม่บันทึกแก้ไขกลับลงตัวเครื่องจริงพร้อมระบบฉีดการ์ดจำลอง `wlan0` อัตโนมัติในฝั่งหน้าบ้าน
+    * **อัปเดตสเปก API เอกสารสากล (OpenAPI Specification) [สำเร็จ]:** อัปเดตสเปก API ทั้งหมดเพิ่มเส้นทาง `/system/dns` และ Schemas `DNSConfig`, `DNSConfigInput`, `DynamicDNSServer` ในคู่มือตัวระบบ `docs/openapi.yaml` และหน้าบ้าน `frontend/public/openapi.yaml`
+    * **ฟีเจอร์จำกัดสิทธิ์แก้ไขข้อมูลจำลอง (Disable Edit Mode) [สำเร็จ]:** เพิ่มแฟล็ก `-disable-edit` เพื่อเปิดใช้งานโหมดอ่านอย่างเดียว (Read-Only) ในฝั่งหลังบ้าน ป้องกันการทำ CRUD เพื่อความปลอดภัยในบางสภาวะแวดล้อม
+    * **ระบบสแกนคลื่นไร้สายที่รัดกุม (Wireless Scan Validation) [สำเร็จ]:** เพิ่มการกรองและยืนยันประเภทของการ์ดเชื่อมต่อเครือข่ายก่อนทำการค้นหาสัญญาณ Wi-Fi (Wi-Fi Scan) เพื่อบังคับให้ทำรายการเฉพาะการ์ดที่ระบุประเภทเป็น `wireless` เท่านั้น
+    * **ระบบจัดการ DNS เชิงลึกแบบรวมศูนย์ (Centralized DNS Management) [สำเร็จ]:** เพิ่มการรองรับ API การตั้งค่าเซิร์ฟเวอร์ DNS ทั้งแบบคงที่และแบบรับไดนามิก พร้อมทั้งการเชื่อมโยงระบบ Local Domain Name
 
 * **แก้ไขข้อเสนอแนะความสำคัญสูง (Priority High Recommendations) จากผลการรีวิวหน้าบ้าน [สำเร็จ]**:
   * **แทนที่ Native Dialogs:** พัฒนาและติดตั้ง [AlertDialogProvider.tsx](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/frontend/src/components/AlertDialogProvider.tsx) เพื่อใช้ Custom AlertDialog ของ shadcn/ui ครอบคลุมการเตือนและการยืนยันคำสั่งทั้งหมด แทนการเรียกใช้ `alert()` และ `confirm()` ดั้งเดิมของเบราว์เซอร์
@@ -127,3 +132,4 @@
   * ทดสอบการทำงานของปุ่ม ฟังก์ชัน CRUD และ UI ต่างๆ บนเบราว์เซอร์จริง (Runtime Manual Verification & UI Validation) `[เสร็จสิ้น]`
   * ตรวจสอบความปลอดภัยระดับเบื้องต้น เช่น การรับมือเมื่อเซสชันหมดอายุ, การกรองฟิลด์ข้อมูลนำเข้า (Sanitization) และการเข้ารหัสการสื่อสาร `[เสร็จสิ้น]`
   * เชื่อมต่อ API จริงกับฝั่ง Go Backend และระบบการอัปเดตแบบ Real-time ด้วย Server-Sent Events (SSE) เมื่อฝั่ง API พร้อมใช้งาน `[เสร็จสิ้น]`
+  * เพิ่มเติมฟีเจอร์รันระบบหลังบ้านโดยดึงข้อมูลจริงจาก Kernel แต่อัปเดตลงเฉพาะฐานข้อมูล (-mock-from-real) พร้อมระบบจำกัดสิทธิ์อ่านอย่างเดียว (-disable-edit), ระบบ DNS และการตรวจสอบ Wifi Scan พร้อมปรับปรุง API Specs `[เสร็จสิ้น]`
