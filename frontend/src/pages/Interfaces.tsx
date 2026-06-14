@@ -123,8 +123,6 @@ export default function Interfaces() {
   const [formIp, setFormIp] = useState("")
   const [formNetmask, setFormNetmask] = useState("")
   const [formGateway, setFormGateway] = useState("")
-  const [formDns1, setFormDns1] = useState("")
-  const [formDns2, setFormDns2] = useState("")
   const [formAccess, setFormAccess] = useState<AdminAccess[]>([])
   const [formError, setFormError] = useState("")
 
@@ -188,8 +186,6 @@ export default function Interfaces() {
     setFormIp(iface.ip)
     setFormNetmask(iface.netmask)
     setFormGateway(iface.gateway)
-    setFormDns1(iface.dns1)
-    setFormDns2(iface.dns2)
     setFormAccess([...iface.adminAccess])
     setFormSSID(iface.connectedSSID || "")
     setFormWifiPassword("")
@@ -402,8 +398,8 @@ export default function Interfaces() {
         ip: formMode === "static" ? formIp : editingIface.ip,
         netmask: formMode === "static" ? formNetmask : editingIface.netmask,
         gateway: formMode === "static" ? formGateway : editingIface.gateway,
-        dns1: formMode === "static" ? formDns1 : editingIface.dns1,
-        dns2: formMode === "static" ? formDns2 : editingIface.dns2,
+        dns1: "",
+        dns2: "",
         adminAccess: formAccess,
       }
 
@@ -821,30 +817,6 @@ export default function Interfaces() {
                     placeholder="192.168.1.254"
                     className="bg-background/50 h-8 font-mono text-xs"
                   />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <Label htmlFor="form-dns1" className="text-[11px] text-muted-foreground">DNS Primary</Label>
-                    <Input
-                      id="form-dns1"
-                      type="text"
-                      value={formDns1}
-                      onChange={(e) => setFormDns1(e.target.value)}
-                      placeholder="8.8.8.8"
-                      className="bg-background/50 h-8 font-mono text-xs"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="form-dns2" className="text-[11px] text-muted-foreground">DNS Secondary</Label>
-                    <Input
-                      id="form-dns2"
-                      type="text"
-                      value={formDns2}
-                      onChange={(e) => setFormDns2(e.target.value)}
-                      placeholder="1.1.1.1"
-                      className="bg-background/50 h-8 font-mono text-xs"
-                    />
-                  </div>
                 </div>
               </div>
             )}

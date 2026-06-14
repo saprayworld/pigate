@@ -17,7 +17,8 @@ import {
   Zap,
   Menu,
   Moon,
-  Sun
+  Sun,
+  Globe
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -47,6 +48,8 @@ export default function ShellLayout() {
         return "Dashboard"
       case "/network/interfaces":
         return "Network Interfaces"
+      case "/network/dns":
+        return "DNS Settings"
       case "/network/routes":
         return "Static Routes"
       case "/network/dhcp":
@@ -79,6 +82,7 @@ export default function ShellLayout() {
       title: "Network",
       items: [
         { path: "/network/interfaces", label: "Interfaces", icon: Network },
+        { path: "/network/dns", label: "DNS Settings", icon: Globe },
         { path: "/network/routes", label: "Static Routes", icon: Route },
         { path: "/network/dhcp", label: "DHCP Server", icon: Radio }
       ]

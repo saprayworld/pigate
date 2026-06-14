@@ -13,6 +13,7 @@ import Services from "@/pages/Services"
 import SettingsMaintenance from "@/pages/SettingsMaintenance"
 import Login from "@/pages/Login"
 import ApiDocs from "./pages/ApiDocs"
+import DNS from "@/pages/DNS"
 
 // A simple authentication route guard
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -49,6 +50,7 @@ export default function App() {
               {/* Network Routes */}
               <Route path="network">
                 <Route path="interfaces" element={<Interfaces />} />
+                <Route path="dns" element={<DNS />} />
                 <Route path="routes" element={<StaticRoutes />} />
                 <Route path="dhcp" element={<DhcpServer />} />
               </Route>

@@ -172,6 +172,14 @@ func migrate(db *sql.DB) error {
 			primary_max_retries INTEGER,
 			failover_cooldown INTEGER
 		);`,
+
+		`CREATE TABLE IF NOT EXISTS system_dns_settings (
+			id INTEGER PRIMARY KEY CHECK(id = 1),
+			mode TEXT NOT NULL CHECK(mode IN ('wan', 'static')),
+			primary_dns TEXT NOT NULL,
+			secondary_dns TEXT NOT NULL,
+			local_domain TEXT NOT NULL DEFAULT 'pigate.local'
+		);`,
 	}
 
 	for _, query := range queries {
@@ -290,6 +298,19 @@ func seed(db *sql.DB) error {
 			('route-1', '0.0.0.0/0', '10.0.0.1', 'wlan0', 100, 'Default gateway route (WAN)', 1, 'system'),
 			('route-2', '192.168.1.0/24', '', 'eth0', 0, 'Direct subnet route for LAN', 1, 'system'),
 			('route-3', '10.0.0.0/24', '', 'wlan0', 0, 'Direct subnet route for WAN', 1, 'system')`)
+		if err != nil {
+			return err
+		}
+	}
+
+	// 8. Seed Default System DNS settings
+	var dnsCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM system_dns_settings").Scan(&dnsCount); err != nil {
+		return err
+	}
+	if dnsCount == 0 {
+		_, err := db.Exec(`INSERT INTO system_dns_settings (id, mode, primary_dns, secondary_dns, local_domain) 
+			VALUES (1, 'static', '1.1.1.1', '8.8.8.8', 'pigate.local')`)
 		if err != nil {
 			return err
 		}

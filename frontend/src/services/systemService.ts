@@ -8,6 +8,64 @@ import { IS_MOCK_MODE, API_BASE_URL } from "./config";
 
 const TIME_STORAGE_KEY = "pigate_system_time";
 const SERVICES_STORAGE_KEY = "pigate_network_services";
+const DNS_STORAGE_KEY = "pigate_system_dns";
+
+export interface DynamicDNSServer {
+  interfaceName: string;
+  interfaceAlias: string;
+  dnsServers: string[];
+}
+
+export interface DNSConfig {
+  mode: "wan" | "static";
+  primaryDns: string;
+  secondaryDns: string;
+  localDomain: string;
+  dynamicDnsServers: DynamicDNSServer[];
+}
+
+const initialDNSConfig: DNSConfig = {
+  mode: "static",
+  primaryDns: "1.1.1.1",
+  secondaryDns: "8.8.8.8",
+  localDomain: "pigate.local",
+  dynamicDnsServers: [
+    {
+      interfaceName: "wlan0",
+      interfaceAlias: "WAN_WiFi",
+      dnsServers: ["192.168.0.1", "8.8.4.4"],
+    },
+  ],
+};
+
+function getLocalDNSConfig(): DNSConfig {
+  const stored = localStorage.getItem(DNS_STORAGE_KEY);
+  if (!stored) {
+    localStorage.setItem(DNS_STORAGE_KEY, JSON.stringify(initialDNSConfig));
+    return initialDNSConfig;
+  }
+  try {
+    const parsed = JSON.parse(stored);
+    if (!parsed.localDomain) {
+      parsed.localDomain = "pigate.local";
+    }
+    return parsed;
+  } catch (e) {
+    return initialDNSConfig;
+  }
+}
+
+function saveLocalDNSConfig(cfg: { mode: string; primaryDns: string; secondaryDns: string; localDomain: string }) {
+  const current = getLocalDNSConfig();
+  const updated = {
+    ...current,
+    mode: cfg.mode as "wan" | "static",
+    primaryDns: cfg.primaryDns,
+    secondaryDns: cfg.secondaryDns,
+    localDomain: cfg.localDomain,
+  };
+  localStorage.setItem(DNS_STORAGE_KEY, JSON.stringify(updated));
+}
 
 // Helper to get time settings from LocalStorage
 function getLocalTimeSettings(): SystemTimeSettings {
@@ -256,5 +314,38 @@ export const systemService = {
       const errBody = await response.json().catch(() => ({}));
       throw new Error(errBody.message || `Failed to import configuration: ${response.statusText}`);
     }
+  },
+
+  // Get system DNS settings
+  getDNSConfig: async (): Promise<DNSConfig> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return getLocalDNSConfig();
+    }
+
+    const response = await fetch(`${API_BASE_URL}/system/dns`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch system DNS settings: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  // Save system DNS settings
+  updateDNSConfig: async (cfg: { mode: string; primaryDns: string; secondaryDns: string; localDomain: string }): Promise<any> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      saveLocalDNSConfig(cfg);
+      return cfg;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/system/dns`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cfg),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to update system DNS settings: ${response.statusText}`);
+    }
+    return response.json();
   },
 };

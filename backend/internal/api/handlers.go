@@ -868,6 +868,33 @@ func (s *Server) HandleUpdateSystemTime(w http.ResponseWriter, r *http.Request) 
 	s.writeJSON(w, http.StatusOK, settings)
 }
 
+func (s *Server) HandleGetDNSConfig(w http.ResponseWriter, r *http.Request) {
+	cfg, err := s.repo.GetDNSConfig()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, cfg)
+}
+
+func (s *Server) HandleUpdateDNSConfig(w http.ResponseWriter, r *http.Request) {
+	var input model.DNSConfigInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	if input.LocalDomain == "" {
+		input.LocalDomain = "pigate.local"
+	}
+
+	if err := s.repo.UpdateDNSConfig(input); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, input)
+}
+
 func (s *Server) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 	var req model.ChangePasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

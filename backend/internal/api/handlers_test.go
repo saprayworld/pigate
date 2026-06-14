@@ -315,3 +315,59 @@ func TestDisableEditMode(t *testing.T) {
 		t.Errorf("Expected 403 Forbidden for POST /api/policies in read-only mode, got %d", rec.Code)
 	}
 }
+
+func TestDNSConfigAPI(t *testing.T) {
+	handler, _ := setupTestServer(t)
+	authToken := "mock_session_id_test_token"
+
+	// 1. Fetch default DNS Config
+	req := httptest.NewRequest("GET", "/api/system/dns", nil)
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for GET /api/system/dns, got %d", rec.Code)
+	}
+
+	var dnsCfg model.DNSConfig
+	json.NewDecoder(rec.Body).Decode(&dnsCfg)
+
+	if dnsCfg.Mode != "static" || dnsCfg.PrimaryDNS != "1.1.1.1" || dnsCfg.SecondaryDNS != "8.8.8.8" || dnsCfg.LocalDomain != "pigate.local" {
+		t.Errorf("Unexpected default DNS config: %+v", dnsCfg)
+	}
+
+	// 2. Update DNS Config
+	updatePayload := model.DNSConfigInput{
+		Mode:         "wan",
+		PrimaryDNS:   "9.9.9.9",
+		SecondaryDNS: "1.0.0.1",
+		LocalDomain:  "pigate.internal",
+	}
+	body, _ := json.Marshal(updatePayload)
+	req = httptest.NewRequest("PUT", "/api/system/dns", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for PUT /api/system/dns, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	// 3. Verify updated DNS Config
+	req = httptest.NewRequest("GET", "/api/system/dns", nil)
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for GET after update, got %d", rec.Code)
+	}
+
+	var updatedCfg model.DNSConfig
+	json.NewDecoder(rec.Body).Decode(&updatedCfg)
+
+	if updatedCfg.Mode != "wan" || updatedCfg.PrimaryDNS != "9.9.9.9" || updatedCfg.SecondaryDNS != "1.0.0.1" || updatedCfg.LocalDomain != "pigate.internal" {
+		t.Errorf("Updated DNS config did not match expected values: %+v", updatedCfg)
+	}
+}

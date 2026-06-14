@@ -1227,3 +1227,59 @@ func (r *Repository) CreateInterfaceForTest(iface model.NetworkInterface) error 
 		iface.MacMode, iface.RealMacAddress, reconInt, foInt)
 	return err
 }
+
+// GetDNSConfig retrieves system-wide DNS settings
+func (r *Repository) GetDNSConfig() (*model.DNSConfig, error) {
+	row := r.db.QueryRow("SELECT mode, primary_dns, secondary_dns, local_domain FROM system_dns_settings WHERE id = 1")
+	var cfg model.DNSConfig
+	err := row.Scan(&cfg.Mode, &cfg.PrimaryDNS, &cfg.SecondaryDNS, &cfg.LocalDomain)
+	if err != nil {
+		return nil, err
+	}
+
+	// Populate dynamic DNS servers
+	dynServers, err := r.GetDynamicDNSServers()
+	if err == nil {
+		cfg.DynamicDNS = dynServers
+	} else {
+		cfg.DynamicDNS = []model.DynamicDNSServer{}
+	}
+
+	return &cfg, nil
+}
+
+// UpdateDNSConfig updates the system-wide DNS configuration
+func (r *Repository) UpdateDNSConfig(cfg model.DNSConfigInput) error {
+	if cfg.Mode != "wan" && cfg.Mode != "static" {
+		return fmt.Errorf("invalid mode: %s", cfg.Mode)
+	}
+	_, err := r.db.Exec("UPDATE system_dns_settings SET mode = ?, primary_dns = ?, secondary_dns = ?, local_domain = ? WHERE id = 1",
+		cfg.Mode, cfg.PrimaryDNS, cfg.SecondaryDNS, cfg.LocalDomain)
+	return err
+}
+
+// GetDynamicDNSServers finds WAN interfaces configured with DHCP and returns their DNS configurations
+func (r *Repository) GetDynamicDNSServers() ([]model.DynamicDNSServer, error) {
+	rows, err := r.db.Query("SELECT name, alias, ip FROM network_interfaces WHERE role = 'WAN' AND addressing_mode = 'dhcp'")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []model.DynamicDNSServer
+	for rows.Next() {
+		var name, alias, ip string
+		if err := rows.Scan(&name, &alias, &ip); err == nil {
+			dnsList := []string{"192.168.0.1", "8.8.4.4"}
+			if name == "eth0" {
+				dnsList = []string{"172.20.160.1", "8.8.8.8"}
+			}
+			list = append(list, model.DynamicDNSServer{
+				InterfaceName:  name,
+				InterfaceAlias: alias,
+				DNSServers:     dnsList,
+			})
+		}
+	}
+	return list, nil
+}

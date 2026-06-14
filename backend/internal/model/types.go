@@ -235,3 +235,27 @@ type DashboardStats struct {
 	WifiStatus      string `json:"wifiStatus"`
 	WifiSSID        string `json:"wifiSSID"`
 }
+
+// DNSConfig represents system-wide DNS settings
+type DNSConfig struct {
+	Mode         string               `json:"mode"` // "wan", "static"
+	PrimaryDNS   string               `json:"primaryDns"`
+	SecondaryDNS string               `json:"secondaryDns"`
+	LocalDomain  string               `json:"localDomain"`
+	DynamicDNS   []DynamicDNSServer   `json:"dynamicDnsServers"`
+}
+
+// DNSConfigInput represents payload to update DNS configuration
+type DNSConfigInput struct {
+	Mode         string `json:"mode"`
+	PrimaryDNS   string `json:"primaryDns"`
+	SecondaryDNS string `json:"secondaryDns"`
+	LocalDomain  string `json:"localDomain"`
+}
+
+// DynamicDNSServer represents DNS servers obtained dynamically from WAN interfaces
+type DynamicDNSServer struct {
+	InterfaceName  string   `json:"interfaceName"`
+	InterfaceAlias string   `json:"interfaceAlias"`
+	DNSServers     []string `json:"dnsServers"`
+}
