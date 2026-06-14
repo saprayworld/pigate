@@ -937,6 +937,36 @@ paths:
               schema:
                 $ref: '#/components/schemas/SystemTimeSettings'
 
+  /system/dns:
+    get:
+      tags:
+        - System & Maintenance
+      summary: Get system-wide DNS configuration
+      responses:
+        '200':
+          description: System DNS settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSConfig'
+    put:
+      tags:
+        - System & Maintenance
+      summary: Update system-wide DNS configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSConfigInput'
+      responses:
+        '200':
+          description: DNS configuration updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSConfigInput'
+
   /system/password:
     put:
       tags:
@@ -1715,3 +1745,71 @@ components:
           type: string
           enum: [running, stopped, failed]
           example: running
+
+    DNSConfig:
+      type: object
+      required:
+        - mode
+        - primaryDns
+        - secondaryDns
+        - localDomain
+        - dynamicDnsServers
+      properties:
+        mode:
+          type: string
+          enum: [wan, static]
+          example: static
+        primaryDns:
+          type: string
+          example: 1.1.1.1
+        secondaryDns:
+          type: string
+          example: 8.8.8.8
+        localDomain:
+          type: string
+          example: pigate.local
+        dynamicDnsServers:
+          type: array
+          items:
+            $ref: '#/components/schemas/DynamicDNSServer'
+
+    DNSConfigInput:
+      type: object
+      required:
+        - mode
+        - primaryDns
+        - secondaryDns
+        - localDomain
+      properties:
+        mode:
+          type: string
+          enum: [wan, static]
+          example: static
+        primaryDns:
+          type: string
+          example: 1.1.1.1
+        secondaryDns:
+          type: string
+          example: 8.8.8.8
+        localDomain:
+          type: string
+          example: pigate.local
+
+    DynamicDNSServer:
+      type: object
+      required:
+        - interfaceName
+        - interfaceAlias
+        - dnsServers
+      properties:
+        interfaceName:
+          type: string
+          example: eth0
+        interfaceAlias:
+          type: string
+          example: WAN_OS
+        dnsServers:
+          type: array
+          items:
+            type: string
+          example: [192.168.0.1, 8.8.4.4]
