@@ -286,6 +286,11 @@ func (s *Server) HandleScanWifi(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if iface.Type != "wireless" {
+		s.writeError(w, http.StatusBadRequest, "Interface is not a wireless interface")
+		return
+	}
+
 	results, err := s.network.ScanWifi(iface.Name)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())

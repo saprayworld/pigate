@@ -184,3 +184,28 @@ func TestAddressCRUDAPI(t *testing.T) {
 		t.Errorf("Expected 200 OK for deleting address, got %d", rec.Code)
 	}
 }
+
+func TestWifiScanAPI(t *testing.T) {
+	handler, _ := setupTestServer(t)
+	authToken := "mock_session_id_test_token"
+
+	// 1. Scan on ethernet interface (should fail with 400 Bad Request)
+	req := httptest.NewRequest("GET", "/api/interfaces/iface-1/scan", nil)
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 Bad Request for scanning on ethernet interface, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	// 2. Scan on wireless interface (should succeed with 200 OK)
+	req = httptest.NewRequest("GET", "/api/interfaces/iface-2/scan", nil)
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200 OK for scanning on wireless interface, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+}
