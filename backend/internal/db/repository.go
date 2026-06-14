@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -12,11 +14,22 @@ import (
 )
 
 type Repository struct {
-	db *sql.DB
+	db           *sql.DB
+	mockMode     bool
+	mockFromReal bool
 }
 
 func NewRepository(db *sql.DB) *Repository {
-	return &Repository{db: db}
+	return &Repository{
+		db:           db,
+		mockMode:     true, // default to true for safety
+		mockFromReal: false,
+	}
+}
+
+func (r *Repository) SetMockMode(mockMode bool, mockFromReal bool) {
+	r.mockMode = mockMode
+	r.mockFromReal = mockFromReal
 }
 
 // =========================================================================
@@ -1071,12 +1084,68 @@ func (r *Repository) SyncInterfacesFromOS() error {
 		}
 	}
 
+	// If mockFromReal is true, ensure a wireless interface is present
+	if r.mockFromReal {
+		var hasWireless int
+		err = r.db.QueryRow("SELECT COUNT(*) FROM network_interfaces WHERE type = 'wireless'").Scan(&hasWireless)
+		if err == nil && hasWireless == 0 {
+			// Inject mock wireless interface
+			mockWifi := model.NetworkInterface{
+				ID:             "iface-mock-wlan0",
+				Name:           "wlan0",
+				Alias:          "WAN_WiFi_Mock",
+				Role:           "WAN",
+				Type:           "wireless",
+				AddressingMode: "dhcp",
+				IP:             "10.0.0.45",
+				Netmask:        "24",
+				Gateway:        "10.0.0.1",
+				DNS1:           "8.8.8.8",
+				DNS2:           "1.1.1.1",
+				MacAddress:     "4E:88:2F:BC:A1:90",
+				AdminAccess:    []string{"PING"},
+				Status:         "up",
+				Speed:          "72 Mbps",
+			}
+			mockSSID := "MyHome_5G"
+			mockWifi.ConnectedSSID = &mockSSID
+			mockSec := "WPA2-PSK"
+			mockWifi.WifiSecurity = &mockSec
+			mockMode := "randomized"
+			mockWifi.MacMode = &mockMode
+			realMac := "DC:A6:32:AA:BB:C2"
+			mockWifi.RealMacAddress = &realMac
+			randMac := "4E:88:2F:BC:A1:90"
+			mockWifi.RandomizedMac = &randMac
+			laaMac := "9A:11:22:33:44:55"
+			mockWifi.LaaMacAddress = &laaMac
+			recon := true
+			mockWifi.RandomizeOnReconnect = &recon
+			fo := false
+			mockWifi.FailoverEnabled = &fo
+			backupSSID := "MyHome_2G"
+			mockWifi.BackupSSID = &backupSSID
+			backupPass := "backupPassword123"
+			mockWifi.BackupWifiPassword = &backupPass
+			timeout := 15
+			mockWifi.IPCheckTimeout = &timeout
+			retries := 3
+			mockWifi.PrimaryMaxRetries = &retries
+			cooldown := 60
+			mockWifi.FailoverCooldown = &cooldown
+
+			_ = r.CreateInterfaceForTest(mockWifi)
+		}
+	}
+
 	return nil
 }
 
 func (r *Repository) GetInterfaces() ([]model.NetworkInterface, error) {
-	// Sync OS interfaces first (ignore error, fallback to whatever is in DB)
-	_ = r.SyncInterfacesFromOS()
+	// Sync OS interfaces first (ignore error, fallback to whatever is in DB) if not in pure mock mode
+	if !r.mockMode {
+		_ = r.SyncInterfacesFromOS()
+	}
 
 	rows, err := r.db.Query(`SELECT 
 		id, name, alias, role, type, addressing_mode, ip, netmask, gateway, dns1, dns2, mac_address, admin_access, status, speed,
@@ -1282,4 +1351,176 @@ func (r *Repository) GetDynamicDNSServers() ([]model.DynamicDNSServer, error) {
 		}
 	}
 	return list, nil
+}
+
+// SyncRoutesFromOS fetches static routes from /proc/net/route and updates the database.
+func (r *Repository) SyncRoutesFromOS() error {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+
+	data, err := os.ReadFile("/proc/net/route")
+	if err != nil {
+		return fmt.Errorf("failed to read /proc/net/route: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	if len(lines) <= 1 {
+		return nil
+	}
+
+	// Delete old system routes
+	_, err = r.db.Exec("DELETE FROM static_routes WHERE type = 'system'")
+	if err != nil {
+		return fmt.Errorf("failed to delete old system routes: %w", err)
+	}
+
+	for idx, line := range lines[1:] {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 8 {
+			continue
+		}
+
+		iface := fields[0]
+		destHex := fields[1]
+		gwHex := fields[2]
+		metricStr := fields[6]
+		maskHex := fields[7]
+
+		destIP, err := parseHexIP(destHex)
+		if err != nil {
+			continue
+		}
+
+		gwIP, err := parseHexIP(gwHex)
+		if err != nil {
+			continue
+		}
+
+		maskIPStr, err := parseHexIP(maskHex)
+		if err != nil {
+			continue
+		}
+
+		// Convert mask to prefix length
+		prefixLen := 32
+		maskIP := net.ParseIP(maskIPStr)
+		if maskIP != nil {
+			mask := net.IPMask(maskIP.To4())
+			ones, _ := mask.Size()
+			prefixLen = ones
+		}
+
+		metric, _ := strconv.Atoi(metricStr)
+
+		// Format destination as CIDR (e.g. 192.168.1.0/24 or 0.0.0.0/0)
+		destination := fmt.Sprintf("%s/%d", destIP, prefixLen)
+
+		// For direct routes, gateway is typically 0.0.0.0, we can save it as empty string
+		gateway := gwIP
+		if gateway == "0.0.0.0" {
+			gateway = ""
+		}
+
+		routeID := fmt.Sprintf("route-os-%d", idx)
+		description := "System route fetched from kernel"
+
+		_, err = r.db.Exec(`INSERT INTO static_routes (id, destination, gateway, interface, metric, description, status, type) 
+			VALUES (?, ?, ?, ?, ?, ?, 1, 'system')`,
+			routeID, destination, gateway, iface, metric, description)
+		if err != nil {
+			// Ignore or log error
+		}
+	}
+
+	return nil
+}
+
+func parseHexIP(hexStr string) (string, error) {
+	if len(hexStr) != 8 {
+		return "", fmt.Errorf("invalid hex IP length: %s", hexStr)
+	}
+	// The hex string is little-endian format (e.g. "0022A8C0" for 192.168.34.0)
+	var ipBytes [4]byte
+	for i := 0; i < 4; i++ {
+		b, err := strconv.ParseUint(hexStr[i*2:i*2+2], 16, 8)
+		if err != nil {
+			return "", err
+		}
+		ipBytes[i] = byte(b)
+	}
+	// Format bytes in little-endian order (reverse byte index)
+	return fmt.Sprintf("%d.%d.%d.%d", ipBytes[3], ipBytes[2], ipBytes[1], ipBytes[0]), nil
+}
+
+// ClearInterfaces deletes all records from network_interfaces.
+func (r *Repository) ClearInterfaces() error {
+	_, err := r.db.Exec("DELETE FROM network_interfaces")
+	return err
+}
+
+// SyncDNSFromOS reads nameservers from /etc/resolv.conf on Linux and updates the database.
+func (r *Repository) SyncDNSFromOS() error {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+
+	data, err := os.ReadFile("/etc/resolv.conf")
+	if err != nil {
+		return fmt.Errorf("failed to read /etc/resolv.conf: %w", err)
+	}
+
+	var nameservers []string
+	localDomain := "pigate.local"
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") || line == "" {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+
+		if fields[0] == "nameserver" {
+			nameservers = append(nameservers, fields[1])
+		} else if fields[0] == "search" || fields[0] == "domain" {
+			localDomain = fields[1]
+		}
+	}
+
+	primaryDNS := ""
+	secondaryDNS := ""
+
+	if len(nameservers) > 0 {
+		primaryDNS = nameservers[0]
+	}
+	if len(nameservers) > 1 {
+		secondaryDNS = nameservers[1]
+	}
+
+	// If no nameservers found, fallback to defaults
+	if primaryDNS == "" {
+		primaryDNS = "1.1.1.1"
+	}
+	if secondaryDNS == "" {
+		secondaryDNS = "8.8.8.8"
+	}
+
+	_, err = r.db.Exec(`UPDATE system_dns_settings SET 
+		mode = 'static', primary_dns = ?, secondary_dns = ?, local_domain = ?
+		WHERE id = 1`, primaryDNS, secondaryDNS, localDomain)
+	if err != nil {
+		return fmt.Errorf("failed to update DNS settings in DB: %w", err)
+	}
+
+	return nil
 }

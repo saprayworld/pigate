@@ -18,6 +18,7 @@ func main() {
 	port := flag.Int("port", 8080, "Port to run the API server on")
 	dbPath := flag.String("db", "pigate.db", "Path to SQLite database file")
 	mockOS := flag.Bool("mock", true, "Use mocked kernel operations (default true on PC)")
+	mockFromReal := flag.Bool("mock-from-real", false, "Mock operations but initialize/pull from real kernel data at startup")
 	disableEdit := flag.Bool("disable-edit", false, "Disable edit operations (Read-only mode)")
 	flag.Parse()
 
@@ -25,6 +26,7 @@ func main() {
 	log.Printf("Port: %d", *port)
 	log.Printf("Database: %s", *dbPath)
 	log.Printf("Mock OS Integration: %t", *mockOS)
+	log.Printf("Mock From Real Data: %t", *mockFromReal)
 	log.Printf("Disable Edit Mode: %t", *disableEdit)
 
 	// 2. Initialize in-memory logs circular buffer (Ring Buffer)
@@ -42,6 +44,24 @@ func main() {
 	defer sqliteDB.Close()
 
 	repo := db.NewRepository(sqliteDB)
+	repo.SetMockMode(*mockOS, *mockFromReal)
+
+	// Perform initial synchronization of interfaces, routing table, and DNS if real mode or mock-from-real is enabled
+	if !*mockOS || *mockFromReal {
+		log.Printf("Initializing and syncing interfaces, routes, and DNS from OS kernel...")
+		if err := repo.ClearInterfaces(); err != nil {
+			log.Printf("Warning: Failed to clear old network interfaces: %v", err)
+		}
+		if err := repo.SyncInterfacesFromOS(); err != nil {
+			log.Printf("Warning: Failed to sync network interfaces from OS: %v", err)
+		}
+		if err := repo.SyncRoutesFromOS(); err != nil {
+			log.Printf("Warning: Failed to sync static routes from OS: %v", err)
+		}
+		if err := repo.SyncDNSFromOS(); err != nil {
+			log.Printf("Warning: Failed to sync DNS settings from OS: %v", err)
+		}
+	}
 
 	// 4. Instantiate Kernel managers (Force Mock layer for now)
 	var fw kernel.FirewallManager
@@ -49,17 +69,21 @@ func main() {
 	var rt kernel.RoutingManager
 	var dhcp kernel.DhcpManager
 
-	if *mockOS {
+	if *mockOS || *mockFromReal {
 		fw = kernel.NewMockFirewall()
 		net = kernel.NewMockNetwork()
 		rt = kernel.NewMockRouting()
-		dhcp = kernel.NewMockDhcp()
+		mDhcp := kernel.NewMockDhcp()
+		mDhcp.MockFromReal = *mockFromReal
+		dhcp = mDhcp
 	} else {
 		// Real integrations will be swapped here for Raspberry Pi 5 production
 		fw = kernel.NewMockFirewall()
 		net = kernel.NewMockNetwork()
 		rt = kernel.NewMockRouting()
-		dhcp = kernel.NewMockDhcp()
+		mDhcp := kernel.NewMockDhcp()
+		mDhcp.MockFromReal = false
+		dhcp = mDhcp
 	}
 
 	// 5. Instantiate Server & Router

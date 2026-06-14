@@ -1,6 +1,7 @@
 package db
 
 import (
+	"runtime"
 	"testing"
 
 	"pigate/internal/model"
@@ -514,5 +515,122 @@ func TestServiceObjectValidation(t *testing.T) {
 	}
 	if err := repo.CreateService(svcOkICMP); err != nil {
 		t.Errorf("Expected valid ICMP service creation to succeed, got: %v", err)
+	}
+}
+
+func TestHexIPParserAndRouteSyncFallback(t *testing.T) {
+	// Test parseHexIP
+	cases := []struct {
+		hexStr   string
+		expected string
+		err      bool
+	}{
+		{"0022A8C0", "192.168.34.0", false},
+		{"0122A8C0", "192.168.34.1", false},
+		{"00000000", "0.0.0.0", false},
+		{"FFFFFFFF", "255.255.255.255", false},
+		{"123", "", true},
+		{"ZZZZZZZZ", "", true},
+	}
+
+	for _, tc := range cases {
+		res, err := parseHexIP(tc.hexStr)
+		if tc.err {
+			if err == nil {
+				t.Errorf("Expected error for hex %s, got nil", tc.hexStr)
+			}
+		} else {
+			if err != nil {
+				t.Errorf("Unexpected error for hex %s: %v", tc.hexStr, err)
+			}
+			if res != tc.expected {
+				t.Errorf("Expected %s for hex %s, got %s", tc.expected, tc.hexStr, res)
+			}
+		}
+	}
+
+	// Test SyncRoutesFromOS fallback on non-Linux or dummy run
+	db, err := InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	repo.SetMockMode(false, true) // Enable mockFromReal sync
+
+	// Clear interfaces first
+	err = repo.ClearInterfaces()
+	if err != nil {
+		t.Errorf("ClearInterfaces failed: %v", err)
+	}
+
+	// Sync interfaces
+	err = repo.SyncInterfacesFromOS()
+	if err != nil {
+		t.Errorf("SyncInterfacesFromOS failed: %v", err)
+	}
+
+	// Sync routes
+	err = repo.SyncRoutesFromOS()
+	if err != nil {
+		if runtime.GOOS == "linux" {
+			t.Errorf("SyncRoutesFromOS failed on Linux: %v", err)
+		} else {
+			t.Logf("SyncRoutesFromOS returned error on non-Linux: %v", err)
+		}
+	}
+
+	// Sync DNS
+	err = repo.SyncDNSFromOS()
+	if err != nil {
+		if runtime.GOOS == "linux" {
+			t.Errorf("SyncDNSFromOS failed on Linux: %v", err)
+		} else {
+			t.Logf("SyncDNSFromOS returned error on non-Linux: %v", err)
+		}
+	}
+
+	// Verify DNS in DB (if on Linux)
+	if runtime.GOOS == "linux" {
+		dns, err := repo.GetDNSConfig()
+		if err != nil {
+			t.Errorf("GetDNSConfig failed: %v", err)
+		}
+		if dns.PrimaryDNS == "" {
+			t.Errorf("Expected populated PrimaryDNS, got empty")
+		}
+		t.Logf("DNS config after sync: Mode=%s, Primary=%s, Secondary=%s, LocalDomain=%s",
+			dns.Mode, dns.PrimaryDNS, dns.SecondaryDNS, dns.LocalDomain)
+	}
+
+	// Verify mock wlan0 was injected (since we cleared DB and enable mockFromReal)
+	ifaces, err := repo.GetInterfaces()
+	if err != nil {
+		t.Errorf("Failed to get interfaces: %v", err)
+	}
+
+	hasMockWifi := false
+	for _, iface := range ifaces {
+		if iface.Name == "wlan0" && iface.Type == "wireless" {
+			hasMockWifi = true
+		}
+	}
+	if !hasMockWifi {
+		t.Errorf("Expected wlan0 mock wireless interface to be injected, but was not found in %v", ifaces)
+	}
+
+	// Verify that interfaces and routes were actually imported if on Linux
+	if runtime.GOOS == "linux" {
+		t.Logf("Found %d interfaces in DB after sync from OS (including injected wifi if host lacks it)", len(ifaces))
+
+		routes, err := repo.GetRoutes()
+		if err != nil {
+			t.Errorf("Failed to get routes: %v", err)
+		}
+		t.Logf("Found %d routes in DB after sync from OS", len(routes))
+
+		if len(ifaces) == 0 {
+			t.Errorf("Expected at least one network interface in DB on Linux, got 0")
+		}
 	}
 }
