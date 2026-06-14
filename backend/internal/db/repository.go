@@ -974,7 +974,110 @@ func (r *Repository) DeleteDHCPReservation(id string) error {
 // NETWORK INTERFACES
 // =========================================================================
 
+// SyncInterfacesFromOS fetches interfaces from the OS and updates the database.
+func (r *Repository) SyncInterfacesFromOS() error {
+	netIfaces, err := net.Interfaces()
+	if err != nil {
+		return fmt.Errorf("failed to get system interfaces: %w", err)
+	}
+
+	// Fetch existing interfaces names and IDs to avoid duplicate name and keep ID
+	rows, err := r.db.Query("SELECT id, name FROM network_interfaces")
+	if err != nil {
+		return fmt.Errorf("failed to query DB interfaces: %w", err)
+	}
+	defer rows.Close()
+
+	dbMap := make(map[string]string) // name -> id
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err == nil {
+			dbMap[name] = id
+		}
+	}
+
+	for idx, netIface := range netIfaces {
+		// Skip loopback interface
+		if netIface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		// Skip loopback with name
+		if strings.HasPrefix(netIface.Name, "lo") {
+			continue
+		}
+
+		macAddr := netIface.HardwareAddr.String()
+		if macAddr == "" {
+			macAddr = "00:00:00:00:00:00"
+		}
+
+		// Query IP and netmask
+		ipStr := "0.0.0.0"
+		netmaskStr := "24"
+		addrs, err := netIface.Addrs()
+		if err == nil {
+			for _, addr := range addrs {
+				if ipNet, ok := addr.(*net.IPNet); ok {
+					if ipNet.IP.To4() != nil {
+						ipStr = ipNet.IP.String()
+						ones, _ := ipNet.Mask.Size()
+						netmaskStr = fmt.Sprintf("%d", ones)
+						break
+					}
+				}
+			}
+		}
+
+		status := "down"
+		if netIface.Flags&net.FlagUp != 0 {
+			status = "up"
+		}
+
+		ifaceType := "ethernet"
+		if strings.HasPrefix(netIface.Name, "w") {
+			ifaceType = "wireless"
+		}
+
+		if id, exists := dbMap[netIface.Name]; exists {
+			// Update dynamic fields
+			_, err = r.db.Exec(`UPDATE network_interfaces SET 
+				ip = ?, netmask = ?, mac_address = ?, status = ?
+				WHERE id = ?`, ipStr, netmaskStr, macAddr, status, id)
+			if err != nil {
+				// Ignore or log error
+			}
+		} else {
+			// Insert a new interface record
+			id := fmt.Sprintf("iface-os-%d", idx)
+			alias := netIface.Name + "_os"
+			role := "LAN"
+			if netIface.Name == "eth0" || strings.Contains(netIface.Name, "wan") {
+				role = "WAN"
+			}
+			macMode := "hardware"
+			reconnectVal := 0
+			failoverVal := 0
+
+			_, err = r.db.Exec(`INSERT INTO network_interfaces (
+				id, name, alias, role, type, addressing_mode, ip, netmask, gateway, dns1, dns2, mac_address, admin_access, status, speed,
+				mac_mode, real_mac_address, randomize_on_reconnect, failover_enabled
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, netIface.Name, alias, role, ifaceType, "dhcp", ipStr, netmaskStr, "", "8.8.8.8", "1.1.1.1", macAddr, "PING,HTTP,SSH", status, "1000 Mbps",
+				macMode, macAddr, reconnectVal, failoverVal)
+			if err != nil {
+				// Ignore or log error
+			}
+		}
+	}
+
+	return nil
+}
+
 func (r *Repository) GetInterfaces() ([]model.NetworkInterface, error) {
+	// Sync OS interfaces first (ignore error, fallback to whatever is in DB)
+	_ = r.SyncInterfacesFromOS()
+
 	rows, err := r.db.Query(`SELECT 
 		id, name, alias, role, type, addressing_mode, ip, netmask, gateway, dns1, dns2, mac_address, admin_access, status, speed,
 		mac_mode, real_mac_address, randomized_mac, laa_mac_address, randomize_on_reconnect,
@@ -1102,5 +1205,25 @@ func (r *Repository) UpdateSystemTimeSettings(settings model.SystemTimeSettings)
 	}
 	_, err := r.db.Exec("UPDATE system_time_settings SET timezone = ?, ntp_sync = ?, ntp_server = ? WHERE id = 1",
 		settings.Timezone, ntpVal, settings.NTPServer)
+	return err
+}
+
+// CreateInterfaceForTest inserts a network interface for testing purposes.
+func (r *Repository) CreateInterfaceForTest(iface model.NetworkInterface) error {
+	adminAccessStr := strings.Join(iface.AdminAccess, ",")
+	reconInt := 0
+	if iface.RandomizeOnReconnect != nil && *iface.RandomizeOnReconnect {
+		reconInt = 1
+	}
+	foInt := 0
+	if iface.FailoverEnabled != nil && *iface.FailoverEnabled {
+		foInt = 1
+	}
+	_, err := r.db.Exec(`INSERT INTO network_interfaces (
+		id, name, alias, role, type, addressing_mode, ip, netmask, gateway, dns1, dns2, mac_address, admin_access, status, speed,
+		mac_mode, real_mac_address, randomize_on_reconnect, failover_enabled
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		iface.ID, iface.Name, iface.Alias, iface.Role, iface.Type, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.DNS1, iface.DNS2, iface.MacAddress, adminAccessStr, iface.Status, iface.Speed,
+		iface.MacMode, iface.RealMacAddress, reconInt, foInt)
 	return err
 }

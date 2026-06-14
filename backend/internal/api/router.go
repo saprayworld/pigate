@@ -82,6 +82,10 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("GET /api/system/config/export", s.HandleExportConfig)
 	authRoute("POST /api/system/config/import", s.HandleImportConfig)
 
-	// Global CORS Wrapper
-	return CORSMiddleware(mux)
+	var handler http.Handler = mux
+	if s.disableEdit {
+		handler = DisableEditMiddleware(handler)
+	}
+	// Global CORS Wrapper must be outermost to ensure CORS headers are set on all responses (including 403 Forbidden)
+	return CORSMiddleware(handler)
 }

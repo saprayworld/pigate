@@ -27,7 +27,7 @@ func setupTestServer(t *testing.T) (http.Handler, *db.Repository) {
 	dhcp := kernel.NewMockDhcp()
 	ringBuffer := logs.NewRingBuffer(50)
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false)
 	handler := RegisterRoutes(server)
 
 	return handler, repo
@@ -186,8 +186,52 @@ func TestAddressCRUDAPI(t *testing.T) {
 }
 
 func TestWifiScanAPI(t *testing.T) {
-	handler, _ := setupTestServer(t)
+	handler, repo := setupTestServer(t)
 	authToken := "mock_session_id_test_token"
+
+	// Seed test interfaces
+	macMode := "hardware"
+	reconnect := false
+	failover := false
+	macAddr1 := "DC:A6:32:AA:BB:C1"
+	_ = repo.CreateInterfaceForTest(model.NetworkInterface{
+		ID:                   "iface-1",
+		Name:                 "eth0",
+		Alias:                "LAN_Internal",
+		Role:                 "LAN",
+		Type:                 "ethernet",
+		AddressingMode:       "static",
+		IP:                   "192.168.1.1",
+		Netmask:              "24",
+		MacAddress:           macAddr1,
+		AdminAccess:          []string{"PING", "HTTP", "SSH"},
+		Status:               "up",
+		Speed:                "1000 Mbps",
+		MacMode:              &macMode,
+		RealMacAddress:       &macAddr1,
+		RandomizeOnReconnect: &reconnect,
+		FailoverEnabled:      &failover,
+	})
+
+	macAddr2 := "4E:88:2F:BC:A1:90"
+	_ = repo.CreateInterfaceForTest(model.NetworkInterface{
+		ID:                   "iface-2",
+		Name:                 "wlan0",
+		Alias:                "WAN_WiFi",
+		Role:                 "WAN",
+		Type:                 "wireless",
+		AddressingMode:       "dhcp",
+		IP:                   "10.0.0.45",
+		Netmask:              "24",
+		MacAddress:           macAddr2,
+		AdminAccess:          []string{"PING"},
+		Status:               "up",
+		Speed:                "72 Mbps",
+		MacMode:              &macMode,
+		RealMacAddress:       &macAddr2,
+		RandomizeOnReconnect: &reconnect,
+		FailoverEnabled:      &failover,
+	})
 
 	// 1. Scan on ethernet interface (should fail with 400 Bad Request)
 	req := httptest.NewRequest("GET", "/api/interfaces/iface-1/scan", nil)
@@ -207,5 +251,67 @@ func TestWifiScanAPI(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("Expected 200 OK for scanning on wireless interface, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDisableEditMode(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	repo := db.NewRepository(sqliteDB)
+	fw := kernel.NewMockFirewall()
+	net := kernel.NewMockNetwork()
+	rt := kernel.NewMockRouting()
+	dhcp := kernel.NewMockDhcp()
+	ringBuffer := logs.NewRingBuffer(50)
+
+	// Server initialized with disableEdit = true
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, true)
+	handler := RegisterRoutes(server)
+
+	// 1. Login should succeed (POST /api/auth/login)
+	loginPayload := model.LoginRequest{Username: "admin", Password: "admin"}
+	body, _ := json.Marshal(loginPayload)
+	req := httptest.NewRequest("POST", "/api/auth/login", bytes.NewBuffer(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200 OK for login in read-only mode, got %d", rec.Code)
+	}
+
+	authToken := "mock_session_id_test_token"
+
+	// 2. Read operations should succeed (GET /api/interfaces)
+	req = httptest.NewRequest("GET", "/api/interfaces", nil)
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200 OK for GET /api/interfaces in read-only mode, got %d", rec.Code)
+	}
+
+	// 3. Write operations should fail (POST /api/policies)
+	policyInput := model.PolicyRuleInput{
+		Name:         "Block_Test",
+		InInterface:  "eth0",
+		OutInterface: "wlan0",
+		Source:       []string{"ALL"},
+		Destination:  []string{"ALL"},
+		Service:      []string{"ALL"},
+		Action:       "DROP",
+		Log:          false,
+		Status:       true,
+	}
+	policyBody, _ := json.Marshal(policyInput)
+	req = httptest.NewRequest("POST", "/api/policies", bytes.NewBuffer(policyBody))
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected 403 Forbidden for POST /api/policies in read-only mode, got %d", rec.Code)
 	}
 }

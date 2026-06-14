@@ -17,12 +17,13 @@ import (
 )
 
 type Server struct {
-	repo     *db.Repository
-	firewall kernel.FirewallManager
-	network  kernel.NetworkManager
-	routing  kernel.RoutingManager
-	dhcp     kernel.DhcpManager
-	logs     *logs.RingBuffer
+	repo        *db.Repository
+	firewall    kernel.FirewallManager
+	network     kernel.NetworkManager
+	routing     kernel.RoutingManager
+	dhcp        kernel.DhcpManager
+	logs        *logs.RingBuffer
+	disableEdit bool
 }
 
 func NewServer(
@@ -32,14 +33,16 @@ func NewServer(
 	rt kernel.RoutingManager,
 	dhcp kernel.DhcpManager,
 	l *logs.RingBuffer,
+	disableEdit bool,
 ) *Server {
 	return &Server{
-		repo:     repo,
-		firewall: fw,
-		network:  net,
-		routing:  rt,
-		dhcp:     dhcp,
-		logs:     l,
+		repo:        repo,
+		firewall:    fw,
+		network:     net,
+		routing:     rt,
+		dhcp:        dhcp,
+		logs:        l,
+		disableEdit: disableEdit,
 	}
 }
 

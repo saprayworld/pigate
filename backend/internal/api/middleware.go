@@ -172,3 +172,18 @@ func RateLimitMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// DisableEditMiddleware blocks all POST, PUT, DELETE, and PATCH requests except for auth login/logout
+func DisableEditMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete || r.Method == http.MethodPatch {
+			if r.URL.Path != "/api/auth/login" && r.URL.Path != "/api/auth/logout" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"message": "Editing is disabled (Read-only mode)"}`))
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}

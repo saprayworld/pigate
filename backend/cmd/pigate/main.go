@@ -18,12 +18,14 @@ func main() {
 	port := flag.Int("port", 8080, "Port to run the API server on")
 	dbPath := flag.String("db", "pigate.db", "Path to SQLite database file")
 	mockOS := flag.Bool("mock", true, "Use mocked kernel operations (default true on PC)")
+	disableEdit := flag.Bool("disable-edit", false, "Disable edit operations (Read-only mode)")
 	flag.Parse()
 
 	log.Printf("Starting PiGate Backend Server (Go v1.26.4)...")
 	log.Printf("Port: %d", *port)
 	log.Printf("Database: %s", *dbPath)
 	log.Printf("Mock OS Integration: %t", *mockOS)
+	log.Printf("Disable Edit Mode: %t", *disableEdit)
 
 	// 2. Initialize in-memory logs circular buffer (Ring Buffer)
 	ringBuffer := logs.NewRingBuffer(50)
@@ -61,7 +63,7 @@ func main() {
 	}
 
 	// 5. Instantiate Server & Router
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit)
 	handler := api.RegisterRoutes(server)
 
 	// 6. Start HTTP API listener
