@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PiGate — Network Interface Documentation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0f;
+      --bg-card: #111118;
+      --bg-raised: #18181f;
+      --border: #23232e;
+      --border-accent: #2e2e3e;
+      --text: #e8e8f0;
+      --text-muted: #7a7a96;
+      --text-dim: #4a4a60;
+      --primary: #6ee7b7;
+      --primary-dim: rgba(110,231,183,0.12);
+      --primary-border: rgba(110,231,183,0.25);
+      --blue: #60a5fa;
+      --blue-dim: rgba(96,165,250,0.12);
+      --purple: #a78bfa;
+      --purple-dim: rgba(167,139,250,0.12);
+      --amber: #fbbf24;
+      --amber-dim: rgba(251,191,36,0.12);
+      --red: #f87171;
+      --red-dim: rgba(248,113,113,0.12);
+      --cyan: #22d3ee;
+      --cyan-dim: rgba(34,211,238,0.12);
+      --radius: 8px;
+      --radius-lg: 12px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      font-size: 14px;
+      min-height: 100vh;
+    }
+
+    /* ── Layout ── */
+    .layout { display: flex; min-height: 100vh; }
+
+    .sidebar {
+      width: 260px;
+      flex-shrink: 0;
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 100vh;
+      overflow-y: auto;
+      background: var(--bg-card);
+      border-right: 1px solid var(--border);
+      padding: 24px 0;
+      z-index: 100;
+    }
+
+    .sidebar-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 20px 24px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+
+    .sidebar-logo .icon {
+      width: 32px; height: 32px;
+      background: var(--primary-dim);
+      border: 1px solid var(--primary-border);
+      border-radius: 8px;
+      display: grid; place-items: center;
+      font-size: 16px;
+    }
+
+    .sidebar-logo .title { font-size: 13px; font-weight: 600; color: var(--text); }
+    .sidebar-logo .subtitle { font-size: 11px; color: var(--text-muted); }
+
+    .nav-section { padding: 0 12px; margin-bottom: 8px; }
+    .nav-label { font-size: 10px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; padding: 0 8px 6px; }
+
+    .nav-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 8px;
+      border-radius: 6px;
+      font-size: 13px;
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: background 0.15s, color 0.15s;
+      cursor: pointer;
+    }
+    .nav-item:hover { background: var(--bg-raised); color: var(--text); }
+    .nav-item.active { background: var(--primary-dim); color: var(--primary); }
+    .nav-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; opacity: 0.5; }
+    .nav-item.active .nav-dot { opacity: 1; }
+
+    .main {
+      margin-left: 260px;
+      flex: 1;
+      max-width: calc(100% - 260px);
+    }
+
+    /* ── Header ── */
+    .page-header {
+      padding: 48px 56px 36px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .breadcrumb { font-size: 12px; color: var(--text-muted); margin-bottom: 16px; display: flex; align-items: center; gap: 6px; }
+    .breadcrumb span { color: var(--text-dim); }
+
+    .page-title {
+      font-size: 28px; font-weight: 700; color: var(--text);
+      letter-spacing: -0.5px; margin-bottom: 8px;
+    }
+
+    .page-desc { font-size: 14px; color: var(--text-muted); max-width: 600px; }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px; border-radius: 20px;
+      font-size: 11px; font-weight: 500;
+    }
+    .badge-green { background: var(--primary-dim); color: var(--primary); border: 1px solid var(--primary-border); }
+    .badge-blue  { background: var(--blue-dim);    color: var(--blue);    border: 1px solid rgba(96,165,250,0.25); }
+    .badge-amber { background: var(--amber-dim);   color: var(--amber);   border: 1px solid rgba(251,191,36,0.25); }
+    .badge-red   { background: var(--red-dim);     color: var(--red);     border: 1px solid rgba(248,113,113,0.25); }
+    .badge-purple{ background: var(--purple-dim);  color: var(--purple);  border: 1px solid rgba(167,139,250,0.25); }
+    .badge-cyan  { background: var(--cyan-dim);    color: var(--cyan);    border: 1px solid rgba(34,211,238,0.25); }
+
+    .meta-row { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+
+    /* ── Content ── */
+    .content { padding: 48px 56px; max-width: 900px; }
+
+    /* ── Section ── */
+    .section { margin-bottom: 56px; }
+
+    .section-header {
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 20px; padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .section-num {
+      width: 28px; height: 28px; border-radius: 7px;
+      background: var(--primary-dim); border: 1px solid var(--primary-border);
+      display: grid; place-items: center;
+      font-size: 12px; font-weight: 700; color: var(--primary);
+      flex-shrink: 0;
+    }
+
+    .section-title { font-size: 18px; font-weight: 600; color: var(--text); }
+    .section-file { font-size: 11px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+
+    /* ── Code blocks ── */
+    .code-wrap {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      margin: 16px 0;
+    }
+
+    .code-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 16px;
+      background: var(--bg-raised);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .code-lang { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    .code-filename { font-size: 11px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
+
+    .code-body {
+      padding: 20px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12.5px;
+      line-height: 1.8;
+      color: #c9d1d9;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    /* Syntax highlights */
+    .kw  { color: #ff7b72; }
+    .tp  { color: #79c0ff; }
+    .str { color: #a5d6ff; }
+    .cmt { color: #556070; font-style: italic; }
+    .fn  { color: #d2a8ff; }
+    .num { color: #ffa657; }
+    .sql-kw { color: #ff7b72; }
+    .sql-tp  { color: #79c0ff; }
+    .sql-str { color: #a5d6ff; }
+    .sql-cmt { color: #556070; font-style: italic; }
+
+    /* ── Tables ── */
+    .table-wrap {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      margin: 16px 0;
+    }
+
+    table { width: 100%; border-collapse: collapse; }
+
+    thead { background: var(--bg-raised); }
+    thead th { padding: 10px 16px; text-align: left; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border); }
+
+    tbody tr { border-bottom: 1px solid var(--border); }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--bg-raised); }
+    tbody td { padding: 10px 16px; font-size: 13px; color: var(--text); vertical-align: top; }
+    tbody td:first-child { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--primary); }
+
+    .td-type { color: var(--blue); font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+    .td-muted { color: var(--text-muted); font-size: 12px; }
+
+    /* ── Cards ── */
+    .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin: 16px 0; }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.15s;
+    }
+    .card:hover { border-color: var(--border-accent); }
+    .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; }
+    .card.green::before { background: var(--primary); }
+    .card.blue::before  { background: var(--blue); }
+    .card.purple::before{ background: var(--purple); }
+    .card.amber::before { background: var(--amber); }
+    .card.red::before   { background: var(--red); }
+    .card.cyan::before  { background: var(--cyan); }
+
+    .card-icon { font-size: 22px; margin-bottom: 10px; }
+    .card-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+    .card-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+
+    /* ── Flow diagram ── */
+    .flow {
+      display: flex; align-items: stretch; gap: 0;
+      margin: 20px 0; flex-wrap: wrap;
+    }
+
+    .flow-step {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      flex: 1; min-width: 120px;
+      position: relative;
+    }
+    .flow-step + .flow-step { margin-left: -1px; border-radius: 0; }
+    .flow-step:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+    .flow-step:last-child  { border-radius: 0 var(--radius) var(--radius) 0; }
+
+    .flow-num { font-size: 10px; font-weight: 700; color: var(--text-dim); margin-bottom: 4px; }
+    .flow-label { font-size: 12px; font-weight: 600; color: var(--text); }
+    .flow-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+    /* ── Alert / callout ── */
+    .callout {
+      display: flex; gap: 12px;
+      padding: 14px 16px;
+      border-radius: var(--radius);
+      border: 1px solid;
+      margin: 16px 0;
+      font-size: 13px;
+    }
+    .callout-icon { font-size: 16px; flex-shrink: 0; line-height: 1.5; }
+    .callout-body { flex: 1; }
+    .callout-title { font-weight: 600; margin-bottom: 4px; }
+    .callout.warn  { background: var(--amber-dim); border-color: rgba(251,191,36,0.3); color: #c9a23a; }
+    .callout.info  { background: var(--blue-dim);  border-color: rgba(96,165,250,0.3);  color: #7bb3f8; }
+    .callout.tip   { background: var(--primary-dim); border-color: var(--primary-border); color: var(--primary); }
+
+    /* ── inline code ── */
+    code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 6px;
+      color: var(--primary);
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-accent); border-radius: 3px; }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      .sidebar { display: none; }
+      .main { margin-left: 0; max-width: 100%; }
+      .page-header, .content { padding: 24px 20px; }
+    }
+
+    /* ── Source section at bottom ── */
+    .source-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; margin: 16px 0; }
+
+    .source-item {
+      display: flex; align-items: flex-start; gap: 10px;
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 12px 14px;
+      text-decoration: none; transition: border-color 0.15s;
+    }
+    .source-item:hover { border-color: var(--primary-border); }
+    .source-item .si-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+    .source-item .si-path { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--primary); display: block; margin-bottom: 2px; }
+    .source-item .si-desc { font-size: 12px; color: var(--text-muted); }
+
+    /* ── Helper probe list ── */
+    .probe-list { list-style: none; margin: 12px 0; }
+    .probe-list li {
+      display: flex; align-items: baseline; gap: 10px;
+      padding: 7px 0; border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .probe-list li:last-child { border-bottom: none; }
+    .probe-num { width: 20px; height: 20px; border-radius: 50%; background: var(--bg-raised); border: 1px solid var(--border); font-size: 10px; font-weight: 700; color: var(--text-muted); display: grid; place-items: center; flex-shrink: 0; }
+    .probe-path { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--cyan); }
+    .probe-via  { font-size: 11px; color: var(--text-dim); }
+  </style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ══ SIDEBAR ══ -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="icon">🔥</div>
+      <div>
+        <div class="title">PiGate Docs</div>
+        <div class="subtitle">Developer Reference</div>
+      </div>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">Network Interface</div>
+      <a class="nav-item" href="#model"><span class="nav-dot"></span>Data Model</a>
+      <a class="nav-item" href="#schema"><span class="nav-dot"></span>Database Schema</a>
+      <a class="nav-item" href="#sync"><span class="nav-dot"></span>OS Sync Flow</a>
+      <a class="nav-item" href="#helpers"><span class="nav-dot"></span>Helper Functions</a>
+      <a class="nav-item" href="#api"><span class="nav-dot"></span>REST API</a>
+      <a class="nav-item" href="#mock"><span class="nav-dot"></span>Mock Mode</a>
+      <a class="nav-item" href="#notes"><span class="nav-dot"></span>ข้อควรระวัง</a>
+      <a class="nav-item" href="#files"><span class="nav-dot"></span>ไฟล์ที่เกี่ยวข้อง</a>
+    </div>
+  </aside>
+
+  <!-- ══ MAIN ══ -->
+  <div class="main">
+
+    <!-- Header -->
+    <div class="page-header">
+      <div class="breadcrumb">docs / data <span>›</span> interface</div>
+      <h1 class="page-title">Network Interface</h1>
+      <p class="page-desc">บันทึกการทำงานของระบบ Network Interface ใน PiGate ตั้งแต่ OS Sync, Database, REST API จนถึง Mock Mode</p>
+      <div class="meta-row">
+        <span class="badge badge-green">● Backend</span>
+        <span class="badge badge-blue">Go 1.22+</span>
+        <span class="badge badge-purple">SQLite</span>
+        <span class="badge badge-cyan">Linux Only</span>
+        <span class="badge badge-amber">อัปเดต 2026-06-15</span>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+
+      <!-- ── 1. Data Model ── -->
+      <div class="section" id="model">
+        <div class="section-header">
+          <div class="section-num">1</div>
+          <div>
+            <div class="section-title">Data Model</div>
+            <div class="section-file">backend/internal/model/types.go</div>
+          </div>
+        </div>
+
+        <div class="code-wrap">
+          <div class="code-header">
+            <span class="code-lang">Go</span>
+            <span class="code-filename">model/types.go</span>
+          </div>
+          <div class="code-body"><span class="kw">type</span> <span class="tp">NetworkInterface</span> <span class="kw">struct</span> {
+  <span class="cmt">// ── Core Fields ──────────────────────────────────</span>
+  ID             <span class="tp">string</span>    <span class="str">`json:"id"`</span>                <span class="cmt">// เช่น "iface-1", "iface-os-2"</span>
+  Name           <span class="tp">string</span>    <span class="str">`json:"name"`</span>              <span class="cmt">// OS name เช่น "eth0", "wlan0"</span>
+  Alias          <span class="tp">string</span>    <span class="str">`json:"alias"`</span>             <span class="cmt">// ชื่อแสดงผล เช่น "LAN_Internal"</span>
+  Role           <span class="tp">string</span>    <span class="str">`json:"role"`</span>              <span class="cmt">// "LAN" | "WAN"</span>
+  Type           <span class="tp">string</span>    <span class="str">`json:"type"`</span>              <span class="cmt">// "ethernet" | "wireless"</span>
+  AddressingMode <span class="tp">string</span>    <span class="str">`json:"addressingMode"`</span>    <span class="cmt">// "static" | "dhcp"</span>
+  IP             <span class="tp">string</span>    <span class="str">`json:"ip"`</span>                <span class="cmt">// IPv4 address</span>
+  Netmask        <span class="tp">string</span>    <span class="str">`json:"netmask"`</span>           <span class="cmt">// CIDR prefix เช่น "24"</span>
+  Gateway        <span class="tp">string</span>    <span class="str">`json:"gateway"`</span>           <span class="cmt">// Default gateway IP</span>
+  DNS1           <span class="tp">string</span>    <span class="str">`json:"dns1"`</span>
+  DNS2           <span class="tp">string</span>    <span class="str">`json:"dns2"`</span>
+  MacAddress     <span class="tp">string</span>    <span class="str">`json:"macAddress"`</span>        <span class="cmt">// hardware หรือ randomized</span>
+  AdminAccess    []<span class="tp">string</span>   <span class="str">`json:"adminAccess"`</span>       <span class="cmt">// ["PING","HTTP","HTTPS","SSH"]</span>
+  Status         <span class="tp">string</span>    <span class="str">`json:"status"`</span>            <span class="cmt">// "up" | "down"</span>
+  Speed          <span class="tp">string</span>    <span class="str">`json:"speed"`</span>             <span class="cmt">// เช่น "1000 Mbps", "1 Gbps"</span>
+
+  <span class="cmt">// ── Wireless-only Fields (optional/nullable) ─────</span>
+  ConnectedSSID        *<span class="tp">string</span>  <span class="str">`json:"connectedSSID,omitempty"`</span>
+  WifiPassword         *<span class="tp">string</span>  <span class="str">`json:"wifiPassword,omitempty"`</span>
+  WifiSecurity         *<span class="tp">string</span>  <span class="str">`json:"wifiSecurity,omitempty"`</span>
+  MacMode              *<span class="tp">string</span>  <span class="str">`json:"macMode,omitempty"`</span>        <span class="cmt">// "hardware"|"randomized"|"laa"</span>
+  RealMacAddress       *<span class="tp">string</span>  <span class="str">`json:"realMacAddress,omitempty"`</span>
+  RandomizedMac        *<span class="tp">string</span>  <span class="str">`json:"randomizedMac,omitempty"`</span>
+  LaaMacAddress        *<span class="tp">string</span>  <span class="str">`json:"laaMacAddress,omitempty"`</span>
+  RandomizeOnReconnect *<span class="tp">bool</span>    <span class="str">`json:"randomizeOnReconnect,omitempty"`</span>
+  FailoverEnabled      *<span class="tp">bool</span>    <span class="str">`json:"failoverEnabled,omitempty"`</span>
+  BackupSSID           *<span class="tp">string</span>  <span class="str">`json:"backupSsid,omitempty"`</span>
+  BackupWifiPassword   *<span class="tp">string</span>  <span class="str">`json:"backupWifiPassword,omitempty"`</span>
+  IPCheckTimeout       *<span class="tp">int</span>     <span class="str">`json:"ipCheckTimeout,omitempty"`</span>
+  PrimaryMaxRetries    *<span class="tp">int</span>     <span class="str">`json:"primaryMaxRetries,omitempty"`</span>
+  FailoverCooldown     *<span class="tp">int</span>     <span class="str">`json:"failoverCooldown,omitempty"`</span>
+}</div>
+        </div>
+      </div>
+
+      <!-- ── 2. Database Schema ── -->
+      <div class="section" id="schema">
+        <div class="section-header">
+          <div class="section-num">2</div>
+          <div>
+            <div class="section-title">Database Schema</div>
+            <div class="section-file">backend/internal/db/connection.go</div>
+          </div>
+        </div>
+
+        <div class="code-wrap">
+          <div class="code-header">
+            <span class="code-lang">SQL</span>
+            <span class="code-filename">connection.go → migrate()</span>
+          </div>
+          <div class="code-body"><span class="sql-kw">CREATE TABLE IF NOT EXISTS</span> <span class="sql-tp">network_interfaces</span> (
+  id                     <span class="sql-tp">TEXT</span>     <span class="sql-kw">PRIMARY KEY</span>,
+  name                   <span class="sql-tp">TEXT</span>     <span class="sql-kw">UNIQUE NOT NULL</span>,
+  alias                  <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span>,
+  role                   <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span> <span class="sql-kw">CHECK</span>(role <span class="sql-kw">IN</span> (<span class="sql-str">'LAN'</span>, <span class="sql-str">'WAN'</span>)),
+  type                   <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span> <span class="sql-kw">CHECK</span>(type <span class="sql-kw">IN</span> (<span class="sql-str">'ethernet'</span>, <span class="sql-str">'wireless'</span>)),
+  addressing_mode        <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span> <span class="sql-kw">CHECK</span>(addressing_mode <span class="sql-kw">IN</span> (<span class="sql-str">'dhcp'</span>, <span class="sql-str">'static'</span>)),
+  ip                     <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span>,
+  netmask                <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span>,
+  gateway                <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span>,
+  dns1                   <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span>,
+  dns2                   <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span>,
+  mac_address            <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span>,
+  admin_access           <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span>, <span class="sql-cmt">-- comma-separated: "PING,HTTP,SSH"</span>
+  status                 <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span> <span class="sql-kw">CHECK</span>(status <span class="sql-kw">IN</span> (<span class="sql-str">'up'</span>, <span class="sql-str">'down'</span>)),
+  speed                  <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span>,
+  <span class="sql-cmt">-- Wireless optional fields</span>
+  connected_ssid         <span class="sql-tp">TEXT</span>,
+  wifi_password          <span class="sql-tp">TEXT</span>,
+  wifi_security          <span class="sql-tp">TEXT</span>,
+  mac_mode               <span class="sql-tp">TEXT</span>     <span class="sql-kw">CHECK</span>(mac_mode <span class="sql-kw">IN</span> (<span class="sql-str">'hardware'</span>, <span class="sql-str">'randomized'</span>, <span class="sql-str">'laa'</span>)),
+  real_mac_address       <span class="sql-tp">TEXT</span>,
+  randomized_mac         <span class="sql-tp">TEXT</span>,
+  laa_mac_address        <span class="sql-tp">TEXT</span>,
+  randomize_on_reconnect <span class="sql-tp">INTEGER</span>  <span class="sql-kw">DEFAULT</span> <span class="num">0</span>,
+  failover_enabled       <span class="sql-tp">INTEGER</span>  <span class="sql-kw">DEFAULT</span> <span class="num">0</span>,
+  backup_ssid            <span class="sql-tp">TEXT</span>,
+  backup_wifi_password   <span class="sql-tp">TEXT</span>,
+  ip_check_timeout       <span class="sql-tp">INTEGER</span>,
+  primary_max_retries    <span class="sql-tp">INTEGER</span>,
+  failover_cooldown      <span class="sql-tp">INTEGER</span>
+);</div>
+        </div>
+
+        <p style="color:var(--text-muted);font-size:13px;margin:12px 0 8px;">Seed data เริ่มต้น (สร้างเมื่อ DB ว่าง)</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Type</th><th>Mode</th><th>IP</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>iface-1</td>
+                <td><code>eth0</code></td>
+                <td><span class="badge badge-green">LAN</span></td>
+                <td>ethernet</td>
+                <td><span class="badge badge-blue">static</span></td>
+                <td class="td-muted">192.168.1.1/24</td>
+              </tr>
+              <tr>
+                <td>iface-2</td>
+                <td><code>wlan0</code></td>
+                <td><span class="badge badge-amber">WAN</span></td>
+                <td>wireless</td>
+                <td><span class="badge badge-purple">dhcp</span></td>
+                <td class="td-muted">10.0.0.45/24</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── 3. OS Sync Flow ── -->
+      <div class="section" id="sync">
+        <div class="section-header">
+          <div class="section-num">3</div>
+          <div>
+            <div class="section-title">OS Sync Flow</div>
+            <div class="section-file">backend/internal/db/repository.go → SyncInterfacesFromOS()</div>
+          </div>
+        </div>
+
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+          ฟังก์ชันนี้ถูกเรียกอัตโนมัติทุกครั้งที่ client ขอ <code>GET /api/interfaces</code> (เฉพาะเมื่อไม่อยู่ใน pure mock mode)
+        </p>
+
+        <div class="flow">
+          <div class="flow-step">
+            <div class="flow-num">STEP 1</div>
+            <div class="flow-label">net.Interfaces()</div>
+            <div class="flow-sub">ดึง list จาก kernel</div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-num">STEP 2</div>
+            <div class="flow-label">Skip lo / loopback</div>
+            <div class="flow-sub">FlagLoopback หรือ "lo*"</div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-num">STEP 3</div>
+            <div class="flow-label">อ่าน IP/MAC/status</div>
+            <div class="flow-sub">Addrs(), HardwareAddr, FlagUp</div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-num">STEP 4</div>
+            <div class="flow-label">ตรวจ DB</div>
+            <div class="flow-sub">มีอยู่แล้ว? UPDATE / ไม่มี? INSERT</div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
+          <div class="card green">
+            <div class="card-icon">🔄</div>
+            <div class="card-title">กรณี UPDATE (มีใน DB แล้ว)</div>
+            <div class="card-desc">อัปเดตเฉพาะ <code>ip</code>, <code>netmask</code>, <code>mac_address</code>, <code>status</code> — ไม่แตะ <code>addressing_mode</code> และค่าที่ user ตั้งไว้</div>
+          </div>
+          <div class="card blue">
+            <div class="card-icon">➕</div>
+            <div class="card-title">กรณี INSERT (ใหม่)</div>
+            <div class="card-desc">อ่านทุกค่าจาก OS จริงผ่าน helper functions: addressing_mode, gateway, DNS, speed</div>
+          </div>
+        </div>
+
+        <p style="font-size:13px;color:var(--text-muted);margin:20px 0 10px;">ค่าที่อ่านจาก OS เมื่อ INSERT interface ใหม่</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Field</th><th>Helper</th><th>แหล่งข้อมูล</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>addressing_mode</td>
+                <td class="td-type">detectAddressingMode()</td>
+                <td class="td-muted">DHCP lease/PID files</td>
+              </tr>
+              <tr>
+                <td>gateway</td>
+                <td class="td-type">getGatewayForInterface()</td>
+                <td class="td-muted">/proc/net/route</td>
+              </tr>
+              <tr>
+                <td>dns1, dns2</td>
+                <td class="td-type">getSystemDNS()</td>
+                <td class="td-muted">/etc/resolv.conf</td>
+              </tr>
+              <tr>
+                <td>speed</td>
+                <td class="td-type">getInterfaceSpeed()</td>
+                <td class="td-muted">/sys/class/net/&lt;iface&gt;/speed</td>
+              </tr>
+              <tr>
+                <td>role</td>
+                <td class="td-type">(inline)</td>
+                <td class="td-muted">eth0 / *wan* → WAN, อื่นๆ → LAN</td>
+              </tr>
+              <tr>
+                <td>type</td>
+                <td class="td-type">(inline)</td>
+                <td class="td-muted">ชื่อขึ้นต้น "w" → wireless</td>
+              </tr>
+              <tr>
+                <td>admin_access</td>
+                <td class="td-type">(inline)</td>
+                <td class="td-muted">LAN = "PING,HTTP,SSH" / WAN = "PING"</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── 4. Helper Functions ── -->
+      <div class="section" id="helpers">
+        <div class="section-header">
+          <div class="section-num">4</div>
+          <div>
+            <div class="section-title">Helper Functions</div>
+            <div class="section-file">backend/internal/db/repository.go</div>
+          </div>
+        </div>
+
+        <!-- detectAddressingMode -->
+        <div style="margin-bottom:28px;">
+          <p style="font-size:15px;font-weight:600;color:var(--primary);font-family:'JetBrains Mono',monospace;margin-bottom:8px;">detectAddressingMode(ifaceName, ifaceIndex)</p>
+          <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">ตรวจสอบว่า interface ใช้ DHCP หรือ Static โดยตรวจ file system ตามลำดับ ถ้าพบไฟล์ที่มีอยู่จริง → คืน <code>"dhcp"</code>, fallback → <code>"static"</code></p>
+          <ul class="probe-list">
+            <li><span class="probe-num">1</span><span class="probe-path">/run/dhclient-&lt;iface&gt;.pid</span><span class="probe-via">— dhclient PID</span></li>
+            <li><span class="probe-num">2</span><span class="probe-path">/var/run/dhclient.&lt;iface&gt;.pid</span><span class="probe-via">— dhclient PID (alt path)</span></li>
+            <li><span class="probe-num">3</span><span class="probe-path">/var/lib/dhcp/dhclient.&lt;iface&gt;.leases</span><span class="probe-via">— dhclient lease</span></li>
+            <li><span class="probe-num">4</span><span class="probe-path">/var/lib/dhcpcd/&lt;iface&gt;.lease</span><span class="probe-via">— dhcpcd5 lease</span></li>
+            <li><span class="probe-num">5</span><span class="probe-path">/run/systemd/netif/leases/&lt;ifaceIndex&gt;</span><span class="probe-via">— systemd-networkd</span></li>
+            <li><span class="probe-num">6</span><span class="probe-path">/var/lib/NetworkManager/dhclient-&lt;iface&gt;.conf</span><span class="probe-via">— NetworkManager</span></li>
+            <li><span class="probe-num">7</span><span class="probe-path">/run/NetworkManager/dhcp-&lt;iface&gt;.conf</span><span class="probe-via">— NetworkManager (runtime)</span></li>
+          </ul>
+        </div>
+
+        <!-- getGatewayForInterface -->
+        <div style="margin-bottom:28px;">
+          <p style="font-size:15px;font-weight:600;color:var(--blue);font-family:'JetBrains Mono',monospace;margin-bottom:8px;">getGatewayForInterface(ifaceName)</p>
+          <p style="font-size:13px;color:var(--text-muted);margin-bottom:10px;">อ่าน <code>/proc/net/route</code> → กรอง row ที่ <code>Iface == ifaceName</code> AND <code>Destination == 00000000</code> → แปลง Gateway hex (little-endian) เป็น IP</p>
+          <div class="code-wrap">
+            <div class="code-header"><span class="code-lang">Format</span><span class="code-filename">/proc/net/route</span></div>
+            <div class="code-body">Iface   Destination  Gateway   Flags  RefCnt  Use  Metric  Mask      MTU  Window  IRTT
+eth1    00000000     0101A8C0  0003   0       0    100     00000000  0    0       0
+         ↑ Default    ↑ Little-endian hex → 192.168.1.1</div>
+          </div>
+        </div>
+
+        <!-- getSystemDNS -->
+        <div style="margin-bottom:28px;">
+          <p style="font-size:15px;font-weight:600;color:var(--purple);font-family:'JetBrains Mono',monospace;margin-bottom:8px;">getSystemDNS() → (dns1, dns2 string)</p>
+          <p style="font-size:13px;color:var(--text-muted);margin-bottom:10px;">อ่าน <code>/etc/resolv.conf</code> เก็บบรรทัด <code>nameserver</code> สูงสุด 2 ตัว ถ้าไม่พบ fallback เป็น <code>8.8.8.8</code> / <code>1.1.1.1</code></p>
+        </div>
+
+        <!-- getInterfaceSpeed -->
+        <div>
+          <p style="font-size:15px;font-weight:600;color:var(--amber);font-family:'JetBrains Mono',monospace;margin-bottom:8px;">getInterfaceSpeed(ifaceName) → string</p>
+          <p style="font-size:13px;color:var(--text-muted);margin-bottom:10px;">อ่าน <code>/sys/class/net/&lt;iface&gt;/speed</code> (หน่วย Mbps) แปลงเป็น human-readable</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>ค่าใน sysfs</th><th>ผลลัพธ์</th></tr></thead>
+              <tbody>
+                <tr><td>1000</td><td class="td-muted">1 Gbps</td></tr>
+                <tr><td>100</td><td class="td-muted">100 Mbps</td></tr>
+                <tr><td>-1 หรือ error</td><td class="td-muted">unknown (wireless ปกติจะได้ค่านี้)</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 5. REST API ── -->
+      <div class="section" id="api">
+        <div class="section-header">
+          <div class="section-num">5</div>
+          <div>
+            <div class="section-title">REST API Endpoints</div>
+            <div class="section-file">backend/internal/api/router.go · handlers.go</div>
+          </div>
+        </div>
+
+        <div class="callout info">
+          <span class="callout-icon">🔐</span>
+          <div class="callout-body">
+            <div class="callout-title">Authentication Required</div>
+            ทุก endpoint ต้องผ่าน session cookie หรือ <code>Authorization: Bearer &lt;token&gt;</code>
+          </div>
+        </div>
+
+        <div class="table-wrap" style="margin-top:16px;">
+          <table>
+            <thead><tr><th>Method</th><th>Path</th><th>Handler</th><th>หน้าที่</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><span class="badge badge-green">GET</span></td>
+                <td><code>/api/interfaces</code></td>
+                <td class="td-type">HandleGetInterfaces</td>
+                <td class="td-muted">ดึง list ทั้งหมด (trigger OS sync)</td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-amber">PUT</span></td>
+                <td><code>/api/interfaces/{id}</code></td>
+                <td class="td-type">HandleUpdateInterface</td>
+                <td class="td-muted">แก้ไขค่า interface</td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-blue">POST</span></td>
+                <td><code>/api/interfaces/{id}/toggle</code></td>
+                <td class="td-type">HandleToggleInterface</td>
+                <td class="td-muted">เปิด/ปิด interface (OS + DB)</td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-green">GET</span></td>
+                <td><code>/api/interfaces/{id}/scan</code></td>
+                <td class="td-type">HandleScanWifi</td>
+                <td class="td-muted">สแกน Wi-Fi SSID (wireless เท่านั้น)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p style="font-size:13px;font-weight:600;color:var(--text);margin:20px 0 8px;">HandleToggleInterface — ลำดับการทำงาน</p>
+        <div class="flow" style="flex-direction:column;gap:8px;">
+          <div style="display:flex;align-items:center;gap:12px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;">
+            <span style="width:22px;height:22px;border-radius:50%;background:var(--primary-dim);border:1px solid var(--primary-border);display:grid;place-items:center;font-size:10px;font-weight:700;color:var(--primary);flex-shrink:0;">1</span>
+            <span style="font-size:13px;color:var(--text);">ดึง interface จาก DB ตรวจว่ามีอยู่จริง</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;">
+            <span style="width:22px;height:22px;border-radius:50%;background:var(--primary-dim);border:1px solid var(--primary-border);display:grid;place-items:center;font-size:10px;font-weight:700;color:var(--primary);flex-shrink:0;">2</span>
+            <span style="font-size:13px;color:var(--text);">คำนวณ <code>nextStatus</code> → <code>up</code> ↔ <code>down</code></span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;">
+            <span style="width:22px;height:22px;border-radius:50%;background:var(--primary-dim);border:1px solid var(--primary-border);display:grid;place-items:center;font-size:10px;font-weight:700;color:var(--primary);flex-shrink:0;">3</span>
+            <span style="font-size:13px;color:var(--text);">เรียก <code>kernel.NetworkManager.ToggleInterface(name, isUp)</code> → OS action จริง</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;">
+            <span style="width:22px;height:22px;border-radius:50%;background:var(--primary-dim);border:1px solid var(--primary-border);display:grid;place-items:center;font-size:10px;font-weight:700;color:var(--primary);flex-shrink:0;">4</span>
+            <span style="font-size:13px;color:var(--text);">อัปเดต <code>status</code> ใน DB ผ่าน <code>repo.ToggleInterfaceStatus()</code></span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;">
+            <span style="width:22px;height:22px;border-radius:50%;background:var(--primary-dim);border:1px solid var(--primary-border);display:grid;place-items:center;font-size:10px;font-weight:700;color:var(--primary);flex-shrink:0;">5</span>
+            <span style="font-size:13px;color:var(--text);">คืน interface object ที่อัปเดตแล้วกลับไปยัง client</span>
+          </div>
+        </div>
+
+        <p style="font-size:13px;font-weight:600;color:var(--text);margin:20px 0 8px;">HandleUpdateInterface — Fields ที่แก้ไขได้ผ่าน API</p>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+          <code>alias</code><code>role</code><code>addressingMode</code><code>ip</code><code>netmask</code><code>gateway</code>
+          <code>dns1</code><code>dns2</code><code>macAddress</code><code>adminAccess</code><code>status</code>
+          <code>macMode</code><code>laaMacAddress</code><code>randomizeOnReconnect</code><code>backupSsid</code><code>backupWifiPassword</code>
+        </div>
+        <div class="callout warn" style="margin-top:12px;">
+          <span class="callout-icon">⚠️</span>
+          <div class="callout-body">
+            <div class="callout-title">ไม่สามารถแก้ไขได้ผ่าน API</div>
+            <code>name</code> และ <code>type</code> ผูกกับ OS — ไม่มี field เหล่านี้ใน update handler
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 6. Mock Mode ── -->
+      <div class="section" id="mock">
+        <div class="section-header">
+          <div class="section-num">6</div>
+          <div>
+            <div class="section-title">Mock Mode</div>
+            <div class="section-file">backend/internal/kernel/mock.go</div>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>CLI Flag</th><th>mockMode</th><th>mockFromReal</th><th>พฤติกรรม</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>(default)</td>
+                <td><span class="badge badge-amber">true</span></td>
+                <td><span class="badge badge-red">false</span></td>
+                <td class="td-muted">ใช้ seed data ใน DB เท่านั้น ไม่ sync OS</td>
+              </tr>
+              <tr>
+                <td><code>-mock-from-real</code></td>
+                <td><span class="badge badge-red">false</span></td>
+                <td><span class="badge badge-green">true</span></td>
+                <td class="td-muted">Sync จาก OS จริง + inject mock wireless ถ้าไม่มี</td>
+              </tr>
+              <tr>
+                <td>(production)</td>
+                <td><span class="badge badge-red">false</span></td>
+                <td><span class="badge badge-red">false</span></td>
+                <td class="td-muted">Sync จาก OS จริงเต็มรูปแบบ</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p style="font-size:13px;font-weight:600;color:var(--text);margin:20px 0 10px;">Mock Wireless Injection</p>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">ถ้า <code>mockFromReal == true</code> และไม่มี <code>wireless</code> interface ใน DB → ระบบจะ inject mock wlan0 อัตโนมัติ</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">Go</span><span class="code-filename">repository.go → SyncInterfacesFromOS()</span></div>
+          <div class="code-body">mockWifi := model.NetworkInterface{
+  ID:             <span class="str">"iface-mock-wlan0"</span>,
+  Name:           <span class="str">"wlan0"</span>,
+  Role:           <span class="str">"WAN"</span>,
+  Type:           <span class="str">"wireless"</span>,
+  AddressingMode: <span class="str">"dhcp"</span>,
+  IP:             <span class="str">"10.0.0.45"</span>,
+  ConnectedSSID:  <span class="str">"MyHome_5G"</span>,
+  WifiSecurity:   <span class="str">"WPA2-PSK"</span>,
+  MacMode:        <span class="str">"randomized"</span>,
+}</div>
+        </div>
+      </div>
+
+      <!-- ── 7. ข้อควรระวัง ── -->
+      <div class="section" id="notes">
+        <div class="section-header">
+          <div class="section-num">7</div>
+          <div>
+            <div class="section-title">ข้อควรระวัง</div>
+          </div>
+        </div>
+
+        <div class="callout warn" style="margin-bottom:12px;">
+          <span class="callout-icon">⚠️</span>
+          <div class="callout-body">
+            <div class="callout-title">addressing_mode ไม่ sync อัตโนมัติ</div>
+            ค่า <code>addressing_mode</code> ในกรณี UPDATE จะ<strong>ไม่ถูก overwrite</strong> โดย OS sync — เจตนาเพื่อรักษาการตั้งค่าของ user หากผู้ใช้บันทึก <code>static</code> ไว้แต่ OS ถูกเปลี่ยน → ค่า DB จะยังเป็น <code>static</code> จนกว่าจะ UPDATE ผ่าน API
+          </div>
+        </div>
+
+        <div class="callout warn" style="margin-bottom:12px;">
+          <span class="callout-icon">⚠️</span>
+          <div class="callout-body">
+            <div class="callout-title">speed อาจเป็น "unknown" สำหรับ wireless</div>
+            <code>/sys/class/net/wlan0/speed</code> มักคืน <code>-1</code> เพราะความเร็ว Wi-Fi ขึ้นอยู่กับสภาพสัญญาณ ณ ขณะนั้น ไม่ใช่ค่าคงที่
+          </div>
+        </div>
+
+        <div class="callout tip">
+          <span class="callout-icon">💡</span>
+          <div class="callout-body">
+            <div class="callout-title">DNS Fallback</div>
+            ถ้าอ่าน <code>/etc/resolv.conf</code> ไม่ได้หรือว่างเปล่า ระบบจะ fallback เป็น <code>8.8.8.8</code> / <code>1.1.1.1</code> อัตโนมัติ จะไม่เกิด empty string ที่ database
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 8. ไฟล์ที่เกี่ยวข้อง ── -->
+      <div class="section" id="files">
+        <div class="section-header">
+          <div class="section-num">8</div>
+          <div>
+            <div class="section-title">ไฟล์ที่เกี่ยวข้อง</div>
+          </div>
+        </div>
+        <div class="source-grid">
+          <div class="source-item">
+            <span class="si-icon">📄</span>
+            <div>
+              <span class="si-path">model/types.go</span>
+              <span class="si-desc">Data model struct ของ NetworkInterface</span>
+            </div>
+          </div>
+          <div class="source-item">
+            <span class="si-icon">🗄️</span>
+            <div>
+              <span class="si-path">db/connection.go</span>
+              <span class="si-desc">DB schema, migrate(), seed()</span>
+            </div>
+          </div>
+          <div class="source-item">
+            <span class="si-icon">🔁</span>
+            <div>
+              <span class="si-path">db/repository.go</span>
+              <span class="si-desc">CRUD + SyncInterfacesFromOS + helpers</span>
+            </div>
+          </div>
+          <div class="source-item">
+            <span class="si-icon">🌐</span>
+            <div>
+              <span class="si-path">api/handlers.go</span>
+              <span class="si-desc">HTTP handlers สำหรับ interface endpoints</span>
+            </div>
+          </div>
+          <div class="source-item">
+            <span class="si-icon">🗺️</span>
+            <div>
+              <span class="si-path">api/router.go</span>
+              <span class="si-desc">Route mapping ทั้งหมด</span>
+            </div>
+          </div>
+          <div class="source-item">
+            <span class="si-icon">⚙️</span>
+            <div>
+              <span class="si-path">kernel/interfaces.go</span>
+              <span class="si-desc">Interface abstractions (NetworkManager)</span>
+            </div>
+          </div>
+          <div class="source-item">
+            <span class="si-icon">🧪</span>
+            <div>
+              <span class="si-path">kernel/mock.go</span>
+              <span class="si-desc">Mock implementations สำหรับ dev/test</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /layout -->
+
+<script>
+  // Highlight active nav item based on scroll
+  const sections = document.querySelectorAll('.section[id]');
+  const navItems = document.querySelectorAll('.nav-item');
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        navItems.forEach(n => n.classList.remove('active'));
+        const active = document.querySelector(`.nav-item[href="#${entry.target.id}"]`);
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+
+  sections.forEach(s => observer.observe(s));
+</script>
+</body>
+</html>

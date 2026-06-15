@@ -987,6 +987,161 @@ func (r *Repository) DeleteDHCPReservation(id string) error {
 // NETWORK INTERFACES
 // =========================================================================
 
+// detectAddressingMode checks whether a network interface is configured via DHCP or static IP.
+// It probes common DHCP lease/PID file locations used by dhclient, dhcpcd, and systemd-networkd.
+func detectAddressingMode(ifaceName string, ifaceIndex int) string {
+	// Check dhclient PID files
+	dhclientPaths := []string{
+		fmt.Sprintf("/run/dhclient-%s.pid", ifaceName),
+		fmt.Sprintf("/run/dhclient.%s.pid", ifaceName),
+		fmt.Sprintf("/var/run/dhclient-%s.pid", ifaceName),
+		fmt.Sprintf("/var/run/dhclient.%s.pid", ifaceName),
+	}
+	for _, p := range dhclientPaths {
+		if _, err := os.Stat(p); err == nil {
+			return "dhcp"
+		}
+	}
+
+	// Check dhclient lease files
+	dhclientLeaseFiles := []string{
+		fmt.Sprintf("/var/lib/dhcp/dhclient.%s.leases", ifaceName),
+		fmt.Sprintf("/var/lib/dhclient/dhclient.%s.leases", ifaceName),
+	}
+	for _, p := range dhclientLeaseFiles {
+		if _, err := os.Stat(p); err == nil {
+			return "dhcp"
+		}
+	}
+
+	// Check dhcpcd lease files
+	dhcpcdPaths := []string{
+		fmt.Sprintf("/var/lib/dhcpcd/%s.lease", ifaceName),
+		fmt.Sprintf("/var/lib/dhcpcd5/%s.lease", ifaceName),
+	}
+	for _, p := range dhcpcdPaths {
+		if _, err := os.Stat(p); err == nil {
+			return "dhcp"
+		}
+	}
+
+	// Check systemd-networkd lease file (named by interface index)
+	systemdLeasePath := fmt.Sprintf("/run/systemd/netif/leases/%d", ifaceIndex)
+	if _, err := os.Stat(systemdLeasePath); err == nil {
+		return "dhcp"
+	}
+
+	// Check NetworkManager DHCP lease (nm-dhcp-*)
+	nmLeasePath := fmt.Sprintf("/var/lib/NetworkManager/dhclient-%s.conf", ifaceName)
+	if _, err := os.Stat(nmLeasePath); err == nil {
+		return "dhcp"
+	}
+
+	// Check /run/NetworkManager/dhcp directory for lease files
+	nmRunLeases := []string{
+		fmt.Sprintf("/run/NetworkManager/dhcp-%s.conf", ifaceName),
+		fmt.Sprintf("/run/NetworkManager/dhclient-%s.conf", ifaceName),
+	}
+	for _, p := range nmRunLeases {
+		if _, err := os.Stat(p); err == nil {
+			return "dhcp"
+		}
+	}
+
+	// Fall back to static
+	return "static"
+}
+
+// getGatewayForInterface reads /proc/net/route to find the default gateway for the given interface.
+func getGatewayForInterface(ifaceName string) string {
+	data, err := os.ReadFile("/proc/net/route")
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines[1:] {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		// fields[0]=Iface, fields[1]=Destination, fields[2]=Gateway
+		if fields[0] != ifaceName {
+			continue
+		}
+		// Default route has destination 00000000
+		if fields[1] != "00000000" {
+			continue
+		}
+		gwHex := fields[2]
+		if len(gwHex) != 8 {
+			continue
+		}
+		// Little-endian hex -> IP
+		var b [4]byte
+		for i := 0; i < 4; i++ {
+			v, err := strconv.ParseUint(gwHex[i*2:i*2+2], 16, 8)
+			if err != nil {
+				break
+			}
+			b[i] = byte(v)
+		}
+		gwIP := fmt.Sprintf("%d.%d.%d.%d", b[3], b[2], b[1], b[0])
+		if gwIP == "0.0.0.0" {
+			return ""
+		}
+		return gwIP
+	}
+	return ""
+}
+
+// getSystemDNS reads /etc/resolv.conf and returns up to two nameserver entries.
+func getSystemDNS() (dns1, dns2 string) {
+	data, err := os.ReadFile("/etc/resolv.conf")
+	if err != nil {
+		return "", ""
+	}
+	var servers []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") || line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "nameserver" {
+			servers = append(servers, fields[1])
+			if len(servers) >= 2 {
+				break
+			}
+		}
+	}
+	if len(servers) >= 1 {
+		dns1 = servers[0]
+	}
+	if len(servers) >= 2 {
+		dns2 = servers[1]
+	}
+	return dns1, dns2
+}
+
+// getInterfaceSpeed reads the link speed from /sys/class/net/<iface>/speed.
+// Returns a human-readable string such as "1000 Mbps" or "unknown" if not available.
+func getInterfaceSpeed(ifaceName string) string {
+	speedPath := fmt.Sprintf("/sys/class/net/%s/speed", ifaceName)
+	data, err := os.ReadFile(speedPath)
+	if err != nil {
+		return "unknown"
+	}
+	speedStr := strings.TrimSpace(string(data))
+	speedMbps, err := strconv.Atoi(speedStr)
+	if err != nil || speedMbps <= 0 {
+		return "unknown"
+	}
+	if speedMbps >= 1000 {
+		return fmt.Sprintf("%d Gbps", speedMbps/1000)
+	}
+	return fmt.Sprintf("%d Mbps", speedMbps)
+}
+
 // SyncInterfacesFromOS fetches interfaces from the OS and updates the database.
 func (r *Repository) SyncInterfacesFromOS() error {
 	netIfaces, err := net.Interfaces()
@@ -1008,6 +1163,9 @@ func (r *Repository) SyncInterfacesFromOS() error {
 			dbMap[name] = id
 		}
 	}
+
+	// Pre-read system DNS once (shared across all interfaces)
+	sysDNS1, sysDNS2 := getSystemDNS()
 
 	for idx, netIface := range netIfaces {
 		// Skip loopback interface
@@ -1053,7 +1211,8 @@ func (r *Repository) SyncInterfacesFromOS() error {
 		}
 
 		if id, exists := dbMap[netIface.Name]; exists {
-			// Update dynamic fields
+			// Update dynamic fields only (ip, netmask, mac, status)
+			// addressing_mode and other user-configured fields are intentionally preserved
 			_, err = r.db.Exec(`UPDATE network_interfaces SET 
 				ip = ?, netmask = ?, mac_address = ?, status = ?
 				WHERE id = ?`, ipStr, netmaskStr, macAddr, status, id)
@@ -1061,7 +1220,7 @@ func (r *Repository) SyncInterfacesFromOS() error {
 				// Ignore or log error
 			}
 		} else {
-			// Insert a new interface record
+			// Insert a new interface record — read real values from OS
 			id := fmt.Sprintf("iface-os-%d", idx)
 			alias := netIface.Name + "_os"
 			role := "LAN"
@@ -1072,11 +1231,35 @@ func (r *Repository) SyncInterfacesFromOS() error {
 			reconnectVal := 0
 			failoverVal := 0
 
+			// Detect addressing mode from OS DHCP lease/pid files
+			addrMode := detectAddressingMode(netIface.Name, netIface.Index)
+
+			// Read default gateway for this interface from kernel routing table
+			gateway := getGatewayForInterface(netIface.Name)
+
+			// Read interface speed from sysfs
+			speed := getInterfaceSpeed(netIface.Name)
+
+			// Use system DNS; fall back to well-known public resolvers if unavailable
+			dns1, dns2 := sysDNS1, sysDNS2
+			if dns1 == "" {
+				dns1 = "8.8.8.8"
+			}
+			if dns2 == "" {
+				dns2 = "1.1.1.1"
+			}
+
+			// Default admin access based on role
+			adminAccess := "PING,HTTP,SSH"
+			if role == "WAN" {
+				adminAccess = "PING"
+			}
+
 			_, err = r.db.Exec(`INSERT INTO network_interfaces (
 				id, name, alias, role, type, addressing_mode, ip, netmask, gateway, dns1, dns2, mac_address, admin_access, status, speed,
 				mac_mode, real_mac_address, randomize_on_reconnect, failover_enabled
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				id, netIface.Name, alias, role, ifaceType, "dhcp", ipStr, netmaskStr, "", "8.8.8.8", "1.1.1.1", macAddr, "PING,HTTP,SSH", status, "1000 Mbps",
+				id, netIface.Name, alias, role, ifaceType, addrMode, ipStr, netmaskStr, gateway, dns1, dns2, macAddr, adminAccess, status, speed,
 				macMode, macAddr, reconnectVal, failoverVal)
 			if err != nil {
 				// Ignore or log error
