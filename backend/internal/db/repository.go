@@ -1094,34 +1094,8 @@ func getGatewayForInterface(ifaceName string) string {
 	return ""
 }
 
-// getSystemDNS reads /etc/resolv.conf and returns up to two nameserver entries.
-func getSystemDNS() (dns1, dns2 string) {
-	data, err := os.ReadFile("/etc/resolv.conf")
-	if err != nil {
-		return "", ""
-	}
-	var servers []string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "#") || line == "" {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[0] == "nameserver" {
-			servers = append(servers, fields[1])
-			if len(servers) >= 2 {
-				break
-			}
-		}
-	}
-	if len(servers) >= 1 {
-		dns1 = servers[0]
-	}
-	if len(servers) >= 2 {
-		dns2 = servers[1]
-	}
-	return dns1, dns2
-}
+// NOTE: DNS is managed globally via system_dns_settings (SyncDNSFromOS / DNS Settings page).
+// Per-interface dns1/dns2 fields have been removed.
 
 // getInterfaceSpeed reads the link speed from /sys/class/net/<iface>/speed.
 // Returns a human-readable string such as "1000 Mbps" or "unknown" if not available.
@@ -1163,9 +1137,6 @@ func (r *Repository) SyncInterfacesFromOS() error {
 			dbMap[name] = id
 		}
 	}
-
-	// Pre-read system DNS once (shared across all interfaces)
-	sysDNS1, sysDNS2 := getSystemDNS()
 
 	for idx, netIface := range netIfaces {
 		// Skip loopback interface
@@ -1240,15 +1211,6 @@ func (r *Repository) SyncInterfacesFromOS() error {
 			// Read interface speed from sysfs
 			speed := getInterfaceSpeed(netIface.Name)
 
-			// Use system DNS; fall back to well-known public resolvers if unavailable
-			dns1, dns2 := sysDNS1, sysDNS2
-			if dns1 == "" {
-				dns1 = "8.8.8.8"
-			}
-			if dns2 == "" {
-				dns2 = "1.1.1.1"
-			}
-
 			// Default admin access based on role
 			adminAccess := "PING,HTTP,SSH"
 			if role == "WAN" {
@@ -1256,10 +1218,10 @@ func (r *Repository) SyncInterfacesFromOS() error {
 			}
 
 			_, err = r.db.Exec(`INSERT INTO network_interfaces (
-				id, name, alias, role, type, addressing_mode, ip, netmask, gateway, dns1, dns2, mac_address, admin_access, status, speed,
+				id, name, alias, role, type, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
 				mac_mode, real_mac_address, randomize_on_reconnect, failover_enabled
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				id, netIface.Name, alias, role, ifaceType, addrMode, ipStr, netmaskStr, gateway, dns1, dns2, macAddr, adminAccess, status, speed,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, netIface.Name, alias, role, ifaceType, addrMode, ipStr, netmaskStr, gateway, macAddr, adminAccess, status, speed,
 				macMode, macAddr, reconnectVal, failoverVal)
 			if err != nil {
 				// Ignore or log error
@@ -1283,8 +1245,6 @@ func (r *Repository) SyncInterfacesFromOS() error {
 				IP:             "10.0.0.45",
 				Netmask:        "24",
 				Gateway:        "10.0.0.1",
-				DNS1:           "8.8.8.8",
-				DNS2:           "1.1.1.1",
 				MacAddress:     "4E:88:2F:BC:A1:90",
 				AdminAccess:    []string{"PING"},
 				Status:         "up",
@@ -1331,7 +1291,7 @@ func (r *Repository) GetInterfaces() ([]model.NetworkInterface, error) {
 	}
 
 	rows, err := r.db.Query(`SELECT 
-		id, name, alias, role, type, addressing_mode, ip, netmask, gateway, dns1, dns2, mac_address, admin_access, status, speed,
+		id, name, alias, role, type, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
 		mac_mode, real_mac_address, randomized_mac, laa_mac_address, randomize_on_reconnect,
 		connected_ssid, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, ip_check_timeout, primary_max_retries, failover_cooldown
 		FROM network_interfaces`)
@@ -1347,7 +1307,7 @@ func (r *Repository) GetInterfaces() ([]model.NetworkInterface, error) {
 		var reconnectInt, failoverInt int
 		err := rows.Scan(
 			&iface.ID, &iface.Name, &iface.Alias, &iface.Role, &iface.Type, &iface.AddressingMode,
-			&iface.IP, &iface.Netmask, &iface.Gateway, &iface.DNS1, &iface.DNS2, &iface.MacAddress,
+			&iface.IP, &iface.Netmask, &iface.Gateway, &iface.MacAddress,
 			&adminAccessStr, &iface.Status, &iface.Speed,
 			&iface.MacMode, &iface.RealMacAddress, &iface.RandomizedMac, &iface.LaaMacAddress, &reconnectInt,
 			&iface.ConnectedSSID, &iface.WifiSecurity, &failoverInt, &iface.BackupSSID, &iface.BackupWifiPassword,
@@ -1372,7 +1332,7 @@ func (r *Repository) GetInterfaces() ([]model.NetworkInterface, error) {
 
 func (r *Repository) GetInterfaceByID(id string) (*model.NetworkInterface, error) {
 	row := r.db.QueryRow(`SELECT 
-		id, name, alias, role, type, addressing_mode, ip, netmask, gateway, dns1, dns2, mac_address, admin_access, status, speed,
+		id, name, alias, role, type, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
 		mac_mode, real_mac_address, randomized_mac, laa_mac_address, randomize_on_reconnect,
 		connected_ssid, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, ip_check_timeout, primary_max_retries, failover_cooldown
 		FROM network_interfaces WHERE id = ?`, id)
@@ -1381,7 +1341,7 @@ func (r *Repository) GetInterfaceByID(id string) (*model.NetworkInterface, error
 	var reconnectInt, failoverInt int
 	err := row.Scan(
 		&iface.ID, &iface.Name, &iface.Alias, &iface.Role, &iface.Type, &iface.AddressingMode,
-		&iface.IP, &iface.Netmask, &iface.Gateway, &iface.DNS1, &iface.DNS2, &iface.MacAddress,
+		&iface.IP, &iface.Netmask, &iface.Gateway, &iface.MacAddress,
 		&adminAccessStr, &iface.Status, &iface.Speed,
 		&iface.MacMode, &iface.RealMacAddress, &iface.RandomizedMac, &iface.LaaMacAddress, &reconnectInt,
 		&iface.ConnectedSSID, &iface.WifiSecurity, &failoverInt, &iface.BackupSSID, &iface.BackupWifiPassword,
@@ -1417,12 +1377,12 @@ func (r *Repository) UpdateInterface(iface model.NetworkInterface) error {
 	}
 
 	_, err := r.db.Exec(`UPDATE network_interfaces SET 
-		alias = ?, role = ?, addressing_mode = ?, ip = ?, netmask = ?, gateway = ?, dns1 = ?, dns2 = ?, mac_address = ?, admin_access = ?, 
+		alias = ?, role = ?, addressing_mode = ?, ip = ?, netmask = ?, gateway = ?, mac_address = ?, admin_access = ?, 
 		mac_mode = ?, real_mac_address = ?, randomized_mac = ?, laa_mac_address = ?, randomize_on_reconnect = ?,
 		connected_ssid = ?, wifi_security = ?, failover_enabled = ?, backup_ssid = ?, backup_wifi_password = ?, 
 		ip_check_timeout = ?, primary_max_retries = ?, failover_cooldown = ?
 		WHERE id = ?`,
-		iface.Alias, iface.Role, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.DNS1, iface.DNS2, iface.MacAddress, adminAccessStr,
+		iface.Alias, iface.Role, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.MacAddress, adminAccessStr,
 		iface.MacMode, iface.RealMacAddress, iface.RandomizedMac, iface.LaaMacAddress, reconInt,
 		iface.ConnectedSSID, iface.WifiSecurity, foInt, iface.BackupSSID, iface.BackupWifiPassword,
 		iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown, iface.ID)
@@ -1472,10 +1432,10 @@ func (r *Repository) CreateInterfaceForTest(iface model.NetworkInterface) error 
 		foInt = 1
 	}
 	_, err := r.db.Exec(`INSERT INTO network_interfaces (
-		id, name, alias, role, type, addressing_mode, ip, netmask, gateway, dns1, dns2, mac_address, admin_access, status, speed,
+		id, name, alias, role, type, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
 		mac_mode, real_mac_address, randomize_on_reconnect, failover_enabled
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		iface.ID, iface.Name, iface.Alias, iface.Role, iface.Type, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.DNS1, iface.DNS2, iface.MacAddress, adminAccessStr, iface.Status, iface.Speed,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		iface.ID, iface.Name, iface.Alias, iface.Role, iface.Type, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.MacAddress, adminAccessStr, iface.Status, iface.Speed,
 		iface.MacMode, iface.RealMacAddress, reconInt, foInt)
 	return err
 }

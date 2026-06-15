@@ -226,8 +226,6 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 	iface.IP = updates.IP
 	iface.Netmask = updates.Netmask
 	iface.Gateway = updates.Gateway
-	iface.DNS1 = updates.DNS1
-	iface.DNS2 = updates.DNS2
 	iface.MacAddress = updates.MacAddress
 	iface.AdminAccess = updates.AdminAccess
 	iface.Status = updates.Status

@@ -398,8 +398,6 @@ export default function Interfaces() {
         ip: formMode === "static" ? formIp : editingIface.ip,
         netmask: formMode === "static" ? formNetmask : editingIface.netmask,
         gateway: formMode === "static" ? formGateway : editingIface.gateway,
-        dns1: "",
-        dns2: "",
         adminAccess: formAccess,
       }
 

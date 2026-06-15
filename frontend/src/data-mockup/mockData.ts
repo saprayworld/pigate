@@ -258,8 +258,6 @@ export interface NetworkInterface {
   ip: string                  // e.g. "192.168.1.1"
   netmask: string             // e.g. "24"
   gateway: string             // e.g. "192.168.1.254" (used for static)
-  dns1: string
-  dns2: string
   macAddress: string          // Effective MAC address currently active
   adminAccess: AdminAccess[]
   status: "up" | "down"
@@ -295,8 +293,6 @@ export const initialNetworkInterfaces: NetworkInterface[] = [
     ip: "192.168.1.1",
     netmask: "24",
     gateway: "",
-    dns1: "",
-    dns2: "",
     macAddress: "DC:A6:32:AA:BB:C1",
     realMacAddress: "DC:A6:32:AA:BB:C1",
     macMode: "hardware",
@@ -314,8 +310,6 @@ export const initialNetworkInterfaces: NetworkInterface[] = [
     ip: "10.0.0.45",
     netmask: "24",
     gateway: "10.0.0.1",
-    dns1: "8.8.8.8",
-    dns2: "1.1.1.1",
     macAddress: "4E:88:2F:BC:A1:90", // effective MAC
     realMacAddress: "DC:A6:32:AA:BB:C2", // hardware MAC
     macMode: "randomized",

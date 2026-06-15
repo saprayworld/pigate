@@ -19,8 +19,6 @@ type NetworkInterface struct {
     IP                   string   // IPv4 address
     Netmask              string   // CIDR prefix (เช่น "24")
     Gateway              string   // Default gateway IP
-    DNS1                 string   // Primary DNS
-    DNS2                 string   // Secondary DNS
     MacAddress           string   // MAC address (อาจเป็น hardware หรือ randomized)
     AdminAccess          []string // ["PING", "HTTP", "HTTPS", "SSH"]
     Status               string   // "up" หรือ "down"
@@ -61,8 +59,6 @@ CREATE TABLE IF NOT EXISTS network_interfaces (
     ip                      TEXT NOT NULL,
     netmask                 TEXT NOT NULL,
     gateway                 TEXT NOT NULL,
-    dns1                    TEXT NOT NULL,
-    dns2                    TEXT NOT NULL,
     mac_address             TEXT NOT NULL,
     admin_access            TEXT NOT NULL,  -- comma separated: "PING,HTTP,SSH"
     status                  TEXT NOT NULL CHECK(status IN ('up', 'down')),
@@ -130,7 +126,6 @@ func (r *Repository) GetInterfaces() ([]model.NetworkInterface, error) {
 |---|---|---|
 | `addressing_mode` | `detectAddressingMode()` | ตรวจ DHCP lease/PID files |
 | `gateway` | `getGatewayForInterface()` | `/proc/net/route` |
-| `dns1`, `dns2` | `getSystemDNS()` | `/etc/resolv.conf` |
 | `speed` | `getInterfaceSpeed()` | `/sys/class/net/<iface>/speed` |
 | `admin_access` | (inline logic) | LAN=`"PING,HTTP,SSH"`, WAN=`"PING"` |
 | `role` | (inline logic) | `eth0`/`*wan*` → WAN, อื่นๆ → LAN |
@@ -158,12 +153,6 @@ func (r *Repository) GetInterfaces() ([]model.NetworkInterface, error) {
 - แปลง Gateway hex little-endian เป็น IP string
 - ถ้า gateway เป็น `0.0.0.0` คืนค่า `""`
 
-### `getSystemDNS()`
-
-- อ่าน `/etc/resolv.conf`
-- เก็บ `nameserver` entries สูงสุด 2 ตัว
-- Fallback เป็น `8.8.8.8` / `1.1.1.1` ถ้าไม่พบ
-
 ### `getInterfaceSpeed(ifaceName)`
 
 - อ่าน `/sys/class/net/<iface>/speed` (หน่วย Mbps)
@@ -186,7 +175,7 @@ func (r *Repository) GetInterfaces() ([]model.NetworkInterface, error) {
 
 ### `HandleUpdateInterface` — Fields ที่ update ได้
 
-`alias`, `role`, `addressingMode`, `ip`, `netmask`, `gateway`, `dns1`, `dns2`, `macAddress`, `adminAccess`, `status`, `macMode`, `laaMacAddress`, `randomizeOnReconnect`, `backupSsid`, `backupWifiPassword`
+`alias`, `role`, `addressingMode`, `ip`, `netmask`, `gateway`, `macAddress`, `adminAccess`, `status`, `macMode`, `laaMacAddress`, `randomizeOnReconnect`, `backupSsid`, `backupWifiPassword`
 
 > **หมายเหตุ**: `name` และ `type` **ไม่สามารถแก้ไขได้** ผ่าน API (ผูกกับ OS)
 
@@ -234,11 +223,9 @@ MAC Mode: randomized
 
 3. **`speed` อาจเป็น `"unknown"`** — สำหรับ wireless interface, `/sys/class/net/wlan0/speed` อาจ return ค่า `-1` หรือ error เพราะความเร็วขึ้นอยู่กับ connection ณ ขณะนั้น
 
-4. **DNS fallback** — ถ้าอ่าน `/etc/resolv.conf` ไม่ได้หรือว่าง จะ fallback เป็น `8.8.8.8` / `1.1.1.1` อัตโนมัติ
+4. **`net.FlagUp` ≠ Administratively Down** — `FlagUp` อ่านจาก kernel IFF_UP flag เท่านั้น การรัน `nmcli connection down <name>` อาจไม่เปลี่ยน IFF_UP เพราะ NM deactivate เฉพาะ connection profile ไม่ได้สั่ง `ip link set down` เสมอไป → สถานะอาจไม่ sync ถ้าใช้ `nmcli` โดยตรง ควรใช้ API `POST /toggle` แทน
 
-5. **`net.FlagUp` ≠ Administratively Down** — `FlagUp` อ่านจาก kernel IFF_UP flag เท่านั้น การรัน `nmcli connection down <name>` อาจไม่เปลี่ยน IFF_UP เพราะ NM deactivate เฉพาะ connection profile ไม่ได้สั่ง `ip link set down` เสมอไป → สถานะอาจไม่ sync ถ้าใช้ `nmcli` โดยตรง ควรใช้ API `POST /toggle` แทน
-
-6. **Production mode ต้องการ Linux Capabilities** — `RealNetwork` (netlink) ต้องการ `cap_net_admin` บน binary ก่อนใช้งาน:
+5. **Production mode ต้องการ Linux Capabilities** — `RealNetwork` (netlink) ต้องการ `cap_net_admin` บน binary ก่อนใช้งาน:
    ```bash
    sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
    ```

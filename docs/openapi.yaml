@@ -197,10 +197,6 @@ paths:
                   type: string
                 gateway:
                   type: string
-                dns1:
-                  type: string
-                dns2:
-                  type: string
                 adminAccess:
                   type: array
                   items:
@@ -1191,8 +1187,6 @@ components:
         - ip
         - netmask
         - gateway
-        - dns1
-        - dns2
         - macAddress
         - adminAccess
         - status
@@ -1226,12 +1220,6 @@ components:
           type: string
           example: "24"
         gateway:
-          type: string
-          example: ""
-        dns1:
-          type: string
-          example: ""
-        dns2:
           type: string
           example: ""
         macAddress:

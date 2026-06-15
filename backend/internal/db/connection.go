@@ -150,8 +150,6 @@ func migrate(db *sql.DB) error {
 			ip TEXT NOT NULL,
 			netmask TEXT NOT NULL,
 			gateway TEXT NOT NULL,
-			dns1 TEXT NOT NULL,
-			dns2 TEXT NOT NULL,
 			mac_address TEXT NOT NULL,
 			admin_access TEXT NOT NULL, -- comma separated values like "PING,HTTP,SSH"
 			status TEXT NOT NULL CHECK(status IN ('up', 'down')),
@@ -270,16 +268,16 @@ func seed(db *sql.DB) error {
 	}
 	if ifaceCount == 0 {
 		_, err := db.Exec(`INSERT INTO network_interfaces (
-			id, name, alias, role, type, addressing_mode, ip, netmask, gateway, dns1, dns2, mac_address, admin_access, status, speed,
+			id, name, alias, role, type, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
 			mac_mode, real_mac_address, randomized_mac, laa_mac_address, randomize_on_reconnect,
 			connected_ssid, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, ip_check_timeout, primary_max_retries, failover_cooldown
 		) VALUES 
 		(
-			'iface-1', 'eth0', 'LAN_Internal', 'LAN', 'ethernet', 'static', '192.168.1.1', '24', '', '', '', 'DC:A6:32:AA:BB:C1', 'PING,HTTP,SSH', 'up', '1000 Mbps',
+			'iface-1', 'eth0', 'LAN_Internal', 'LAN', 'ethernet', 'static', '192.168.1.1', '24', '', 'DC:A6:32:AA:BB:C1', 'PING,HTTP,SSH', 'up', '1000 Mbps',
 			'hardware', 'DC:A6:32:AA:BB:C1', NULL, NULL, 0, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL
 		),
 		(
-			'iface-2', 'wlan0', 'WAN_WiFi', 'WAN', 'wireless', 'dhcp', '10.0.0.45', '24', '10.0.0.1', '8.8.8.8', '1.1.1.1', '4E:88:2F:BC:A1:90', 'PING', 'up', '72 Mbps',
+			'iface-2', 'wlan0', 'WAN_WiFi', 'WAN', 'wireless', 'dhcp', '10.0.0.45', '24', '10.0.0.1', '4E:88:2F:BC:A1:90', 'PING', 'up', '72 Mbps',
 			'randomized', 'DC:A6:32:AA:BB:C2', '4E:88:2F:BC:A1:90', '9A:11:22:33:44:55', 1,
 			'MyHome_5G', 'WPA2-PSK', 0, 'MyHome_2G', 'backupPassword123', 15, 3, 60
 		)`)

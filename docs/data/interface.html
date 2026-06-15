@@ -410,8 +410,6 @@
   IP             <span class="tp">string</span>    <span class="str">`json:"ip"`</span>                <span class="cmt">// IPv4 address</span>
   Netmask        <span class="tp">string</span>    <span class="str">`json:"netmask"`</span>           <span class="cmt">// CIDR prefix เช่น "24"</span>
   Gateway        <span class="tp">string</span>    <span class="str">`json:"gateway"`</span>           <span class="cmt">// Default gateway IP</span>
-  DNS1           <span class="tp">string</span>    <span class="str">`json:"dns1"`</span>
-  DNS2           <span class="tp">string</span>    <span class="str">`json:"dns2"`</span>
   MacAddress     <span class="tp">string</span>    <span class="str">`json:"macAddress"`</span>        <span class="cmt">// hardware หรือ randomized</span>
   AdminAccess    []<span class="tp">string</span>   <span class="str">`json:"adminAccess"`</span>       <span class="cmt">// ["PING","HTTP","HTTPS","SSH"]</span>
   Status         <span class="tp">string</span>    <span class="str">`json:"status"`</span>            <span class="cmt">// "up" | "down"</span>
@@ -461,8 +459,6 @@
   ip                     <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span>,
   netmask                <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span>,
   gateway                <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span>,
-  dns1                   <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span>,
-  dns2                   <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span>,
   mac_address            <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span>,
   admin_access           <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span>, <span class="sql-cmt">-- comma-separated: "PING,HTTP,SSH"</span>
   status                 <span class="sql-tp">TEXT</span>     <span class="sql-kw">NOT NULL</span> <span class="sql-kw">CHECK</span>(status <span class="sql-kw">IN</span> (<span class="sql-str">'up'</span>, <span class="sql-str">'down'</span>)),
@@ -577,11 +573,6 @@
                 <td class="td-muted">/proc/net/route</td>
               </tr>
               <tr>
-                <td>dns1, dns2</td>
-                <td class="td-type">getSystemDNS()</td>
-                <td class="td-muted">/etc/resolv.conf</td>
-              </tr>
-              <tr>
                 <td>speed</td>
                 <td class="td-type">getInterfaceSpeed()</td>
                 <td class="td-muted">/sys/class/net/&lt;iface&gt;/speed</td>
@@ -641,12 +632,6 @@
 eth1    00000000     0101A8C0  0003   0       0    100     00000000  0    0       0
          ↑ Default    ↑ Little-endian hex → 192.168.1.1</div>
           </div>
-        </div>
-
-        <!-- getSystemDNS -->
-        <div style="margin-bottom:28px;">
-          <p style="font-size:15px;font-weight:600;color:var(--purple);font-family:'JetBrains Mono',monospace;margin-bottom:8px;">getSystemDNS() → (dns1, dns2 string)</p>
-          <p style="font-size:13px;color:var(--text-muted);margin-bottom:10px;">อ่าน <code>/etc/resolv.conf</code> เก็บบรรทัด <code>nameserver</code> สูงสุด 2 ตัว ถ้าไม่พบ fallback เป็น <code>8.8.8.8</code> / <code>1.1.1.1</code></p>
         </div>
 
         <!-- getInterfaceSpeed -->
@@ -743,7 +728,7 @@ eth1    00000000     0101A8C0  0003   0       0    100     00000000  0    0     
         <p style="font-size:13px;font-weight:600;color:var(--text);margin:20px 0 8px;">HandleUpdateInterface — Fields ที่แก้ไขได้ผ่าน API</p>
         <div style="display:flex;flex-wrap:wrap;gap:6px;">
           <code>alias</code><code>role</code><code>addressingMode</code><code>ip</code><code>netmask</code><code>gateway</code>
-          <code>dns1</code><code>dns2</code><code>macAddress</code><code>adminAccess</code><code>status</code>
+          <code>macAddress</code><code>adminAccess</code><code>status</code>
           <code>macMode</code><code>laaMacAddress</code><code>randomizeOnReconnect</code><code>backupSsid</code><code>backupWifiPassword</code>
         </div>
         <div class="callout warn" style="margin-top:12px;">
@@ -831,14 +816,6 @@ eth1    00000000     0101A8C0  0003   0       0    100     00000000  0    0     
           <div class="callout-body">
             <div class="callout-title">speed อาจเป็น "unknown" สำหรับ wireless</div>
             <code>/sys/class/net/wlan0/speed</code> มักคืน <code>-1</code> เพราะความเร็ว Wi-Fi ขึ้นอยู่กับสภาพสัญญาณ ณ ขณะนั้น ไม่ใช่ค่าคงที่
-          </div>
-        </div>
-
-        <div class="callout tip">
-          <span class="callout-icon">💡</span>
-          <div class="callout-body">
-            <div class="callout-title">DNS Fallback</div>
-            ถ้าอ่าน <code>/etc/resolv.conf</code> ไม่ได้หรือว่างเปล่า ระบบจะ fallback เป็น <code>8.8.8.8</code> / <code>1.1.1.1</code> อัตโนมัติ จะไม่เกิด empty string ที่ database
           </div>
         </div>
 

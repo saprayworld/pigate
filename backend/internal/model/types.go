@@ -102,8 +102,6 @@ type NetworkInterface struct {
 	IP                   string       `json:"ip"`
 	Netmask              string       `json:"netmask"`
 	Gateway              string       `json:"gateway"`
-	DNS1                 string       `json:"dns1"`
-	DNS2                 string       `json:"dns2"`
 	MacAddress           string       `json:"macAddress"`
 	AdminAccess          []string     `json:"adminAccess"` // PING, HTTP, HTTPS, SSH
 	Status               string       `json:"status"`      // "up", "down"
