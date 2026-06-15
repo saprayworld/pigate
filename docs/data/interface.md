@@ -236,9 +236,47 @@ MAC Mode: randomized
 
 4. **DNS fallback** — ถ้าอ่าน `/etc/resolv.conf` ไม่ได้หรือว่าง จะ fallback เป็น `8.8.8.8` / `1.1.1.1` อัตโนมัติ
 
+5. **`net.FlagUp` ≠ Administratively Down** — `FlagUp` อ่านจาก kernel IFF_UP flag เท่านั้น การรัน `nmcli connection down <name>` อาจไม่เปลี่ยน IFF_UP เพราะ NM deactivate เฉพาะ connection profile ไม่ได้สั่ง `ip link set down` เสมอไป → สถานะอาจไม่ sync ถ้าใช้ `nmcli` โดยตรง ควรใช้ API `POST /toggle` แทน
+
+6. **Production mode ต้องการ Linux Capabilities** — `RealNetwork` (netlink) ต้องการ `cap_net_admin` บน binary ก่อนใช้งาน:
+   ```bash
+   sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
+   ```
+
 ---
 
-## 8. ไฟล์ที่เกี่ยวข้อง
+## 8. Kernel Integration (Production)
+
+ไฟล์: `backend/internal/kernel/real_network.go` (build tag: `linux`)
+
+`RealNetwork` implement `NetworkManager` interface โดยสื่อสารกับ kernel ผ่าน **Netlink Socket** โดยตรง (ไม่ใช้ shell command) ต้องการ `github.com/vishvananda/netlink`
+
+### `ToggleInterface(name string, up bool)`
+
+```go
+link, _ := netlink.LinkByName(name)
+netlink.LinkSetUp(link)   // ≡ ip link set eth0 up
+netlink.LinkSetDown(link) // ≡ ip link set eth0 down
+```
+
+→ เปลี่ยน `IFF_UP` ใน kernel โดยตรง → `SyncInterfacesFromOS()` จะ reflect ค่า `net.FlagUp` ถูกต้องในครั้งถัดไป
+
+### `ScanWifi(name string)`
+
+1. **Primary**: `iw dev <name> scan` — parse BSS blocks
+2. **Fallback**: `nmcli --terse --fields SSID,SIGNAL,SECURITY,CHAN,FREQ dev wifi list`
+
+### Production Deployment
+
+```bash
+go build -o pigate-backend ./cmd/pigate
+sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
+./pigate-backend -port=8080 -mock=false
+```
+
+---
+
+## 9. ไฟล์ที่เกี่ยวข้อง
 
 | ไฟล์ | หน้าที่ |
 |---|---|
@@ -247,5 +285,6 @@ MAC Mode: randomized
 | [`backend/internal/db/repository.go`](../../../backend/internal/db/repository.go) | CRUD + OS sync logic (SyncInterfacesFromOS, detectAddressingMode ฯลฯ) |
 | [`backend/internal/api/handlers.go`](../../../backend/internal/api/handlers.go) | HTTP handlers สำหรับ interface endpoints |
 | [`backend/internal/api/router.go`](../../../backend/internal/api/router.go) | Route mapping |
-| [`backend/internal/kernel/interfaces.go`](../../../backend/internal/kernel/interfaces.go) | Interface abstractions (NetworkManager) |
+| [`backend/internal/kernel/interfaces.go`](../../../backend/internal/kernel/interfaces.go) | Interface abstractions (NetworkManager, FirewallManager ฯลฯ) |
 | [`backend/internal/kernel/mock.go`](../../../backend/internal/kernel/mock.go) | Mock implementations สำหรับ test/dev |
+| [`backend/internal/kernel/real_network.go`](../../../backend/internal/kernel/real_network.go) | **[ใหม่]** Real NetworkManager ผ่าน netlink (Linux production) |

@@ -77,10 +77,11 @@ func main() {
 		mDhcp.MockFromReal = *mockFromReal
 		dhcp = mDhcp
 	} else {
-		// Real integrations will be swapped here for Raspberry Pi 5 production
-		fw = kernel.NewMockFirewall()
-		net = kernel.NewMockNetwork()
-		rt = kernel.NewMockRouting()
+		// Real kernel integrations via netlink — used on Raspberry Pi 5 production.
+		// Requires: sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
+		fw = kernel.NewMockFirewall() // nftables real impl: TODO (google/nftables)
+		net = kernel.NewRealNetwork()
+		rt = kernel.NewMockRouting() // netlink route real impl: TODO
 		mDhcp := kernel.NewMockDhcp()
 		mDhcp.MockFromReal = false
 		dhcp = mDhcp

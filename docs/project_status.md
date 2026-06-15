@@ -133,3 +133,17 @@
   * ตรวจสอบความปลอดภัยระดับเบื้องต้น เช่น การรับมือเมื่อเซสชันหมดอายุ, การกรองฟิลด์ข้อมูลนำเข้า (Sanitization) และการเข้ารหัสการสื่อสาร `[เสร็จสิ้น]`
   * เชื่อมต่อ API จริงกับฝั่ง Go Backend และระบบการอัปเดตแบบ Real-time ด้วย Server-Sent Events (SSE) เมื่อฝั่ง API พร้อมใช้งาน `[เสร็จสิ้น]`
   * เพิ่มเติมฟีเจอร์รันระบบหลังบ้านโดยดึงข้อมูลจริงจาก Kernel แต่อัปเดตลงเฉพาะฐานข้อมูล (-mock-from-real) พร้อมระบบจำกัดสิทธิ์อ่านอย่างเดียว (-disable-edit), ระบบ DNS และการตรวจสอบ Wifi Scan พร้อมปรับปรุง API Specs `[เสร็จสิ้น]`
+
+* **พัฒนา Kernel Integration ระยะที่ 1 — Real NetworkManager ผ่าน Netlink Socket [สำเร็จ]**:
+  * สร้างไฟล์ [internal/kernel/real_network.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/internal/kernel/real_network.go) implement `RealNetwork struct` ตาม `NetworkManager` interface สำหรับรันบน Linux production จริง
+  * `ToggleInterface` ใช้ `github.com/vishvananda/netlink` — `netlink.LinkSetUp/Down()` สื่อสารกับ kernel ผ่าน Netlink Socket โดยตรง ไม่ผ่าน shell command (ป้องกัน Command Injection ตามข้อ 4.1 ใน tech_stack_design.md)
+  * `ScanWifi` ใช้ `iw dev scan` (primary) และ `nmcli` (fallback) โดยไม่ต้องการ root
+  * อัปเดต [cmd/pigate/main.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/cmd/pigate/main.go) ให้ production path (`--mock=false`) ใช้ `kernel.NewRealNetwork()` แทน MockNetwork
+  * ทดสอบ compile ผ่าน 100% ด้วย `go build ./...`
+  * ทดสอบรันจริงด้วย `./pigate-backend -port=8081 -mock=false` ผ่านสำเร็จ (ต้องการ `cap_net_admin` บน RPi5)
+
+* **สเตปที่ 6: Kernel Integration ระยะที่ 2 — Real Firewall & Routing (TODO)**:
+  * **[TODO]** สร้าง `RealFirewall` ใช้ `github.com/google/nftables` แทน MockFirewall
+  * **[TODO]** สร้าง `RealRouting` ใช้ `netlink.RouteAdd/Del()` แทน MockRouting
+  * **[TODO]** ทดสอบบน Raspberry Pi 5 จริงพร้อม `sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend`
+

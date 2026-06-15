@@ -359,6 +359,7 @@
       <a class="nav-item" href="#api"><span class="nav-dot"></span>REST API</a>
       <a class="nav-item" href="#mock"><span class="nav-dot"></span>Mock Mode</a>
       <a class="nav-item" href="#notes"><span class="nav-dot"></span>ข้อควรระวัง</a>
+      <a class="nav-item" href="#kernel"><span class="nav-dot"></span>Kernel Integration</a>
       <a class="nav-item" href="#files"><span class="nav-dot"></span>ไฟล์ที่เกี่ยวข้อง</a>
     </div>
   </aside>
@@ -840,12 +841,79 @@ eth1    00000000     0101A8C0  0003   0       0    100     00000000  0    0     
             ถ้าอ่าน <code>/etc/resolv.conf</code> ไม่ได้หรือว่างเปล่า ระบบจะ fallback เป็น <code>8.8.8.8</code> / <code>1.1.1.1</code> อัตโนมัติ จะไม่เกิด empty string ที่ database
           </div>
         </div>
+
+        <div class="callout warn" style="margin-bottom:12px;">
+          <span class="callout-icon">⚠️</span>
+          <div class="callout-body">
+            <div class="callout-title">net.FlagUp ≠ Administratively Down</div>
+            <code>FlagUp</code> อ่านจาก kernel <code>IFF_UP</code> flag เท่านั้น — การรัน <code>nmcli connection down</code> อาจไม่เปลี่ยน <code>IFF_UP</code> เพราะ NM deactivate เฉพาะ connection profile ไม่ได้สั่ง <code>ip link set down</code> เสมอไป ควรใช้ API <code>POST /api/interfaces/{id}/toggle</code> แทน เพื่อให้ kernel state และ DB sync กัน
+          </div>
+        </div>
+
+        <div class="callout info">
+          <span class="callout-icon">🔐</span>
+          <div class="callout-body">
+            <div class="callout-title">Production ต้องการ Linux Capabilities</div>
+            <code>RealNetwork</code> (netlink) ต้องการ <code>cap_net_admin</code> บน binary ก่อนใช้งาน Production:<br>
+            <code>sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend</code>
+          </div>
+        </div>
       </div>
 
-      <!-- ── 8. ไฟล์ที่เกี่ยวข้อง ── -->
-      <div class="section" id="files">
+      <!-- ── 8. Kernel Integration ── -->
+      <div class="section" id="kernel">
         <div class="section-header">
           <div class="section-num">8</div>
+          <div>
+            <div class="section-title">Kernel Integration (Production)</div>
+            <div class="section-file">backend/internal/kernel/real_network.go</div>
+          </div>
+        </div>
+
+        <div class="callout tip" style="margin-bottom:16px;">
+          <span class="callout-icon">🔌</span>
+          <div class="callout-body">
+            <div class="callout-title">RealNetwork — ไม่ใช้ shell command</div>
+            <code>RealNetwork struct</code> implement <code>NetworkManager</code> ผ่าน <strong>Netlink Socket</strong> โดยตรง (<code>vishvananda/netlink</code>) ป้องกัน Command Injection ตามแนวทาง Section 4.1 ใน tech_stack_design.md
+          </div>
+        </div>
+
+        <p style="font-size:13px;font-weight:600;color:var(--text);margin:0 0 8px;">ToggleInterface(name string, up bool)</p>
+        <div class="code-wrap" style="margin-bottom:20px;">
+          <div class="code-header"><span class="code-lang">Go</span><span class="code-filename">real_network.go</span></div>
+          <div class="code-body"><span class="cmt">// ใช้ netlink โดยตรง — เทียบเท่า ip link set &lt;name&gt; up/down</span>
+link, err := <span class="fn">netlink.LinkByName</span>(name)
+<span class="fn">netlink.LinkSetUp</span>(link)   <span class="cmt">// ≡ ip link set eth0 up   → set IFF_UP ใน kernel</span>
+<span class="fn">netlink.LinkSetDown</span>(link) <span class="cmt">// ≡ ip link set eth0 down → clear IFF_UP ใน kernel</span></div>
+        </div>
+
+        <p style="font-size:13px;font-weight:600;color:var(--text);margin:0 0 8px;">ScanWifi(name string)</p>
+        <div class="flow" style="margin-bottom:20px;">
+          <div class="flow-step">
+            <div class="flow-num">PRIMARY</div>
+            <div class="flow-label">iw dev scan</div>
+            <div class="flow-sub">parse BSS blocks → SSID, signal dBm→%, channel, security</div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-num">FALLBACK</div>
+            <div class="flow-label">nmcli --terse</div>
+            <div class="flow-sub">fields: SSID,SIGNAL,SECURITY,CHAN,FREQ</div>
+          </div>
+        </div>
+
+        <p style="font-size:13px;font-weight:600;color:var(--text);margin:0 0 8px;">Production Deployment (RPi5)</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">bash</span><span class="code-filename">deploy</span></div>
+          <div class="code-body">go build -o pigate-backend ./cmd/pigate
+sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
+./pigate-backend -port=8080 -mock=false</div>
+        </div>
+      </div>
+
+      <!-- ── 9. ไฟล์ที่เกี่ยวข้อง ── -->
+      <div class="section" id="files">
+        <div class="section-header">
+          <div class="section-num">9</div>
           <div>
             <div class="section-title">ไฟล์ที่เกี่ยวข้อง</div>
           </div>
@@ -890,7 +958,7 @@ eth1    00000000     0101A8C0  0003   0       0    100     00000000  0    0     
             <span class="si-icon">⚙️</span>
             <div>
               <span class="si-path">kernel/interfaces.go</span>
-              <span class="si-desc">Interface abstractions (NetworkManager)</span>
+              <span class="si-desc">Interface abstractions (NetworkManager, FirewallManager ฯลฯ)</span>
             </div>
           </div>
           <div class="source-item">
@@ -898,6 +966,13 @@ eth1    00000000     0101A8C0  0003   0       0    100     00000000  0    0     
             <div>
               <span class="si-path">kernel/mock.go</span>
               <span class="si-desc">Mock implementations สำหรับ dev/test</span>
+            </div>
+          </div>
+          <div class="source-item" style="border-color: var(--primary-border);">
+            <span class="si-icon">🔌</span>
+            <div>
+              <span class="si-path">kernel/real_network.go</span>
+              <span class="si-desc"><strong style="color:var(--primary)">[ใหม่]</strong> RealNetwork — netlink socket, Linux production</span>
             </div>
           </div>
         </div>
