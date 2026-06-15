@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PiGate — Tech Stack Design & Blueprint</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0f;
+      --bg-card: #111118;
+      --bg-raised: #18181f;
+      --border: #23232e;
+      --border-accent: #2e2e3e;
+      --text: #e8e8f0;
+      --text-muted: #7a7a96;
+      --text-dim: #4a4a60;
+      --primary: #6ee7b7;
+      --primary-dim: rgba(110,231,183,0.12);
+      --primary-border: rgba(110,231,183,0.25);
+      --blue: #60a5fa;
+      --blue-dim: rgba(96,165,250,0.12);
+      --purple: #a78bfa;
+      --purple-dim: rgba(167,139,250,0.12);
+      --amber: #fbbf24;
+      --amber-dim: rgba(251,191,36,0.12);
+      --red: #f87171;
+      --red-dim: rgba(248,113,113,0.12);
+      --cyan: #22d3ee;
+      --cyan-dim: rgba(34,211,238,0.12);
+      --radius: 8px;
+      --radius-lg: 12px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      font-size: 14px;
+      min-height: 100vh;
+    }
+
+    /* ── Layout ── */
+    .layout { display: flex; min-height: 100vh; }
+
+    .sidebar {
+      width: 260px;
+      flex-shrink: 0;
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 100vh;
+      overflow-y: auto;
+      background: var(--bg-card);
+      border-right: 1px solid var(--border);
+      padding: 24px 0;
+      z-index: 100;
+    }
+
+    .sidebar-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 20px 24px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+
+    .sidebar-logo .icon {
+      width: 32px; height: 32px;
+      background: var(--primary-dim);
+      border: 1px solid var(--primary-border);
+      border-radius: 8px;
+      display: grid; place-items: center;
+      font-size: 16px;
+    }
+
+    .sidebar-logo .title { font-size: 13px; font-weight: 600; color: var(--text); }
+    .sidebar-logo .subtitle { font-size: 11px; color: var(--text-muted); }
+
+    .nav-section { padding: 0 12px; margin-bottom: 8px; }
+    .nav-label { font-size: 10px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; padding: 0 8px 6px; }
+
+    .nav-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 8px;
+      border-radius: 6px;
+      font-size: 13px;
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: background 0.15s, color 0.15s;
+      cursor: pointer;
+    }
+    .nav-item:hover { background: var(--bg-raised); color: var(--text); }
+    .nav-item.active { background: var(--primary-dim); color: var(--primary); }
+    .nav-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; opacity: 0.5; }
+    .nav-item.active .nav-dot { opacity: 1; }
+
+    .main {
+      margin-left: 260px;
+      flex: 1;
+      max-width: calc(100% - 260px);
+    }
+
+    /* ── Header ── */
+    .page-header {
+      padding: 48px 56px 36px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .breadcrumb { font-size: 12px; color: var(--text-muted); margin-bottom: 16px; display: flex; align-items: center; gap: 6px; }
+    .breadcrumb span { color: var(--text-dim); }
+
+    .page-title {
+      font-size: 28px; font-weight: 700; color: var(--text);
+      letter-spacing: -0.5px; margin-bottom: 8px;
+    }
+
+    .page-desc { font-size: 14px; color: var(--text-muted); max-width: 600px; }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px; border-radius: 20px;
+      font-size: 11px; font-weight: 500;
+    }
+    .badge-green { background: var(--primary-dim); color: var(--primary); border: 1px solid var(--primary-border); }
+    .badge-blue  { background: var(--blue-dim);    color: var(--blue);    border: 1px solid rgba(96,165,250,0.25); }
+    .badge-amber { background: var(--amber-dim);   color: var(--amber);   border: 1px solid rgba(251,191,36,0.25); }
+    .badge-red   { background: var(--red-dim);     color: var(--red);     border: 1px solid rgba(248,113,113,0.25); }
+    .badge-purple{ background: var(--purple-dim);  color: var(--purple);  border: 1px solid rgba(167,139,250,0.25); }
+    .badge-cyan  { background: var(--cyan-dim);    color: var(--cyan);    border: 1px solid rgba(34,211,238,0.25); }
+
+    .meta-row { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+
+    /* ── Content ── */
+    .content { padding: 48px 56px; max-width: 900px; }
+
+    /* ── Section ── */
+    .section { margin-bottom: 56px; }
+
+    .section-header {
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 20px; padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .section-num {
+      width: 28px; height: 28px; border-radius: 7px;
+      background: var(--primary-dim); border: 1px solid var(--primary-border);
+      display: grid; place-items: center;
+      font-size: 12px; font-weight: 700; color: var(--primary);
+      flex-shrink: 0;
+    }
+
+    .section-title { font-size: 18px; font-weight: 600; color: var(--text); }
+    .section-file { font-size: 11px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+
+    /* ── Code blocks ── */
+    .code-wrap {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      margin: 16px 0;
+    }
+
+    .code-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 16px;
+      background: var(--bg-raised);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .code-lang { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    .code-filename { font-size: 11px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
+
+    .code-body {
+      padding: 20px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12.5px;
+      line-height: 1.8;
+      color: #c9d1d9;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    /* Syntax highlights */
+    .kw  { color: #ff7b72; }
+    .tp  { color: #79c0ff; }
+    .str { color: #a5d6ff; }
+    .cmt { color: #556070; font-style: italic; }
+    .fn  { color: #d2a8ff; }
+    .num { color: #ffa657; }
+    .sql-kw { color: #ff7b72; }
+    .sql-tp  { color: #79c0ff; }
+    .sql-str { color: #a5d6ff; }
+    .sql-cmt { color: #556070; font-style: italic; }
+
+    /* ── Tables ── */
+    .table-wrap {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      margin: 16px 0;
+    }
+
+    table { width: 100%; border-collapse: collapse; }
+
+    thead { background: var(--bg-raised); }
+    thead th { padding: 10px 16px; text-align: left; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border); }
+
+    tbody tr { border-bottom: 1px solid var(--border); }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--bg-raised); }
+    tbody td { padding: 10px 16px; font-size: 13px; color: var(--text); vertical-align: top; }
+    tbody td:first-child { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--primary); }
+
+    .td-type { color: var(--blue); font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+    .td-muted { color: var(--text-muted); font-size: 12px; }
+
+    /* ── Cards ── */
+    .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin: 16px 0; }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.15s;
+    }
+    .card:hover { border-color: var(--border-accent); }
+    .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; }
+    .card.green::before { background: var(--primary); }
+    .card.blue::before  { background: var(--blue); }
+    .card.purple::before{ background: var(--purple); }
+    .card.amber::before { background: var(--amber); }
+    .card.red::before   { background: var(--red); }
+    .card.cyan::before  { background: var(--cyan); }
+
+    .card-icon { font-size: 22px; margin-bottom: 10px; }
+    .card-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+    .card-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+
+    /* Architecture Box Layout */
+    .arch-container {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      margin: 16px 0;
+    }
+
+    .arch-flow {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .arch-node {
+      background: var(--bg-raised);
+      border: 1px solid var(--border-accent);
+      border-radius: var(--radius);
+      padding: 14px 20px;
+      text-align: center;
+      min-width: 220px;
+    }
+
+    .arch-node.primary { border-color: var(--primary-border); color: var(--primary); background: var(--primary-dim); }
+    .arch-node.cyan { border-color: rgba(34,211,238,0.25); color: var(--cyan); background: var(--cyan-dim); }
+    .arch-arrow { color: var(--text-dim); font-size: 18px; }
+
+    .arch-sub-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      width: 100%;
+      margin-top: 10px;
+    }
+    
+    .arch-sub-node {
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* ── Alert / callout ── */
+    .callout {
+      display: flex; gap: 12px;
+      padding: 14px 16px;
+      border-radius: var(--radius);
+      border: 1px solid;
+      margin: 16px 0;
+      font-size: 13px;
+    }
+    .callout-icon { font-size: 16px; flex-shrink: 0; line-height: 1.5; }
+    .callout-body { flex: 1; }
+    .callout-title { font-weight: 600; margin-bottom: 4px; }
+    .callout.warn  { background: var(--amber-dim); border-color: rgba(251,191,36,0.3); color: #c9a23a; }
+    .callout.info  { background: var(--blue-dim);  border-color: rgba(96,165,250,0.3);  color: #7bb3f8; }
+    .callout.tip   { background: var(--primary-dim); border-color: var(--primary-border); color: var(--primary); }
+
+    /* ── inline code ── */
+    code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 6px;
+      color: var(--primary);
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-accent); border-radius: 3px; }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      .sidebar { display: none; }
+      .main { margin-left: 0; max-width: 100%; }
+      .page-header, .content { padding: 24px 20px; }
+      .arch-sub-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ══ SIDEBAR ══ -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="icon">🚀</div>
+      <div>
+        <div class="title">PiGate Docs</div>
+        <div class="subtitle">System Architecture</div>
+      </div>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">Tech Stack Blueprint</div>
+      <a class="nav-item" href="#overview"><span class="nav-dot"></span>Architecture Overview</a>
+      <a class="nav-item" href="#frontend"><span class="nav-dot"></span>Frontend Stack</a>
+      <a class="nav-item" href="#backend"><span class="nav-dot"></span>Backend Stack</a>
+      <a class="nav-item" href="#kernel"><span class="nav-dot"></span>Kernel & OS Security</a>
+      <a class="nav-item" href="#supplychain"><span class="nav-dot"></span>Supply Chain Protection</a>
+      <a class="nav-item" href="#auth"><span class="nav-dot"></span>Auth & Access Control</a>
+      <a class="nav-item" href="#streaming"><span class="nav-dot"></span>Real-Time Streaming</a>
+      <a class="nav-item" href="#preservation"><span class="nav-dot"></span>SD Card Preservation</a>
+      <a class="nav-item" href="#dbus"><span class="nav-dot"></span>D-Bus Integration</a>
+    </div>
+  </aside>
+
+  <!-- ══ MAIN ══ -->
+  <div class="main">
+
+    <!-- Header -->
+    <div class="page-header">
+      <div class="breadcrumb">docs <span>›</span> tech_stack_design</div>
+      <h1 class="page-title">Tech Stack Design & Blueprint</h1>
+      <p class="page-desc">คู่มือการออกแบบและข้อกำหนดทางเทคนิค (Tech Stack Blueprint) สำหรับระบบ PiGate มุ่งเน้นประสิทธิภาพ ความปลอดภัยระดับ OS แกนหลัก และลดความเสี่ยงห่วงโซ่อุปทาน</p>
+      <div class="meta-row">
+        <span class="badge badge-green">● Architecture</span>
+        <span class="badge badge-blue">React SPA</span>
+        <span class="badge badge-purple">Go standard SDK</span>
+        <span class="badge badge-cyan">Netlink Socket</span>
+        <span class="badge badge-amber">อัปเดต 2026-06-15</span>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+
+      <!-- ── 1. System Architecture Overview ── -->
+      <div class="section" id="overview">
+        <div class="section-header">
+          <div class="section-num">1</div>
+          <div>
+            <div class="section-title">System Architecture Overview</div>
+          </div>
+        </div>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+          สถาปัตยกรรมของ PiGate จะแบ่งออกเป็น 3 Layer หลัก โดยมี <strong>Go (Golang)</strong> ทำหน้าที่เป็นทั้ง API Backend และเซิร์ฟเวอร์เสิร์ฟหน้าเว็บแบบไฟล์เดี่ยว (Single Binary):
+        </p>
+
+        <div class="arch-container">
+          <div class="arch-flow">
+            <div class="arch-node cyan">
+              <strong>Web Browser / Client UI</strong>
+              <div style="font-size:11px;opacity:0.8;margin-top:2px;">React Single Page Application</div>
+            </div>
+            
+            <div class="arch-arrow">⬇️ HTTPS / Server-Sent Events</div>
+
+            <div class="arch-node primary">
+              <strong>Go Single Binary Application</strong>
+              <div style="font-size:11px;opacity:0.8;margin-top:2px;">Embed SPA + REST API + D-Bus & Netlink</div>
+            </div>
+
+            <div class="arch-arrow">⬇️ Direct System Interaction</div>
+
+            <div class="arch-sub-grid">
+              <div class="arch-sub-node">
+                <strong>SQLite DB</strong>
+                <div style="font-size:10px;opacity:0.7;margin-top:2px;">modernc.org/sqlite<br>(Pure Go)</div>
+              </div>
+              <div class="arch-sub-node">
+                <strong>Netlink Sockets</strong>
+                <div style="font-size:10px;opacity:0.7;margin-top:2px;">Linux Kernel / nftables<br>(no shell command)</div>
+              </div>
+              <div class="arch-sub-node">
+                <strong>D-Bus Interface</strong>
+                <div style="font-size:10px;opacity:0.7;margin-top:2px;">NetworkManager<br>(Interface Config)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 2. Frontend Technology Stack ── -->
+      <div class="section" id="frontend">
+        <div class="section-header">
+          <div class="section-num">2</div>
+          <div>
+            <div class="section-title">Frontend Technology Stack</div>
+          </div>
+        </div>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+          เพื่อลดภาระประมวลผลบนตัวบอร์ด Raspberry Pi ให้เหลือน้อยที่สุด หน้าบ้านถูกออกแบบเป็น <strong>Single Page Application (SPA)</strong> เพื่อให้ประมวลผลบนฝั่ง Client:
+        </p>
+
+        <div class="card-grid">
+          <div class="card green">
+            <div class="card-icon">⚛️</div>
+            <div class="card-title">React 19 & Vite</div>
+            <div class="card-desc">ช่วยจัดการ UI State ที่มีความซับซ้อน รวดเร็ว มีระบบ Lifecycle ที่นิ่ง และทำงานสอดประสานร่วมกับระบบ Drag & Drop ยุคใหม่ได้เต็มประสิทธิภาพ</div>
+          </div>
+          <div class="card blue">
+            <div class="card-icon">🎨</div>
+            <div class="card-title">Tailwind CSS v4</div>
+            <div class="card-desc">ช่วยกำหนด Style ด้วย Utility-first CSS ทำให้เว็บมีขนาดเล็ก โหลดเร็ว ปรับแต่งธีม Dark/Light mode และดีไซน์ Premium Flat ได้อย่างยืดหยุ่น</div>
+          </div>
+          <div class="card purple">
+            <div class="card-icon">🧩</div>
+            <div class="card-title">shadcn/ui</div>
+            <div class="card-desc">คอมโพเนนต์ Primitives (Radix UI) ที่ copy-paste โค้ดลงโปรเจกต์โดยตรง ช่วยลด Package Bloat และเปิดสิทธิ์ให้แก้ไขสไตล์ระดับล่างได้อิสระ</div>
+          </div>
+          <div class="card cyan">
+            <div class="card-icon">📈</div>
+            <div class="card-title">Recharts & dnd-kit</div>
+            <div class="card-desc"><code>@dnd-kit</code> ใช้ทำ Drag & Drop สลับจัดลำดับกฎไฟร์วอลล์ และ <code>Recharts</code> สำหรับวาดกราฟสถิติทราฟฟิก WAN แบบเรียลไทม์</div>
+          </div>
+        </div>
+
+        <div class="callout tip">
+          <span class="callout-icon">💡</span>
+          <div class="callout-body">
+            <div class="callout-title">Deployment Pattern — go:embed</div>
+            เมื่อหน้าบ้านถูกคอมไพล์ผ่านคำสั่ง <code>yarn build</code> ไฟล์ปลายทาง HTML, CSS, JS จะถูกฝังเข้าไปเป็นส่วนหนึ่งของไฟล์แอปพลิเคชันหลังบ้าน Go ผ่านระบบ <code>go:embed</code> ทำให้ติดตั้งและส่งมอบงานในลักษณะ Single Binary ไฟล์เดียวจบ
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 3. Backend Technology Stack ── -->
+      <div class="section" id="backend">
+        <div class="section-header">
+          <div class="section-num">3</div>
+          <div>
+            <div class="section-title">Backend Technology Stack (Go/Golang)</div>
+          </div>
+        </div>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+          หลังบ้านพัฒนาด้วยภาษา <strong>Go (Golang)</strong> เพื่อความเร็ว ความเสถียรสูงสุด และป้องกันปัญหา Supply Chain Attack:
+        </p>
+
+        <div class="card-grid">
+          <div class="card green">
+            <div class="card-icon">⚙️</div>
+            <div class="card-title">Go Standard Library (net/http)</div>
+            <div class="card-desc">หลีกเลี่ยงการพึ่งพาเฟรมเวิร์กขนาดใหญ่ภายนอก ช่วยลดปริมาณโมดูลเสริมให้เหลือเกือบ 0% ลดความเสี่ยงช่องโหว่ทางห่วงโซ่อุปทานลงอย่างสมบูรณ์</div>
+          </div>
+          <div class="card blue">
+            <div class="card-icon">🗄️</div>
+            <div class="card-title">modernc.org/sqlite</div>
+            <div class="card-desc">ตัวเชื่อมต่อ SQLite ที่เขียนด้วยภาษา Go ล้วน (Pure Go / CGO-free) ทำให้สามารถ Cross-compile ข้ามแพลตฟอร์มได้โดยไม่ต้องพึ่ง C Compiler</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 4. Kernel Integration & Privilege Separation ── -->
+      <div class="section" id="kernel">
+        <div class="section-header">
+          <div class="section-num">4</div>
+          <div>
+            <div class="section-title">Kernel Integration & Privilege Separation</div>
+          </div>
+        </div>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+          ระบบควบคุมระดับ Gateway จำเป็นต้องเปลี่ยนค่า Firewall และสถานะอินเทอร์เฟซ ซึ่งต้องใช้สิทธิ์ระดับสูง แต่เพื่อป้องกันอันตรายจากการครอบงำระบบ จึงออกแบบโครงสร้างความปลอดภัยไว้ดังนี้:
+        </p>
+
+        <div style="margin-bottom:28px;">
+          <p style="font-size:15px;font-weight:600;color:var(--primary);margin-bottom:8px;">4.1 Direct Socket Interaction (หลีกเลี่ยง Command Injection)</p>
+          <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+            การใช้คำสั่งเชลล์มีความเสี่ยงต่อช่องโหว่ Command Injection หากกรองอักขระอินพุตไม่รัดกุม ระบบ PiGate จึงเลือกใช้ Pure socket สื่อสารกับ Linux Kernel โดยตรง:
+          </p>
+          <ul style="list-style:none;padding-left:12px;">
+            <li style="margin-bottom:8px;">📁 <strong>Firewall (nftables):</strong> สื่อสารผ่าน Netlink Socket ด้วย <code>github.com/google/nftables</code> สำหรับสร้าง ลบ และดึงข้อมูลกฎตาราง Firewall</li>
+            <li style="margin-bottom:8px;">📁 <strong>Network & Routing:</strong> สื่อสารผ่าน Netlink ด้วย <code>github.com/vishvananda/netlink</code> สำหรับการปรับปรุง Interface IP, Gateway, และ Routing Table</li>
+          </ul>
+        </div>
+
+        <div>
+          <p style="font-size:15px;font-weight:600;color:var(--blue);margin-bottom:8px;">4.2 Linux Capabilities (การควบคุมขอบเขตความปลอดภัย)</p>
+          <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+            แอปพลิเคชันหลังบ้าน Go จะ<strong>ไม่ได้ถูกรันภายใต้สิทธิ์ root ตรงๆ</strong> แต่จะถูกจำกัดสิทธิ์ในระดับ User ธรรมดา และใช้วิธีผูก Linux Capabilities ให้ทำงานเฉพาะทางได้เท่านั้น:
+          </p>
+          <div class="code-wrap">
+            <div class="code-header"><span class="code-lang">bash</span><span class="code-filename">Privilege assignment</span></div>
+            <div class="code-body">sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend</div>
+          </div>
+          <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">
+            - <code>cap_net_admin</code>: สิทธิ์ตั้งค่า Network Interface, IP, Routes และ Firewall Rules<br>
+            - <code>cap_net_raw</code>: สิทธิ์ในการสร้าง Raw Sockets (ใช้ในการทำ Ping หรือสอดส่องแพ็กเก็ต)
+          </p>
+        </div>
+      </div>
+
+      <!-- ── 5. Security & Protection Against Supply Chain Attack ── -->
+      <div class="section" id="supplychain">
+        <div class="section-header">
+          <div class="section-num">5</div>
+          <div>
+            <div class="section-title">Supply Chain Attack Prevention</div>
+          </div>
+        </div>
+        <div class="card-grid">
+          <div class="card green">
+            <div class="card-icon">🔒</div>
+            <div class="card-title">Strict Dependency Pinning</div>
+            <div class="card-desc">การใช้ระบบ <code>go.sum</code> ในภาษา Go เพื่อบันทึกค่า Cryptographic Hash ของทุกโมดูล ป้องกันการแอบสอดไส้โค้ดจากต้นทางผู้พัฒนาภายนอกระหว่างการคอมไพล์</div>
+          </div>
+          <div class="card blue">
+            <div class="card-icon">🛡️</div>
+            <div class="card-title">Official & Core Modules Only</div>
+            <div class="card-desc">คัดกรองเฉพาะไลบรารีระดับแกนหลักที่มีผู้พัฒนาอย่างเป็นทางการและน่าเชื่อถือสูงเท่านั้น (เช่น <code>golang.org/x/...</code> หรือ <code>github.com/google/...</code>)</div>
+          </div>
+          <div class="card purple">
+            <div class="card-icon">🚀</div>
+            <div class="card-title">No Dynamic Code Evaluation</div>
+            <div class="card-desc">ภาษา Go ไม่มีฟังก์ชันการรันโค้ดสดผ่าน string (เช่น <code>eval()</code> ใน JavaScript) ทำให้ปลอดภัยจากช่องโหว่ Dynamic Code Injection โดยปริยาย</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 6. Authentication, Session & Access Control ── -->
+      <div class="section" id="auth">
+        <div class="section-header">
+          <div class="section-num">6</div>
+          <div>
+            <div class="section-title">Authentication & Access Control</div>
+          </div>
+        </div>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+          ระบบความมั่นคงปลอดภัยของการจำกัดสิทธิ์เข้าใช้งาน API:
+        </p>
+        <ul style="list-style:none;padding-left:12px;font-size:13px;">
+          <li style="margin-bottom:8px;">🔑 <strong>Password Hashing:</strong> เข้ารหัสรหัสผ่านผู้ดูแลระบบด้วยความปลอดภัยสูงผ่าน <code>bcrypt</code></li>
+          <li style="margin-bottom:8px;">🍪 <strong>Session Control:</strong> บันทึก JWT/Session Token บนเว็บบราวเซอร์ผ่าน <code>HttpOnly, Secure, SameSite=Strict Cookies</code> เพื่อบล็อกการเข้าถึงจาก JavaScript (ป้องกันการถูกขโมยผ่านช่องโหว่ XSS)</li>
+          <li style="margin-bottom:8px;">⏳ <strong>Rate Limiting:</strong> ป้องกันการสุ่มรหัสผ่านผ่าน Brute-Force Attacks ในหน้า Login ด้วยระบบ Rate Limiter (Token Bucket Algorithm)</li>
+        </ul>
+      </div>
+
+      <!-- ── 7. Real-Time Data Streaming ── -->
+      <div class="section" id="streaming">
+        <div class="section-header">
+          <div class="section-num">7</div>
+          <div>
+            <div class="section-title">Real-Time Data Streaming</div>
+          </div>
+        </div>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+          การสตรีมค่าสถานะกราฟ WAN Bandwidth, ทรัพยากรระบบ CPU/RAM/Temp และ Block Logs ปรากฏแบบเรียลไทม์บนหน้าหลัก Dashboard:
+        </p>
+
+        <div class="card-grid">
+          <div class="card green">
+            <div class="card-icon">📡</div>
+            <div class="card-title">Server-Sent Events (SSE)</div>
+            <div class="card-desc">ใช้ SSE ซึ่งเป็นโปรโตคอลทิศทางเดียว (Server-to-Client) รันผ่าน HTTP ปกติ ทำงานได้เบาและกินทรัพยากรน้อยกว่าการเชื่อมต่อผ่าน WebSockets</div>
+          </div>
+          <div class="card blue">
+            <div class="card-icon">⚡</div>
+            <div class="card-title">Zero Third-Party Library</div>
+            <div class="card-desc">สตรีมโดยตรงผ่าน <code>http.ResponseWriter</code> มาตรฐานและมีระบบจับช่องสัญญาณหลุดของบราวเซอร์เพื่อเคลียร์หน่วยความจำโดยอัตโนมัติ</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 8. Logging & SD Card Preservation ── -->
+      <div class="section" id="preservation">
+        <div class="section-header">
+          <div class="section-num">8</div>
+          <div>
+            <div class="section-title">SD Card Preservation (การถนอมการเขียน MicroSD)</div>
+          </div>
+        </div>
+        <div class="callout warn" style="margin-bottom:16px;">
+          <span class="callout-icon">⚠️</span>
+          <div class="callout-body">
+            <div class="callout-title">ข้อจำกัดของ MicroSD Card บน Raspberry Pi</div>
+            บอร์ด Raspberry Pi มักรัน OS ผ่าน MicroSD Card ซึ่งมีรอบการเขียนจำกัด การเขียนไฟล์ล็อกขนาดใหญ่ลงดิสก์ SQLite อย่างต่อเนื่องจะทำให้การ์ดเสื่อมสภาพและชำรุดเสียหายได้อย่างรวดเร็ว
+          </div>
+        </div>
+
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">ระบบป้องกันปัญหา SD Card พังเร็วด้วยโซลูชัน:</p>
+        <ul style="list-style:none;padding-left:12px;font-size:13px;">
+          <li style="margin-bottom:8px;">💾 <strong>In-Memory Circular Buffer:</strong> บันทึกล็อกการดักจับแพ็กเก็ตล่าสุด (Firewall Block Logs) ลงใน Ring Buffer บนแรมของแอปพลิเคชัน Go แทนการบันทึกทับลงฐานข้อมูล SQLite</li>
+          <li style="margin-bottom:8px;">💾 <strong>Virtual Filesystem:</strong> เขียนไฟล์ล็อกทั่วไปลงพาร์ทิชันชั่วคราว เช่น <code>/run/</code> หรือ <code>/tmp/</code> (ซึ่งทำงานบนหน่วยความจำแรม) เพื่อเลี่ยงการกดเขียนข้อมูลจริงลงดิสก์การ์ด</li>
+        </ul>
+      </div>
+
+      <!-- ── 9. Network Configuration Mechanism ── -->
+      <div class="section" id="dbus">
+        <div class="section-header">
+          <div class="section-num">9</div>
+          <div>
+            <div class="section-title">Network Configuration Mechanism (D-Bus Protocol)</div>
+          </div>
+        </div>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+          การควบคุมพอร์ตการ์ดแลนและ Wi-Fi ในระบบปฏิบัติการ Raspberry Pi OS รุ่นใหม่จะรันผ่านบริการ <strong>NetworkManager</strong>:
+        </p>
+
+        <div class="card-grid">
+          <div class="card purple">
+            <div class="card-icon">🖧</div>
+            <div class="card-title">D-Bus IPC Socket Connection</div>
+            <div class="card-desc">แทนการใช้คำสั่ง shell-wrap เช่น <code>nmcli</code> โค้ดหลังบ้าน Go จะสื่อสารผ่าน D-Bus Socket ดั้งเดิมของ OS (ใช้ <code>godbus/dbus</code>) เพื่อความปลอดภัยและแม่นยำสูง</div>
+          </div>
+          <div class="card green">
+            <div class="card-icon">⚡</div>
+            <div class="card-title">Fast & Precise Results</div>
+            <div class="card-desc">ช่วยให้อ่านข้อมูลความแรงสัญญาณ Wi-Fi, จัดการ SSID และตั้งค่า addressing mode ได้เสถียรกว่าการประมวลผล text จาก command line</div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /layout -->
+
+<script>
+  // Highlight active nav item based on scroll
+  const sections = document.querySelectorAll('.section[id]');
+  const navItems = document.querySelectorAll('.nav-item');
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        navItems.forEach(n => n.classList.remove('active'));
+        const active = document.querySelector(`.nav-item[href="#${entry.target.id}"]`);
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+
+  sections.forEach(s => observer.observe(s));
+</script>
+</body>
+</html>

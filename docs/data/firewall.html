@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PiGate — Firewall Policy Documentation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0f;
+      --bg-card: #111118;
+      --bg-raised: #18181f;
+      --border: #23232e;
+      --border-accent: #2e2e3e;
+      --text: #e8e8f0;
+      --text-muted: #7a7a96;
+      --text-dim: #4a4a60;
+      --primary: #6ee7b7;
+      --primary-dim: rgba(110,231,183,0.12);
+      --primary-border: rgba(110,231,183,0.25);
+      --blue: #60a5fa;
+      --blue-dim: rgba(96,165,250,0.12);
+      --purple: #a78bfa;
+      --purple-dim: rgba(167,139,250,0.12);
+      --amber: #fbbf24;
+      --amber-dim: rgba(251,191,36,0.12);
+      --red: #f87171;
+      --red-dim: rgba(248,113,113,0.12);
+      --cyan: #22d3ee;
+      --cyan-dim: rgba(34,211,238,0.12);
+      --radius: 8px;
+      --radius-lg: 12px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      font-size: 14px;
+      min-height: 100vh;
+    }
+
+    /* ── Layout ── */
+    .layout { display: flex; min-height: 100vh; }
+
+    .sidebar {
+      width: 260px;
+      flex-shrink: 0;
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 100vh;
+      overflow-y: auto;
+      background: var(--bg-card);
+      border-right: 1px solid var(--border);
+      padding: 24px 0;
+      z-index: 100;
+    }
+
+    .sidebar-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 20px 24px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+
+    .sidebar-logo .icon {
+      width: 32px; height: 32px;
+      background: var(--primary-dim);
+      border: 1px solid var(--primary-border);
+      border-radius: 8px;
+      display: grid; place-items: center;
+      font-size: 16px;
+    }
+
+    .sidebar-logo .title { font-size: 13px; font-weight: 600; color: var(--text); }
+    .sidebar-logo .subtitle { font-size: 11px; color: var(--text-muted); }
+
+    .nav-section { padding: 0 12px; margin-bottom: 8px; }
+    .nav-label { font-size: 10px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; padding: 0 8px 6px; }
+
+    .nav-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 8px;
+      border-radius: 6px;
+      font-size: 13px;
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: background 0.15s, color 0.15s;
+      cursor: pointer;
+    }
+    .nav-item:hover { background: var(--bg-raised); color: var(--text); }
+    .nav-item.active { background: var(--primary-dim); color: var(--primary); }
+    .nav-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; opacity: 0.5; }
+    .nav-item.active .nav-dot { opacity: 1; }
+
+    .main {
+      margin-left: 260px;
+      flex: 1;
+      max-width: calc(100% - 260px);
+    }
+
+    /* ── Header ── */
+    .page-header {
+      padding: 48px 56px 36px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .breadcrumb { font-size: 12px; color: var(--text-muted); margin-bottom: 16px; display: flex; align-items: center; gap: 6px; }
+    .breadcrumb span { color: var(--text-dim); }
+
+    .page-title {
+      font-size: 28px; font-weight: 700; color: var(--text);
+      letter-spacing: -0.5px; margin-bottom: 8px;
+    }
+
+    .page-desc { font-size: 14px; color: var(--text-muted); max-width: 600px; }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px; border-radius: 20px;
+      font-size: 11px; font-weight: 500;
+    }
+    .badge-green { background: var(--primary-dim); color: var(--primary); border: 1px solid var(--primary-border); }
+    .badge-blue  { background: var(--blue-dim);    color: var(--blue);    border: 1px solid rgba(96,165,250,0.25); }
+    .badge-amber { background: var(--amber-dim);   color: var(--amber);   border: 1px solid rgba(251,191,36,0.25); }
+    .badge-red   { background: var(--red-dim);     color: var(--red);     border: 1px solid rgba(248,113,113,0.25); }
+    .badge-purple{ background: var(--purple-dim);  color: var(--purple);  border: 1px solid rgba(167,139,250,0.25); }
+    .badge-cyan  { background: var(--cyan-dim);    color: var(--cyan);    border: 1px solid rgba(34,211,238,0.25); }
+
+    .meta-row { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+
+    /* ── Content ── */
+    .content { padding: 48px 56px; max-width: 900px; }
+
+    /* ── Section ── */
+    .section { margin-bottom: 56px; }
+
+    .section-header {
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 20px; padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .section-num {
+      width: 28px; height: 28px; border-radius: 7px;
+      background: var(--primary-dim); border: 1px solid var(--primary-border);
+      display: grid; place-items: center;
+      font-size: 12px; font-weight: 700; color: var(--primary);
+      flex-shrink: 0;
+    }
+
+    .section-title { font-size: 18px; font-weight: 600; color: var(--text); }
+    .section-file { font-size: 11px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+
+    /* ── Code blocks ── */
+    .code-wrap {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      margin: 16px 0;
+    }
+
+    .code-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 16px;
+      background: var(--bg-raised);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .code-lang { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    .code-filename { font-size: 11px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
+
+    .code-body {
+      padding: 20px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12.5px;
+      line-height: 1.8;
+      color: #c9d1d9;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    /* Syntax highlights */
+    .kw  { color: #ff7b72; }
+    .tp  { color: #79c0ff; }
+    .str { color: #a5d6ff; }
+    .cmt { color: #556070; font-style: italic; }
+    .fn  { color: #d2a8ff; }
+    .num { color: #ffa657; }
+    .sql-kw { color: #ff7b72; }
+    .sql-tp  { color: #79c0ff; }
+    .sql-str { color: #a5d6ff; }
+    .sql-cmt { color: #556070; font-style: italic; }
+
+    /* ── Tables ── */
+    .table-wrap {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      margin: 16px 0;
+    }
+
+    table { width: 100%; border-collapse: collapse; }
+
+    thead { background: var(--bg-raised); }
+    thead th { padding: 10px 16px; text-align: left; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border); }
+
+    tbody tr { border-bottom: 1px solid var(--border); }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--bg-raised); }
+    tbody td { padding: 10px 16px; font-size: 13px; color: var(--text); vertical-align: top; }
+    tbody td:first-child { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--primary); }
+
+    .td-type { color: var(--blue); font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+    .td-muted { color: var(--text-muted); font-size: 12px; }
+
+    /* ── Cards ── */
+    .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin: 16px 0; }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.15s;
+    }
+    .card:hover { border-color: var(--border-accent); }
+    .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; }
+    .card.green::before { background: var(--primary); }
+    .card.blue::before  { background: var(--blue); }
+    .card.purple::before{ background: var(--purple); }
+    .card.amber::before { background: var(--amber); }
+    .card.red::before   { background: var(--red); }
+    .card.cyan::before  { background: var(--cyan); }
+
+    .card-icon { font-size: 22px; margin-bottom: 10px; }
+    .card-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+    .card-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+
+    /* ── Flow diagram ── */
+    .flow {
+      display: flex; align-items: stretch; gap: 0;
+      margin: 20px 0; flex-wrap: wrap;
+    }
+
+    .flow-step {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      flex: 1; min-width: 120px;
+      position: relative;
+    }
+    .flow-step + .flow-step { margin-left: -1px; border-radius: 0; }
+    .flow-step:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+    .flow-step:last-child  { border-radius: 0 var(--radius) var(--radius) 0; }
+
+    .flow-num { font-size: 10px; font-weight: 700; color: var(--text-dim); margin-bottom: 4px; }
+    .flow-label { font-size: 12px; font-weight: 600; color: var(--text); }
+    .flow-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+    /* ── Alert / callout ── */
+    .callout {
+      display: flex; gap: 12px;
+      padding: 14px 16px;
+      border-radius: var(--radius);
+      border: 1px solid;
+      margin: 16px 0;
+      font-size: 13px;
+    }
+    .callout-icon { font-size: 16px; flex-shrink: 0; line-height: 1.5; }
+    .callout-body { flex: 1; }
+    .callout-title { font-weight: 600; margin-bottom: 4px; }
+    .callout.warn  { background: var(--amber-dim); border-color: rgba(251,191,36,0.3); color: #c9a23a; }
+    .callout.info  { background: var(--blue-dim);  border-color: rgba(96,165,250,0.3);  color: #7bb3f8; }
+    .callout.tip   { background: var(--primary-dim); border-color: var(--primary-border); color: var(--primary); }
+
+    /* ── inline code ── */
+    code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 6px;
+      color: var(--primary);
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-accent); border-radius: 3px; }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      .sidebar { display: none; }
+      .main { margin-left: 0; max-width: 100%; }
+      .page-header, .content { padding: 24px 20px; }
+    }
+
+    /* ── Source section at bottom ── */
+    .source-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; margin: 16px 0; }
+
+    .source-item {
+      display: flex; align-items: flex-start; gap: 10px;
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 12px 14px;
+      text-decoration: none; transition: border-color 0.15s;
+    }
+    .source-item:hover { border-color: var(--primary-border); }
+    .source-item .si-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+    .source-item .si-path { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--primary); display: block; margin-bottom: 2px; }
+    .source-item .si-desc { font-size: 12px; color: var(--text-muted); }
+  </style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ══ SIDEBAR ══ -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="icon">🛡️</div>
+      <div>
+        <div class="title">PiGate Docs</div>
+        <div class="subtitle">Developer Reference</div>
+      </div>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">Firewall Policies</div>
+      <a class="nav-item" href="#model"><span class="nav-dot"></span>Data Model</a>
+      <a class="nav-item" href="#schema"><span class="nav-dot"></span>Database Schema</a>
+      <a class="nav-item" href="#reorder"><span class="nav-dot"></span>Rule Evaluation</a>
+      <a class="nav-item" href="#api"><span class="nav-dot"></span>REST API</a>
+      <a class="nav-item" href="#mock"><span class="nav-dot"></span>Mock Mode</a>
+      <a class="nav-item" href="#notes"><span class="nav-dot"></span>ข้อควรระวัง</a>
+      <a class="nav-item" href="#kernel"><span class="nav-dot"></span>Kernel Integration</a>
+      <a class="nav-item" href="#files"><span class="nav-dot"></span>ไฟล์ที่เกี่ยวข้อง</a>
+    </div>
+  </aside>
+
+  <!-- ══ MAIN ══ -->
+  <div class="main">
+
+    <!-- Header -->
+    <div class="page-header">
+      <div class="breadcrumb">docs / data <span>›</span> firewall</div>
+      <h1 class="page-title">Firewall Policy</h1>
+      <p class="page-desc">บันทึกการทำงานของระบบ Firewall Policy ใน PiGate ตั้งแต่ข้อมูลโครงสร้างฐานข้อมูล การลากจัดลำดับความสำคัญ (Drag & Drop Priority) จนถึง Kernel nftables</p>
+      <div class="meta-row">
+        <span class="badge badge-green">● Backend</span>
+        <span class="badge badge-blue">Go 1.22+</span>
+        <span class="badge badge-purple">SQLite</span>
+        <span class="badge badge-cyan">nftables</span>
+        <span class="badge badge-amber">อัปเดต 2026-06-15</span>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+
+      <!-- ── 1. Data Model ── -->
+      <div class="section" id="model">
+        <div class="section-header">
+          <div class="section-num">1</div>
+          <div>
+            <div class="section-title">Data Model</div>
+            <div class="section-file">backend/internal/model/types.go</div>
+          </div>
+        </div>
+
+        <div class="code-wrap">
+          <div class="code-header">
+            <span class="code-lang">Go</span>
+            <span class="code-filename">model/types.go</span>
+          </div>
+          <div class="code-body"><span class="kw">type</span> <span class="tp">PolicyRule</span> <span class="kw">struct</span> {
+  ID           <span class="tp">string</span>   <span class="str">`json:"id"`</span>           <span class="cmt">// รหัสเฉพาะ (UUID)</span>
+  Name         <span class="tp">string</span>   <span class="str">`json:"name"`</span>         <span class="cmt">// ชื่อกฎความปลอดภัย</span>
+  InInterface  <span class="tp">string</span>   <span class="str">`json:"inInterface"`</span>  <span class="cmt">// การ์ดขาเข้า เช่น "eth0", "wlan0" หรือ "" (Any)</span>
+  OutInterface <span class="tp">string</span>   <span class="str">`json:"outInterface"`</span> <span class="cmt">// การ์ดขาออก เช่น "eth0", "wlan0" หรือ "" (Any)</span>
+  Source       []<span class="tp">string</span> <span class="str">`json:"source"`</span>       <span class="cmt">// รายชื่อ Address Objects ที่อ้างอิง</span>
+  Destination  []<span class="tp">string</span> <span class="str">`json:"destination"`</span>  <span class="cmt">// รายชื่อ Address Objects ปลายทางที่อ้างอิง</span>
+  Service      []<span class="tp">string</span> <span class="str">`json:"service"`</span>      <span class="cmt">// รายชื่อ Service Objects (พอร์ต/โปรโตคอล) ที่อ้างอิง</span>
+  Action       <span class="tp">string</span>   <span class="str">`json:"action"`</span>       <span class="cmt">// "ACCEPT" | "DROP"</span>
+  Log          <span class="tp">bool</span>     <span class="str">`json:"log"`</span>          <span class="cmt">// เปิด/ปิดการเก็บบันทึก Log (true/false)</span>
+  Status       <span class="tp">bool</span>     <span class="str">`json:"status"`</span>       <span class="cmt">// true = เปิดใช้งานกฎ, false = ปิดใช้งานกฎ</span>
+  Priority     <span class="tp">int</span>      <span class="str">`json:"-"`</span>            <span class="cmt">// ลำดับความสำคัญการตรวจสอบ (ใช้ใน DB เท่านั้น)</span>
+}</div>
+        </div>
+      </div>
+
+      <!-- ── 2. Database Schema ── -->
+      <div class="section" id="schema">
+        <div class="section-header">
+          <div class="section-num">2</div>
+          <div>
+            <div class="section-title">Database Schema</div>
+            <div class="section-file">backend/internal/db/connection.go</div>
+          </div>
+        </div>
+
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+          ตารางหลัก <code>firewall_policies</code> และตารางเชื่อมโยงแบบ Many-to-Many สำหรับ Address และ Service Objects:
+        </p>
+
+        <div class="code-wrap">
+          <div class="code-header">
+            <span class="code-lang">SQL</span>
+            <span class="code-filename">connection.go</span>
+          </div>
+          <div class="code-body"><span class="sql-kw">CREATE TABLE IF NOT EXISTS</span> <span class="sql-tp">firewall_policies</span> (
+  id            <span class="sql-tp">TEXT</span>    <span class="sql-kw">PRIMARY KEY</span>,
+  name          <span class="sql-tp">TEXT</span>    <span class="sql-kw">NOT NULL</span>,
+  in_interface  <span class="sql-tp">TEXT</span>    <span class="sql-kw">NOT NULL</span>,
+  out_interface <span class="sql-tp">TEXT</span>    <span class="sql-kw">NOT NULL</span>,
+  action        <span class="sql-tp">TEXT</span>    <span class="sql-kw">NOT NULL</span> <span class="sql-kw">CHECK</span>(action <span class="sql-kw">IN</span> (<span class="sql-str">'ACCEPT'</span>, <span class="sql-str">'DROP'</span>)),
+  log           <span class="sql-tp">INTEGER</span> <span class="sql-kw">DEFAULT</span> <span class="num">0</span> <span class="sql-kw">CHECK</span>(log <span class="sql-kw">IN</span> (<span class="num">0</span>, <span class="num">1</span>)),
+  status        <span class="sql-tp">INTEGER</span> <span class="sql-kw">DEFAULT</span> <span class="num">1</span> <span class="sql-kw">CHECK</span>(status <span class="sql-kw">IN</span> (<span class="num">0</span>, <span class="num">1</span>)),
+  priority      <span class="sql-tp">INTEGER</span> <span class="sql-kw">NOT NULL</span>
+);
+
+<span class="sql-kw">CREATE TABLE IF NOT EXISTS</span> <span class="sql-tp">policy_addresses</span> (
+  policy_id        <span class="sql-tp">TEXT</span> <span class="sql-kw">NOT NULL</span>,
+  address_id       <span class="sql-tp">TEXT</span> <span class="sql-kw">NOT NULL</span>,
+  association_type <span class="sql-tp">TEXT</span> <span class="sql-kw">NOT NULL</span> <span class="sql-kw">CHECK</span>(association_type <span class="sql-kw">IN</span> (<span class="sql-str">'SOURCE'</span>, <span class="sql-str">'DESTINATION'</span>)),
+  <span class="sql-kw">PRIMARY KEY</span> (policy_id, address_id, association_type),
+  <span class="sql-kw">FOREIGN KEY</span> (policy_id) <span class="sql-kw">REFERENCES</span> <span class="sql-tp">firewall_policies</span>(id) <span class="sql-kw">ON DELETE CASCADE</span>,
+  <span class="sql-kw">FOREIGN KEY</span> (address_id) <span class="sql-kw">REFERENCES</span> <span class="sql-tp">address_objects</span>(id) <span class="sql-kw">ON DELETE RESTRICT</span>
+);
+
+<span class="sql-kw">CREATE TABLE IF NOT EXISTS</span> <span class="sql-tp">policy_services</span> (
+  policy_id  <span class="sql-tp">TEXT</span> <span class="sql-kw">NOT NULL</span>,
+  service_id <span class="sql-tp">TEXT</span> <span class="sql-kw">NOT NULL</span>,
+  <span class="sql-kw">PRIMARY KEY</span> (policy_id, service_id),
+  <span class="sql-kw">FOREIGN KEY</span> (policy_id) <span class="sql-kw">REFERENCES</span> <span class="sql-tp">firewall_policies</span>(id) <span class="sql-kw">ON DELETE CASCADE</span>,
+  <span class="sql-kw">FOREIGN KEY</span> (service_id) <span class="sql-kw">REFERENCES</span> <span class="sql-tp">service_objects</span>(id) <span class="sql-kw">ON DELETE RESTRICT</span>
+);</div>
+        </div>
+
+        <div class="callout info">
+          <span class="callout-icon">🛡️</span>
+          <div class="callout-body">
+            <div class="callout-title">การควบคุม Referential Integrity ด้วย ON DELETE RESTRICT</div>
+            หาก Address Object หรือ Service Object ถูกอ้างอิงโดยกฎข้อใดข้อหนึ่ง ฐานข้อมูล SQLite จะไม่อนุญาตให้ลบวัตถุดังกล่าวทันทีเพื่อป้องกันปัญหากฎค้าง (orphan rules) ในระดับ kernel
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 3. Rule Evaluation ── -->
+      <div class="section" id="reorder">
+        <div class="section-header">
+          <div class="section-num">3</div>
+          <div>
+            <div class="section-title">Rule Evaluation & Reordering Flow</div>
+            <div class="section-file">backend/internal/db/repository.go → SaveAllPolicies()</div>
+          </div>
+        </div>
+
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+          PiGate ประมวลผลกฎจากบนลงล่าง (First-Match Wins) การปรับตำแหน่งด้วยการ Drag & Drop บน Frontend จะบันทึกลำดับผ่าน REST API:
+        </p>
+
+        <div class="flow">
+          <div class="flow-step">
+            <div class="flow-num">STEP 1</div>
+            <div class="flow-label">Drag & Drop UI</div>
+            <div class="flow-sub">สลับแถวตารางใน React (@dnd-kit)</div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-num">STEP 2</div>
+            <div class="flow-label">PUT /api/policies/reorder</div>
+            <div class="flow-sub">ส่งอาเรย์ของกฎเรียงตามลำดับใหม่</div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-num">STEP 3</div>
+            <div class="flow-label">SQLite DB Transaction</div>
+            <div class="flow-sub">อัปเดต priority 1..N ใน DB</div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-num">STEP 4</div>
+            <div class="flow-label">POST /api/policies/apply</div>
+            <div class="flow-sub">แปลงและโหลดกฎลง nftables kernel จริง</div>
+          </div>
+        </div>
+
+        <div class="card-grid">
+          <div class="card green">
+            <div class="card-icon">⚡</div>
+            <div class="card-title">First-Match Wins</div>
+            <div class="card-desc">เมื่อแพ็กเก็ตวิ่งผ่าน หากตรงเงื่อนไขของกฎข้อใด ระบบจะทำการกระทำ (ACCEPT/DROP) และหยุดมองหากฎข้อถัดไปทันที</div>
+          </div>
+          <div class="card red">
+            <div class="card-icon">🛑</div>
+            <div class="card-title">Implicit Deny Fallback</div>
+            <div class="card-desc">หากแพ็กเก็ตตรวจสอบทุกกฎแล้วไม่ตรงกับข้อใดเลย เคอร์เนลจะทำการ DROP แพ็กเก็ตนั้นโดยอัตโนมัติ (Default Chain Policy)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 4. REST API ── -->
+      <div class="section" id="api">
+        <div class="section-header">
+          <div class="section-num">4</div>
+          <div>
+            <div class="section-title">REST API Endpoints</div>
+            <div class="section-file">backend/internal/api/router.go · handlers.go</div>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Method</th><th>Path</th><th>Handler</th><th>หน้าที่</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><span class="badge badge-green">GET</span></td>
+                <td><code>/api/policies</code></td>
+                <td class="td-type">HandleGetPolicies</td>
+                <td class="td-muted">ดึงรายชื่อกฎทั้งหมด เรียงตาม priority ASC</td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-green">POST</span></td>
+                <td><code>/api/policies</code></td>
+                <td class="td-type">HandleCreatePolicy</td>
+                <td class="td-muted">เพิ่มกฎใหม่ (คำนวณ priority ล่างสุดให้อัตโนมัติ)</td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-amber">PUT</span></td>
+                <td><code>/api/policies/{id}</code></td>
+                <td class="td-type">HandleUpdatePolicy</td>
+                <td class="td-muted">แก้ไขกฎ (รวมถึงอัปเดตความสัมพันธ์ Many-to-Many ใหม่)</td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-red">DELETE</span></td>
+                <td><code>/api/policies/{id}</code></td>
+                <td class="td-type">HandleDeletePolicy</td>
+                <td class="td-muted">ลบกฎและลบความสัมพันธ์ในตารางลูก</td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-amber">PUT</span></td>
+                <td><code>/api/policies/reorder</code></td>
+                <td class="td-type">HandleReorderPolicies</td>
+                <td class="td-muted">บันทึกลำดับ Priority หลังการลากสลับแถว</td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-blue">POST</span></td>
+                <td><code>/api/policies/{id}/toggle-log</code></td>
+                <td class="td-type">HandleTogglePolicyLog</td>
+                <td class="td-muted">เปิด/ปิดการเก็บ Log ของกฎข้อนั้น (toggle บิต log)</td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-blue">POST</span></td>
+                <td><code>/api/policies/{id}/toggle-status</code></td>
+                <td class="td-type">HandleTogglePolicyStatus</td>
+                <td class="td-muted">เปิด/ปิดการทำงานของกฎ (active ↔ inactive)</td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-blue">POST</span></td>
+                <td><code>/api/policies/apply</code></td>
+                <td class="td-type">HandleApplyPolicies</td>
+                <td class="td-muted">คอมไพล์และนำคำสั่งทั้งหมดโหลดเข้า nftables kernel</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── 5. Mock Mode ── -->
+      <div class="section" id="mock">
+        <div class="section-header">
+          <div class="section-num">5</div>
+          <div>
+            <div class="section-title">Mock Mode vs Production Mode</div>
+            <div class="section-file">backend/internal/kernel/mock.go</div>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>mockMode</th><th>พฤติกรรมของ ApplyRules</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><span class="badge badge-amber">true</span></td>
+                <td class="td-muted">เพียงทำการพิมพ์แสดงโครงสร้าง nftables command ที่ประมวลผลได้ลงสู่ backend standard logs เท่านั้น ไม่มีผลกับ OS จริง</td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-red">false</span></td>
+                <td class="td-muted">นำกฎไฟร์วอลล์ทั้งหมดที่เปิดสถานะ (Status = true) แปลงเป็น nftables instructions แล้วเขียนลง netlink socket โดยตรง</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── 6. ข้อควรระวัง ── -->
+      <div class="section" id="notes">
+        <div class="section-header">
+          <div class="section-num">6</div>
+          <div>
+            <div class="section-title">ข้อควรระวัง</div>
+          </div>
+        </div>
+
+        <div class="callout warn" style="margin-bottom:12px;">
+          <span class="callout-icon">⚠️</span>
+          <div class="callout-body">
+            <div class="callout-title">การอ้างอิงวัตถุที่โดนล็อก</div>
+            ไม่อนุญาตให้แก้ไขหรือลบวัตถุระบบ (System Predefined Objects เช่น <code>ALL</code> หรือ <code>ICMP</code>) ผ่านการใช้งานปกติ เนื่องจากระบบย่อยอื่นๆ ใช้ระบุการทำงานพื้นฐาน
+          </div>
+        </div>
+
+        <div class="callout warn" style="margin-bottom:12px;">
+          <span class="callout-icon">⚠️</span>
+          <div class="callout-body">
+            <div class="callout-title">ตารางหลุดเฟรมบนสมาร์ทโฟน</div>
+            หน้าแสดงกฎไฟร์วอลล์มีจำนวนคอลัมน์และข้อมูลประเภท Multi-select Combobox ค่อนข้างกว้าง จึงมีคำแนะนำให้ผู้ใช้ใช้งานในหน้าจอขนาดกว้างหรือแท็บเล็ตเป็นอย่างน้อย หรือตรวจสอบว่าตารางครอบด้วยสไตล์ <code>overflow-x-auto w-full</code>
+          </div>
+        </div>
+
+        <div class="callout tip">
+          <span class="callout-icon">💡</span>
+          <div class="callout-body">
+            <div class="callout-title">การเชื่อมโยง IP address จริง</div>
+            เมื่อมีการแก้ไขชื่อหรือเพิ่ม/ลด สมาชิกใน Address Object หรือ Service Object ระบบหลังบ้านจะนำไปแมปร่วมกับการดึงข้อมูล SQL ในตารางเชื่อมโยงทันที เพื่ออัปเดตกฎ nftables ให้เป็นปัจจุบันทุกครั้งที่กด Apply
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 7. Kernel Integration ── -->
+      <div class="section" id="kernel">
+        <div class="section-header">
+          <div class="section-num">7</div>
+          <div>
+            <div class="section-title">Kernel Integration (Production)</div>
+            <div class="section-file">backend/internal/kernel/real_firewall.go (ระยะที่ 2)</div>
+          </div>
+        </div>
+
+        <div class="callout tip" style="margin-bottom:16px;">
+          <span class="callout-icon">🔌</span>
+          <div class="callout-body">
+            <div class="callout-title">การใช้งาน google/nftables</div>
+            เพื่อความปลอดภัยสูงสุดและเสถียรภาพในการจัดการสิทธิ์บน Linux Kernel ระบบจะไม่เรียก run command `nft` หรือ shell shell scripts แต่จะใช้ netlink socket API ในการอัปเดตกฎไฟร์วอลล์แทน
+          </div>
+        </div>
+
+        <p style="font-size:13px;font-weight:600;color:var(--text);margin:0 0 8px;">สถาปัตยกรรมตาราง nftables ของ PiGate:</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">nftables syntax mockup</span><span class="code-filename">pigate_firewall</span></div>
+          <div class="code-body">table inet pigate_firewall {
+    chain input {
+        type filter hook input priority filter; policy drop;
+        ct state established,related accept
+        iifname "lo" accept
+        # Custom INPUT rules go here...
+    }
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+        ct state established,related accept
+        # Custom FORWARD rules go here...
+    }
+}</div>
+        </div>
+      </div>
+
+      <!-- ── 8. ไฟล์ที่เกี่ยวข้อง ── -->
+      <div class="section" id="files">
+        <div class="section-header">
+          <div class="section-num">8</div>
+          <div>
+            <div class="section-title">ไฟล์ที่เกี่ยวข้อง</div>
+          </div>
+        </div>
+        <div class="source-grid">
+          <div class="source-item">
+            <span class="si-icon">📄</span>
+            <div>
+              <span class="si-path">model/types.go</span>
+              <span class="si-desc">โครงสร้าง structs สำหรับ PolicyRule และ Input</span>
+            </div>
+          </div>
+          <div class="source-item">
+            <span class="si-icon">🗄️</span>
+            <div>
+              <span class="si-path">db/connection.go</span>
+              <span class="si-desc">DB schema ตารางหลักและตารางความสัมพันธ์</span>
+            </div>
+          </div>
+          <div class="source-item">
+            <span class="si-icon">🔁</span>
+            <div>
+              <span class="si-path">db/repository.go</span>
+              <span class="si-desc">ฟังก์ชัน CRUD, Transaction, Reordering & Relations</span>
+            </div>
+          </div>
+          <div class="source-item">
+            <span class="si-icon">🌐</span>
+            <div>
+              <span class="si-path">api/handlers.go</span>
+              <span class="si-desc">HTTP handlers สำหรับการจัดการกฎความปลอดภัยไฟร์วอลล์</span>
+            </div>
+          </div>
+          <div class="source-item">
+            <span class="si-icon">🗺️</span>
+            <div>
+              <span class="si-path">api/router.go</span>
+              <span class="si-desc">Route mapping สำหรับ endpoints ทั้งหมด</span>
+            </div>
+          </div>
+          <div class="source-item">
+            <span class="si-icon">⚙️</span>
+            <div>
+              <span class="si-path">kernel/interfaces.go</span>
+              <span class="si-desc">FirewallManager interface abstraction</span>
+            </div>
+          </div>
+          <div class="source-item">
+            <span class="si-icon">🧪</span>
+            <div>
+              <span class="si-path">kernel/mock.go</span>
+              <span class="si-desc">Mock implementation สำหรับ test/dev environment</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /layout -->
+
+<script>
+  // Highlight active nav item based on scroll
+  const sections = document.querySelectorAll('.section[id]');
+  const navItems = document.querySelectorAll('.nav-item');
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        navItems.forEach(n => n.classList.remove('active'));
+        const active = document.querySelector(`.nav-item[href="#${entry.target.id}"]`);
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+
+  sections.forEach(s => observer.observe(s));
+</script>
+</body>
+</html>
