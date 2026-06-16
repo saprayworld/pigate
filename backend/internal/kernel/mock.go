@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -55,6 +56,15 @@ func NewMockRouting() *MockRouting {
 }
 
 func (m *MockRouting) ApplyRoutes(routes []model.StaticRoute) error {
+	log.Printf("[MockRouting] Applying %d static routes to mock kernel:", len(routes))
+	for _, rt := range routes {
+		statusStr := "DISABLED"
+		if rt.Status {
+			statusStr = "ENABLED"
+		}
+		log.Printf("  [%s] Dest: %s, Gateway: %s, Interface: %s, Metric: %d, Type: %s",
+			statusStr, rt.Destination, rt.Gateway, rt.Interface, rt.Metric, rt.Type)
+	}
 	return nil
 }
 

@@ -14,22 +14,32 @@ import (
 )
 
 type Repository struct {
-	db           *sql.DB
-	mockMode     bool
-	mockFromReal bool
+	db                    *sql.DB
+	mockMode              bool
+	mockFromReal          bool
+	allowEditSystemRoutes bool
 }
 
 func NewRepository(db *sql.DB) *Repository {
 	return &Repository{
-		db:           db,
-		mockMode:     true, // default to true for safety
-		mockFromReal: false,
+		db:                    db,
+		mockMode:              true, // default to true for safety
+		mockFromReal:          false,
+		allowEditSystemRoutes: false,
 	}
 }
 
 func (r *Repository) SetMockMode(mockMode bool, mockFromReal bool) {
 	r.mockMode = mockMode
 	r.mockFromReal = mockFromReal
+}
+
+func (r *Repository) SetAllowEditSystemRoutes(allow bool) {
+	r.allowEditSystemRoutes = allow
+}
+
+func (r *Repository) GetAllowEditSystemRoutes() bool {
+	return r.allowEditSystemRoutes
 }
 
 // =========================================================================
@@ -848,7 +858,7 @@ func (r *Repository) UpdateRoute(route model.StaticRoute) error {
 	if err != nil {
 		return err
 	}
-	if rType == "system" {
+	if rType == "system" && !r.allowEditSystemRoutes {
 		return errors.New("cannot update system predefined static routes")
 	}
 
@@ -867,7 +877,7 @@ func (r *Repository) DeleteRoute(id string) error {
 	if err != nil {
 		return err
 	}
-	if rType == "system" {
+	if rType == "system" && !r.allowEditSystemRoutes {
 		return errors.New("cannot delete system predefined static routes")
 	}
 
@@ -888,13 +898,15 @@ func (r *Repository) BulkDeleteRoutes(ids []string) error {
 	}
 	queryIn := strings.Join(placeholders, ",")
 
-	var systemCount int
-	querySys := fmt.Sprintf("SELECT COUNT(*) FROM static_routes WHERE type = 'system' AND id IN (%s)", queryIn)
-	if err := r.db.QueryRow(querySys, args...).Scan(&systemCount); err != nil {
-		return err
-	}
-	if systemCount > 0 {
-		return errors.New("cannot delete system predefined static routes in bulk")
+	if !r.allowEditSystemRoutes {
+		var systemCount int
+		querySys := fmt.Sprintf("SELECT COUNT(*) FROM static_routes WHERE type = 'system' AND id IN (%s)", queryIn)
+		if err := r.db.QueryRow(querySys, args...).Scan(&systemCount); err != nil {
+			return err
+		}
+		if systemCount > 0 {
+			return errors.New("cannot delete system predefined static routes in bulk")
+		}
 	}
 
 	queryDel := fmt.Sprintf("DELETE FROM static_routes WHERE id IN (%s)", queryIn)
@@ -903,7 +915,16 @@ func (r *Repository) BulkDeleteRoutes(ids []string) error {
 }
 
 func (r *Repository) ToggleRouteStatus(id string) error {
-	_, err := r.db.Exec("UPDATE static_routes SET status = NOT status WHERE id = ?", id)
+	var rType string
+	err := r.db.QueryRow("SELECT type FROM static_routes WHERE id = ?", id).Scan(&rType)
+	if err != nil {
+		return err
+	}
+	if rType == "system" && !r.allowEditSystemRoutes {
+		return errors.New("cannot toggle status of system predefined static routes")
+	}
+
+	_, err = r.db.Exec("UPDATE static_routes SET status = NOT status WHERE id = ?", id)
 	return err
 }
 
@@ -1512,13 +1533,55 @@ func (r *Repository) SyncRoutesFromOS() error {
 		return nil
 	}
 
-	// Delete old system routes
-	_, err = r.db.Exec("DELETE FROM static_routes WHERE type = 'system'")
-	if err != nil {
-		return fmt.Errorf("failed to delete old system routes: %w", err)
+	// Helper to get canonical CIDR representation
+	canonicalCIDR := func(s string) string {
+		_, ipNet, err := net.ParseCIDR(s)
+		if err != nil {
+			return s
+		}
+		return ipNet.String()
 	}
 
-	for idx, line := range lines[1:] {
+	type routeKey struct {
+		dest  string
+		gw    string
+		iface string
+	}
+
+	// 1. Fetch custom routes from DB to reconcile their status and prevent duplicates
+	rowsCustom, err := r.db.Query("SELECT id, destination, gateway, interface, status FROM static_routes WHERE type = 'custom'")
+	if err != nil {
+		return fmt.Errorf("failed to fetch custom routes: %w", err)
+	}
+	customRoutes := make(map[routeKey]*model.StaticRoute)
+	for rowsCustom.Next() {
+		var rt model.StaticRoute
+		var statVal int
+		if err := rowsCustom.Scan(&rt.ID, &rt.Destination, &rt.Gateway, &rt.Interface, &statVal); err == nil {
+			rt.Status = statVal == 1
+			key := routeKey{
+				dest:  canonicalCIDR(rt.Destination),
+				gw:    strings.TrimSpace(rt.Gateway),
+				iface: strings.TrimSpace(rt.Interface),
+			}
+			customRoutes[key] = &rt
+		}
+	}
+	rowsCustom.Close()
+
+	// 2. Track which custom routes were found active in OS
+	foundCustom := make(map[string]bool)
+
+	// 3. Temporary list of system routes to insert
+	type systemRoute struct {
+		destination string
+		gateway     string
+		iface       string
+		metric      int
+	}
+	var systemRoutesToInsert []systemRoute
+
+	for _, line := range lines[1:] {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -1550,7 +1613,6 @@ func (r *Repository) SyncRoutesFromOS() error {
 			continue
 		}
 
-		// Convert mask to prefix length
 		prefixLen := 32
 		maskIP := net.ParseIP(maskIPStr)
 		if maskIP != nil {
@@ -1560,24 +1622,61 @@ func (r *Repository) SyncRoutesFromOS() error {
 		}
 
 		metric, _ := strconv.Atoi(metricStr)
-
-		// Format destination as CIDR (e.g. 192.168.1.0/24 or 0.0.0.0/0)
 		destination := fmt.Sprintf("%s/%d", destIP, prefixLen)
-
-		// For direct routes, gateway is typically 0.0.0.0, we can save it as empty string
 		gateway := gwIP
 		if gateway == "0.0.0.0" {
 			gateway = ""
 		}
 
-		routeID := fmt.Sprintf("route-os-%d", idx)
-		description := "System route fetched from kernel"
+		// Check if this matches a custom route
+		key := routeKey{
+			dest:  canonicalCIDR(destination),
+			gw:    gateway,
+			iface: iface,
+		}
 
+		if custRt, found := customRoutes[key]; found {
+			foundCustom[custRt.ID] = true
+		} else {
+			systemRoutesToInsert = append(systemRoutesToInsert, systemRoute{
+				destination: destination,
+				gateway:     gateway,
+				iface:       iface,
+				metric:      metric,
+			})
+		}
+	}
+
+	// 4. Update status of custom routes in DB based on presence in kernel
+	for _, custRt := range customRoutes {
+		isActiveInOS := foundCustom[custRt.ID]
+		if isActiveInOS && !custRt.Status {
+			_, _ = r.db.Exec("UPDATE static_routes SET status = 1 WHERE id = ?", custRt.ID)
+		} else if !isActiveInOS && custRt.Status {
+			_, _ = r.db.Exec("UPDATE static_routes SET status = 0 WHERE id = ?", custRt.ID)
+		}
+	}
+
+	// 5. Delete old system routes and insert new active ones
+	_, err = r.db.Exec("DELETE FROM static_routes WHERE type = 'system'")
+	if err != nil {
+		return fmt.Errorf("failed to clear old system routes: %w", err)
+	}
+
+	for _, sysRt := range systemRoutesToInsert {
+		// Use canonical key as stable ID to prevent PRIMARY KEY collisions across syncs
+		routeID := fmt.Sprintf("route-sys-%s-%s-%s",
+			strings.ReplaceAll(canonicalCIDR(sysRt.destination), "/", "_"),
+			strings.ReplaceAll(sysRt.gateway, ".", "_"),
+			sysRt.iface,
+		)
+		description := "System route fetched from kernel"
 		_, err = r.db.Exec(`INSERT INTO static_routes (id, destination, gateway, interface, metric, description, status, type) 
 			VALUES (?, ?, ?, ?, ?, ?, 1, 'system')`,
-			routeID, destination, gateway, iface, metric, description)
+			routeID, sysRt.destination, sysRt.gateway, sysRt.iface, sysRt.metric, description)
 		if err != nil {
-			// Ignore or log error
+			// Log but continue — non-fatal for individual route insert failures
+			_ = err
 		}
 	}
 

@@ -20,6 +20,7 @@ func main() {
 	mockOS := flag.Bool("mock", true, "Use mocked kernel operations (default true on PC)")
 	mockFromReal := flag.Bool("mock-from-real", false, "Mock operations but initialize/pull from real kernel data at startup")
 	disableEdit := flag.Bool("disable-edit", false, "Disable edit operations (Read-only mode)")
+	allowEditSystemRoutes := flag.Bool("allow-edit-system-routes", false, "Allow editing and deleting system predefined static routes")
 	flag.Parse()
 
 	log.Printf("Starting PiGate Backend Server (Go v1.26.4)...")
@@ -28,6 +29,7 @@ func main() {
 	log.Printf("Mock OS Integration: %t", *mockOS)
 	log.Printf("Mock From Real Data: %t", *mockFromReal)
 	log.Printf("Disable Edit Mode: %t", *disableEdit)
+	log.Printf("Allow Edit System Routes: %t", *allowEditSystemRoutes)
 
 	// 2. Initialize in-memory logs circular buffer (Ring Buffer)
 	ringBuffer := logs.NewRingBuffer(50)
@@ -45,6 +47,7 @@ func main() {
 
 	repo := db.NewRepository(sqliteDB)
 	repo.SetMockMode(*mockOS, *mockFromReal)
+	repo.SetAllowEditSystemRoutes(*allowEditSystemRoutes)
 
 	// Perform initial synchronization of interfaces, routing table, and DNS if real mode or mock-from-real is enabled
 	if !*mockOS || *mockFromReal {
@@ -81,7 +84,7 @@ func main() {
 		// Requires: sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
 		fw = kernel.NewMockFirewall() // nftables real impl: TODO (google/nftables)
 		net = kernel.NewRealNetwork()
-		rt = kernel.NewMockRouting() // netlink route real impl: TODO
+		rt = kernel.NewRealRouting(*allowEditSystemRoutes)
 		mDhcp := kernel.NewMockDhcp()
 		mDhcp.MockFromReal = false
 		dhcp = mDhcp

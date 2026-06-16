@@ -35,8 +35,9 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
-import { type StaticRoute } from "@/data-mockup/mockData"
+import { type StaticRoute, type NetworkInterface } from "@/data-mockup/mockData"
 import { staticRouteService } from "@/services/staticRouteService"
+import { interfaceService } from "@/services/interfaceService"
 import { useAlert } from "@/components/AlertDialogProvider"
 import { isValidIp, isValidCidr } from "@/lib/utils"
 
@@ -45,6 +46,8 @@ export default function StaticRoutes() {
 
   // --- State ---
   const [routes, setRoutes] = useState<StaticRoute[]>([])
+  const [interfaces, setInterfaces] = useState<NetworkInterface[]>([])
+  const [allowEditSystemRoutes, setAllowEditSystemRoutes] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<"all" | "system" | "custom">("all")
@@ -76,8 +79,14 @@ export default function StaticRoutes() {
   const loadRoutes = async (showLoading = true) => {
     if (showLoading) setIsLoading(true)
     try {
-      const data = await staticRouteService.getAll()
-      setRoutes(data)
+      const [routesData, configData, interfacesData] = await Promise.all([
+        staticRouteService.getAll(),
+        staticRouteService.getConfig(),
+        interfaceService.getAll()
+      ])
+      setRoutes(routesData)
+      setAllowEditSystemRoutes(configData.allowEditSystemRoutes)
+      setInterfaces(interfacesData)
     } catch (err: any) {
       console.error(err)
       await alert("ข้อผิดพลาด", "ไม่สามารถโหลดตารางเส้นทางได้: " + (err.message || err))
@@ -119,10 +128,10 @@ export default function StaticRoutes() {
     })
   }, [routes, searchQuery, selectedTypeFilter, selectedStatusFilter])
 
-  // --- Checkbox Actions (Only Custom Routes are selectable) ---
+  // --- Checkbox Actions (Only Custom Routes or all routes if system route editing is allowed) ---
   const selectableRoutes = useMemo(() => {
-    return filteredRoutes.filter(r => r.type === "custom")
-  }, [filteredRoutes])
+    return filteredRoutes.filter(r => r.type === "custom" || allowEditSystemRoutes)
+  }, [filteredRoutes, allowEditSystemRoutes])
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
@@ -161,7 +170,7 @@ export default function StaticRoutes() {
     setEditingRoute(null)
     setFormDestination("")
     setFormGateway("")
-    setFormInterface("eth0")
+    setFormInterface(interfaces[0]?.name || "eth0")
     setFormMetric("100")
     setFormDescription("")
     setFormStatus(true)
@@ -183,7 +192,7 @@ export default function StaticRoutes() {
 
   const handleDelete = async (id: string, dest: string) => {
     const route = routes.find(r => r.id === id)
-    if (route?.type === "system") {
+    if (route?.type === "system" && !allowEditSystemRoutes) {
       await alert("การดำเนินการล้มเหลว", "ไม่สามารถลบ System Route ของระบบปฏิบัติการได้")
       return
     }
@@ -506,7 +515,7 @@ export default function StaticRoutes() {
                   <TableCell className="p-3">
                     <input
                       type="checkbox"
-                      disabled={route.type === "system"}
+                      disabled={route.type === "system" && !allowEditSystemRoutes}
                       checked={selectedIds.includes(route.id)}
                       onChange={(e) => handleSelectRow(route.id, e.target.checked)}
                       className="rounded border-input bg-background text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer accent-primary disabled:opacity-30 disabled:cursor-not-allowed"
@@ -561,20 +570,20 @@ export default function StaticRoutes() {
                       <Button
                         variant="ghost"
                         size="icon-xs"
-                        disabled={route.type === "system"}
+                        disabled={route.type === "system" && !allowEditSystemRoutes}
                         onClick={() => openEditModal(route)}
                         className="cursor-pointer text-muted-foreground hover:text-foreground hover:bg-muted/50 disabled:opacity-25 disabled:cursor-not-allowed"
-                        title={route.type === "system" ? "ไม่สามารถแก้ไขข้อมูลระบบได้" : "แก้ไขเส้นทาง"}
+                        title={route.type === "system" && !allowEditSystemRoutes ? "ไม่สามารถแก้ไขข้อมูลระบบได้" : "แก้ไขเส้นทาง"}
                       >
                         <Edit className="h-3.5 w-3.5" />
                       </Button>
                       <Button
                         variant="ghost"
                         size="icon-xs"
-                        disabled={route.type === "system"}
+                        disabled={route.type === "system" && !allowEditSystemRoutes}
                         onClick={() => handleDelete(route.id, route.destination)}
                         className="cursor-pointer text-muted-foreground hover:text-red-500 hover:bg-red-500/10 disabled:opacity-25 disabled:cursor-not-allowed"
-                        title={route.type === "system" ? "ไม่สามารถลบข้อมูลระบบได้" : "ลบเส้นทาง"}
+                        title={route.type === "system" && !allowEditSystemRoutes ? "ไม่สามารถลบข้อมูลระบบได้" : "ลบเส้นทาง"}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
@@ -665,8 +674,17 @@ export default function StaticRoutes() {
                   onChange={(e) => setFormInterface(e.target.value)}
                   className="w-full bg-background border border-border rounded-lg h-9 px-2.5 text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
                 >
-                  <option value="eth0">eth0 (LAN Port)</option>
-                  <option value="wlan0">wlan0 (Wireless WAN)</option>
+                  {interfaces.map((iface) => (
+                    <option key={iface.id} value={iface.name}>
+                      {iface.name} ({iface.alias || iface.role})
+                    </option>
+                  ))}
+                  {interfaces.length === 0 && (
+                    <>
+                      <option value="eth0">eth0 (LAN Port)</option>
+                      <option value="wlan0">wlan0 (Wireless WAN)</option>
+                    </>
+                  )}
                 </select>
               </div>
 

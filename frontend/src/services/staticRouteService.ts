@@ -39,6 +39,20 @@ export const staticRouteService = {
     return response.json();
   },
 
+  // Fetch routes configuration parameters (such as allowEditSystemRoutes)
+  getConfig: async (): Promise<{ allowEditSystemRoutes: boolean }> => {
+    if (IS_MOCK_MODE) {
+      const stored = localStorage.getItem("pigate_allow_edit_system_routes") === "true";
+      return { allowEditSystemRoutes: stored };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/routes/config`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch routes configuration: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
   // Create a new custom static route
   create: async (
     obj: Omit<StaticRoute, "id" | "type">
@@ -80,7 +94,8 @@ export const staticRouteService = {
       if (!target) {
         throw new Error(`Static route with id ${id} not found`);
       }
-      if (target.type === "system") {
+      const allowEdit = localStorage.getItem("pigate_allow_edit_system_routes") === "true";
+      if (target.type === "system" && !allowEdit) {
         throw new Error(`Cannot update system predefined static routes`);
       }
       const updatedRoute: StaticRoute = {
@@ -114,7 +129,8 @@ export const staticRouteService = {
       if (!target) {
         throw new Error(`Static route with id ${id} not found`);
       }
-      if (target.type === "system") {
+      const allowEdit = localStorage.getItem("pigate_allow_edit_system_routes") === "true";
+      if (target.type === "system" && !allowEdit) {
         throw new Error(`Cannot delete system predefined static routes`);
       }
       const updatedList = current.filter((r) => r.id !== id);
@@ -138,7 +154,8 @@ export const staticRouteService = {
       const current = getLocalRoutes();
       const targets = current.filter((r) => ids.includes(r.id));
       const hasSystem = targets.some((r) => r.type === "system");
-      if (hasSystem) {
+      const allowEdit = localStorage.getItem("pigate_allow_edit_system_routes") === "true";
+      if (hasSystem && !allowEdit) {
         throw new Error(`Cannot delete system predefined static routes in bulk`);
       }
       const updatedList = current.filter((r) => !ids.includes(r.id));

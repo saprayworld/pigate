@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -610,6 +612,17 @@ func (s *Server) HandleDeleteService(w http.ResponseWriter, r *http.Request) {
 // STATIC ROUTES HANDLERS
 // =========================================================================
 
+func (s *Server) applyRoutesToKernel() error {
+	routes, err := s.repo.GetRoutes()
+	if err != nil {
+		return fmt.Errorf("failed to load routes from DB: %w", err)
+	}
+	if err := s.routing.ApplyRoutes(routes); err != nil {
+		return fmt.Errorf("kernel routing update failed: %w", err)
+	}
+	return nil
+}
+
 func (s *Server) HandleGetRoutes(w http.ResponseWriter, r *http.Request) {
 	list, err := s.repo.GetRoutes()
 	if err != nil {
@@ -640,6 +653,9 @@ func (s *Server) HandleCreateRoute(w http.ResponseWriter, r *http.Request) {
 	if err := s.repo.CreateRoute(route); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if err := s.applyRoutesToKernel(); err != nil {
+		log.Printf("[Server] Warning: route created but kernel apply failed: %v", err)
 	}
 	s.writeJSON(w, http.StatusOK, route)
 }
@@ -673,6 +689,10 @@ func (s *Server) HandleUpdateRoute(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if err := s.applyRoutesToKernel(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Route saved but kernel apply failed: "+err.Error())
+		return
+	}
 	s.writeJSON(w, http.StatusOK, route)
 }
 
@@ -681,6 +701,9 @@ func (s *Server) HandleDeleteRoute(w http.ResponseWriter, r *http.Request) {
 	if err := s.repo.DeleteRoute(id); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if err := s.applyRoutesToKernel(); err != nil {
+		log.Printf("[Server] Warning: route deleted but kernel apply failed: %v", err)
 	}
 	s.writeJSON(w, http.StatusOK, true)
 }
@@ -698,6 +721,9 @@ func (s *Server) HandleBulkDeleteRoutes(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := s.applyRoutesToKernel(); err != nil {
+		log.Printf("[Server] Warning: routes deleted but kernel apply failed: %v", err)
+	}
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -705,6 +731,10 @@ func (s *Server) HandleToggleRoute(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.repo.ToggleRouteStatus(id); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := s.applyRoutesToKernel(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Route toggled but kernel apply failed: "+err.Error())
 		return
 	}
 	route, _ := s.repo.GetRouteByID(id)
@@ -724,6 +754,12 @@ func (s *Server) HandleApplyRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, true)
+}
+
+func (s *Server) HandleGetRoutesConfig(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"allowEditSystemRoutes": s.repo.GetAllowEditSystemRoutes(),
+	})
 }
 
 // =========================================================================

@@ -54,6 +54,7 @@ func RegisterRoutes(s *Server) http.Handler {
 
 	// 7. Static Routes
 	authRoute("GET /api/routes", s.HandleGetRoutes)
+	authRoute("GET /api/routes/config", s.HandleGetRoutesConfig)
 	authRoute("POST /api/routes", s.HandleCreateRoute)
 	authRoute("PUT /api/routes/{id}", s.HandleUpdateRoute)
 	authRoute("DELETE /api/routes/{id}", s.HandleDeleteRoute)
