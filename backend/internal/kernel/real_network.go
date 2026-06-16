@@ -5,11 +5,13 @@ package kernel
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 
-	"github.com/vishvananda/netlink"
 	"pigate/internal/model"
+
+	"github.com/vishvananda/netlink"
 )
 
 // RealNetwork implements NetworkManager using netlink for direct kernel interaction.
@@ -41,6 +43,96 @@ func (r *RealNetwork) ToggleInterface(name string, up bool) error {
 	if err := netlink.LinkSetDown(link); err != nil {
 		return fmt.Errorf("failed to bring interface %q down: %w", name, err)
 	}
+	return nil
+}
+
+// ConfigureInterface configures the IP address, netmask, gateway, and addressing mode of an interface using Netlink.
+// For DHCP mode, it clears static IPs and routes, and spawns/signals dhclient/dhcpcd to request an address.
+// For Static mode, it clears existing IPv4 addresses and sets the specified static IP/Netmask and gateway route.
+func (r *RealNetwork) ConfigureInterface(name string, mode string, ip string, netmask string, gateway string) error {
+	link, err := netlink.LinkByName(name)
+	if err != nil {
+		return fmt.Errorf("interface %q not found: %w", name, err)
+	}
+
+	// Bring the interface up if it is not up, as IP configuration and routing require an active link
+	if link.Attrs().Flags&net.FlagUp == 0 {
+		if err := netlink.LinkSetUp(link); err != nil {
+			return fmt.Errorf("failed to bring interface %q up: %w", name, err)
+		}
+	}
+
+	// Always release DHCP client and clean up first to prevent conflicts/duplicates
+	_ = exec.Command("dhclient", "-r", name).Run()
+	_ = exec.Command("dhcpcd", "-k", name).Run()
+
+	// Always clear existing IPv4 addresses from the interface
+	addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
+	if err == nil {
+		for _, a := range addrs {
+			_ = netlink.AddrDel(link, &a)
+		}
+	}
+
+	if mode == "dhcp" {
+		// Try starting dhclient in background
+		if err := exec.Command("dhclient", name).Start(); err == nil {
+			return nil
+		}
+		// Try fallback to dhcpcd
+		if err := exec.Command("dhcpcd", name).Start(); err == nil {
+			return nil
+		}
+		// If neither dhclient nor dhcpcd exists or starts, we return error
+		return fmt.Errorf("failed to start dhclient or dhcpcd for DHCP mode on %s", name)
+	}
+
+	// Static mode configuration
+	if ip == "" || netmask == "" {
+		return fmt.Errorf("IP address and netmask are required for static configuration")
+	}
+
+	// Add static IP address
+	addr, err := netlink.ParseAddr(fmt.Sprintf("%s/%s", ip, netmask))
+	if err != nil {
+		return fmt.Errorf("invalid CIDR address %s/%s: %w", ip, netmask, err)
+	}
+
+	if err := netlink.AddrAdd(link, addr); err != nil {
+		return fmt.Errorf("failed to set static IP %s/%s: %w", ip, netmask, err)
+	}
+
+	// Configure default gateway route if specified
+	if gateway != "" {
+		gwIP := net.ParseIP(gateway)
+		if gwIP == nil {
+			return fmt.Errorf("invalid gateway IP format: %q", gateway)
+		}
+
+		// Delete existing default routes to prevent conflict
+		routes, err := netlink.RouteList(link, netlink.FAMILY_V4)
+		if err == nil {
+			for _, rt := range routes {
+				if rt.Dst == nil || rt.Dst.String() == "0.0.0.0/0" {
+					_ = netlink.RouteDel(&rt)
+				}
+			}
+		}
+
+		// Parse default destination (0.0.0.0/0)
+		_, defaultNet, _ := net.ParseCIDR("0.0.0.0/0")
+		route := &netlink.Route{
+			LinkIndex: link.Attrs().Index,
+			Dst:       defaultNet,
+			Gw:        gwIP,
+			Priority:  100,
+		}
+
+		if err := netlink.RouteAdd(route); err != nil {
+			return fmt.Errorf("failed to add default gateway route: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -100,7 +192,7 @@ func scanWifiWithIW(name string) ([]model.WifiScanResult, error) {
 			} else if dBm >= -30 {
 				current.Signal = 100
 			} else {
-				current.Signal = int(2*(dBm+100))
+				current.Signal = int(2 * (dBm + 100))
 			}
 
 		case strings.HasPrefix(line, "DS Parameter set: channel "):

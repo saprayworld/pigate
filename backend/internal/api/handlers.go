@@ -246,6 +246,11 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 		iface.BackupWifiPassword = updates.BackupWifiPassword
 	}
 
+	if err := s.network.ConfigureInterface(iface.Name, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "OS level configuration failed: "+err.Error())
+		return
+	}
+
 	if err := s.repo.UpdateInterface(*iface); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return

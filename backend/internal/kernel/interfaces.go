@@ -7,10 +7,11 @@ type FirewallManager interface {
 	ApplyRules(rules []model.PolicyRule) error
 }
 
-// NetworkManager abstracts Wi-Fi scanning and NetworkManager control
+// NetworkManager abstracts Wi-Fi scanning and interface control
 type NetworkManager interface {
 	ToggleInterface(name string, up bool) error
 	ScanWifi(name string) ([]model.WifiScanResult, error)
+	ConfigureInterface(name string, mode string, ip string, netmask string, gateway string) error
 }
 
 // RoutingManager abstracts netlink route modifications

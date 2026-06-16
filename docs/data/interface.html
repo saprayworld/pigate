@@ -725,6 +725,26 @@ eth1    00000000     0101A8C0  0003   0       0    100     00000000  0    0     
           </div>
         </div>
 
+        <p style="font-size:13px;font-weight:600;color:var(--text);margin:20px 0 8px;">HandleUpdateInterface — ลำดับการทำงาน</p>
+        <div class="flow" style="flex-direction:column;gap:8px;">
+          <div style="display:flex;align-items:center;gap:12px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;">
+            <span style="width:22px;height:22px;border-radius:50%;background:var(--primary-dim);border:1px solid var(--primary-border);display:grid;place-items:center;font-size:10px;font-weight:700;color:var(--primary);flex-shrink:0;">1</span>
+            <span style="font-size:13px;color:var(--text);">ดึง interface เดิมจาก DB เพื่อตรวจสอบข้อมูล</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;">
+            <span style="width:22px;height:22px;border-radius:50%;background:var(--primary-dim);border:1px solid var(--primary-border);display:grid;place-items:center;font-size:10px;font-weight:700;color:var(--primary);flex-shrink:0;">2</span>
+            <span style="font-size:13px;color:var(--text);">รับค่าใหม่จาก request body (alias, role, addressingMode, ip, netmask, gateway ฯลฯ)</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;">
+            <span style="width:22px;height:22px;border-radius:50%;background:var(--primary-dim);border:1px solid var(--primary-border);display:grid;place-items:center;font-size:10px;font-weight:700;color:var(--primary);flex-shrink:0;">3</span>
+            <span style="font-size:13px;color:var(--text);">เรียก <code>s.network.ConfigureInterface(name, addressingMode, ip, netmask, gateway)</code> เพื่อสั่งเซ็ตค่าที่ OS Kernel (Netlink)</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;">
+            <span style="width:22px;height:22px;border-radius:50%;background:var(--primary-dim);border:1px solid var(--primary-border);display:grid;place-items:center;font-size:10px;font-weight:700;color:var(--primary);flex-shrink:0;">4</span>
+            <span style="font-size:13px;color:var(--text);">หากอัปเดต OS สำเร็จ บันทึกค่าลง DB ด้วย <code>repo.UpdateInterface()</code> หาก OS ล้มเหลวจะคืน Error 500 ทันที</span>
+          </div>
+        </div>
+
         <p style="font-size:13px;font-weight:600;color:var(--text);margin:20px 0 8px;">HandleUpdateInterface — Fields ที่แก้ไขได้ผ่าน API</p>
         <div style="display:flex;flex-wrap:wrap;gap:6px;">
           <code>alias</code><code>role</code><code>addressingMode</code><code>ip</code><code>netmask</code><code>gateway</code>
@@ -862,6 +882,40 @@ eth1    00000000     0101A8C0  0003   0       0    100     00000000  0    0     
 link, err := <span class="fn">netlink.LinkByName</span>(name)
 <span class="fn">netlink.LinkSetUp</span>(link)   <span class="cmt">// ≡ ip link set eth0 up   → set IFF_UP ใน kernel</span>
 <span class="fn">netlink.LinkSetDown</span>(link) <span class="cmt">// ≡ ip link set eth0 down → clear IFF_UP ใน kernel</span></div>
+        </div>
+
+        <p style="font-size:13px;font-weight:600;color:var(--text);margin:0 0 8px;">ConfigureInterface(name string, mode string, ip string, netmask string, gateway string)</p>
+        <div class="code-wrap" style="margin-bottom:20px;">
+          <div class="code-header"><span class="code-lang">Go</span><span class="code-filename">real_network.go</span></div>
+          <div class="code-body"><span class="cmt">// 1. ดึง link และสั่งเปิด link ขึ้นมาทำงานก่อน (ถ้ายังไม่เปิด) เพื่อไม่ให้การตั้งค่า route เกิดข้อผิดพลาด</span>
+link, err := <span class="fn">netlink.LinkByName</span>(name)
+<span class="kw">if</span> link.Attrs().Flags&net.FlagUp == <span class="num">0</span> {
+    <span class="fn">netlink.LinkSetUp</span>(link)
+}
+
+<span class="cmt">// 2. เคลียร์ DHCP daemon (dhclient / dhcpcd) และไอพี v4 เดิมทั้งหมดเพื่อป้องกันชนกัน</span>
+<span class="fn">exec.Command</span>(<span class="str">"dhclient"</span>, <span class="str">"-r"</span>, name).<span class="fn">Run</span>()
+<span class="fn">exec.Command</span>(<span class="str">"dhcpcd"</span>, <span class="str">"-k"</span>, name).<span class="fn">Run</span>()
+netlink.AddrList(link, netlink.FAMILY_V4) <span class="cmt">// แล้วสั่งลบผ่าน netlink.AddrDel</span>
+
+<span class="cmt">// 3. ตั้งค่าตาม Addressing Mode</span>
+<span class="kw">if</span> mode == <span class="str">"dhcp"</span> {
+    <span class="cmt">// สั่งเริ่ม DHCP Client ใน background</span>
+    <span class="fn">exec.Command</span>(<span class="str">"dhclient"</span>, name).<span class="fn">Start</span>()
+} <span class="kw">else if</span> mode == <span class="str">"static"</span> {
+    <span class="cmt">// ตั้ง IP/Netmask</span>
+    addr, _ := <span class="fn">netlink.ParseAddr</span>(ip + <span class="str">"/"</span> + netmask)
+    <span class="fn">netlink.AddrAdd</span>(link, addr)
+    
+    <span class="cmt">// ตั้ง Gateway Default Route</span>
+    route := &netlink.Route{
+        LinkIndex: link.Attrs().Index,
+        Dst:       defaultNet, <span class="cmt">// 0.0.0.0/0</span>
+        Gw:        <span class="fn">net.ParseIP</span>(gateway),
+        Priority:  <span class="num">100</span>,
+    }
+    <span class="fn">netlink.RouteAdd</span>(route)
+}</div>
         </div>
 
         <p style="font-size:13px;font-weight:600;color:var(--text);margin:0 0 8px;">ScanWifi(name string)</p>

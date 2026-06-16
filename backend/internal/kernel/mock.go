@@ -32,6 +32,11 @@ func (m *MockNetwork) ToggleInterface(name string, up bool) error {
 	return nil
 }
 
+func (m *MockNetwork) ConfigureInterface(name string, mode string, ip string, netmask string, gateway string) error {
+	// Mock success
+	return nil
+}
+
 func (m *MockNetwork) ScanWifi(name string) ([]model.WifiScanResult, error) {
 	return []model.WifiScanResult{
 		{SSID: "MyHome_5G", Signal: 85, Security: "WPA2-PSK", Channel: 36, Frequency: "5 GHz"},
