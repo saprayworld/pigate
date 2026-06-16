@@ -722,11 +722,33 @@ paths:
                 type: boolean
                 example: true
 
+  /routes/config:
+    get:
+      tags:
+        - Static Routes
+      summary: Get routing configuration flags
+      description: |
+        Returns the current backend configuration flags that control routing behavior:
+        - `allowEditSystemRoutes`: whether system/kernel-detected routes can be edited or deleted
+        - `prioritizeKernelRoutes`: whether kernel routing table is used as source of truth for route status
+      responses:
+        '200':
+          description: Routing configuration flags
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoutesConfig'
+
   /routes/{id}/toggle:
     post:
       tags:
         - Static Routes
       summary: Toggle active status (enable/disable) of a route
+      description: |
+        Toggles the `status` field of the route in the database.
+        - `custom` and `defaultgateway` routes: always toggleable.
+        - `system` routes: blocked unless `-allow-edit-system-routes` flag is set on the backend.
+        After toggle, the new route status is applied to the kernel via netlink.
       parameters:
         - name: id
           in: path
@@ -735,11 +757,21 @@ paths:
             type: string
       responses:
         '200':
-          description: Route status toggled
+          description: Route status toggled, returns updated route
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/StaticRoute'
+        '500':
+          description: Toggle blocked (system route) or kernel apply failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: cannot toggle status of system predefined static routes
 
   /routes/apply:
     post:
@@ -1521,6 +1553,29 @@ components:
           example: Alternative HTTP web port
 
     # --- Static Route Schemas ---
+    RoutesConfig:
+      type: object
+      description: Backend runtime flags controlling routing behavior
+      required:
+        - allowEditSystemRoutes
+        - prioritizeKernelRoutes
+      properties:
+        allowEditSystemRoutes:
+          type: boolean
+          description: |
+            When true, routes of type 'system' (directly connected kernel routes) can be
+            edited, deleted, or toggled. Controlled by the `-allow-edit-system-routes` CLI flag.
+          example: false
+        prioritizeKernelRoutes:
+          type: boolean
+          description: |
+            When true, the kernel routing table (/proc/net/route) is the source of truth.
+            Routes found in kernel have their metric and type updated from kernel data.
+            Routes NOT in kernel (system/defaultgateway types) are automatically marked inactive.
+            User-toggled status in DB is preserved and not overridden by kernel state.
+            Controlled by the `-prioritize-kernel-routes` CLI flag.
+          example: true
+
     StaticRoute:
       type: object
       required:
@@ -1535,29 +1590,41 @@ components:
       properties:
         id:
           type: string
+          description: |
+            For user-created routes: UUID (e.g. `route-1`).
+            For kernel-only routes not yet in DB: canonical ID `route-sys-[dest]-[gw]-[iface]`.
           example: route-1
         destination:
           type: string
           example: 0.0.0.0/0
         gateway:
           type: string
+          description: Next-hop gateway IP. Empty string for directly connected (system) routes.
           example: 10.0.0.1
         interface:
           type: string
           example: wlan0
         metric:
           type: integer
+          description: Route priority. Lower value = higher priority. Synced from kernel when prioritizeKernelRoutes is true.
           example: 100
         description:
           type: string
           example: Default gateway route (WAN)
         status:
           type: boolean
+          description: |
+            Whether the route is enabled. Stored in DB and preserved across GetRoutes calls.
+            For system/defaultgateway types: auto-set to false if route not found in kernel.
           example: true
         type:
           type: string
-          enum: [system, custom]
-          example: system
+          enum: [system, custom, defaultgateway]
+          description: |
+            - `system`: directly connected route (no gateway), read-only unless -allow-edit-system-routes is set
+            - `defaultgateway`: route to 0.0.0.0/0, always editable and toggleable
+            - `custom`: user-defined route, always editable and toggleable
+          example: defaultgateway
 
     StaticRouteInput:
       type: object

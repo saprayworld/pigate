@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"runtime"
@@ -14,18 +15,20 @@ import (
 )
 
 type Repository struct {
-	db                    *sql.DB
-	mockMode              bool
-	mockFromReal          bool
-	allowEditSystemRoutes bool
+	db                     *sql.DB
+	mockMode               bool
+	mockFromReal           bool
+	allowEditSystemRoutes  bool
+	prioritizeKernelRoutes bool
 }
 
 func NewRepository(db *sql.DB) *Repository {
 	return &Repository{
-		db:                    db,
-		mockMode:              true, // default to true for safety
-		mockFromReal:          false,
-		allowEditSystemRoutes: false,
+		db:                     db,
+		mockMode:               true, // default to true for safety
+		mockFromReal:           false,
+		allowEditSystemRoutes:  false,
+		prioritizeKernelRoutes: true, // default to true
 	}
 }
 
@@ -40,6 +43,14 @@ func (r *Repository) SetAllowEditSystemRoutes(allow bool) {
 
 func (r *Repository) GetAllowEditSystemRoutes() bool {
 	return r.allowEditSystemRoutes
+}
+
+func (r *Repository) SetPrioritizeKernelRoutes(prioritize bool) {
+	r.prioritizeKernelRoutes = prioritize
+}
+
+func (r *Repository) GetPrioritizeKernelRoutes() bool {
+	return r.prioritizeKernelRoutes
 }
 
 // =========================================================================
@@ -814,17 +825,110 @@ func (r *Repository) GetRoutes() ([]model.StaticRoute, error) {
 	}
 	defer rows.Close()
 
-	list := []model.StaticRoute{}
+	var dbRoutes []model.StaticRoute
 	for rows.Next() {
-		var route model.StaticRoute
+		var rt model.StaticRoute
 		var statInt int
-		if err := rows.Scan(&route.ID, &route.Destination, &route.Gateway, &route.Interface, &route.Metric, &route.Description, &statInt, &route.Type); err != nil {
+		if err := rows.Scan(&rt.ID, &rt.Destination, &rt.Gateway, &rt.Interface, &rt.Metric, &rt.Description, &statInt, &rt.Type); err != nil {
 			return nil, err
 		}
-		route.Status = statInt == 1
-		list = append(list, route)
+		rt.Status = statInt == 1
+
+		// Map type automatically if destination is default gateway and type isn't custom
+		if rt.Destination == "0.0.0.0/0" && rt.Type != "custom" {
+			rt.Type = "defaultgateway"
+		} else if rt.Gateway == "" && rt.Type != "custom" {
+			rt.Type = "system"
+		}
+
+		dbRoutes = append(dbRoutes, rt)
 	}
-	return list, nil
+
+	// Fetch routes from kernel
+	kernelRoutes, err := r.GetKernelRoutes()
+	if err != nil {
+		log.Printf("[Routing] Warning: Failed to fetch kernel routes in GetRoutes: %v", err)
+	}
+
+	// Helper to get canonical CIDR representation
+	canonicalCIDR := func(s string) string {
+		_, ipNet, err := net.ParseCIDR(s)
+		if err != nil {
+			return s
+		}
+		return ipNet.String()
+	}
+
+	type routeCompareKey struct {
+		dest  string
+		gw    string
+		iface string
+	}
+
+	// Build map of kernel routes for fast lookup
+	kMap := make(map[routeCompareKey]model.StaticRoute)
+	for _, kr := range kernelRoutes {
+		key := routeCompareKey{
+			dest:  canonicalCIDR(kr.Destination),
+			gw:    strings.TrimSpace(kr.Gateway),
+			iface: strings.TrimSpace(kr.Interface),
+		}
+		kMap[key] = kr
+	}
+
+	var result []model.StaticRoute
+	matchedKeys := make(map[routeCompareKey]bool)
+
+	// Merge DB routes with kernel routes
+	for _, dbRoute := range dbRoutes {
+		key := routeCompareKey{
+			dest:  canonicalCIDR(dbRoute.Destination),
+			gw:    strings.TrimSpace(dbRoute.Gateway),
+			iface: strings.TrimSpace(dbRoute.Interface),
+		}
+
+		if kr, found := kMap[key]; found {
+			matchedKeys[key] = true
+			if r.prioritizeKernelRoutes {
+				// Prioritize kernel metric and type classification,
+				// but KEEP the DB status (user-toggled) — kernel only tells us the route exists, not what user wants.
+				dbRoute.Metric = kr.Metric
+				if dbRoute.Destination == "0.0.0.0/0" {
+					dbRoute.Type = "defaultgateway"
+				} else if dbRoute.Gateway == "" {
+					dbRoute.Type = "system"
+				}
+			}
+		} else {
+			// Not found in kernel — for system/defaultgateway types mark as inactive since they can't be active without being in kernel.
+			// Custom routes retain their DB status (user may want them applied later via Apply button).
+			if r.prioritizeKernelRoutes && (dbRoute.Type == "system" || dbRoute.Type == "defaultgateway") {
+				dbRoute.Status = false
+			}
+		}
+		result = append(result, dbRoute)
+	}
+
+	// Add routes that exist only in kernel
+	for _, kr := range kernelRoutes {
+		key := routeCompareKey{
+			dest:  canonicalCIDR(kr.Destination),
+			gw:    strings.TrimSpace(kr.Gateway),
+			iface: strings.TrimSpace(kr.Interface),
+		}
+		if !matchedKeys[key] {
+			// Generate a canonical ID for it
+			routeID := fmt.Sprintf("route-sys-%s-%s-%s",
+				strings.ReplaceAll(canonicalCIDR(kr.Destination), "/", "_"),
+				strings.ReplaceAll(kr.Gateway, ".", "_"),
+				kr.Interface,
+			)
+			kr.ID = routeID
+			result = append(result, kr)
+		}
+	}
+
+	return result, nil
 }
 
 func (r *Repository) GetRouteByID(id string) (*model.StaticRoute, error) {
@@ -920,6 +1024,8 @@ func (r *Repository) ToggleRouteStatus(id string) error {
 	if err != nil {
 		return err
 	}
+	// Only block toggling of 'system' routes (directly connected) when allowEditSystemRoutes is false.
+	// 'defaultgateway' and 'custom' routes are always toggleable.
 	if rType == "system" && !r.allowEditSystemRoutes {
 		return errors.New("cannot toggle status of system predefined static routes")
 	}
@@ -1518,19 +1624,15 @@ func (r *Repository) GetDynamicDNSServers() ([]model.DynamicDNSServer, error) {
 }
 
 // SyncRoutesFromOS fetches static routes from /proc/net/route and updates the database.
-func (r *Repository) SyncRoutesFromOS() error {
-	if runtime.GOOS != "linux" {
-		return nil
-	}
-
+func (r *Repository) parseProcNetRoute() ([]model.StaticRoute, error) {
 	data, err := os.ReadFile("/proc/net/route")
 	if err != nil {
-		return fmt.Errorf("failed to read /proc/net/route: %w", err)
+		return nil, fmt.Errorf("failed to read /proc/net/route: %w", err)
 	}
 
 	lines := strings.Split(string(data), "\n")
 	if len(lines) <= 1 {
-		return nil
+		return nil, nil
 	}
 
 	// Helper to get canonical CIDR representation
@@ -1542,45 +1644,7 @@ func (r *Repository) SyncRoutesFromOS() error {
 		return ipNet.String()
 	}
 
-	type routeKey struct {
-		dest  string
-		gw    string
-		iface string
-	}
-
-	// 1. Fetch custom routes from DB to reconcile their status and prevent duplicates
-	rowsCustom, err := r.db.Query("SELECT id, destination, gateway, interface, status FROM static_routes WHERE type = 'custom'")
-	if err != nil {
-		return fmt.Errorf("failed to fetch custom routes: %w", err)
-	}
-	customRoutes := make(map[routeKey]*model.StaticRoute)
-	for rowsCustom.Next() {
-		var rt model.StaticRoute
-		var statVal int
-		if err := rowsCustom.Scan(&rt.ID, &rt.Destination, &rt.Gateway, &rt.Interface, &statVal); err == nil {
-			rt.Status = statVal == 1
-			key := routeKey{
-				dest:  canonicalCIDR(rt.Destination),
-				gw:    strings.TrimSpace(rt.Gateway),
-				iface: strings.TrimSpace(rt.Interface),
-			}
-			customRoutes[key] = &rt
-		}
-	}
-	rowsCustom.Close()
-
-	// 2. Track which custom routes were found active in OS
-	foundCustom := make(map[string]bool)
-
-	// 3. Temporary list of system routes to insert
-	type systemRoute struct {
-		destination string
-		gateway     string
-		iface       string
-		metric      int
-	}
-	var systemRoutesToInsert []systemRoute
-
+	var list []model.StaticRoute
 	for _, line := range lines[1:] {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -1628,22 +1692,109 @@ func (r *Repository) SyncRoutesFromOS() error {
 			gateway = ""
 		}
 
-		// Check if this matches a custom route
+		routeType := "system"
+		if destination == "0.0.0.0/0" {
+			routeType = "defaultgateway"
+		}
+
+		routeID := fmt.Sprintf("route-sys-%s-%s-%s",
+			strings.ReplaceAll(canonicalCIDR(destination), "/", "_"),
+			strings.ReplaceAll(gateway, ".", "_"),
+			iface,
+		)
+
+		list = append(list, model.StaticRoute{
+			ID:          routeID,
+			Destination: destination,
+			Gateway:     gateway,
+			Interface:   iface,
+			Metric:      metric,
+			Description: "System route fetched from kernel",
+			Status:      true,
+			Type:        routeType,
+		})
+	}
+	return list, nil
+}
+
+func (r *Repository) GetKernelRoutes() ([]model.StaticRoute, error) {
+	if runtime.GOOS != "linux" {
+		if r.mockMode {
+			return []model.StaticRoute{
+				{ID: "route-sys-0_0_0_0_0-10_0_0_1-wlan0", Destination: "0.0.0.0/0", Gateway: "10.0.0.1", Interface: "wlan0", Metric: 100, Description: "System route fetched from kernel", Status: true, Type: "defaultgateway"},
+				{ID: "route-sys-192_168_1_0_24--eth0", Destination: "192.168.1.0/24", Gateway: "", Interface: "eth0", Metric: 0, Description: "System route fetched from kernel", Status: true, Type: "system"},
+				{ID: "route-sys-10_0_0_0_24--wlan0", Destination: "10.0.0.0/24", Gateway: "", Interface: "wlan0", Metric: 0, Description: "System route fetched from kernel", Status: true, Type: "system"},
+			}, nil
+		}
+		return nil, nil
+	}
+	return r.parseProcNetRoute()
+}
+
+// SyncRoutesFromOS fetches static routes from /proc/net/route and updates the database.
+func (r *Repository) SyncRoutesFromOS() error {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+
+	kernelRoutes, err := r.parseProcNetRoute()
+	if err != nil {
+		return err
+	}
+
+	// Helper to get canonical CIDR representation
+	canonicalCIDR := func(s string) string {
+		_, ipNet, err := net.ParseCIDR(s)
+		if err != nil {
+			return s
+		}
+		return ipNet.String()
+	}
+
+	type routeKey struct {
+		dest  string
+		gw    string
+		iface string
+	}
+
+	// 1. Fetch custom routes from DB to reconcile their status and prevent duplicates
+	rowsCustom, err := r.db.Query("SELECT id, destination, gateway, interface, status FROM static_routes WHERE type = 'custom'")
+	if err != nil {
+		return fmt.Errorf("failed to fetch custom routes: %w", err)
+	}
+	customRoutes := make(map[routeKey]*model.StaticRoute)
+	for rowsCustom.Next() {
+		var rt model.StaticRoute
+		var statVal int
+		if err := rowsCustom.Scan(&rt.ID, &rt.Destination, &rt.Gateway, &rt.Interface, &statVal); err == nil {
+			rt.Status = statVal == 1
+			key := routeKey{
+				dest:  canonicalCIDR(rt.Destination),
+				gw:    strings.TrimSpace(rt.Gateway),
+				iface: strings.TrimSpace(rt.Interface),
+			}
+			customRoutes[key] = &rt
+		}
+	}
+	rowsCustom.Close()
+
+	// 2. Track which custom routes were found active in OS
+	foundCustom := make(map[string]bool)
+
+	// 3. Temporary list of system routes to insert
+	var systemRoutesToInsert []model.StaticRoute
+
+	for _, kr := range kernelRoutes {
 		key := routeKey{
-			dest:  canonicalCIDR(destination),
-			gw:    gateway,
-			iface: iface,
+			dest:  canonicalCIDR(kr.Destination),
+			gw:    strings.TrimSpace(kr.Gateway),
+			iface: strings.TrimSpace(kr.Interface),
 		}
 
 		if custRt, found := customRoutes[key]; found {
 			foundCustom[custRt.ID] = true
 		} else {
-			systemRoutesToInsert = append(systemRoutesToInsert, systemRoute{
-				destination: destination,
-				gateway:     gateway,
-				iface:       iface,
-				metric:      metric,
-			})
+			systemRoutesToInsert = append(systemRoutesToInsert, kr)
 		}
 	}
 
@@ -1657,26 +1808,18 @@ func (r *Repository) SyncRoutesFromOS() error {
 		}
 	}
 
-	// 5. Delete old system routes and insert new active ones
-	_, err = r.db.Exec("DELETE FROM static_routes WHERE type = 'system'")
+	// 5. Delete old system and defaultgateway routes and insert new active ones
+	_, err = r.db.Exec("DELETE FROM static_routes WHERE type IN ('system', 'defaultgateway')")
 	if err != nil {
 		return fmt.Errorf("failed to clear old system routes: %w", err)
 	}
 
 	for _, sysRt := range systemRoutesToInsert {
-		// Use canonical key as stable ID to prevent PRIMARY KEY collisions across syncs
-		routeID := fmt.Sprintf("route-sys-%s-%s-%s",
-			strings.ReplaceAll(canonicalCIDR(sysRt.destination), "/", "_"),
-			strings.ReplaceAll(sysRt.gateway, ".", "_"),
-			sysRt.iface,
-		)
-		description := "System route fetched from kernel"
 		_, err = r.db.Exec(`INSERT INTO static_routes (id, destination, gateway, interface, metric, description, status, type) 
-			VALUES (?, ?, ?, ?, ?, ?, 1, 'system')`,
-			routeID, sysRt.destination, sysRt.gateway, sysRt.iface, sysRt.metric, description)
+			VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+			sysRt.ID, sysRt.Destination, sysRt.Gateway, sysRt.Interface, sysRt.Metric, sysRt.Description, sysRt.Type)
 		if err != nil {
-			// Log but continue — non-fatal for individual route insert failures
-			_ = err
+			// Log but continue
 		}
 	}
 

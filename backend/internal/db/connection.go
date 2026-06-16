@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -48,6 +49,36 @@ func InitDB(dsn string) (*sql.DB, error) {
 }
 
 func migrate(db *sql.DB) error {
+	// Rebuild static_routes table if existing schema doesn't support defaultgateway type in CHECK constraint
+	var sqlCreate string
+	err := db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='static_routes'").Scan(&sqlCreate)
+	if err == nil {
+		if !strings.Contains(sqlCreate, "'defaultgateway'") {
+			migrationQueries := []string{
+				"PRAGMA foreign_keys=OFF;",
+				`CREATE TABLE static_routes_new (
+					id TEXT PRIMARY KEY,
+					destination TEXT NOT NULL,
+					gateway TEXT NOT NULL,
+					interface TEXT NOT NULL,
+					metric INTEGER DEFAULT 0,
+					description TEXT,
+					status INTEGER DEFAULT 1 CHECK(status IN (0, 1)),
+					type TEXT NOT NULL CHECK(type IN ('system', 'custom', 'defaultgateway'))
+				);`,
+				"INSERT INTO static_routes_new SELECT id, destination, gateway, interface, metric, description, status, type FROM static_routes;",
+				"DROP TABLE static_routes;",
+				"ALTER TABLE static_routes_new RENAME TO static_routes;",
+				"PRAGMA foreign_keys=ON;",
+			}
+			for _, q := range migrationQueries {
+				if _, err := db.Exec(q); err != nil {
+					return fmt.Errorf("failed to migrate static_routes table: %w (query: %s)", err, q)
+				}
+			}
+		}
+	}
+
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY,
@@ -110,7 +141,7 @@ func migrate(db *sql.DB) error {
 			metric INTEGER DEFAULT 0,
 			description TEXT,
 			status INTEGER DEFAULT 1 CHECK(status IN (0, 1)),
-			type TEXT NOT NULL CHECK(type IN ('system', 'custom'))
+			type TEXT NOT NULL CHECK(type IN ('system', 'custom', 'defaultgateway'))
 		);`,
 
 		`CREATE TABLE IF NOT EXISTS dhcp_config (

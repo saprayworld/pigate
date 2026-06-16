@@ -345,6 +345,7 @@
       <a class="nav-item" href="#sync"><span class="nav-dot"></span>OS Sync Flow</a>
       <a class="nav-item" href="#helpers"><span class="nav-dot"></span>Helper Functions</a>
       <a class="nav-item" href="#api"><span class="nav-dot"></span>REST API</a>
+      <a class="nav-item" href="#flags"><span class="nav-dot"></span>Config Flags</a>
       <a class="nav-item" href="#mock"><span class="nav-dot"></span>Mock Mode</a>
       <a class="nav-item" href="#notes"><span class="nav-dot"></span>ข้อควรระวัง</a>
       <a class="nav-item" href="#kernel"><span class="nav-dot"></span>Kernel Integration</a>
@@ -365,7 +366,7 @@
         <span class="badge badge-blue">Go 1.22+</span>
         <span class="badge badge-purple">SQLite</span>
         <span class="badge badge-cyan">Routing Table</span>
-        <span class="badge badge-amber">อัปเดต 2026-06-15</span>
+        <span class="badge badge-amber">อัปเดต 2026-06-16</span>
       </div>
     </div>
 
@@ -388,14 +389,14 @@
             <span class="code-filename">model/types.go</span>
           </div>
           <div class="code-body"><span class="kw">type</span> <span class="tp">StaticRoute</span> <span class="kw">struct</span> {
-  ID          <span class="tp">string</span> <span class="str">`json:"id"`</span>          <span class="cmt">// รหัสอ้างอิงเส้นทาง</span>
+  ID          <span class="tp">string</span> <span class="str">`json:"id"`</span>          <span class="cmt">// รหัสอ้างอิงเส้นทาง (หรือ canonical route-sys-... สำหรับ kernel-only)</span>
   Destination <span class="tp">string</span> <span class="str">`json:"destination"`</span> <span class="cmt">// เครือข่ายปลายทาง เช่น "192.168.10.0/24"</span>
-  Gateway     <span class="tp">string</span> <span class="str">`json:"gateway"`</span>     <span class="cmt">// IP Gateway (ว่างหากเชื่อมต่อแบบ Direct)</span>
+  Gateway     <span class="tp">string</span> <span class="str">`json:"gateway"`</span>     <span class="cmt">// IP Gateway (ว่างหากเชื่อมต่อแบบ Direct/system)</span>
   Interface   <span class="tp">string</span> <span class="str">`json:"interface"`</span>   <span class="cmt">// อินเตอร์เฟสขาออก เช่น "eth0", "wlan0"</span>
-  Metric      <span class="tp">int</span>    <span class="str">`json:"metric"`</span>      <span class="cmt">// ลำดับความสำคัญการตัดสินใจ</span>
+  Metric      <span class="tp">int</span>    <span class="str">`json:"metric"`</span>      <span class="cmt">// ลำดับความสำคัญการตัดสินใจ (sync จาก kernel)</span>
   Description <span class="tp">string</span> <span class="str">`json:"description"`</span> <span class="cmt">// คำอธิบายประกอบ</span>
-  Status      <span class="tp">bool</span>   <span class="str">`json:"status"`</span>      <span class="cmt">// true = เปิดใช้งาน, false = ปิดใช้งาน</span>
-  Type        <span class="tp">string</span> <span class="str">`json:"type"`</span>        <span class="cmt">// "system" (สร้างจาก OS) | "custom" (สร้างเอง)</span>
+  Status      <span class="tp">bool</span>   <span class="str">`json:"status"`</span>      <span class="cmt">// true = เปิดใช้งาน (เก็บใน DB, ไม่ถูกทับด้วย kernel)</span>
+  Type        <span class="tp">string</span> <span class="str">`json:"type"`</span>        <span class="cmt">// "system" | "defaultgateway" | "custom"</span>
 }</div>
         </div>
       </div>
@@ -423,11 +424,13 @@
   metric      <span class="sql-tp">INTEGER</span> <span class="sql-kw">DEFAULT</span> <span class="num">0</span>,
   description <span class="sql-tp">TEXT</span>,
   status      <span class="sql-tp">INTEGER</span> <span class="sql-kw">DEFAULT</span> <span class="num">1</span> <span class="sql-kw">CHECK</span>(status <span class="sql-kw">IN</span> (<span class="num">0</span>, <span class="num">1</span>)),
-  type        <span class="sql-tp">TEXT</span>    <span class="sql-kw">NOT NULL</span> <span class="sql-kw">CHECK</span>(type <span class="sql-kw">IN</span> (<span class="sql-str">'system'</span>, <span class="sql-str">'custom'</span>))
-);</div>
+  type        <span class="sql-tp">TEXT</span>    <span class="sql-kw">NOT NULL</span> <span class="sql-kw">CHECK</span>(type <span class="sql-kw">IN</span> (<span class="sql-str">'system'</span>, <span class="sql-str">'custom'</span>, <span class="sql-str">'defaultgateway'</span>))
+);
+<span class="sql-cmt">-- Migration: ถ้า DB เดิมยังไม่มี 'defaultgateway' ใน CHECK constraint</span>
+<span class="sql-cmt">-- จะทำ migration อัตโนมัติใน connection.go (recreate table + copy data)</span></div>
         </div>
 
-        <p style="color:var(--text-muted);font-size:13px;margin:12px 0 8px;">ข้อมูลตั้งต้นที่ Seed เข้าฐานข้อมูล:</p>
+        <p style="color:var(--text-muted);font-size:13px;margin:12px 0 8px;">ข้อมูล seed ที่สร้างขึ้นอัตโนมัติจากเคอร์เนลเมื่อ startup ครั้งแรก (ตัวอย่าง):</p>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Destination</th><th>Gateway</th><th>Interface</th><th>Metric</th><th>Type</th></tr></thead>
@@ -437,7 +440,7 @@
                 <td>10.0.0.1</td>
                 <td>wlan0</td>
                 <td>100</td>
-                <td><span class="badge badge-purple">system</span></td>
+                <td><span class="badge badge-blue">defaultgateway</span></td>
               </tr>
               <tr>
                 <td><code>192.168.1.0/24</code></td>
@@ -469,29 +472,29 @@
         </div>
 
         <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
-          ระบบจะทำการดึงตารางเส้นทางเครือข่ายจากไฟล์ระบบเคอร์เนลมาปรับปรุงลงฐานข้อมูลในช่วงบอร์ดเริ่มต้นการทำงาน:
+          การซิงค์ข้อมูลเส้นทางเครือข่ายจากระบบเคอร์เนลมาปรับปรุงลงฐานข้อมูลจะทำงาน <strong>เพียงครั้งเดียวตอนเริ่มการทำงานของแอปพลิเคชัน (Startup Sync)</strong> เพื่อป้องกันการลูปเขียนทับซ้ำซ้อน โดยมีลำดับขั้นตอนดังนี้:
         </p>
 
         <div class="flow">
           <div class="flow-step">
             <div class="flow-num">STEP 1</div>
-            <div class="flow-label">อ่าน /proc/net/route</div>
-            <div class="flow-sub">สแกนตารางเส้นทางระดับล่างของ Linux</div>
+            <div class="flow-label">อ่านตารางเส้นทาง OS</div>
+            <div class="flow-sub">อ่านข้อมูลและสแกนพอร์ต/เส้นทางในเคอร์เนลจริง</div>
           </div>
           <div class="flow-step">
             <div class="flow-num">STEP 2</div>
-            <div class="flow-label">ลบเส้นทางระบบเดิม</div>
-            <div class="flow-sub">DELETE WHERE type = 'system'</div>
+            <div class="flow-label">เปรียบเทียบ Custom Routes</div>
+            <div class="flow-sub">ตรวจสอบ Custom Route ใน DB กับ OS และอัปเดตสถานะ Active/Inactive</div>
           </div>
           <div class="flow-step">
             <div class="flow-num">STEP 3</div>
-            <div class="flow-label">แปลง Hex เป็น IP</div>
-            <div class="flow-sub">parseHexIP() เพื่อให้อ่านเข้าใจได้</div>
+            <div class="flow-label">คำนวณ Canonical ID</div>
+            <div class="flow-sub">ใช้ ID เฉพาะเจาะจง <code>route-sys-[dest]-[gw]-[iface]</code> เพื่อไม่ให้เกิด PRIMARY KEY ซ้ำ</div>
           </div>
           <div class="flow-step">
             <div class="flow-num">STEP 4</div>
-            <div class="flow-label">เขียนข้อมูลลง SQLite</div>
-            <div class="flow-sub">INSERT ใหม่แบบมีสถานะ Active เสมอ</div>
+            <div class="flow-label">ล้างและบันทึก System Routes</div>
+            <div class="flow-sub">ล้างข้อมูลระบบตัวเดิมและบันทึกข้อมูลตารางใหม่เข้า SQLite</div>
           </div>
         </div>
       </div>
@@ -544,7 +547,13 @@
                 <td><span class="badge badge-green">GET</span></td>
                 <td><code>/api/routes</code></td>
                 <td class="td-type">HandleGetRoutes</td>
-                <td class="td-muted">ดึงรายชื่อเส้นทางทั้งหมด (ทั้งระบบและปรับแต่งเอง)</td>
+                <td class="td-muted">ดึงรายชื่อเส้นทางทั้งหมด (รวม kernel routes ที่ไม่อยู่ใน DB)</td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-green">GET</span></td>
+                <td><code>/api/routes/config</code></td>
+                <td class="td-type">HandleGetRoutesConfig</td>
+                <td class="td-muted">ดึง flags การตั้งค่า: <code>allowEditSystemRoutes</code>, <code>prioritizeKernelRoutes</code></td>
               </tr>
               <tr>
                 <td><span class="badge badge-green">POST</span></td>
@@ -556,13 +565,13 @@
                 <td><span class="badge badge-amber">PUT</span></td>
                 <td><code>/api/routes/{id}</code></td>
                 <td class="td-type">HandleUpdateRoute</td>
-                <td class="td-muted">แก้ไขเส้นทางปรับแต่งเอง (ล็อกสำหรับ system)</td>
+                <td class="td-muted">แก้ไขเส้นทาง (ล็อกสำหรับ <code>system</code> เว้นแต่มี flag)</td>
               </tr>
               <tr>
                 <td><span class="badge badge-red">DELETE</span></td>
                 <td><code>/api/routes/{id}</code></td>
                 <td class="td-type">HandleDeleteRoute</td>
-                <td class="td-muted">ลบเส้นทางปรับแต่งเอง (ล็อกสำหรับ system)</td>
+                <td class="td-muted">ลบเส้นทาง (ล็อกสำหรับ <code>system</code> เว้นแต่มี flag)</td>
               </tr>
               <tr>
                 <td><span class="badge badge-red">POST</span></td>
@@ -574,7 +583,7 @@
                 <td><span class="badge badge-blue">POST</span></td>
                 <td><code>/api/routes/{id}/toggle</code></td>
                 <td class="td-type">HandleToggleRoute</td>
-                <td class="td-muted">เปิด/ปิดการใช้งานเส้นทาง (Active / Inactive)</td>
+                <td class="td-muted">เปิด/ปิด route — <code>defaultgateway</code>/<code>custom</code> Toggle ได้เสมอ; <code>system</code> ต้องมี flag</td>
               </tr>
               <tr>
                 <td><span class="badge badge-blue">POST</span></td>
@@ -584,6 +593,43 @@
               </tr>
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <!-- ── 5.5 Config Flags ── -->
+      <div class="section" id="flags">
+        <div class="section-header">
+          <div class="section-num">★</div>
+          <div>
+            <div class="section-title">Config Flags (CLI &amp; Runtime)</div>
+            <div class="section-file">backend/cmd/pigate/main.go · GET /api/routes/config</div>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Flag</th><th>Default</th><th>ผลกระทบ</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>-allow-edit-system-routes</code></td>
+                <td><span class="badge badge-red">false</span></td>
+                <td class="td-muted">เมื่อ <code>true</code> — ผู้ใช้สามารถแก้ไข ลบ และ Toggle เส้นทาง <code>system</code> ได้</td>
+              </tr>
+              <tr>
+                <td><code>-prioritize-kernel-routes</code></td>
+                <td><span class="badge badge-green">true</span></td>
+                <td class="td-muted">เมื่อ <code>true</code> — kernel เป็น source of truth สำหรับ metric และ type แต่ status ยังคงมาจาก DB (user intent)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout tip">
+          <span class="callout-icon">💡</span>
+          <div class="callout-body">
+            <div class="callout-title">ดูค่า flags ปัจจุบันได้ที่ GET /api/routes/config</div>
+            Frontend ใช้ endpoint นี้เพื่อปรับการแสดงผล (เช่น ซ่อน/แสดงปุ่ม Edit สำหรับ system routes)
+          </div>
         </div>
       </div>
 
@@ -623,11 +669,59 @@
           </div>
         </div>
 
-        <div class="callout warn" style="margin-bottom:12px;">
-          <span class="callout-icon">⚠️</span>
+        <div class="callout info" style="margin-bottom:12px;">
+          <span class="callout-icon">⚙️</span>
           <div class="callout-body">
-            <div class="callout-title">สิทธิ์การควบคุมแบบอ่านอย่างเดียวบน System Routes</div>
-            เส้นทางเครือข่ายที่เป็นแบบ <code>system</code> ที่เคอร์เนลสร้างขึ้นมาเอง (เช่น วง subnet หลักของการ์ดแลน) จะไม่สามารถแก้ไขหรือลบผ่านทางหน้าเว็บได้ เนื่องจากเป็นความปลอดภัยไม่ให้แอดมินลบพอร์ตเชื่อมต่อตัวเองออกจนระบบหลุด
+            <div class="callout-title">Route Type Priority &amp; Behavior</div>
+            <div class="table-wrap" style="margin-top:10px;">
+              <table>
+                <thead><tr><th>Type</th><th>แก้ไขได้</th><th>Toggle ได้</th><th>ลบได้</th><th>ที่มา</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><span class="badge badge-purple">system</span></td>
+                    <td class="td-muted">❌ ต้องมี flag</td>
+                    <td class="td-muted">❌ ต้องมี flag</td>
+                    <td class="td-muted">❌ ต้องมี flag</td>
+                    <td class="td-muted">เส้นทาง directly-connected จากเคอร์เนล</td>
+                  </tr>
+                  <tr>
+                    <td><span class="badge badge-blue">defaultgateway</span></td>
+                    <td class="td-muted">✅ เสมอ</td>
+                    <td class="td-muted">✅ เสมอ</td>
+                    <td class="td-muted">✅ เสมอ</td>
+                    <td class="td-muted">เส้นทาง 0.0.0.0/0 (default route)</td>
+                  </tr>
+                  <tr>
+                    <td><span class="badge badge-green">custom</span></td>
+                    <td class="td-muted">✅ เสมอ</td>
+                    <td class="td-muted">✅ เสมอ</td>
+                    <td class="td-muted">✅ เสมอ</td>
+                    <td class="td-muted">เส้นทางที่ผู้ใช้สร้างเอง</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="callout info" style="margin-bottom:12px;">
+          <span class="callout-icon">⚙️</span>
+          <div class="callout-body">
+            <div class="callout-title">การควบคุมและแก้ไข System Routes (ผ่าน Flag ระบบ)</div>
+            โดยปกติเส้นทางเครือข่ายที่เป็นแบบ <code>system</code> จะเป็นแบบอ่านอย่างเดียวเพื่อความปลอดภัยในการป้องกันระบบหลุดการเชื่อมต่อ อย่างไรก็ตาม ผู้ใช้สามารถกำหนดให้ระบบอนุญาตให้แก้ไขหรือลบเส้นทางระบบได้ โดยเริ่มการทำงาน backend ด้วย flag <code>-allow-edit-system-routes</code> ซึ่งระบบจะทำการปลดล็อกให้แก้ไข เพิ่ม และลบ พร้อมทั้งนำไปปรับใช้ในเคอร์เนลจริง
+          </div>
+        </div>
+
+        <div class="callout tip" style="margin-bottom:12px;">
+          <span class="callout-icon">🔀</span>
+          <div class="callout-body">
+            <div class="callout-title">Toggle Route — พฤติกรรมเมื่อ prioritizeKernelRoutes = true</div>
+            เมื่อ <code>prioritizeKernelRoutes</code> เปิดอยู่ <strong>สถานะ (status) ที่ผู้ใช้กด Toggle จะถูกเก็บใน DB เสมอ</strong> และไม่ถูกเคอร์เนลทับซ้ำ:
+            <ul style="margin-top:8px;padding-left:18px;font-size:12px;">
+              <li>Route ที่อยู่ใน kernel → metric และ type อัปเดตจาก kernel แต่ <strong>status คงไว้จาก DB</strong></li>
+              <li>Route <code>system</code>/<code>defaultgateway</code> ที่ไม่อยู่ใน kernel → auto-set <code>status = false</code></li>
+              <li>Route <code>custom</code> ที่ไม่อยู่ใน kernel → คง status จาก DB (ผู้ใช้อาจกด Apply ทีหลัง)</li>
+            </ul>
           </div>
         </div>
 
@@ -646,29 +740,50 @@
           <div class="section-num">8</div>
           <div>
             <div class="section-title">Kernel Integration (Production)</div>
-            <div class="section-file">backend/internal/kernel/real_routing.go (ระยะที่ 2)</div>
+            <div class="section-file">backend/internal/kernel/real_routing.go</div>
           </div>
         </div>
 
         <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
-          การจัดการตารางเส้นทางจริงบน Raspberry Pi 5 ในสภาพแวดล้อม Production จะใช้ Netlink API ในการทำงานแทนการเรียกสั่งผ่าน `ip route` command:
+          การปรับปรุงตารางเส้นทางจริงบนระบบปฏิบัติการ Linux ของ Raspberry Pi 5 จะใช้ไลบรารี <code>netlink</code> ของ Go ในการติดต่อสื่อสารโดยตรงแทนการพิมพ์คำสั่งเชลล์ (Shell commands) ซึ่งมีความรวดเร็วและปลอดภัยสูงกว่า:
         </p>
 
         <div class="code-wrap">
           <div class="code-header">
-            <span class="code-lang">Go (netlink mockup)</span>
+            <span class="code-lang">Go (Reconciliation Logic)</span>
             <span class="code-filename">real_routing.go</span>
           </div>
-          <div class="code-body"><span class="kw">import</span> <span class="str">"github.com/vishvananda/netlink"</span>
+          <div class="code-body"><span class="cmt">// 1. ดึงตารางเส้นทางปัจจุบันในเคอร์เนล</span>
+existingRoutes, err := <span class="tp">netlink</span>.<span class="fn">RouteList</span>(nil, <span class="tp">netlink</span>.FAMILY_V4)
 
-<span class="cmt">// ตัวอย่างการเพิ่มเส้นทางเครือข่ายลง OS</span>
-route := &amp;<span class="tp">netlink.Route</span>{
-  LinkIndex: link.Attrs().Index,
-  Dst:       dstAddr,
-  Gw:        gwIP,
-  Metric:    metricValue,
+<span class="cmt">// 2. ตรวจสอบการจัดการตามเงื่อนไข (Reconciliation)</span>
+<span class="kw">for</span> _, rt := <span class="kw">range</span> existingRoutes {
+    <span class="cmt">// ตรวจสอบโปรโตคอล (ใช้ Protocol 120 เป็นสัญลักษณ์บ่งบอกว่าสร้างโดยแอปพลิเคชันนี้)</span>
+    isManagedRoute := rt.Protocol == <span class="num">120</span>
+
+    <span class="kw">if</span> isActiveTarget {
+        <span class="cmt">// อัปเดต Metric หรือแก้ไขข้อมูลถ้าหากมีการเปลี่ยนแปลง</span>
+        <span class="tp">netlink</span>.<span class="fn">RouteReplace</span>(&amp;rt)
+    } <span class="kw">else</span> {
+        <span class="cmt">// ลบเส้นทางหากไม่ได้เปิดใช้งาน (Disabled) หรือถูกลบออกไปแล้ว</span>
+        <span class="kw">if</span> isManagedRoute || (isSystemRoute &amp;&amp; r.allowEditSystemRoutes) {
+            <span class="tp">netlink</span>.<span class="fn">RouteDel</span>(&amp;rt)
+        }
+    }
 }
-<span class="fn">netlink.RouteAdd</span>(route)</div>
+
+<span class="cmt">// 3. เพิ่มเส้นทางใหม่ที่เปิดใช้งาน</span>
+<span class="kw">for</span> _, route := <span class="kw">range</span> activeRoutesToApply {
+    <span class="cmt">// ค้นหาอินเตอร์เฟสและแปลงที่อยู่ IP (หากขัดข้องจะใช้การ Log Warning และประมวลผลต่อเพื่อไม่ให้บล็อกรายการอื่น)</span>
+    netlinkRoute := &amp;<span class="tp">netlink.Route</span>{
+        LinkIndex: link.Attrs().Index,
+        Dst:       dstNet,
+        Gw:        gwIP,
+        Priority:  route.Metric,
+        Protocol:  <span class="num">120</span>,
+    }
+    <span class="tp">netlink</span>.<span class="fn">RouteAdd</span>(netlinkRoute)
+}</div>
         </div>
       </div>
 
@@ -721,6 +836,13 @@ route := &amp;<span class="tp">netlink.Route</span>{
             <div>
               <span class="si-path">kernel/interfaces.go</span>
               <span class="si-desc">RoutingManager interface definition</span>
+            </div>
+          </div>
+          <div class="source-item">
+            <span class="si-icon">🔌</span>
+            <div>
+              <span class="si-path">kernel/real_routing.go</span>
+              <span class="si-desc">เชื่อมต่อเคอร์เนลจริงผ่าน Netlink Socket ในโหมด Production</span>
             </div>
           </div>
           <div class="source-item">

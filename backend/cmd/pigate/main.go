@@ -21,6 +21,7 @@ func main() {
 	mockFromReal := flag.Bool("mock-from-real", false, "Mock operations but initialize/pull from real kernel data at startup")
 	disableEdit := flag.Bool("disable-edit", false, "Disable edit operations (Read-only mode)")
 	allowEditSystemRoutes := flag.Bool("allow-edit-system-routes", false, "Allow editing and deleting system predefined static routes")
+	prioritizeKernelRoutes := flag.Bool("prioritize-kernel-routes", true, "Prioritize kernel route information over database if duplicate")
 	flag.Parse()
 
 	log.Printf("Starting PiGate Backend Server (Go v1.26.4)...")
@@ -30,6 +31,7 @@ func main() {
 	log.Printf("Mock From Real Data: %t", *mockFromReal)
 	log.Printf("Disable Edit Mode: %t", *disableEdit)
 	log.Printf("Allow Edit System Routes: %t", *allowEditSystemRoutes)
+	log.Printf("Prioritize Kernel Routes: %t", *prioritizeKernelRoutes)
 
 	// 2. Initialize in-memory logs circular buffer (Ring Buffer)
 	ringBuffer := logs.NewRingBuffer(50)
@@ -48,6 +50,7 @@ func main() {
 	repo := db.NewRepository(sqliteDB)
 	repo.SetMockMode(*mockOS, *mockFromReal)
 	repo.SetAllowEditSystemRoutes(*allowEditSystemRoutes)
+	repo.SetPrioritizeKernelRoutes(*prioritizeKernelRoutes)
 
 	// Perform initial synchronization of interfaces, routing table, and DNS if real mode or mock-from-real is enabled
 	if !*mockOS || *mockFromReal {

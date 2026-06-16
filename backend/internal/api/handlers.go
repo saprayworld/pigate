@@ -758,7 +758,8 @@ func (s *Server) HandleApplyRoutes(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleGetRoutesConfig(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"allowEditSystemRoutes": s.repo.GetAllowEditSystemRoutes(),
+		"allowEditSystemRoutes":  s.repo.GetAllowEditSystemRoutes(),
+		"prioritizeKernelRoutes": s.repo.GetPrioritizeKernelRoutes(),
 	})
 }
 
@@ -1069,7 +1070,7 @@ func (s *Server) HandleImportConfig(w http.ResponseWriter, r *http.Request) {
 		_ = s.repo.CreatePolicy(p)
 	}
 	for _, r := range cfg.Routes {
-		if r.Type == "system" {
+		if r.Type == "system" || r.Type == "defaultgateway" {
 			continue
 		}
 		_ = s.repo.CreateRoute(r)

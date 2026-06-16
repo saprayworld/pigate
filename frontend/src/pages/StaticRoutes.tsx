@@ -103,7 +103,7 @@ export default function StaticRoutes() {
   const stats = useMemo(() => {
     const total = routes.length
     const active = routes.filter(r => r.status).length
-    const system = routes.filter(r => r.type === "system").length
+    const system = routes.filter(r => r.type === "system" || r.type === "defaultgateway").length
     const custom = routes.filter(r => r.type === "custom").length
     return { total, active, system, custom }
   }, [routes])
@@ -117,7 +117,10 @@ export default function StaticRoutes() {
         route.interface.toLowerCase().includes(searchQuery.toLowerCase()) ||
         route.description.toLowerCase().includes(searchQuery.toLowerCase())
 
-      const matchType = selectedTypeFilter === "all" || route.type === selectedTypeFilter
+      const matchType =
+        selectedTypeFilter === "all" ||
+        route.type === selectedTypeFilter ||
+        (selectedTypeFilter === "system" && route.type === "defaultgateway")
 
       const matchStatus =
         selectedStatusFilter === "all" ||
@@ -128,9 +131,9 @@ export default function StaticRoutes() {
     })
   }, [routes, searchQuery, selectedTypeFilter, selectedStatusFilter])
 
-  // --- Checkbox Actions (Only Custom Routes or all routes if system route editing is allowed) ---
+  // --- Checkbox Actions (Only Custom / Default Gateway Routes or all routes if system route editing is allowed) ---
   const selectableRoutes = useMemo(() => {
-    return filteredRoutes.filter(r => r.type === "custom" || allowEditSystemRoutes)
+    return filteredRoutes.filter(r => r.type === "custom" || r.type === "defaultgateway" || allowEditSystemRoutes)
   }, [filteredRoutes, allowEditSystemRoutes])
 
   const handleSelectAll = (checked: boolean) => {
@@ -529,12 +532,16 @@ export default function StaticRoutes() {
                           <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20 text-[9px] px-1.5 py-0.2 rounded font-mono font-medium">
                             System
                           </Badge>
+                        ) : route.type === "defaultgateway" ? (
+                          <Badge variant="outline" className="bg-purple-500/10 text-purple-400 border-purple-500/20 text-[9px] px-1.5 py-0.2 rounded font-mono font-medium">
+                            Default Gateway
+                          </Badge>
                         ) : (
                           <Badge variant="outline" className="bg-amber-500/10 text-amber-400 border-amber-500/20 text-[9px] px-1.5 py-0.2 rounded font-mono font-medium">
                             Custom
                           </Badge>
                         )}
-                        {route.destination === "0.0.0.0/0" && (
+                        {route.destination === "0.0.0.0/0" && route.type !== "defaultgateway" && (
                           <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[9px] px-1.5 py-0.2 rounded font-mono">
                             Default Gateway
                           </Badge>
