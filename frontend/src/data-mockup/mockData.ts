@@ -350,6 +350,9 @@ export interface StaticRoute {
   description: string
   status: boolean         // true = Active, false = Disabled
   type: "system" | "custom" | "defaultgateway"
+  scope: string
+  src: string
+  proto: string
 }
 
 // Initial mockup data for Static Routes
@@ -362,7 +365,10 @@ export const initialStaticRoutes: StaticRoute[] = [
     metric: 100,
     description: "Default gateway route (WAN)",
     status: true,
-    type: "system"
+    type: "system",
+    scope: "global",
+    src: "",
+    proto: "boot"
   },
   {
     id: "route-2",
@@ -372,7 +378,10 @@ export const initialStaticRoutes: StaticRoute[] = [
     metric: 0,
     description: "Direct subnet route for LAN",
     status: true,
-    type: "system"
+    type: "system",
+    scope: "link",
+    src: "",
+    proto: "kernel"
   },
   {
     id: "route-3",
@@ -382,7 +391,10 @@ export const initialStaticRoutes: StaticRoute[] = [
     metric: 0,
     description: "Direct subnet route for WAN",
     status: true,
-    type: "system"
+    type: "system",
+    scope: "link",
+    src: "",
+    proto: "kernel"
   }
 ]
 

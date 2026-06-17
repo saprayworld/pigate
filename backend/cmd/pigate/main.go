@@ -21,7 +21,7 @@ func main() {
 	mockFromReal := flag.Bool("mock-from-real", false, "Mock operations but initialize/pull from real kernel data at startup")
 	disableEdit := flag.Bool("disable-edit", false, "Disable edit operations (Read-only mode)")
 	allowEditSystemRoutes := flag.Bool("allow-edit-system-routes", false, "Allow editing and deleting system predefined static routes")
-	prioritizeKernelRoutes := flag.Bool("prioritize-kernel-routes", true, "Prioritize kernel route information over database if duplicate")
+	prioritizeKernelRoutes := flag.Bool("prioritize-kernel-routes", false, "Prioritize kernel route information over database if duplicate")
 	flag.Parse()
 
 	log.Printf("Starting PiGate Backend Server (Go v1.26.4)...")

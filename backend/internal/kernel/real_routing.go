@@ -7,6 +7,8 @@ import (
 	"log"
 	"net"
 	"pigate/internal/model"
+	"strconv"
+	"strings"
 
 	"github.com/vishvananda/netlink"
 )
@@ -81,10 +83,22 @@ func (r *RealRouting) ApplyRoutes(routes []model.StaticRoute) error {
 
 		targetRoute, isActive := activeTargetMap[key]
 		if isActive {
-			// Matches an active target route. Update metric if it differs, or make sure Protocol is 120.
-			if rt.Priority != targetRoute.Metric || rt.Protocol != 120 {
+			// Matches an active target route. Update priority, protocol, scope, or src if they differ.
+			targetScope := parseScope(targetRoute.Scope)
+			targetProto := netlink.RouteProtocol(parseProtocol(targetRoute.Proto))
+			targetSrc := net.ParseIP(targetRoute.Src)
+
+			srcMatches := (rt.Src == nil && len(targetRoute.Src) == 0) || (rt.Src != nil && rt.Src.Equal(targetSrc))
+
+			if rt.Priority != targetRoute.Metric || rt.Protocol != targetProto || rt.Scope != targetScope || !srcMatches {
 				rt.Priority = targetRoute.Metric
-				rt.Protocol = 120
+				rt.Protocol = targetProto
+				rt.Scope = targetScope
+				if len(targetRoute.Src) > 0 {
+					rt.Src = targetSrc
+				} else {
+					rt.Src = nil
+				}
 				_ = netlink.RouteReplace(&rt)
 			}
 			// Remove from map since it's already active in the kernel
@@ -138,12 +152,21 @@ func (r *RealRouting) ApplyRoutes(routes []model.StaticRoute) error {
 			}
 		}
 
+		targetScope := parseScope(route.Scope)
+		targetProto := netlink.RouteProtocol(parseProtocol(route.Proto))
+		var srcIP net.IP
+		if route.Src != "" {
+			srcIP = net.ParseIP(route.Src)
+		}
+
 		netlinkRoute := &netlink.Route{
 			LinkIndex: link.Attrs().Index,
 			Dst:       dstNet,
 			Gw:        gwIP,
 			Priority:  route.Metric,
-			Protocol:  120, // Identify as custom managed static route
+			Protocol:  targetProto,
+			Scope:     targetScope,
+			Src:       srcIP,
 		}
 
 		if err := netlink.RouteAdd(netlinkRoute); err != nil {
@@ -159,4 +182,44 @@ func (r *RealRouting) ApplyRoutes(routes []model.StaticRoute) error {
 
 	log.Printf("[Routing] ApplyRoutes completed")
 	return nil
+}
+
+func parseScope(scopeStr string) netlink.Scope {
+	switch strings.ToLower(strings.TrimSpace(scopeStr)) {
+	case "link":
+		return netlink.SCOPE_LINK
+	case "host":
+		return netlink.SCOPE_HOST
+	case "site":
+		return netlink.SCOPE_SITE
+	case "nowhere":
+		return netlink.SCOPE_NOWHERE
+	case "global", "":
+		return netlink.SCOPE_UNIVERSE
+	default:
+		if val, err := strconv.Atoi(scopeStr); err == nil {
+			return netlink.Scope(val)
+		}
+		return netlink.SCOPE_UNIVERSE
+	}
+}
+
+func parseProtocol(protoStr string) int {
+	switch strings.ToLower(strings.TrimSpace(protoStr)) {
+	case "kernel":
+		return 2
+	case "boot":
+		return 3
+	case "static":
+		return 4
+	case "redirect":
+		return 1
+	case "":
+		return 120
+	default:
+		if val, err := strconv.Atoi(protoStr); err == nil {
+			return val
+		}
+		return 120
+	}
 }

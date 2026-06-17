@@ -12,7 +12,9 @@ import {
   CheckCircle2,
   SlidersHorizontal,
   Info,
-  Loader2
+  Loader2,
+  ChevronDown,
+  ChevronUp
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -68,6 +70,12 @@ export default function StaticRoutes() {
   const [formDescription, setFormDescription] = useState("")
   const [formStatus, setFormStatus] = useState(true)
   const [formError, setFormError] = useState("")
+
+  // Advanced fields
+  const [formScope, setFormScope] = useState("global")
+  const [formSrc, setFormSrc] = useState("")
+  const [formProto, setFormProto] = useState("static")
+  const [isAdvancedOpen, setIsAdvancedOpen] = useState(false)
 
   // Simulation Status
   const [isApplying, setIsApplying] = useState(false)
@@ -178,6 +186,10 @@ export default function StaticRoutes() {
     setFormDescription("")
     setFormStatus(true)
     setFormError("")
+    setFormScope("global")
+    setFormSrc("")
+    setFormProto("static")
+    setIsAdvancedOpen(false)
     setIsModalOpen(true)
   }
 
@@ -190,6 +202,14 @@ export default function StaticRoutes() {
     setFormDescription(route.description)
     setFormStatus(route.status)
     setFormError("")
+    setFormScope(route.scope || "global")
+    setFormSrc(route.src || "")
+    setFormProto(route.proto || "static")
+    setIsAdvancedOpen(!!(
+      (route.scope && route.scope !== "global") ||
+      route.src ||
+      (route.proto && route.proto !== "static" && route.proto !== "120")
+    ))
     setIsModalOpen(true)
   }
 
@@ -232,6 +252,9 @@ export default function StaticRoutes() {
     const dest = formDestination.trim()
     const gw = formGateway.trim()
     const metricVal = parseInt(formMetric, 10)
+    const scope = formScope.trim()
+    const src = formSrc.trim()
+    const proto = formProto.trim()
 
     // 1. Validation Destination CIDR format (must be valid CIDR, or 0.0.0.0/0 for default route)
     if (dest !== "0.0.0.0/0" && !isValidCidr(dest)) {
@@ -251,7 +274,13 @@ export default function StaticRoutes() {
       return
     }
 
-    // 4. Duplicate Check
+    // 4. Preferred Source IP Validation
+    if (src && !isValidIp(src)) {
+      setFormError("รูปแบบ Preferred Source IP Address (src) ไม่ถูกต้อง")
+      return
+    }
+
+    // 5. Duplicate Check
     const isDuplicate = routes.some(
       r => r.destination === dest &&
         r.metric === metricVal &&
@@ -271,7 +300,10 @@ export default function StaticRoutes() {
           interface: formInterface,
           metric: metricVal,
           description: formDescription,
-          status: formStatus
+          status: formStatus,
+          scope: scope,
+          src: src,
+          proto: proto
         })
       } else {
         // Create
@@ -281,7 +313,10 @@ export default function StaticRoutes() {
           interface: formInterface,
           metric: metricVal,
           description: formDescription,
-          status: formStatus
+          status: formStatus,
+          scope: scope,
+          src: src,
+          proto: proto
         })
       }
       await loadRoutes(false)
@@ -546,6 +581,27 @@ export default function StaticRoutes() {
                             Default Gateway
                           </Badge>
                         )}
+
+                        {/* Advanced options badges */}
+                        {((route.scope && route.scope !== "global") || route.src || (route.proto && route.proto !== "static" && route.proto !== "120")) && (
+                          <>
+                            {route.scope && route.scope !== "global" && (
+                              <span className="text-[10px] text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 px-1.5 py-0.5 rounded font-mono font-medium animate-fade-in">
+                                scope: {route.scope}
+                              </span>
+                            )}
+                            {route.src && (
+                              <span className="text-[10px] text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded font-mono font-medium animate-fade-in">
+                                src: {route.src}
+                              </span>
+                            )}
+                            {route.proto && route.proto !== "static" && route.proto !== "120" && (
+                              <span className="text-[10px] text-purple-400 bg-purple-500/10 border border-purple-500/20 px-1.5 py-0.5 rounded font-mono font-medium animate-fade-in">
+                                proto: {route.proto}
+                              </span>
+                            )}
+                          </>
+                        )}
                       </div>
                     </div>
                   </TableCell>
@@ -726,6 +782,82 @@ export default function StaticRoutes() {
                 placeholder="เช่น เชื่อมต่อไปยังสาขาย่อย A, VPN tunnel"
                 className="bg-background/50 placeholder:text-muted-foreground h-9 text-xs"
               />
+            </div>
+
+            {/* Collapsible Advanced Section */}
+            <div className="border border-border/60 rounded-lg overflow-hidden bg-card/10">
+              <button
+                type="button"
+                onClick={() => setIsAdvancedOpen(!isAdvancedOpen)}
+                className="w-full flex items-center justify-between px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted/20 transition cursor-pointer select-none"
+              >
+                <span className="flex items-center gap-1.5">
+                  <SlidersHorizontal className="h-3.5 w-3.5 text-primary" />
+                  Advanced Routing Settings (การตั้งค่าขั้นสูง)
+                </span>
+                {isAdvancedOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </button>
+
+              {isAdvancedOpen && (
+                <div className="p-3 border-t border-border/40 space-y-3 bg-muted/5 animate-slide-down">
+                  {/* Grid for Scope & Protocol */}
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Advanced Field: Scope */}
+                    <div className="space-y-1.5">
+                      <Label htmlFor="route-scope" className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block">
+                        Scope (ขอบเขต)
+                      </Label>
+                      <select
+                        id="route-scope"
+                        value={formScope}
+                        onChange={(e) => setFormScope(e.target.value)}
+                        className="w-full bg-background border border-border rounded-lg h-8 px-2 text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                      >
+                        <option value="global">global (Global route)</option>
+                        <option value="link">link (Direct network link)</option>
+                        <option value="host">host (Local host link)</option>
+                        <option value="site">site (IPv6 Site-local)</option>
+                      </select>
+                    </div>
+
+                    {/* Advanced Field: Protocol */}
+                    <div className="space-y-1.5">
+                      <Label htmlFor="route-proto" className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block">
+                        Protocol (โปรโตคอล)
+                      </Label>
+                      <select
+                        id="route-proto"
+                        value={formProto}
+                        onChange={(e) => setFormProto(e.target.value)}
+                        className="w-full bg-background border border-border rounded-lg h-8 px-2 text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                      >
+                        <option value="static">static (Static Route)</option>
+                        <option value="kernel">kernel (OS Kernel Auto)</option>
+                        <option value="boot">boot (System Startup)</option>
+                        <option value="120">120 (PiGate Custom)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Advanced Field: Src IP */}
+                  <div className="space-y-1.5">
+                    <Label htmlFor="route-src" className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block">
+                      Preferred Source IP (src)
+                    </Label>
+                    <Input
+                      id="route-src"
+                      type="text"
+                      value={formSrc}
+                      onChange={(e) => setFormSrc(e.target.value)}
+                      placeholder="เช่น 192.168.1.2"
+                      className="bg-background/50 placeholder:text-muted-foreground h-8 font-mono text-xs"
+                    />
+                    <p className="text-[10px] text-muted-foreground italic leading-normal">
+                      IP ของฝั่งส่งที่ต้องการบังคับให้ออกจากอินเตอร์เฟสนี้ (Preferred Source IP)
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Field: Status Toggle */}

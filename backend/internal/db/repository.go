@@ -28,7 +28,7 @@ func NewRepository(db *sql.DB) *Repository {
 		mockMode:               true, // default to true for safety
 		mockFromReal:           false,
 		allowEditSystemRoutes:  false,
-		prioritizeKernelRoutes: true, // default to true
+		prioritizeKernelRoutes: false, // default to false
 	}
 }
 
@@ -819,7 +819,7 @@ func (r *Repository) TogglePolicyStatus(id string) error {
 // =========================================================================
 
 func (r *Repository) GetRoutes() ([]model.StaticRoute, error) {
-	rows, err := r.db.Query("SELECT id, destination, gateway, interface, metric, description, status, type FROM static_routes")
+	rows, err := r.db.Query("SELECT id, destination, gateway, interface, metric, description, status, type, scope, src, proto FROM static_routes")
 	if err != nil {
 		return nil, err
 	}
@@ -829,7 +829,7 @@ func (r *Repository) GetRoutes() ([]model.StaticRoute, error) {
 	for rows.Next() {
 		var rt model.StaticRoute
 		var statInt int
-		if err := rows.Scan(&rt.ID, &rt.Destination, &rt.Gateway, &rt.Interface, &rt.Metric, &rt.Description, &statInt, &rt.Type); err != nil {
+		if err := rows.Scan(&rt.ID, &rt.Destination, &rt.Gateway, &rt.Interface, &rt.Metric, &rt.Description, &statInt, &rt.Type, &rt.Scope, &rt.Src, &rt.Proto); err != nil {
 			return nil, err
 		}
 		rt.Status = statInt == 1
@@ -893,6 +893,9 @@ func (r *Repository) GetRoutes() ([]model.StaticRoute, error) {
 				// Prioritize kernel metric and type classification,
 				// but KEEP the DB status (user-toggled) — kernel only tells us the route exists, not what user wants.
 				dbRoute.Metric = kr.Metric
+				dbRoute.Scope = kr.Scope
+				dbRoute.Src = kr.Src
+				dbRoute.Proto = kr.Proto
 				if dbRoute.Destination == "0.0.0.0/0" {
 					dbRoute.Type = "defaultgateway"
 				} else if dbRoute.Gateway == "" {
@@ -932,10 +935,10 @@ func (r *Repository) GetRoutes() ([]model.StaticRoute, error) {
 }
 
 func (r *Repository) GetRouteByID(id string) (*model.StaticRoute, error) {
-	row := r.db.QueryRow("SELECT id, destination, gateway, interface, metric, description, status, type FROM static_routes WHERE id = ?", id)
+	row := r.db.QueryRow("SELECT id, destination, gateway, interface, metric, description, status, type, scope, src, proto FROM static_routes WHERE id = ?", id)
 	var route model.StaticRoute
 	var statInt int
-	err := row.Scan(&route.ID, &route.Destination, &route.Gateway, &route.Interface, &route.Metric, &route.Description, &statInt, &route.Type)
+	err := row.Scan(&route.ID, &route.Destination, &route.Gateway, &route.Interface, &route.Metric, &route.Description, &statInt, &route.Type, &route.Scope, &route.Src, &route.Proto)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -951,8 +954,14 @@ func (r *Repository) CreateRoute(route model.StaticRoute) error {
 	if route.Status {
 		statVal = 1
 	}
-	_, err := r.db.Exec("INSERT INTO static_routes (id, destination, gateway, interface, metric, description, status, type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		route.ID, route.Destination, route.Gateway, route.Interface, route.Metric, route.Description, statVal, route.Type)
+	if route.Scope == "" {
+		route.Scope = "global"
+	}
+	if route.Proto == "" {
+		route.Proto = "static"
+	}
+	_, err := r.db.Exec("INSERT INTO static_routes (id, destination, gateway, interface, metric, description, status, type, scope, src, proto) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		route.ID, route.Destination, route.Gateway, route.Interface, route.Metric, route.Description, statVal, route.Type, route.Scope, route.Src, route.Proto)
 	return err
 }
 
@@ -970,8 +979,14 @@ func (r *Repository) UpdateRoute(route model.StaticRoute) error {
 	if route.Status {
 		statVal = 1
 	}
-	_, err = r.db.Exec("UPDATE static_routes SET destination = ?, gateway = ?, interface = ?, metric = ?, description = ?, status = ? WHERE id = ?",
-		route.Destination, route.Gateway, route.Interface, route.Metric, route.Description, statVal, route.ID)
+	if route.Scope == "" {
+		route.Scope = "global"
+	}
+	if route.Proto == "" {
+		route.Proto = "static"
+	}
+	_, err = r.db.Exec("UPDATE static_routes SET destination = ?, gateway = ?, interface = ?, metric = ?, description = ?, status = ?, scope = ?, src = ?, proto = ? WHERE id = ?",
+		route.Destination, route.Gateway, route.Interface, route.Metric, route.Description, statVal, route.Scope, route.Src, route.Proto, route.ID)
 	return err
 }
 
@@ -1703,6 +1718,15 @@ func (r *Repository) parseProcNetRoute() ([]model.StaticRoute, error) {
 			iface,
 		)
 
+		routeScope := "global"
+		routeProto := "static"
+		if gateway == "" {
+			routeScope = "link"
+			routeProto = "kernel"
+		} else if destination == "0.0.0.0/0" {
+			routeProto = "boot"
+		}
+
 		list = append(list, model.StaticRoute{
 			ID:          routeID,
 			Destination: destination,
@@ -1712,6 +1736,9 @@ func (r *Repository) parseProcNetRoute() ([]model.StaticRoute, error) {
 			Description: "System route fetched from kernel",
 			Status:      true,
 			Type:        routeType,
+			Scope:       routeScope,
+			Src:         "",
+			Proto:       routeProto,
 		})
 	}
 	return list, nil
@@ -1721,9 +1748,9 @@ func (r *Repository) GetKernelRoutes() ([]model.StaticRoute, error) {
 	if runtime.GOOS != "linux" {
 		if r.mockMode {
 			return []model.StaticRoute{
-				{ID: "route-sys-0_0_0_0_0-10_0_0_1-wlan0", Destination: "0.0.0.0/0", Gateway: "10.0.0.1", Interface: "wlan0", Metric: 100, Description: "System route fetched from kernel", Status: true, Type: "defaultgateway"},
-				{ID: "route-sys-192_168_1_0_24--eth0", Destination: "192.168.1.0/24", Gateway: "", Interface: "eth0", Metric: 0, Description: "System route fetched from kernel", Status: true, Type: "system"},
-				{ID: "route-sys-10_0_0_0_24--wlan0", Destination: "10.0.0.0/24", Gateway: "", Interface: "wlan0", Metric: 0, Description: "System route fetched from kernel", Status: true, Type: "system"},
+				{ID: "route-sys-0_0_0_0_0-10_0_0_1-wlan0", Destination: "0.0.0.0/0", Gateway: "10.0.0.1", Interface: "wlan0", Metric: 100, Description: "System route fetched from kernel", Status: true, Type: "defaultgateway", Scope: "global", Src: "", Proto: "boot"},
+				{ID: "route-sys-192_168_1_0_24--eth0", Destination: "192.168.1.0/24", Gateway: "", Interface: "eth0", Metric: 0, Description: "System route fetched from kernel", Status: true, Type: "system", Scope: "link", Src: "192.168.1.1", Proto: "kernel"},
+				{ID: "route-sys-10_0_0_0_24--wlan0", Destination: "10.0.0.0/24", Gateway: "", Interface: "wlan0", Metric: 0, Description: "System route fetched from kernel", Status: true, Type: "system", Scope: "link", Src: "10.0.0.45", Proto: "kernel"},
 			}, nil
 		}
 		return nil, nil
@@ -1815,9 +1842,9 @@ func (r *Repository) SyncRoutesFromOS() error {
 	}
 
 	for _, sysRt := range systemRoutesToInsert {
-		_, err = r.db.Exec(`INSERT INTO static_routes (id, destination, gateway, interface, metric, description, status, type) 
-			VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
-			sysRt.ID, sysRt.Destination, sysRt.Gateway, sysRt.Interface, sysRt.Metric, sysRt.Description, sysRt.Type)
+		_, err = r.db.Exec(`INSERT INTO static_routes (id, destination, gateway, interface, metric, description, status, type, scope, src, proto) 
+			VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+			sysRt.ID, sysRt.Destination, sysRt.Gateway, sysRt.Interface, sysRt.Metric, sysRt.Description, sysRt.Type, sysRt.Scope, sysRt.Src, sysRt.Proto)
 		if err != nil {
 			// Log but continue
 		}

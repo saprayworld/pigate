@@ -648,6 +648,9 @@ func (s *Server) HandleCreateRoute(w http.ResponseWriter, r *http.Request) {
 		Description: input.Description,
 		Status:      input.Status,
 		Type:        "custom",
+		Scope:       input.Scope,
+		Src:         input.Src,
+		Proto:       input.Proto,
 	}
 
 	if err := s.repo.CreateRoute(route); err != nil {
@@ -683,6 +686,9 @@ func (s *Server) HandleUpdateRoute(w http.ResponseWriter, r *http.Request) {
 		Description: input.Description,
 		Status:      input.Status,
 		Type:        "custom",
+		Scope:       input.Scope,
+		Src:         input.Src,
+		Proto:       input.Proto,
 	}
 
 	if err := s.repo.UpdateRoute(route); err != nil {

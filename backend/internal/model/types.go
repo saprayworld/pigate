@@ -140,7 +140,10 @@ type StaticRoute struct {
 	Metric      int    `json:"metric"`
 	Description string `json:"description"`
 	Status      bool   `json:"status"` // Active/Inactive
-	Type        string `json:"type"`   // "system", "custom"
+	Type        string `json:"type"`   // "system", "custom", "defaultgateway"
+	Scope       string `json:"scope"`  // "global", "link", "host", "site", etc.
+	Src         string `json:"src"`    // preferred source IP
+	Proto       string `json:"proto"`  // "kernel", "boot", "static", "120", etc.
 }
 
 // StaticRouteInput represents inputs to create or update a StaticRoute
@@ -151,6 +154,9 @@ type StaticRouteInput struct {
 	Metric      int    `json:"metric"`
 	Description string `json:"description"`
 	Status      bool   `json:"status"`
+	Scope       string `json:"scope"`
+	Src         string `json:"src"`
+	Proto       string `json:"proto"`
 }
 
 // DhcpConfig represents DHCP server main settings

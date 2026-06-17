@@ -397,6 +397,9 @@
   Description <span class="tp">string</span> <span class="str">`json:"description"`</span> <span class="cmt">// คำอธิบายประกอบ</span>
   Status      <span class="tp">bool</span>   <span class="str">`json:"status"`</span>      <span class="cmt">// true = เปิดใช้งาน (เก็บใน DB, ไม่ถูกทับด้วย kernel)</span>
   Type        <span class="tp">string</span> <span class="str">`json:"type"`</span>        <span class="cmt">// "system" | "defaultgateway" | "custom"</span>
+  Scope       <span class="tp">string</span> <span class="str">`json:"scope"`</span>       <span class="cmt">// ขอบเขตเส้นทาง เช่น "global", "link", "host", "site"</span>
+  Src         <span class="tp">string</span> <span class="str">`json:"src"`</span>         <span class="cmt">// preferred source IP address</span>
+  Proto       <span class="tp">string</span> <span class="str">`json:"proto"`</span>       <span class="cmt">// โปรโตคอลเส้นทาง เช่น "kernel", "boot", "static", "120"</span>
 }</div>
         </div>
       </div>
@@ -424,7 +427,10 @@
   metric      <span class="sql-tp">INTEGER</span> <span class="sql-kw">DEFAULT</span> <span class="num">0</span>,
   description <span class="sql-tp">TEXT</span>,
   status      <span class="sql-tp">INTEGER</span> <span class="sql-kw">DEFAULT</span> <span class="num">1</span> <span class="sql-kw">CHECK</span>(status <span class="sql-kw">IN</span> (<span class="num">0</span>, <span class="num">1</span>)),
-  type        <span class="sql-tp">TEXT</span>    <span class="sql-kw">NOT NULL</span> <span class="sql-kw">CHECK</span>(type <span class="sql-kw">IN</span> (<span class="sql-str">'system'</span>, <span class="sql-str">'custom'</span>, <span class="sql-str">'defaultgateway'</span>))
+  type        <span class="sql-tp">TEXT</span>    <span class="sql-kw">NOT NULL</span> <span class="sql-kw">CHECK</span>(type <span class="sql-kw">IN</span> (<span class="sql-str">'system'</span>, <span class="sql-str">'custom'</span>, <span class="sql-str">'defaultgateway'</span>)),
+  scope       <span class="sql-tp">TEXT</span>    <span class="sql-kw">DEFAULT</span> <span class="sql-str">'global'</span>,
+  src         <span class="sql-tp">TEXT</span>    <span class="sql-kw">DEFAULT</span> <span class="sql-str">''</span>,
+  proto       <span class="sql-tp">TEXT</span>    <span class="sql-kw">DEFAULT</span> <span class="sql-str">'static'</span>
 );
 <span class="sql-cmt">-- Migration: ถ้า DB เดิมยังไม่มี 'defaultgateway' ใน CHECK constraint</span>
 <span class="sql-cmt">-- จะทำ migration อัตโนมัติใน connection.go (recreate table + copy data)</span></div>
@@ -616,9 +622,9 @@
                 <td class="td-muted">เมื่อ <code>true</code> — ผู้ใช้สามารถแก้ไข ลบ และ Toggle เส้นทาง <code>system</code> ได้</td>
               </tr>
               <tr>
-                <td><code>-prioritize-kernel-routes</code></td>
-                <td><span class="badge badge-green">true</span></td>
-                <td class="td-muted">เมื่อ <code>true</code> — kernel เป็น source of truth สำหรับ metric และ type แต่ status ยังคงมาจาก DB (user intent)</td>
+                <td><code>-prioritize-kernel-routes</code> <span class="badge badge-amber" style="padding: 1px 6px; font-size: 9px;">Experimental</span></td>
+                <td><span class="badge badge-red">false</span></td>
+                <td class="td-muted">เมื่อ <code>true</code> (ไม่เสถียร) — kernel เป็น source of truth สำหรับ metric, type, scope และ proto แต่ status ยังคงมาจาก DB (user intent) <br/><span style="color:var(--red); font-size: 11px;">*ข้อควรระวัง: หากเปิดใช้งาน ควรเปิดใช้งาน <code>-allow-edit-system-routes</code> ควบคู่กันไป เนื่องจากหากผู้ใช้สร้าง route แบบ Directly (ไม่มี gateway) เอง ระบบจะมองว่าเส้นทางนั้นเป็นของระบบ (system) และจะไม่สามารถแก้ไขหรือลบผ่านทางหน้าจอหลักได้</span></td>
               </tr>
             </tbody>
           </table>
@@ -657,6 +663,18 @@
               </tr>
             </tbody>
           </table>
+        </div>
+
+        <div class="callout warn" style="margin-bottom:12px;">
+          <span class="callout-icon">⚠️</span>
+          <div class="callout-body">
+            <div class="callout-title">ข้อพึงระวังเกี่ยวกับ prioritizeKernelRoutes (สถานะ Experimental)</div>
+            ฟังก์ชัน <code>prioritizeKernelRoutes</code> ขณะนี้มีสถานะไม่เสถียร (Experimental) และถูกตั้งค่าเริ่มต้นเป็น <code>false</code> หากเปิดใช้งาน (เป็น <code>true</code>) ควรเปิด <code>-allow-edit-system-routes</code> ควบคู่ไปด้วยเสมอ เนื่องจาก:
+            <ul style="margin-top:8px;padding-left:18px;font-size:12px;">
+              <li>เมื่อผู้ใช้งานสร้างเส้นทางเครือข่ายแบบเชื่อมตรง (Directly connected route เช่น ไม่มี Gateway) ด้วยตนเอง เคอร์เนลจะมองเส้นทางดังกล่าวเป็น Link-local / System route</li>
+              <li>เมื่อระบบซิงค์ข้อมูลจะปรับประเภท (Type) ในฐานข้อมูลจาก <code>custom</code> ไปเป็น <code>system</code> ส่งผลให้ผู้ใช้ไม่สามารถเข้าไปลบหรือแก้ไขเส้นทางนั้นผ่านหน้าจอหลักได้ (ถูกล็อก) เว้นแต่จะเปิด flag อนุญาตแก้ไข System route</li>
+            </ul>
+          </div>
         </div>
       </div>
 
@@ -712,18 +730,7 @@
           </div>
         </div>
 
-        <div class="callout tip" style="margin-bottom:12px;">
-          <span class="callout-icon">🔀</span>
-          <div class="callout-body">
-            <div class="callout-title">Toggle Route — พฤติกรรมเมื่อ prioritizeKernelRoutes = true</div>
-            เมื่อ <code>prioritizeKernelRoutes</code> เปิดอยู่ <strong>สถานะ (status) ที่ผู้ใช้กด Toggle จะถูกเก็บใน DB เสมอ</strong> และไม่ถูกเคอร์เนลทับซ้ำ:
-            <ul style="margin-top:8px;padding-left:18px;font-size:12px;">
-              <li>Route ที่อยู่ใน kernel → metric และ type อัปเดตจาก kernel แต่ <strong>status คงไว้จาก DB</strong></li>
-              <li>Route <code>system</code>/<code>defaultgateway</code> ที่ไม่อยู่ใน kernel → auto-set <code>status = false</code></li>
-              <li>Route <code>custom</code> ที่ไม่อยู่ใน kernel → คง status จาก DB (ผู้ใช้อาจกด Apply ทีหลัง)</li>
-            </ul>
-          </div>
-        </div>
+
 
         <div class="callout warn" style="margin-bottom:12px;">
           <span class="callout-icon">⚠️</span>

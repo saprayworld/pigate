@@ -1569,12 +1569,12 @@ components:
         prioritizeKernelRoutes:
           type: boolean
           description: |
-            When true, the kernel routing table (/proc/net/route) is the source of truth.
+            [Experimental] When true, the kernel routing table (/proc/net/route) is the source of truth.
             Routes found in kernel have their metric and type updated from kernel data.
             Routes NOT in kernel (system/defaultgateway types) are automatically marked inactive.
             User-toggled status in DB is preserved and not overridden by kernel state.
-            Controlled by the `-prioritize-kernel-routes` CLI flag.
-          example: true
+            Controlled by the `-prioritize-kernel-routes` CLI flag. (Default: false)
+          example: false
 
     StaticRoute:
       type: object
@@ -1587,6 +1587,9 @@ components:
         - description
         - status
         - type
+        - scope
+        - src
+        - proto
       properties:
         id:
           type: string
@@ -1625,6 +1628,18 @@ components:
             - `defaultgateway`: route to 0.0.0.0/0, always editable and toggleable
             - `custom`: user-defined route, always editable and toggleable
           example: defaultgateway
+        scope:
+          type: string
+          description: Route scope (e.g. 'global', 'link', 'host').
+          example: global
+        src:
+          type: string
+          description: Preferred source IP address.
+          example: 192.168.1.2
+        proto:
+          type: string
+          description: Route protocol (e.g. 'kernel', 'boot', 'static', '120').
+          example: static
 
     StaticRouteInput:
       type: object
@@ -1635,6 +1650,9 @@ components:
         - metric
         - description
         - status
+        - scope
+        - src
+        - proto
       properties:
         destination:
           type: string
@@ -1654,6 +1672,18 @@ components:
         status:
           type: boolean
           example: true
+        scope:
+          type: string
+          description: Route scope (e.g. 'global', 'link', 'host').
+          example: global
+        src:
+          type: string
+          description: Preferred source IP address.
+          example: 192.168.1.2
+        proto:
+          type: string
+          description: Route protocol (e.g. 'kernel', 'boot', 'static', '120').
+          example: static
 
     # --- DHCP Server Schemas ---
     DhcpConfig:
