@@ -112,6 +112,7 @@ export default function Interfaces() {
   // --- State ---
   const [interfaces, setInterfaces] = useState<NetworkInterface[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState("")
 
   // Edit Dialog State
@@ -152,8 +153,12 @@ export default function Interfaces() {
   const [showScanResults, setShowScanResults] = useState(false)
 
   // --- Load Data ---
-  const loadData = async () => {
-    setIsLoading(true)
+  const loadData = async (silent = false) => {
+    if (silent) {
+      setIsRefreshing(true)
+    } else {
+      setIsLoading(true)
+    }
     setError("")
     try {
       const data = await interfaceService.getAll()
@@ -162,6 +167,7 @@ export default function Interfaces() {
       setError(err.message || "Failed to load interfaces.")
     } finally {
       setIsLoading(false)
+      setIsRefreshing(false)
     }
   }
 
@@ -485,14 +491,28 @@ export default function Interfaces() {
   return (
     <div className="space-y-6">
       {/* 1. Header Area */}
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
-          <Network className="h-7 w-7 text-primary fill-primary/10" />
-          Network Interfaces
-        </h1>
-        <p className="text-muted-foreground mt-1">
-          จัดการอินเทอร์เฟซเครือข่าย Physical และ Virtual บนบอร์ด Raspberry Pi
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
+            <Network className="h-7 w-7 text-primary fill-primary/10" />
+            Network Interfaces
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            จัดการอินเทอร์เฟซเครือข่าย Physical และ Virtual บนบอร์ด Raspberry Pi
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => loadData(true)}
+            disabled={isLoading || isRefreshing}
+            className="cursor-pointer gap-2"
+          >
+            <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* 2. Stats Dashboard Cards */}

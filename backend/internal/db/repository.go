@@ -1398,8 +1398,9 @@ func (r *Repository) SyncInterfacesFromOS() error {
 		}
 		if !foundInOS[name] {
 			log.Printf("[DB] Interface %s is not present in OS, marking as offline", name)
+			// status = 'offline', ip = '0.0.0.0', netmask = '0', gateway = '', speed = 'unknown', connected_ssid = NULL
 			_, err = r.db.Exec(`UPDATE network_interfaces SET 
-				status = 'offline', ip = '0.0.0.0', netmask = '0', gateway = '', speed = 'unknown', connected_ssid = NULL
+				status = 'offline', speed = 'unknown'
 				WHERE id = ?`, id)
 			if err != nil {
 				log.Printf("[DB] Failed to mark interface %s as offline: %v", name, err)

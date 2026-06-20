@@ -1,3 +1,18 @@
+### ติดตั้ง Go
+
+```bash
+wget https://go.dev/dl/go1.26.4.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.26.4.linux-amd64.tar.gz
+
+echo "export PATH=\$PATH:/usr/local/go/bin" >> ~/.bashrc
+
+source ~/.bashrc
+
+go version
+```
+
+> ควรปิดและเปิด session terminal ใหม่ เพื่อให้ go path มีผล
+
 ### คำสั่งทดสอบ
 
 ```bash
@@ -24,18 +39,25 @@ yarn dev
 
 ใช้ user `admin` และ pass `admin` เพื่อทดทอบ
 
-### ติดตั้ง Go
+### CLI For test
+
+สามารถใช้คำสั่งเหล่านี้เพื่อทดสอบการทำงาน โดยรันใน session terminal ใหม่
+
+#### create VLAN Interface
 
 ```bash
-wget https://go.dev/dl/go1.26.4.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.26.4.linux-amd64.tar.gz
-
-echo "export PATH=\$PATH:/usr/local/go/bin" >> ~/.bashrc
-
-source ~/.bashrc
-
-go version
+sudo ip link add link eth0 name eth0.300 type vlan id 300
 ```
 
-> ควรปิดและเปิด session terminal ใหม่ เพื่อให้ go path มีผล
+#### Assign IP Address to VLAN Interface
+
+```bash
+sudo ip addr add 172.26.0.1/24 dev eth0.300
+```
+
+#### Remove IP Address from VLAN Interface
+
+```bash
+sudo ip addr del 172.26.0.1/24 dev eth0.300
+```
 
