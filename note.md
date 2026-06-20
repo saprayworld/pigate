@@ -6,6 +6,9 @@ cd backend
 # Build
 go build -o pigate-backend ./cmd/pigate
 
+# Add Permission
+sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
+
 # Start
 ./pigate-backend -port=8081 -db=pigate.db -mock=true
 

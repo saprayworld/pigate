@@ -1260,22 +1260,28 @@ func getInterfaceSpeed(ifaceName string) string {
 
 // SyncInterfacesFromOS fetches interfaces from the OS and updates the database.
 func (r *Repository) SyncInterfacesFromOS() error {
+	log.Printf("[DB] SyncInterfacesFromOS called")
 	netIfaces, err := net.Interfaces()
 	if err != nil {
+		log.Printf("[DB] Failed to get system interfaces: %v", err)
 		return fmt.Errorf("failed to get system interfaces: %w", err)
 	}
 
 	// Fetch existing interfaces names and IDs to avoid duplicate name and keep ID
 	rows, err := r.db.Query("SELECT id, name FROM network_interfaces")
 	if err != nil {
+		log.Printf("[DB] Failed to query DB interfaces: %v", err)
 		return fmt.Errorf("failed to query DB interfaces: %w", err)
 	}
+	log.Printf("[DB] Query DB interfaces success")
 	defer rows.Close()
 
 	dbMap := make(map[string]string) // name -> id
+	log.Printf("[DB] Mapping DB interfaces")
 	for rows.Next() {
 		var id, name string
 		if err := rows.Scan(&id, &name); err == nil {
+			log.Printf("[DB] Mapping DB interface: %s -> %s", name, id)
 			dbMap[name] = id
 		}
 	}
@@ -1324,6 +1330,7 @@ func (r *Repository) SyncInterfacesFromOS() error {
 		}
 
 		if id, exists := dbMap[netIface.Name]; exists {
+			log.Printf("[DB] Interface %s already exists with ID %s", netIface.Name, id)
 			// Update dynamic fields only (ip, netmask, mac, status)
 			// addressing_mode and other user-configured fields are intentionally preserved
 			_, err = r.db.Exec(`UPDATE network_interfaces SET 
@@ -1333,11 +1340,12 @@ func (r *Repository) SyncInterfacesFromOS() error {
 				// Ignore or log error
 			}
 		} else {
+			log.Printf("[DB] Interface %s not exists, creating new record", netIface.Name)
 			// Insert a new interface record — read real values from OS
 			id := fmt.Sprintf("iface-os-%d", idx)
-			alias := netIface.Name + "_os"
+			alias := netIface.Name + ""
 			role := "LAN"
-			if netIface.Name == "eth0" || strings.Contains(netIface.Name, "wan") {
+			if strings.Contains(netIface.Name, "wan") {
 				role = "WAN"
 			}
 			macMode := "hardware"
@@ -1366,7 +1374,10 @@ func (r *Repository) SyncInterfacesFromOS() error {
 				id, netIface.Name, alias, role, ifaceType, addrMode, ipStr, netmaskStr, gateway, macAddr, adminAccess, status, speed,
 				macMode, macAddr, reconnectVal, failoverVal)
 			if err != nil {
+				log.Printf("[DB] Failed to create interface %s: %v", netIface.Name, err)
 				// Ignore or log error
+			} else {
+				log.Printf("[DB] Created interface %s: %s", netIface.Name, id)
 			}
 		}
 	}
