@@ -98,6 +98,7 @@ type NetworkInterface struct {
 	Alias                string       `json:"alias"` // e.g. "LAN_Internal"
 	Role                 string       `json:"role"`  // "LAN", "WAN"
 	Type                 string       `json:"type"`  // "ethernet", "wireless"
+	Subtype              string       `json:"subtype"` // e.g. "device", "veth", "bridge", "vlan"
 	AddressingMode       string       `json:"addressingMode"`
 	IP                   string       `json:"ip"`
 	Netmask              string       `json:"netmask"`

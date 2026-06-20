@@ -634,3 +634,72 @@ func TestHexIPParserAndRouteSyncFallback(t *testing.T) {
 		}
 	}
 }
+
+func TestInterfaceSubtype(t *testing.T) {
+	db, err := InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+
+	// Test GetDeviceType safety
+	subtype := GetDeviceType("non-existent-device-12345")
+	if subtype != "unknown" {
+		t.Errorf("Expected 'unknown' subtype for non-existent device, got '%s'", subtype)
+	}
+
+	// Create test interface with subtype 'veth'
+	iface := model.NetworkInterface{
+		ID:             "iface-test-veth",
+		Name:           "veth0",
+		Alias:          "VETH_Test",
+		Role:           "LAN",
+		Type:           "ethernet",
+		Subtype:        "veth",
+		AddressingMode: "static",
+		IP:             "192.168.99.1",
+		Netmask:        "24",
+		Gateway:        "",
+		MacAddress:     "00:11:22:33:44:55",
+		AdminAccess:    []string{"PING"},
+		Status:         "up",
+		Speed:          "10 Gbps",
+	}
+
+	err = repo.CreateInterfaceForTest(iface)
+	if err != nil {
+		t.Fatalf("CreateInterfaceForTest failed: %v", err)
+	}
+
+	// Retrieve by ID and check
+	fetched, err := repo.GetInterfaceByID("iface-test-veth")
+	if err != nil {
+		t.Fatalf("GetInterfaceByID failed: %v", err)
+	}
+	if fetched == nil {
+		t.Fatalf("Expected to fetch interface, got nil")
+	}
+	if fetched.Subtype != "veth" {
+		t.Errorf("Expected subtype 'veth', got '%s'", fetched.Subtype)
+	}
+
+	// Retrieve all and check
+	list, err := repo.GetInterfaces()
+	if err != nil {
+		t.Fatalf("GetInterfaces failed: %v", err)
+	}
+	found := false
+	for _, item := range list {
+		if item.ID == "iface-test-veth" {
+			found = true
+			if item.Subtype != "veth" {
+				t.Errorf("Expected list item subtype 'veth', got '%s'", item.Subtype)
+			}
+		}
+	}
+	if !found {
+		t.Error("Did not find created interface in GetInterfaces list")
+	}
+}
+

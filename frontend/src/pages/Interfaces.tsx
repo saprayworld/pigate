@@ -17,7 +17,11 @@ import {
   Play,
   Terminal,
   Trash2,
-  RotateCcw
+  RotateCcw,
+  Layers,
+  Link as LinkIcon,
+  GitMerge,
+  HelpCircle
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -106,6 +110,32 @@ function generateRandomMac(): string {
 }
 
 const ALL_ACCESS_OPTIONS: AdminAccess[] = ["HTTPS", "HTTP", "PING", "SSH"]
+
+function getInterfaceIcon(type: string, subtype?: string, className = "h-5 w-5 mx-auto") {
+  const displayType = subtype || type
+
+  if (type === "wireless") {
+    return <Wifi className={`${className} text-indigo-400`} />
+  }
+
+  switch (displayType) {
+    case "wireless":
+      return <Wifi className={`${className} text-indigo-400`} />
+    case "vlan":
+      return <Layers className={`${className} text-amber-400`} />
+    case "veth":
+      return <LinkIcon className={`${className} text-emerald-400`} />
+    case "bridge":
+      return <GitMerge className={`${className} text-purple-400`} />
+    case "device":
+    case "ethernet":
+      return <Cable className={`${className} text-cyan-400`} />
+    case "loopback":
+      return <RotateCcw className={`${className} text-pink-400`} />
+    default:
+      return <HelpCircle className={`${className} text-muted-foreground`} />
+  }
+}
 
 export default function Interfaces() {
   const { alert, confirm } = useAlert()
@@ -569,23 +599,24 @@ export default function Interfaces() {
                   <TableRow key={iface.id} className="border-b border-border/40 hover:bg-muted/15">
                     {/* Port Icon */}
                     <TableCell className="p-3 text-center">
-                      {iface.type === "ethernet" ? (
-                        <Cable className="h-5 w-5 text-cyan-400 mx-auto" />
-                      ) : (
-                        <Wifi className="h-5 w-5 text-indigo-400 mx-auto" />
-                      )}
+                      {getInterfaceIcon(iface.type, iface.subtype, "h-5 w-5 mx-auto")}
                     </TableCell>
 
                     {/* Name (Alias) */}
                     <TableCell className="p-3">
                       <div className="font-semibold text-foreground">{iface.name}</div>
                       <div className="text-xs text-muted-foreground mt-0.5">({iface.alias})</div>
-                      {iface.type === "wireless" && iface.connectedSSID && iface.status === "up" && (
-                        <div className="flex items-center gap-1 mt-1">
-                          <Signal className="h-3 w-3 text-indigo-400" />
-                          <span className="text-[10px] text-indigo-400 font-mono">{iface.connectedSSID}</span>
-                        </div>
-                      )}
+                      <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                        <Badge variant="secondary" className="text-[9px] px-1.5 py-0.5 rounded capitalize bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 border-none font-mono font-medium">
+                          {iface.subtype || iface.type}
+                        </Badge>
+                        {iface.type === "wireless" && iface.connectedSSID && iface.status === "up" && (
+                          <div className="flex items-center gap-1 ml-0.5">
+                            <Signal className="h-3 w-3 text-indigo-400" />
+                            <span className="text-[10px] text-indigo-400 font-mono">{iface.connectedSSID}</span>
+                          </div>
+                        )}
+                      </div>
                     </TableCell>
 
                     {/* Role */}
@@ -772,13 +803,14 @@ export default function Interfaces() {
         <DialogContent className="w-full md:max-w-[920px] rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up max-h-[90vh] overflow-y-auto">
           <DialogHeader className="pb-3 border-b border-border/40">
             <DialogTitle className="text-lg font-bold text-foreground flex items-center gap-2">
-              {editingIface?.type === "ethernet" ? (
-                <Cable className="h-5 w-5 text-cyan-400" />
-              ) : (
-                <Wifi className="h-5 w-5 text-indigo-400" />
-              )}
+              {editingIface && getInterfaceIcon(editingIface.type, editingIface.subtype, "h-5 w-5")}
               Edit Interface: {editingIface?.name}
               <span className="text-sm font-normal text-muted-foreground">({editingIface?.alias})</span>
+              {editingIface && (
+                <Badge variant="secondary" className="text-[9px] px-1.5 py-0.5 rounded capitalize bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 border-none font-mono font-medium ml-1">
+                  {editingIface.subtype || editingIface.type}
+                </Badge>
+              )}
             </DialogTitle>
           </DialogHeader>
 

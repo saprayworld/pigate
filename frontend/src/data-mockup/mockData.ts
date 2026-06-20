@@ -254,6 +254,7 @@ export interface NetworkInterface {
   alias: string               // e.g. "LAN_Internal", "WAN_WiFi"
   role: "LAN" | "WAN"
   type: InterfaceType
+  subtype?: string            // e.g. "device", "veth", "bridge", "vlan"
   addressingMode: AddressingMode
   ip: string                  // e.g. "192.168.1.1"
   netmask: string             // e.g. "24"
@@ -289,6 +290,7 @@ export const initialNetworkInterfaces: NetworkInterface[] = [
     alias: "LAN_Internal",
     role: "LAN",
     type: "ethernet",
+    subtype: "device",
     addressingMode: "static",
     ip: "192.168.1.1",
     netmask: "24",
@@ -306,6 +308,7 @@ export const initialNetworkInterfaces: NetworkInterface[] = [
     alias: "WAN_WiFi",
     role: "WAN",
     type: "wireless",
+    subtype: "device",
     addressingMode: "dhcp",
     ip: "10.0.0.45",
     netmask: "24",

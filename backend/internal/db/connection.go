@@ -139,6 +139,18 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
+	// Add subtype column to network_interfaces if it doesn't exist
+	var sqlCreateIfaceSubtype string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='network_interfaces'").Scan(&sqlCreateIfaceSubtype)
+	if err == nil {
+		if !strings.Contains(sqlCreateIfaceSubtype, "subtype") {
+			_, err = db.Exec("ALTER TABLE network_interfaces ADD COLUMN subtype TEXT DEFAULT ''")
+			if err != nil {
+				return fmt.Errorf("failed to add subtype column: %w", err)
+			}
+		}
+	}
+
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY,
@@ -240,6 +252,7 @@ func migrate(db *sql.DB) error {
 			alias TEXT NOT NULL,
 			role TEXT NOT NULL CHECK(role IN ('LAN', 'WAN')),
 			type TEXT NOT NULL CHECK(type IN ('ethernet', 'wireless')),
+			subtype TEXT DEFAULT '',
 			addressing_mode TEXT NOT NULL CHECK(addressing_mode IN ('dhcp', 'static')),
 			ip TEXT NOT NULL,
 			netmask TEXT NOT NULL,
@@ -362,16 +375,16 @@ func seed(db *sql.DB) error {
 	}
 	if ifaceCount == 0 {
 		_, err := db.Exec(`INSERT INTO network_interfaces (
-			id, name, alias, role, type, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
+			id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
 			mac_mode, real_mac_address, randomized_mac, laa_mac_address, randomize_on_reconnect,
 			connected_ssid, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, ip_check_timeout, primary_max_retries, failover_cooldown
 		) VALUES 
 		(
-			'iface-1', 'eth0', 'LAN_Internal', 'LAN', 'ethernet', 'static', '192.168.1.1', '24', '', 'DC:A6:32:AA:BB:C1', 'PING,HTTP,SSH', 'up', '1000 Mbps',
+			'iface-1', 'eth0', 'LAN_Internal', 'LAN', 'ethernet', 'device', 'static', '192.168.1.1', '24', '', 'DC:A6:32:AA:BB:C1', 'PING,HTTP,SSH', 'up', '1000 Mbps',
 			'hardware', 'DC:A6:32:AA:BB:C1', NULL, NULL, 0, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL
 		),
 		(
-			'iface-2', 'wlan0', 'WAN_WiFi', 'WAN', 'wireless', 'dhcp', '10.0.0.45', '24', '10.0.0.1', '4E:88:2F:BC:A1:90', 'PING', 'up', '72 Mbps',
+			'iface-2', 'wlan0', 'WAN_WiFi', 'WAN', 'wireless', 'device', 'dhcp', '10.0.0.45', '24', '10.0.0.1', '4E:88:2F:BC:A1:90', 'PING', 'up', '72 Mbps',
 			'randomized', 'DC:A6:32:AA:BB:C2', '4E:88:2F:BC:A1:90', '9A:11:22:33:44:55', 1,
 			'MyHome_5G', 'WPA2-PSK', 0, 'MyHome_2G', 'backupPassword123', 15, 3, 60
 		)`)
