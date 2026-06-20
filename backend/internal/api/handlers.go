@@ -307,6 +307,82 @@ func (s *Server) HandleScanWifi(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, results)
 }
 
+func (s *Server) HandleDeleteInterface(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	iface, err := s.repo.GetInterfaceByID(id)
+	if err != nil || iface == nil {
+		s.writeError(w, http.StatusNotFound, "Interface not found")
+		return
+	}
+
+	if iface.Status != "offline" {
+		s.writeError(w, http.StatusBadRequest, "Cannot delete active interfaces. Only offline interfaces can be deleted.")
+		return
+	}
+
+	if err := s.repo.DeleteInterface(id); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
+}
+
+func (s *Server) HandleResetInterface(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	iface, err := s.repo.GetInterfaceByID(id)
+	if err != nil || iface == nil {
+		s.writeError(w, http.StatusNotFound, "Interface not found")
+		return
+	}
+
+	// Reset configurations to default values
+	iface.Alias = iface.Name
+	iface.Role = "LAN"
+	if strings.Contains(iface.Name, "wan") || strings.Contains(iface.Name, "wlan") {
+		iface.Role = "WAN"
+	}
+
+	iface.AddressingMode = "static"
+	if iface.Type == "wireless" || strings.Contains(iface.Name, "wan") {
+		iface.AddressingMode = "dhcp"
+	}
+
+	if iface.Role == "WAN" {
+		iface.AdminAccess = []string{"PING"}
+	} else {
+		iface.AdminAccess = []string{"PING", "HTTP", "SSH"}
+	}
+
+	// Optional fields reset
+	macModeDefault := "hardware"
+	iface.MacMode = &macModeDefault
+
+	falseVal := false
+	iface.RandomizeOnReconnect = &falseVal
+	iface.FailoverEnabled = &falseVal
+
+	emptyStr := ""
+	iface.BackupSSID = &emptyStr
+	iface.BackupWifiPassword = &emptyStr
+
+	timeoutVal := 15
+	iface.IPCheckTimeout = &timeoutVal
+
+	retriesVal := 3
+	iface.PrimaryMaxRetries = &retriesVal
+
+	cooldownVal := 60
+	iface.FailoverCooldown = &cooldownVal
+
+	if err := s.repo.UpdateInterface(*iface); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, iface)
+}
+
 // =========================================================================
 // FIREWALL POLICY HANDLERS
 // =========================================================================

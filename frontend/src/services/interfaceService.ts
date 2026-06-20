@@ -169,4 +169,61 @@ export const interfaceService = {
     }
     return response.json();
   },
+
+  // Reset interface configuration to default values
+  reset: async (id: string): Promise<NetworkInterface> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const current = getLocalInterfaces();
+      const targetIndex = current.findIndex((i) => i.id === id);
+      if (targetIndex === -1) {
+        throw new Error(`Interface with id ${id} not found`);
+      }
+      const target = current[targetIndex];
+      const resetIface: NetworkInterface = {
+        ...target,
+        alias: target.name,
+        role: target.name.includes("wan") || target.name.includes("wlan") ? "WAN" : "LAN",
+        addressingMode: target.type === "wireless" || target.name.includes("wan") ? "dhcp" : "static",
+        adminAccess: target.name.includes("wan") || target.name.includes("wlan") ? ["PING"] : ["PING", "HTTP", "SSH"],
+        macMode: "hardware",
+        randomizeOnReconnect: false,
+        failoverEnabled: false,
+        backupSsid: "",
+        backupWifiPassword: "",
+        ipCheckTimeout: 15,
+        primaryMaxRetries: 3,
+        failoverCooldown: 60,
+      };
+      current[targetIndex] = resetIface;
+      saveLocalInterfaces(current);
+      return resetIface;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/interfaces/${id}/reset`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to reset interface: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  // Delete interface from database
+  delete: async (id: string): Promise<void> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const current = getLocalInterfaces();
+      const updated = current.filter((i) => i.id !== id);
+      saveLocalInterfaces(updated);
+      return;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/interfaces/${id}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to delete interface: ${response.statusText}`);
+    }
+  },
 };

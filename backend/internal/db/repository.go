@@ -1286,6 +1286,8 @@ func (r *Repository) SyncInterfacesFromOS() error {
 		}
 	}
 
+	foundInOS := make(map[string]bool)
+
 	for idx, netIface := range netIfaces {
 		// Skip loopback interface
 		if netIface.Flags&net.FlagLoopback != 0 {
@@ -1296,6 +1298,8 @@ func (r *Repository) SyncInterfacesFromOS() error {
 		if strings.HasPrefix(netIface.Name, "lo") {
 			continue
 		}
+
+		foundInOS[netIface.Name] = true
 
 		macAddr := netIface.HardwareAddr.String()
 		if macAddr == "" {
@@ -1331,13 +1335,18 @@ func (r *Repository) SyncInterfacesFromOS() error {
 
 		if id, exists := dbMap[netIface.Name]; exists {
 			log.Printf("[DB] Interface %s already exists with ID %s", netIface.Name, id)
+
+			speed := getInterfaceSpeed(netIface.Name)
+
+			log.Printf("[DB] Interface %s ip: %s, netmask: %s, mac: %s, status: %s, speed: %s", netIface.Name, ipStr, netmaskStr, macAddr, status, speed)
+
 			// Update dynamic fields only (ip, netmask, mac, status)
 			// addressing_mode and other user-configured fields are intentionally preserved
 			_, err = r.db.Exec(`UPDATE network_interfaces SET 
-				ip = ?, netmask = ?, mac_address = ?, status = ?
-				WHERE id = ?`, ipStr, netmaskStr, macAddr, status, id)
+				ip = ?, netmask = ?, mac_address = ?, status = ?, speed = ? WHERE id = ?`,
+				ipStr, netmaskStr, macAddr, status, speed, id)
 			if err != nil {
-				// Ignore or log error
+				log.Printf("[DB] Failed to update interface %s: %v", netIface.Name, err)
 			}
 		} else {
 			log.Printf("[DB] Interface %s not exists, creating new record", netIface.Name)
@@ -1378,6 +1387,24 @@ func (r *Repository) SyncInterfacesFromOS() error {
 				// Ignore or log error
 			} else {
 				log.Printf("[DB] Created interface %s: %s", netIface.Name, id)
+			}
+		}
+	}
+
+	// Reconcile missing interfaces: mark interfaces in DB but not in OS as 'offline'
+	for name, id := range dbMap {
+		if r.mockFromReal && name == "wlan0" {
+			continue // Preserve injected mock wlan0 in mockFromReal mode
+		}
+		if !foundInOS[name] {
+			log.Printf("[DB] Interface %s is not present in OS, marking as offline", name)
+			_, err = r.db.Exec(`UPDATE network_interfaces SET 
+				status = 'offline', ip = '0.0.0.0', netmask = '0', gateway = '', speed = 'unknown', connected_ssid = NULL
+				WHERE id = ?`, id)
+			if err != nil {
+				log.Printf("[DB] Failed to mark interface %s as offline: %v", name, err)
+			} else {
+				log.Printf("[DB] Marked interface %s as offline", name)
 			}
 		}
 	}
@@ -1480,6 +1507,9 @@ func (r *Repository) GetInterfaces() ([]model.NetworkInterface, error) {
 
 		list = append(list, iface)
 	}
+
+	// log.Println("[DB] Interfaces: ", list)
+
 	return list, nil
 }
 
@@ -1590,6 +1620,11 @@ func (r *Repository) CreateInterfaceForTest(iface model.NetworkInterface) error 
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		iface.ID, iface.Name, iface.Alias, iface.Role, iface.Type, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.MacAddress, adminAccessStr, iface.Status, iface.Speed,
 		iface.MacMode, iface.RealMacAddress, reconInt, foInt)
+	return err
+}
+
+func (r *Repository) DeleteInterface(id string) error {
+	_, err := r.db.Exec("DELETE FROM network_interfaces WHERE id = ?", id)
 	return err
 }
 

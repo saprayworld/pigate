@@ -260,7 +260,7 @@ export interface NetworkInterface {
   gateway: string             // e.g. "192.168.1.254" (used for static)
   macAddress: string          // Effective MAC address currently active
   adminAccess: AdminAccess[]
-  status: "up" | "down"
+  status: "up" | "down" | "offline"
   speed: string               // e.g. "1000 Mbps", "72 Mbps"
   // Wi-Fi specific
   connectedSSID?: string

@@ -55,9 +55,6 @@ func main() {
 	// Perform initial synchronization of interfaces, routing table, and DNS if real mode or mock-from-real is enabled
 	if !*mockOS || *mockFromReal {
 		log.Printf("Initializing and syncing interfaces, routes, and DNS from OS kernel...")
-		if err := repo.ClearInterfaces(); err != nil {
-			log.Printf("Warning: Failed to clear old network interfaces: %v", err)
-		}
 		if err := repo.SyncInterfacesFromOS(); err != nil {
 			log.Printf("Warning: Failed to sync network interfaces from OS: %v", err)
 		}

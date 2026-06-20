@@ -27,6 +27,8 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("GET /api/interfaces", s.HandleGetInterfaces)
 	authRoute("PUT /api/interfaces/{id}", s.HandleUpdateInterface)
 	authRoute("POST /api/interfaces/{id}/toggle", s.HandleToggleInterface)
+	authRoute("POST /api/interfaces/{id}/reset", s.HandleResetInterface)
+	authRoute("DELETE /api/interfaces/{id}", s.HandleDeleteInterface)
 	authRoute("GET /api/interfaces/{id}/scan", s.HandleScanWifi)
 
 	// 4. Firewall Policies

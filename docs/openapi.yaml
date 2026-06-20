@@ -235,6 +235,50 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NetworkInterface'
+    delete:
+      tags:
+        - Network Interfaces
+      summary: Delete an interface
+      description: Deletes an interface. Only offline interfaces can be deleted. Active interfaces will return a 400 Bad Request error.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Interface deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        '400':
+          description: Cannot delete active interfaces
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Cannot delete active interfaces. Only offline interfaces can be deleted.
+        '404':
+          description: Interface not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Interface not found
+        '500':
+          description: Internal server error
 
   /interfaces/{id}/toggle:
     post:
@@ -254,6 +298,36 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NetworkInterface'
+  /interfaces/{id}/reset:
+    post:
+      tags:
+        - Network Interfaces
+      summary: Reset interface configuration to default values
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Interface reset successful, returns default configurations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NetworkInterface'
+        '404':
+          description: Interface not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Interface not found
+        '500':
+          description: Internal server error
 
   /interfaces/{id}/scan:
     get:

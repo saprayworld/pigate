@@ -82,6 +82,63 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
+	// Rebuild network_interfaces table if existing schema doesn't support 'offline' status in CHECK constraint
+	var sqlCreateIface string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='network_interfaces'").Scan(&sqlCreateIface)
+	if err == nil {
+		if !strings.Contains(sqlCreateIface, "'offline'") {
+			migrationQueries := []string{
+				"PRAGMA foreign_keys=OFF;",
+				`CREATE TABLE network_interfaces_new (
+					id TEXT PRIMARY KEY,
+					name TEXT UNIQUE NOT NULL,
+					alias TEXT NOT NULL,
+					role TEXT NOT NULL CHECK(role IN ('LAN', 'WAN')),
+					type TEXT NOT NULL CHECK(type IN ('ethernet', 'wireless')),
+					addressing_mode TEXT NOT NULL CHECK(addressing_mode IN ('dhcp', 'static')),
+					ip TEXT NOT NULL,
+					netmask TEXT NOT NULL,
+					gateway TEXT NOT NULL,
+					mac_address TEXT NOT NULL,
+					admin_access TEXT NOT NULL,
+					status TEXT NOT NULL CHECK(status IN ('up', 'down', 'offline')),
+					speed TEXT NOT NULL,
+					connected_ssid TEXT,
+					wifi_password TEXT,
+					wifi_security TEXT,
+					mac_mode TEXT CHECK(mac_mode IN ('hardware', 'randomized', 'laa')),
+					real_mac_address TEXT,
+					randomized_mac TEXT,
+					laa_mac_address TEXT,
+					randomize_on_reconnect INTEGER DEFAULT 0,
+					failover_enabled INTEGER DEFAULT 0,
+					backup_ssid TEXT,
+					backup_wifi_password TEXT,
+					ip_check_timeout INTEGER,
+					primary_max_retries INTEGER,
+					failover_cooldown INTEGER
+				);`,
+				`INSERT INTO network_interfaces_new (
+					id, name, alias, role, type, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
+					connected_ssid, wifi_password, wifi_security, mac_mode, real_mac_address, randomized_mac, laa_mac_address, 
+					randomize_on_reconnect, failover_enabled, backup_ssid, backup_wifi_password, ip_check_timeout, primary_max_retries, failover_cooldown
+				) SELECT 
+					id, name, alias, role, type, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
+					connected_ssid, wifi_password, wifi_security, mac_mode, real_mac_address, randomized_mac, laa_mac_address, 
+					randomize_on_reconnect, failover_enabled, backup_ssid, backup_wifi_password, ip_check_timeout, primary_max_retries, failover_cooldown 
+				FROM network_interfaces;`,
+				"DROP TABLE network_interfaces;",
+				"ALTER TABLE network_interfaces_new RENAME TO network_interfaces;",
+				"PRAGMA foreign_keys=ON;",
+			}
+			for _, q := range migrationQueries {
+				if _, err := db.Exec(q); err != nil {
+					return fmt.Errorf("failed to migrate network_interfaces table: %w (query: %s)", err, q)
+				}
+			}
+		}
+	}
+
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY,
@@ -189,7 +246,7 @@ func migrate(db *sql.DB) error {
 			gateway TEXT NOT NULL,
 			mac_address TEXT NOT NULL,
 			admin_access TEXT NOT NULL, -- comma separated values like "PING,HTTP,SSH"
-			status TEXT NOT NULL CHECK(status IN ('up', 'down')),
+			status TEXT NOT NULL CHECK(status IN ('up', 'down', 'offline')),
 			speed TEXT NOT NULL,
 			-- Wireless specific optional fields
 			connected_ssid TEXT,

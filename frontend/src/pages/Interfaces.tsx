@@ -15,7 +15,9 @@ import {
   Check,
   Radio,
   Play,
-  Terminal
+  Terminal,
+  Trash2,
+  RotateCcw
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -106,7 +108,7 @@ function generateRandomMac(): string {
 const ALL_ACCESS_OPTIONS: AdminAccess[] = ["HTTPS", "HTTP", "PING", "SSH"]
 
 export default function Interfaces() {
-  const { alert } = useAlert()
+  const { alert, confirm } = useAlert()
   // --- State ---
   const [interfaces, setInterfaces] = useState<NetworkInterface[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -312,6 +314,38 @@ export default function Interfaces() {
       setInterfaces(data)
     } catch (err: any) {
       await alert("ข้อผิดพลาด", "Failed to toggle interface status: " + err.message)
+    }
+  }
+
+  const handleResetInterface = async (id: string, name: string) => {
+    const ok = await confirm(
+      "ยืนยันการรีเซ็ตการตั้งค่า",
+      `คุณต้องการรีเซ็ตการตั้งค่าของอินเทอร์เฟซ ${name} กลับไปเป็นค่าเริ่มต้นใช่หรือไม่?`
+    )
+    if (!ok) return
+
+    try {
+      await interfaceService.reset(id)
+      await alert("สำเร็จ", "รีเซ็ตการตั้งค่าอินเทอร์เฟซเรียบร้อยแล้ว")
+      await loadData()
+    } catch (err: any) {
+      await alert("ข้อผิดพลาด", "Failed to reset interface settings: " + err.message)
+    }
+  }
+
+  const handleDeleteInterface = async (id: string, name: string) => {
+    const ok = await confirm(
+      "ยืนยันการลบอินเทอร์เฟซ",
+      `คุณต้องการลบอินเทอร์เฟซ ${name} ออกจากฐานข้อมูลใช่หรือไม่?\nการดำเนินการนี้ไม่สามารถย้อนกลับได้`
+    )
+    if (!ok) return
+
+    try {
+      await interfaceService.delete(id)
+      await alert("สำเร็จ", "ลบอินเทอร์เฟซออกจากฐานข้อมูลเรียบร้อยแล้ว")
+      await loadData()
+    } catch (err: any) {
+      await alert("ข้อผิดพลาด", "Failed to delete interface: " + err.message)
     }
   }
 
@@ -589,6 +623,10 @@ export default function Interfaces() {
                         <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px] px-2 py-0.5 rounded font-bold">
                           UP
                         </Badge>
+                      ) : iface.status === "offline" ? (
+                        <Badge variant="outline" className="bg-amber-500/10 text-amber-400 border-amber-500/20 text-[10px] px-2 py-0.5 rounded font-bold animate-pulse">
+                          OFFLINE
+                        </Badge>
                       ) : (
                         <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/20 text-[10px] px-2 py-0.5 rounded font-bold">
                           DOWN
@@ -599,14 +637,37 @@ export default function Interfaces() {
                     {/* Action */}
                     <TableCell className="p-3 text-right">
                       <div className="flex items-center justify-end gap-2">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] text-muted-foreground">{iface.status === "up" ? "ON" : "OFF"}</span>
-                          <Switch
-                            size="sm"
-                            checked={iface.status === "up"}
-                            onCheckedChange={() => handleToggleStatus(iface.id)}
-                          />
-                        </div>
+                        {iface.status === "offline" ? (
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              onClick={() => handleResetInterface(iface.id, iface.name)}
+                              className="cursor-pointer text-amber-400 hover:text-amber-300 hover:bg-amber-500/10"
+                              title="รีเซ็ตการตั้งค่าเป็นค่าเริ่มต้น"
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              onClick={() => handleDeleteInterface(iface.id, iface.name)}
+                              className="cursor-pointer text-red-500 hover:text-red-400 hover:bg-red-500/10"
+                              title="ลบอินเทอร์เฟซออกจากฐานข้อมูล"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </>
+                        ) : (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-muted-foreground">{iface.status === "up" ? "ON" : "OFF"}</span>
+                            <Switch
+                              size="sm"
+                              checked={iface.status === "up"}
+                              onCheckedChange={() => handleToggleStatus(iface.id)}
+                            />
+                          </div>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon-xs"
