@@ -87,6 +87,9 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("GET /api/system/config/export", s.HandleExportConfig)
 	authRoute("POST /api/system/config/import", s.HandleImportConfig)
 
+	// Serve embedded static frontend files
+	serveStatic(mux)
+
 	var handler http.Handler = mux
 	if s.disableEdit {
 		handler = DisableEditMiddleware(handler)

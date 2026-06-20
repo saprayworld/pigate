@@ -10,7 +10,7 @@ export const IS_MOCK_MODE =
   localStorage.getItem("PIGATE_DEV_MODE") === "mock" ||
   false;
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8081/api";
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
 // Automatically hook the global window.fetch to attach the Authorization header if available
 if (typeof window !== "undefined" && !(window as any).__pigate_fetch_hooked__) {

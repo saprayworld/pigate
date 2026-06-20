@@ -17,3 +17,6 @@ go.work.sum
 # IDE/Editor config
 .vscode/
 .idea/
+internal/api/dist/**
+!internal/api/dist/.gitkeep
+

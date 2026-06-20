@@ -15,7 +15,7 @@ import (
 
 func main() {
 	// 1. Parse CLI flags
-	port := flag.Int("port", 8080, "Port to run the API server on")
+	port := flag.Int("port", 2479, "Port to run the API server on")
 	dbPath := flag.String("db", "pigate.db", "Path to SQLite database file")
 	mockOS := flag.Bool("mock", true, "Use mocked kernel operations (default true on PC)")
 	mockFromReal := flag.Bool("mock-from-real", false, "Mock operations but initialize/pull from real kernel data at startup")
