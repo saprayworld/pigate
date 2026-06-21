@@ -102,6 +102,16 @@
     * **การตั้งค่ารายละเอียดอินเตอร์เฟสเครือข่ายจริงผ่าน Netlink (Netlink IP Configuration) [สำเร็จ]:** พัฒนา `ConfigureInterface` ใน [internal/kernel/real_network.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_network.go) ให้ทำการล้างค่า IP/DHCP เก่า (ยกเลิก dhclient/dhcpcd) และลงทะเบียนการตั้งค่า static IP, netmask, default gateway บนการ์ดเครือข่ายลินุกซ์ด้วย Netlink
     * **การทำความสะอาดโครงสร้างเครือข่ายล้าสมัย (Network Struct Cleanup) [สำเร็จ]:** ทำการถอนฟิลด์ `dns1` และ `dns2` ที่ไม่ใช้งานออกจากการตั้งค่าการ์ดเครือข่าย เพื่อไปใช้ระบบจัดส่ง DNS แบบรวมศูนย์อย่างสมบูรณ์
     * **การสร้างเอกสารอ้างอิงสำหรับผู้พัฒนา (Developer Portal generation) [สำเร็จ]:** สร้างเอกสารอ้างอิงสำหรับผู้พัฒนาทั้งรูปแบบ HTML และ Markdown ในโฟลเดอร์ `docs/` เพื่อสรุปแนวทางความปลอดภัย กฎไฟร์วอลล์ และตาราง DHCP/Routing
+    * **ระบบยืนยันสิทธิ์เซสชันและการบังคับเปลี่ยนรหัสผ่านครั้งแรก (Active Session Verification & Force Password Change Enforcement) [สำเร็จ]:**
+      * ฝั่งหลังบ้าน: เพิ่ม API Endpoint `/api/auth/session` สำหรับยืนยันความมีอยู่และหมดอายุของเซสชันที่เชื่อมต่อ และใน `AuthMiddleware` มีการตรวจสอบสิทธิ์รหัสผ่านแรกเริ่ม (`IsInitial` ใน DB) เพื่อจำกัดสิทธิ์ (ส่งกลับ StatusForbidden 403 พร้อม payload `mustChangePassword`) ทุก Endpoint ยกเว้นเปลี่ยนรหัสผ่าน ออกจากระบบ และตรวจสอบเซสชัน โดยผู้ใช้หลักเปลี่ยนชื่ออ้างอิงจาก "admin" เป็น "pigate"
+      * ฝั่งหน้าบ้าน: พัฒนาการตรวจสอบเซสชันบน Backend ทุกครั้งที่เริ่มดาวน์โหลด/เมานต์หน้าเว็บเพื่อป้องกัน Session Bypass พร้อมระบบ Route Guard และจัดทำหน้าจอเตือนเปลี่ยนรหัสผ่านบังคับ `/change-password` (ForceChangePassword.tsx)
+    * **การคัดแยกการ Seeding ข้อมูล Mock/Real (Database Seeding Isolation & Frontend Proxy Config) [สำเร็จ]:**
+      * เพิ่มแฟล็ก `mockOS` จากหน้าหลักส่งเข้าฟังก์ชัน `InitDB` เพื่อป้องกันการ Seed ข้อมูลพอร์ตแลน/Wi-Fi จำลอง (eth0, wlan0) ลงฐานข้อมูล SQLite ในโหมด Production (`-mock=false`) ทำให้ระบบรวบรวมข้อมูลจากการ์ดจริงบนบอร์ดเท่านั้น
+      * กำหนดสิทธิ์ตั้งค่าการทำ Proxy พาร์ท `/api` ไปยัง `http://localhost:2479` ใน `vite.config.ts` ของหน้าบ้าน ทำให้การพัฒนาเชื่อมต่อ API บน React dev server ทำได้สะดวก
+    * **การป้องกันความปลอดภัยฐานข้อมูลและย้ายตำแหน่งไบนารีระบบ (Gitignore database bypass & Binary root placement) [สำเร็จ]:**
+      * เพิ่มการละเว้นไฟล์ข้อมูล SQLite (`*.db`, `*.db-shm`, `*.db-wal`) และไบนารีรัน `pigate` เข้าไปใน `.gitignore` เพื่อความมั่นคงปลอดภัย
+      * ปรับแต่งสคริปต์คอมไพล์ระบบ `build.sh` ให้คัดลอกไฟล์รันไบนารีมาที่ตำแหน่งรูทโฟลเดอร์ในชื่อ `pigate` เพื่อรันงานได้ง่ายขึ้น
+
 
 * **แก้ไขข้อเสนอแนะความสำคัญสูง (Priority High Recommendations) จากผลการรีวิวหน้าบ้าน [สำเร็จ]**:
   * **แทนที่ Native Dialogs:** พัฒนาและติดตั้ง [AlertDialogProvider.tsx](file:///home/sapray/dev/pigate/frontend/src/components/AlertDialogProvider.tsx) เพื่อใช้ Custom AlertDialog ของ shadcn/ui ครอบคลุมการเตือนและการยืนยันคำสั่งทั้งหมด แทนการเรียกใช้ `alert()` และ `confirm()` ดั้งเดิมของเบราว์เซอร์
@@ -138,6 +148,9 @@
   * ตรวจสอบความปลอดภัยระดับเบื้องต้น เช่น การรับมือเมื่อเซสชันหมดอายุ, การกรองฟิลด์ข้อมูลนำเข้า (Sanitization) และการเข้ารหัสการสื่อสาร `[เสร็จสิ้น]`
   * เชื่อมต่อ API จริงกับฝั่ง Go Backend และระบบการอัปเดตแบบ Real-time ด้วย Server-Sent Events (SSE) เมื่อฝั่ง API พร้อมใช้งาน `[เสร็จสิ้น]`
   * เพิ่มเติมฟีเจอร์รันระบบหลังบ้านโดยดึงข้อมูลจริงจาก Kernel แต่อัปเดตลงเฉพาะฐานข้อมูล (-mock-from-real) พร้อมระบบจำกัดสิทธิ์อ่านอย่างเดียว (-disable-edit), ระบบ DNS และการตรวจสอบ Wifi Scan พร้อมปรับปรุง API Specs `[เสร็จสิ้น]`
+  * พัฒนาระบบตรวจสอบความถูกต้องของเซสชัน (Active Session Verification) และระบบบังคับเปลี่ยนรหัสผ่านแรกเริ่มเพื่อความปลอดภัย (Forced Password Change Enforcement) ทั้งฝั่งหลังบ้านและหน้าบ้าน `[เสร็จสิ้น]`
+  * คัดแยกการ Seed ข้อมูลเครือข่ายจำลองตามโหมดใช้งาน และตั้งค่า Proxy การพัฒนาฝั่งหน้าบ้าน `[เสร็จสิ้น]`
+  * ปรับแต่งสคริปต์คอมไพล์ build.sh และการละเว้นไฟล์ข้อมูลสำคัญลง Gitignore `[เสร็จสิ้น]`
 
 * **พัฒนา Kernel Integration ระยะที่ 1 — Real NetworkManager ผ่าน Netlink Socket [สำเร็จ]**:
   * สร้างไฟล์ [internal/kernel/real_network.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_network.go) implement `RealNetwork struct` ตาม `NetworkManager` interface สำหรับรันบน Linux production จริง

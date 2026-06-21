@@ -134,3 +134,21 @@ sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
 * **ปัญหาที่พบ:** `kernel.NetworkManager.ToggleInterface()` เดิมใช้ `MockNetwork` ที่ `return nil` เฉยๆ ทำให้การสั่ง toggle interface ผ่าน API ไม่ได้เปลี่ยนสถานะ kernel (`IFF_UP`) จริง ส่งผลให้ `SyncInterfacesFromOS()` อ่านค่า `FlagUp` ไม่ reflect สถานะจริง
 * **แนวทางแก้ไข:** สร้างไฟล์ [internal/kernel/real_network.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_network.go) implement `RealNetwork struct` ด้วย `github.com/vishvananda/netlink` เพื่อสื่อสารกับ kernel ผ่าน Netlink Socket โดยตรงไม่ใช้ shell command (ป้องกัน Command Injection) — `ToggleInterface` ใช้ `netlink.LinkSetUp/Down()` เทียบเท่า `ip link set up/down` แต่ไม่ต้องเรียก binary ภายนอก — เลือกใช้ใน production path เมื่อ `--mock=false` พร้อมติดตั้ง `cap_net_admin` capability ไว้ที่ binary
 
+### 4.8 ระบบจัดการเซสชันและการบังคับเปลี่ยนรหัสผ่านครั้งแรก (Active Session & Force Password Change)
+* **ปัญหาที่พบ/ความต้องการ:** การเพิ่มความมั่นคงปลอดภัยระดับเริ่มต้น (Day 1 Security) เพื่อตรวจสอบความถูกต้องของเซสชันที่เก็บในเบราว์เซอร์ของฝั่งหน้าบ้านว่ายังคงมีตัวตนและไม่หมดอายุบน backend จริง และจำกัดสิทธิ์หากผู้ดูแลระบบยังคงใช้บัญชีผู้ใช้งานรหัสผ่านเริ่มต้นของระบบ (`pigate` / `IsInitial = true`) โดยต้องบังคับเปลี่ยนรหัสผ่านทันทีก่อนใช้งานส่วนอื่น
+* **แนวทางแก้ไข:**
+  - เพิ่ม API Endpoint `GET /api/auth/session` (ฟังก์ชัน `HandleCheckSession` ใน [internal/api/handlers.go](file:///home/sapray/dev/pigate/backend/internal/api/handlers.go)) สำหรับส่งข้อมูลเซสชันกลับไปให้หน้าบ้านยืนยันสถานะ
+  - ปรับปรุง `AuthMiddleware` ใน [internal/api/middleware.go](file:///home/sapray/dev/pigate/backend/internal/api/middleware.go) ให้ทำการตรวจสอบประวัติผู้ใช้งาน หากพบสถานะ `IsInitial` มีค่าจริง จะสั่งส่งการตอบกลับเป็นรหัส `403 Forbidden` พร้อมระบุ JSON payload `{"message": "Change password required", "mustChangePassword": true}` ทันทีหากเข้าถึง API อื่นๆ นอกเหนือจากการเปลี่ยนรหัสผ่าน บัญชีผู้ดูแลหลักเปลี่ยนชื่ออ้างอิงจาก "admin" เป็น "pigate"
+
+### 4.9 การแยกโหมดการ Seed ข้อมูลเครือข่ายจำลอง (Isolated Database Seeding)
+* **ปัญหาที่พบ/ความต้องการ:** เมื่อรัน backend ด้วยการเชื่อมต่อระบบจริง (`-mock=false`) แต่ตัวโปรแกรมยังมีการสร้างการ์ดเครือข่ายจำลอง `eth0` และ `wlan0` ลงในฐานข้อมูลตอนเริ่มรันครั้งแรก ส่งผลให้ข้อมูล Interfaces สับสนและซ้ำซ้อนกับข้อมูลการ์ดจริงที่อ่านจากระบบปฏิบัติการ
+* **แนวทางแก้ไข:** ส่งสถานะ `mockOS` จากหน้าหลักเข้าสู่ฟังก์ชัน `InitDB` และปรับปรุงตรรกะใน [internal/db/connection.go](file:///home/sapray/dev/pigate/backend/internal/db/connection.go) ให้ทำการตรวจสอบค่าสถานะนี้ก่อนการ Seed ข้อมูลเครือข่ายจำลอง หากผู้ใช้รันโปรแกรมในโหมด Production (`-mock=false`) ระบบจะข้ามการใส่ค่าอินเตอร์เฟสจำลอง
+
+### 4.10 การตั้งค่าพร็อกซีสำหรับการพัฒนารวมและ Version Control (Vite Proxy & Version Control Configuration)
+* **ปัญหาที่พบ/ความต้องการ:** เพื่อความสะดวกในการพัฒนาระหว่าง Frontend และ Backend และป้องกันข้อมูลไฟล์ที่สร้างขึ้นตอนรัน
+* **แนวทางแก้ไข:**
+  - เพิ่มการตั้งค่า Proxy `/api` ให้ชี้ไปที่ `http://localhost:2479` ใน [vite.config.ts](file:///home/sapray/dev/pigate/frontend/vite.config.ts) ของหน้าบ้าน ทำให้การพัฒนาเชื่อมต่อ API บน React dev server ทำได้สะดวก
+  - ปรับปรุง `.gitignore` ทั่วไปเพื่อละเว้นไฟล์ข้อมูล SQLite (`*.db`, `*.db-shm`, `*.db-wal`) และไฟล์รันไบนารีระบบ (`pigate`)
+  - ปรับปรุง `build.sh` ให้ย้ายไฟล์ไบนารีหลังบ้านจาก `./backend/pigate-backend` ไปยังไฟล์รันชื่อ `./pigate` ที่รูทโฟลเดอร์หลักโดยตรง
+
+

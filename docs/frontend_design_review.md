@@ -219,7 +219,7 @@
 
 | ด้าน | สถานะ | หมายเหตุ |
 |---|---|---|
-| Auth bypass | ⚠️ ระวัง | `ProtectedRoute` ตรวจสอบ `localStorage.getItem("pigate_session")` เท่านั้น ไม่มี token validation — เมื่อเชื่อม Backend จริงต้องเพิ่ม JWT verification |
+| Auth bypass | ✅ ผ่าน | มีระบบยืนยันสิทธิ์เซสชันผ่าน API `/api/auth/session` ทุกครั้งที่โหลด/เมานต์หน้าเว็บ พร้อมระบบ Hook ใน `fetch` และมีการควบคุมความปลอดภัยในการเปลี่ยนรหัสผ่านตั้งต้น (`ForceChangePassword`) แล้ว |
 | XSS Protection | ✅ | React auto-escapes, ไม่พบ `dangerouslySetInnerHTML` |
 | Input Sanitization | ✅ | ปรับปรุงระบบตรวจสอบ IP ให้มีความแม่นยำสูง (ตรวจสอบค่า Octet 0-255, CIDR, และ IP Range อย่างเข้มงวด) เรียบร้อยแล้ว |
 | CORS | — | ยังไม่ได้เชื่อมต่อ Backend จริง ต้องกำหนดนโยบาย CORS |
