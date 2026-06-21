@@ -151,4 +151,25 @@ sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
   - ปรับปรุง `.gitignore` ทั่วไปเพื่อละเว้นไฟล์ข้อมูล SQLite (`*.db`, `*.db-shm`, `*.db-wal`) และไฟล์รันไบนารีระบบ (`pigate`)
   - ปรับปรุง `build.sh` ให้ย้ายไฟล์ไบนารีหลังบ้านจาก `./backend/pigate-backend` ไปยังไฟล์รันชื่อ `./pigate` ที่รูทโฟลเดอร์หลักโดยตรง
 
+---
+
+## 5. ประเด็นความมั่นคงปลอดภัยและช่องโหว่ที่ต้องได้รับการแก้ไข (Security Vulnerabilities to Fix)
+
+> [!IMPORTANT]
+> **สถานะความสำคัญ: ต้องแก้ไขทันทีก่อนการนำขึ้นระบบจริง (MUST FIX - CRITICAL PRIORITY)**
+> ตรวจพบช่องโหว่ความปลอดภัยทางซอร์สโค้ด (Source Code Review Findings) สรุปรายละเอียดระดับความสำคัญและแนวทางแก้ไขดังนี้:
+
+### 5.1 ช่องโหว่การข้ามการยืนยันสิทธิ์ล็อกอิน / บัญชีลับ (Critical - Auth Bypass & Backdoor)
+* **ตำแหน่งโค้ด:** ฟังก์ชัน `HandleLogin` ในไฟล์ [internal/api/handlers.go](file:///home/sapray/dev/pigate/backend/internal/api/handlers.go#L92-L98)
+* **รายละเอียด:** โค้ดมีการตรวจสอบสิทธิ์ล็อกอินแบบ Hardcoded Bypass หากผู้ใช้ป้อนชื่อผู้ใช้ `pigate` และรหัสผ่าน `pigate` ระบบจะยินยอมให้ล็อกอินผ่านระบบความปลอดภัย (Bcrypt comparison bypass) โดยตรง ส่งผลให้ถึงแม้ว่าผู้ดูแลระบบจะเปลี่ยนรหัสผ่านใน SQLite ไปแล้ว ผู้โจมตีก็ยังสามารถใช้รหัสผ่านเริ่มต้นในการเจาะระบบได้ตลอดเวลา
+* **ระดับความสำคัญ:** 🔴 **CRITICAL (ต้องแก้ไขทันที)**
+* **แนวทางแก้ไข:** กำจัดโค้ดตรวจสอบเงื่อนไข `req.Username == "pigate" && req.Password == "pigate"` ออกจาก Handler ฝั่ง Production หรือแยกสวิตช์ตรวจเช็กให้อนุญาตเฉพาะเมื่อเปิดใช้งาน Mock Mode เท่านั้น
+
+### 5.2 ปัญหาการสับสนการตั้งค่า CORS ร่วมกับการส่ง Credentials (Medium - CORS Configuration Conflict)
+* **ตำแหน่งโค้ด:** `CORSMiddleware` ในไฟล์ [internal/api/middleware.go](file:///home/sapray/dev/pigate/backend/internal/api/middleware.go#L50-L60)
+* **รายละเอียด:** ระบบมีการตั้งค่า `Access-Control-Allow-Origin: "*"` เมื่อพอร์ต/ Origin ไม่ตรงกับรายการ Local Development แต่ในขณะเดียวกันก็เปิดใช้งาน `Access-Control-Allow-Credentials: "true"` ซึ่งตามข้อกำหนดของเว็บเบราว์เซอร์จะไม่ยินยอมให้ใช้สัญลักษณ์ Wildcard `*` ร่วมกับการส่ง Credentials ส่งผลให้การเชื่อมต่อถูกเบราว์เซอร์บล็อกโดยอัตโนมัติ
+* **ระดับความสำคัญ:** 🟡 **MEDIUM (ควรปรับปรุงก่อนเข้าสู่ช่วงใช้งานจริง)**
+* **แนวทางแก้ไข:** ปรับแก้การคืนค่า Origin ของ CORS ให้สะท้อน Origin ที่ส่งคำขอเข้ามา หรือปิดใช้งาน Credentials สำหรับโดเมนที่ไม่ได้รับอนุญาต
+
+
 
