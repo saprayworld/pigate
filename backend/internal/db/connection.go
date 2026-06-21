@@ -11,7 +11,12 @@ import (
 )
 
 // InitDB initializes SQLite connection, runs table migrations, and seeds initial data.
-func InitDB(dsn string) (*sql.DB, error) {
+func InitDB(dsn string, isMock ...bool) (*sql.DB, error) {
+	mockMode := true
+	if len(isMock) > 0 {
+		mockMode = isMock[0]
+	}
+
 	// If it is a file-based DB, ensure the parent directory exists
 	if dsn != ":memory:" {
 		dir := filepath.Dir(dsn)
@@ -41,7 +46,7 @@ func InitDB(dsn string) (*sql.DB, error) {
 		return nil, fmt.Errorf("database migration failed: %w", err)
 	}
 
-	if err := seed(db); err != nil {
+	if err := seed(db, mockMode); err != nil {
 		return nil, fmt.Errorf("database seeding failed: %w", err)
 	}
 
@@ -295,7 +300,7 @@ func migrate(db *sql.DB) error {
 	return nil
 }
 
-func seed(db *sql.DB) error {
+func seed(db *sql.DB, mockMode bool) error {
 	// 1. Seed Default Admin User if empty
 	// Default password: admin (Bcrypt pre-hashed value: $2a$10$w8F.tI18jR.p9o/H2lF25OcjWbEbeYvD.qW222yA6/oH/l6Uf9D7e)
 	var count int
@@ -369,27 +374,29 @@ func seed(db *sql.DB) error {
 	}
 
 	// 6. Seed Default System Interfaces for mock purposes
-	var ifaceCount int
-	if err := db.QueryRow("SELECT COUNT(*) FROM network_interfaces").Scan(&ifaceCount); err != nil {
-		return err
-	}
-	if ifaceCount == 0 {
-		_, err := db.Exec(`INSERT INTO network_interfaces (
-			id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
-			mac_mode, real_mac_address, randomized_mac, laa_mac_address, randomize_on_reconnect,
-			connected_ssid, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, ip_check_timeout, primary_max_retries, failover_cooldown
-		) VALUES 
-		(
-			'iface-1', 'eth0', 'LAN_Internal', 'LAN', 'ethernet', 'device', 'static', '192.168.1.1', '24', '', 'DC:A6:32:AA:BB:C1', 'PING,HTTP,SSH', 'up', '1000 Mbps',
-			'hardware', 'DC:A6:32:AA:BB:C1', NULL, NULL, 0, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL
-		),
-		(
-			'iface-2', 'wlan0', 'WAN_WiFi', 'WAN', 'wireless', 'device', 'dhcp', '10.0.0.45', '24', '10.0.0.1', '4E:88:2F:BC:A1:90', 'PING', 'up', '72 Mbps',
-			'randomized', 'DC:A6:32:AA:BB:C2', '4E:88:2F:BC:A1:90', '9A:11:22:33:44:55', 1,
-			'MyHome_5G', 'WPA2-PSK', 0, 'MyHome_2G', 'backupPassword123', 15, 3, 60
-		)`)
-		if err != nil {
+	if mockMode {
+		var ifaceCount int
+		if err := db.QueryRow("SELECT COUNT(*) FROM network_interfaces").Scan(&ifaceCount); err != nil {
 			return err
+		}
+		if ifaceCount == 0 {
+			_, err := db.Exec(`INSERT INTO network_interfaces (
+				id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
+				mac_mode, real_mac_address, randomized_mac, laa_mac_address, randomize_on_reconnect,
+				connected_ssid, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, ip_check_timeout, primary_max_retries, failover_cooldown
+			) VALUES 
+			(
+				'iface-1', 'eth0', 'LAN_Internal', 'LAN', 'ethernet', 'device', 'static', '192.168.1.1', '24', '', 'DC:A6:32:AA:BB:C1', 'PING,HTTP,SSH', 'up', '1000 Mbps',
+				'hardware', 'DC:A6:32:AA:BB:C1', NULL, NULL, 0, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL
+			),
+			(
+				'iface-2', 'wlan0', 'WAN_WiFi', 'WAN', 'wireless', 'device', 'dhcp', '10.0.0.45', '24', '10.0.0.1', '4E:88:2F:BC:A1:90', 'PING', 'up', '72 Mbps',
+				'randomized', 'DC:A6:32:AA:BB:C2', '4E:88:2F:BC:A1:90', '9A:11:22:33:44:55', 1,
+				'MyHome_5G', 'WPA2-PSK', 0, 'MyHome_2G', 'backupPassword123', 15, 3, 60
+			)`)
+			if err != nil {
+				return err
+			}
 		}
 	}
 

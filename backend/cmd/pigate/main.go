@@ -41,7 +41,7 @@ func main() {
 	ringBuffer.Add(model.FirewallLog{ID: "log-init-2", Time: "14:31:15", Action: "PASS", Src: "192.168.1.105", Dest: "8.8.8.8", Port: "53", Proto: "UDP", Reason: "DNS request"})
 
 	// 3. Initialize SQLite DB & run migrations
-	sqliteDB, err := db.InitDB(*dbPath)
+	sqliteDB, err := db.InitDB(*dbPath, *mockOS)
 	if err != nil {
 		log.Fatalf("Fatal error initializing SQLite DB: %v", err)
 	}

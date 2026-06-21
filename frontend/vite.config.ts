@@ -11,4 +11,15 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+
+  // สำหรับรันทดสอบแยก Frontend ออกจาก Backend
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:2479', // ชี้ไปยังพอร์ตของ Go Backend
+        changeOrigin: true,
+        secure: false,
+      }
+    }
+  }
 })
