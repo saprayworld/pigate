@@ -69,7 +69,7 @@ func CORSMiddleware(next http.Handler) http.Handler {
 }
 
 // AuthMiddleware checks for a valid session token in Authorization Header or Cookie
-func AuthMiddleware(next http.Handler) http.Handler {
+func (s *Server) AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var token string
 
@@ -94,8 +94,21 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Inject user info into context (mock username admin)
-		ctx := context.WithValue(r.Context(), UserContextKey, "admin")
+		// Inject user info into context (mock username pigate)
+		ctx := context.WithValue(r.Context(), UserContextKey, "pigate")
+
+		// Force password change check if user has is_initial set
+		// Except for change password, logout, and check session endpoints
+		user, err := s.repo.GetUserByUsername("pigate")
+		if err == nil && user != nil && user.IsInitial {
+			if r.URL.Path != "/api/system/password" && r.URL.Path != "/api/auth/logout" && r.URL.Path != "/api/auth/session" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte(`{"message": "Change password required", "mustChangePassword": true}`))
+				return
+			}
+		}
+
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

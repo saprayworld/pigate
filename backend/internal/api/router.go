@@ -13,8 +13,10 @@ func RegisterRoutes(s *Server) http.Handler {
 
 	// Helper wrapper for authentication-protected endpoints
 	authRoute := func(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-		mux.Handle(pattern, AuthMiddleware(http.HandlerFunc(handler)))
+		mux.Handle(pattern, s.AuthMiddleware(http.HandlerFunc(handler)))
 	}
+
+	authRoute("GET /api/auth/session", s.HandleCheckSession)
 
 	// 2. Dashboard Widgets
 	authRoute("GET /api/dashboard/stats", s.HandleGetDashboardStats)

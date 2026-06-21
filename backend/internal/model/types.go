@@ -7,6 +7,7 @@ type User struct {
 	ID           string    `json:"id"`
 	Username     string    `json:"username"`
 	PasswordHash string    `json:"-"`
+	IsInitial    bool      `json:"isInitial"`
 	CreatedAt    time.Time `json:"createdAt"`
 }
 
@@ -18,7 +19,8 @@ type LoginRequest struct {
 
 // LoginResponse represents login token payload
 type LoginResponse struct {
-	Token string `json:"token"`
+	Token              string `json:"token"`
+	MustChangePassword bool   `json:"mustChangePassword"`
 }
 
 // ChangePasswordRequest represents input fields to update admin password

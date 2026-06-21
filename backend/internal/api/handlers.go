@@ -89,8 +89,8 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	// Verify Password hash using Bcrypt
 	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password))
 	if err != nil {
-		// Mock fallback for development if bcrypt fail but password is "admin"
-		if req.Username == "admin" && req.Password == "admin" {
+		// Mock fallback for development if bcrypt fail but password is "pigate"
+		if req.Username == "pigate" && req.Password == "pigate" {
 			// Proceed
 		} else {
 			s.writeError(w, http.StatusUnauthorized, "Invalid username or password")
@@ -112,7 +112,10 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		Expires:  time.Now().Add(24 * time.Hour),
 	})
 
-	s.writeJSON(w, http.StatusOK, model.LoginResponse{Token: token})
+	s.writeJSON(w, http.StatusOK, model.LoginResponse{
+		Token:              token,
+		MustChangePassword: user.IsInitial,
+	})
 }
 
 func (s *Server) HandleLogout(w http.ResponseWriter, r *http.Request) {
@@ -144,6 +147,25 @@ func (s *Server) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) HandleCheckSession(w http.ResponseWriter, r *http.Request) {
+	username, _ := r.Context().Value(UserContextKey).(string)
+	if username == "" {
+		username = "pigate"
+	}
+
+	user, err := s.repo.GetUserByUsername(username)
+	mustChangePassword := false
+	if err == nil && user != nil {
+		mustChangePassword = user.IsInitial
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"valid":              true,
+		"username":           username,
+		"mustChangePassword": mustChangePassword,
+	})
 }
 
 // =========================================================================
@@ -1024,7 +1046,7 @@ func (s *Server) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := s.repo.GetUserByUsername("admin")
+	user, err := s.repo.GetUserByUsername("pigate")
 	if err != nil || user == nil {
 		s.writeError(w, http.StatusInternalServerError, "User context resolution failed")
 		return
@@ -1032,7 +1054,7 @@ func (s *Server) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 
 	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.CurrentPassword))
 	if err != nil {
-		if req.CurrentPassword == "admin" && user.PasswordHash == "$2a$10$w8F.tI18jR.p9o/H2lF25OcjWbEbeYvD.qW222yA6/oH/l6Uf9D7e" {
+		if req.CurrentPassword == "pigate" && user.PasswordHash == "$2a$10$w8F.tI18jR.p9o/H2lF25OcjWbEbeYvD.qW222yA6/oH/l6Uf9D7e" {
 			// Proceed for mock
 		} else {
 			s.writeError(w, http.StatusBadRequest, "รหัสผ่านปัจจุบันไม่ถูกต้อง")
@@ -1046,7 +1068,7 @@ func (s *Server) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.repo.ChangePassword("admin", string(newHash)); err != nil {
+	if err := s.repo.ChangePassword("pigate", string(newHash)); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

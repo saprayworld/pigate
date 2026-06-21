@@ -56,7 +56,7 @@ func TestAPIAuthenticationFlow(t *testing.T) {
 	handler, _ := setupTestServer(t)
 
 	// 1. Attempt login with wrong password
-	loginPayload := model.LoginRequest{Username: "admin", Password: "wrong_password"}
+	loginPayload := model.LoginRequest{Username: "pigate", Password: "wrong_password"}
 	body, _ := json.Marshal(loginPayload)
 	req := httptest.NewRequest("POST", "/api/auth/login", bytes.NewBuffer(body))
 	rec := httptest.NewRecorder()
@@ -68,7 +68,7 @@ func TestAPIAuthenticationFlow(t *testing.T) {
 	}
 
 	// 2. Attempt login with correct password
-	loginPayload.Password = "admin"
+	loginPayload.Password = "pigate"
 	body, _ = json.Marshal(loginPayload)
 	req = httptest.NewRequest("POST", "/api/auth/login", bytes.NewBuffer(body))
 	rec = httptest.NewRecorder()
@@ -271,7 +271,7 @@ func TestDisableEditMode(t *testing.T) {
 	handler := RegisterRoutes(server)
 
 	// 1. Login should succeed (POST /api/auth/login)
-	loginPayload := model.LoginRequest{Username: "admin", Password: "admin"}
+	loginPayload := model.LoginRequest{Username: "pigate", Password: "pigate"}
 	body, _ := json.Marshal(loginPayload)
 	req := httptest.NewRequest("POST", "/api/auth/login", bytes.NewBuffer(body))
 	rec := httptest.NewRecorder()
@@ -369,5 +369,155 @@ func TestDNSConfigAPI(t *testing.T) {
 
 	if updatedCfg.Mode != "wan" || updatedCfg.PrimaryDNS != "9.9.9.9" || updatedCfg.SecondaryDNS != "1.0.0.1" || updatedCfg.LocalDomain != "pigate.internal" {
 		t.Errorf("Updated DNS config did not match expected values: %+v", updatedCfg)
+	}
+}
+
+func TestForcePasswordChangeFlow(t *testing.T) {
+	// Initialize memory database
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	// Explicitly set is_initial to 1 for test
+	_, err = sqliteDB.Exec("UPDATE users SET is_initial = 1 WHERE username = 'pigate'")
+	if err != nil {
+		t.Fatalf("Failed to set is_initial to 1: %v", err)
+	}
+
+	repo := db.NewRepository(sqliteDB)
+	fw := kernel.NewMockFirewall()
+	net := kernel.NewMockNetwork()
+	rt := kernel.NewMockRouting()
+	dhcp := kernel.NewMockDhcp()
+	ringBuffer := logs.NewRingBuffer(50)
+
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false)
+	handler := RegisterRoutes(server)
+
+	// 1. Login with correct password
+	loginPayload := model.LoginRequest{Username: "pigate", Password: "pigate"}
+	body, _ := json.Marshal(loginPayload)
+	req := httptest.NewRequest("POST", "/api/auth/login", bytes.NewBuffer(body))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected login status 200, got %d", rec.Code)
+	}
+
+	var loginRes model.LoginResponse
+	json.NewDecoder(rec.Body).Decode(&loginRes)
+	if !loginRes.MustChangePassword {
+		t.Error("Expected MustChangePassword to be true")
+	}
+
+	// 2. Try fetching a protected resource like stats, should get 403 Forbidden
+	req = httptest.NewRequest("GET", "/api/dashboard/stats", nil)
+	req.Header.Set("Authorization", "Bearer "+loginRes.Token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected 403 Forbidden when accessing stats before changing initial password, got %d", rec.Code)
+	}
+
+	// 3. Change password via PUT /api/system/password
+	changePayload := model.ChangePasswordRequest{CurrentPassword: "pigate", NewPassword: "new_secure_pass"}
+	changeBody, _ := json.Marshal(changePayload)
+	req = httptest.NewRequest("PUT", "/api/system/password", bytes.NewBuffer(changeBody))
+	req.Header.Set("Authorization", "Bearer "+loginRes.Token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for changing password, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	// 4. Try fetching stats again, should succeed now
+	req = httptest.NewRequest("GET", "/api/dashboard/stats", nil)
+	req.Header.Set("Authorization", "Bearer "+loginRes.Token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200 OK for stats after changing password, got %d", rec.Code)
+	}
+}
+
+func TestCheckSessionAPI(t *testing.T) {
+	// Setup server
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	fw := kernel.NewMockFirewall()
+	net := kernel.NewMockNetwork()
+	rt := kernel.NewMockRouting()
+	dhcp := kernel.NewMockDhcp()
+	ringBuffer := logs.NewRingBuffer(50)
+
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false)
+	handler := RegisterRoutes(server)
+
+	// 1. Check session without token (should fail with 401)
+	req := httptest.NewRequest("GET", "/api/auth/session", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 Unauthorized for session check without token, got %d", rec.Code)
+	}
+
+	// 2. Check session with valid token (normal user)
+	// Update user to not be initial
+	_, _ = sqliteDB.Exec("UPDATE users SET is_initial = 0 WHERE username = 'pigate'")
+	
+	// Login to get token
+	loginPayload := model.LoginRequest{Username: "pigate", Password: "pigate"}
+	body, _ := json.Marshal(loginPayload)
+	req = httptest.NewRequest("POST", "/api/auth/login", bytes.NewBuffer(body))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var loginRes model.LoginResponse
+	json.NewDecoder(rec.Body).Decode(&loginRes)
+
+	req = httptest.NewRequest("GET", "/api/auth/session", nil)
+	req.Header.Set("Authorization", "Bearer "+loginRes.Token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200 OK for session check with valid token, got %d", rec.Code)
+	}
+
+	var sessionRes map[string]interface{}
+	json.NewDecoder(rec.Body).Decode(&sessionRes)
+
+	if sessionRes["valid"] != true || sessionRes["username"] != "pigate" || sessionRes["mustChangePassword"] != false {
+		t.Errorf("Unexpected session response for normal user: %v", sessionRes)
+	}
+
+	// 3. Check session with initial user (must change password)
+	_, _ = sqliteDB.Exec("UPDATE users SET is_initial = 1 WHERE username = 'pigate'")
+	
+	req = httptest.NewRequest("GET", "/api/auth/session", nil)
+	req.Header.Set("Authorization", "Bearer "+loginRes.Token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200 OK for session check even with mustChangePassword active, got %d", rec.Code)
+	}
+
+	json.NewDecoder(rec.Body).Decode(&sessionRes)
+	if sessionRes["valid"] != true || sessionRes["username"] != "pigate" || sessionRes["mustChangePassword"] != true {
+		t.Errorf("Unexpected session response for initial user: %v", sessionRes)
 	}
 }

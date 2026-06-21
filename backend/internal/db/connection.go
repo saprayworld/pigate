@@ -1,12 +1,16 @@
 package db
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"fmt"
+	"log"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 )
 
@@ -46,7 +50,7 @@ func InitDB(dsn string, isMock ...bool) (*sql.DB, error) {
 		return nil, fmt.Errorf("database migration failed: %w", err)
 	}
 
-	if err := seed(db, mockMode); err != nil {
+	if err := seed(db, dsn, mockMode); err != nil {
 		return nil, fmt.Errorf("database seeding failed: %w", err)
 	}
 
@@ -161,6 +165,7 @@ func migrate(db *sql.DB) error {
 			id TEXT PRIMARY KEY,
 			username TEXT UNIQUE NOT NULL,
 			password_hash TEXT NOT NULL,
+			is_initial INTEGER DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,
 
@@ -297,22 +302,81 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+
+	// Add is_initial column to users table if it doesn't exist
+	var sqlCreateUsers string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").Scan(&sqlCreateUsers)
+	if err == nil {
+		if !strings.Contains(sqlCreateUsers, "is_initial") {
+			_, err = db.Exec("ALTER TABLE users ADD COLUMN is_initial INTEGER DEFAULT 0")
+			if err != nil {
+				return fmt.Errorf("failed to add is_initial column to users table: %w", err)
+			}
+		}
+	}
+
 	return nil
 }
 
-func seed(db *sql.DB, mockMode bool) error {
+func generateRandomPassword(length int) (string, error) {
+	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	result := make([]byte, length)
+	for i := 0; i < length; i++ {
+		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
+		if err != nil {
+			return "", err
+		}
+		result[i] = chars[num.Int64()]
+	}
+	return string(result), nil
+}
+
+func seed(db *sql.DB, dsn string, mockMode bool) error {
 	// 1. Seed Default Admin User if empty
-	// Default password: admin (Bcrypt pre-hashed value: $2a$10$w8F.tI18jR.p9o/H2lF25OcjWbEbeYvD.qW222yA6/oH/l6Uf9D7e)
 	var count int
 	if err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
 		return err
 	}
 	if count == 0 {
-		_, err := db.Exec(`INSERT INTO users (id, username, password_hash) VALUES (
-			'user-admin', 'admin', '$2a$10$w8F.tI18jR.p9o/H2lF25OcjWbEbeYvD.qW222yA6/oH/l6Uf9D7e'
-		)`)
+		var password string
+		var hash []byte
+		var err error
+
+		if dsn == ":memory:" {
+			// For automated testing in memory, use static password "pigate"
+			password = "pigate"
+			hash, err = bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+			if err != nil {
+				return fmt.Errorf("failed to hash default test password: %w", err)
+			}
+		} else {
+			// For real execution, generate a secure random password
+			password, err = generateRandomPassword(16)
+			if err != nil {
+				return fmt.Errorf("failed to generate random password: %w", err)
+			}
+			hash, err = bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+			if err != nil {
+				return fmt.Errorf("failed to hash random password: %w", err)
+			}
+		}
+
+		isInitialVal := 1
+		if dsn == ":memory:" {
+			isInitialVal = 0
+		}
+		_, err = db.Exec(`INSERT INTO users (id, username, password_hash, is_initial) VALUES (
+			'user-pigate', 'pigate', ?, ?
+		)`, string(hash), isInitialVal)
 		if err != nil {
 			return err
+		}
+
+		if dsn != ":memory:" {
+			log.Printf("==================================================================")
+			log.Printf("  PiGate First Run initialization")
+			log.Printf("  Generated random password for user 'pigate': %s", password)
+			log.Printf("==================================================================")
 		}
 	}
 

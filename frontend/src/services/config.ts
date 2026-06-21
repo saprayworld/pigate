@@ -35,7 +35,18 @@ if (typeof window !== "undefined" && !(window as any).__pigate_fetch_hooked__) {
         init = { ...init, headers };
       }
     }
-    return originalFetch(input, init);
+    const response = await originalFetch(input, init);
+    
+    // Automatically handle session expiration/invalidation
+    if (url.includes("/api/") && response.status === 401) {
+      if (!url.includes("/auth/session") && !url.includes("/auth/login")) {
+        localStorage.removeItem("pigate_session");
+        localStorage.removeItem("pigate_must_change_password");
+        window.location.href = "/login";
+      }
+    }
+    
+    return response;
   };
   (window as any).__pigate_fetch_hooked__ = true;
 }

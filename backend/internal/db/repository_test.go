@@ -17,14 +17,14 @@ func TestInitDBAndSeeding(t *testing.T) {
 	repo := NewRepository(db)
 
 	// Test default user
-	user, err := repo.GetUserByUsername("admin")
+	user, err := repo.GetUserByUsername("pigate")
 	if err != nil {
-		t.Errorf("Error getting admin user: %v", err)
+		t.Errorf("Error getting pigate user: %v", err)
 	}
 	if user == nil {
-		t.Errorf("Default admin user not seeded")
-	} else if user.Username != "admin" {
-		t.Errorf("Expected username 'admin', got '%s'", user.Username)
+		t.Errorf("Default pigate user not seeded")
+	} else if user.Username != "pigate" {
+		t.Errorf("Expected username 'pigate', got '%s'", user.Username)
 	}
 
 	// Test default address objects

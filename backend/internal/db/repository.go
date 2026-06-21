@@ -60,20 +60,22 @@ func (r *Repository) GetPrioritizeKernelRoutes() bool {
 // =========================================================================
 
 func (r *Repository) GetUserByUsername(username string) (*model.User, error) {
-	row := r.db.QueryRow("SELECT id, username, password_hash, created_at FROM users WHERE username = ?", username)
+	row := r.db.QueryRow("SELECT id, username, password_hash, is_initial, created_at FROM users WHERE username = ?", username)
 	var u model.User
-	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.CreatedAt)
+	var isInitInt int
+	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &isInitInt, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	u.IsInitial = isInitInt == 1
 	return &u, nil
 }
 
 func (r *Repository) ChangePassword(username string, newPasswordHash string) error {
-	_, err := r.db.Exec("UPDATE users SET password_hash = ? WHERE username = ?", newPasswordHash, username)
+	_, err := r.db.Exec("UPDATE users SET password_hash = ?, is_initial = 0 WHERE username = ?", newPasswordHash, username)
 	return err
 }
 
