@@ -34,3 +34,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# pigate
+pigate
+*.db
+*.db-shm
+*.db-wal
+pigate.db
+pigate.db-shm
+pigate.db-wal

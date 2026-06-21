@@ -27,4 +27,6 @@ cd backend
 go build -o pigate-backend ./cmd/pigate
 cd ..
 
+cp ./backend/pigate-backend pigate
+
 echo "=== Build Complete! Binary is available at backend/pigate-backend ==="
