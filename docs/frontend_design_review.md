@@ -33,9 +33,9 @@
 
 | ประเด็น | รายละเอียด |
 |---|---|
-| Tooltip สี Hardcoded | [Dashboard.tsx](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/frontend/src/pages/Dashboard.tsx#L402-L408) — Recharts Tooltip ใช้ `backgroundColor: "rgba(23, 23, 23, 0.95)"` แบบ hardcode ซึ่งจะไม่เปลี่ยนตาม Light Mode |
-| App.css ที่ไม่ได้ใช้งาน | [App.css](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/frontend/src/App.css) มี CSS จาก Vite starter template ที่ไม่ได้ถูกใช้งานในโปรเจกต์ (`.counter`, `.hero`, `#center` ฯลฯ) ควรลบออก |
-| CartesianGrid stroke hardcoded | [Dashboard.tsx:386](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/frontend/src/pages/Dashboard.tsx#L386) — `stroke="rgba(255,255,255,0.05)"` ใช้ได้แค่ Dark Mode |
+| Tooltip สี Hardcoded | [Dashboard.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/Dashboard.tsx#L402-L408) — Recharts Tooltip ใช้ `backgroundColor: "rgba(23, 23, 23, 0.95)"` แบบ hardcode ซึ่งจะไม่เปลี่ยนตาม Light Mode |
+| App.css ที่ไม่ได้ใช้งาน | [App.css](file:///home/sapray/dev/pigate/frontend/src/App.css) มี CSS จาก Vite starter template ที่ไม่ได้ถูกใช้งานในโปรเจกต์ (`.counter`, `.hero`, `#center` ฯลฯ) ควรลบออก |
+| CartesianGrid stroke hardcoded | [Dashboard.tsx:386](file:///home/sapray/dev/pigate/frontend/src/pages/Dashboard.tsx#L386) — `stroke="rgba(255,255,255,0.05)"` ใช้ได้แค่ Dark Mode |
 
 ---
 
@@ -234,7 +234,7 @@
 3. **เพิ่ม `overflow-x-auto`** wrapper รอบตาราง Firewall Policy และ Interfaces `[เสร็จสิ้น]`
 
 ### 🟡 Priority Medium (ควรทำก่อน Production)
-4. **ลบ [App.css](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/frontend/src/App.css)** ที่เป็น Vite template CSS ที่ไม่ได้ใช้
+4. **ลบ [App.css](file:///home/sapray/dev/pigate/frontend/src/App.css)** ที่เป็น Vite template CSS ที่ไม่ได้ใช้
 5. **ปรับ Recharts Tooltip** ให้ responsive ต่อ Dark/Light theme (ใช้ CSS variables)
 6. **ใช้ shadcn `<Input>`** แทน native `<input>` ในหน้า Login
 7. **ใช้ shadcn `<Select>`** แทน native `<select>` ในหน้า Addresses

@@ -9,22 +9,22 @@
 โค้ดทั้งหมดถูกเก็บไว้แยกในห้องทำงาน [backend/](file:///pigate-backend/) โดยไม่มีการแก้ไขโค้ดฝั่งหน้าบ้าน (Frontend) ตามข้อตกลง ดังรายละเอียดนี้:
 
 1. **โครงสร้างโมดูลหลัก (Dependencies):**
-   * [go.mod](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/go.mod) และ `go.sum`: กำหนดโมดูลชื่อ `pigate` (ใช้ Go 1.26) โดยติดตั้งแพ็กเกจ SQLite ไดรเวอร์บริสุทธิ์ (`modernc.org/sqlite`), ตัวเข้ารหัสความปลอดภัย (`golang.org/x/crypto`) และ **[ใหม่]** Netlink library (`github.com/vishvananda/netlink`) สำหรับ Kernel Integration สำเร็จเรียบร้อย
+   * [go.mod](file:///home/sapray/dev/pigate/backend/go.mod) และ `go.sum`: กำหนดโมดูลชื่อ `pigate` (ใช้ Go 1.26) โดยติดตั้งแพ็กเกจ SQLite ไดรเวอร์บริสุทธิ์ (`modernc.org/sqlite`), ตัวเข้ารหัสความปลอดภัย (`golang.org/x/crypto`) และ **[ใหม่]** Netlink library (`github.com/vishvananda/netlink`) สำหรับ Kernel Integration สำเร็จเรียบร้อย
 2. **ระบบฐานข้อมูลและคิวรี (Database Layer):**
-   * [internal/model/types.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/internal/model/types.go): โครงสร้างโมเดล Go Structs ทั้งหมดที่แมปคู่เข้ากับความต้องการของสเปก API ของ Frontend
-   * [internal/db/connection.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/internal/db/connection.go): จัดการการเปิดและเชื่อมโยงฐานข้อมูล SQLite และสั่งรัน DDL SQL เพื่อจัดสร้างโครงสร้างตาราง พร้อมใส่ข้อมูลเริ่มต้น (Default User, Seed subnets, Predefined services, Interfaces, Routes) ตอนเริ่มระบบอัตโนมัติ
-   * [internal/db/repository.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/internal/db/repository.go): พัฒนาระบบคิวรี CRUD ครบทุกตาราง มีการเขียนส่วนประมวลผลความปลอดภัย เช่น การล็อกห้ามแก้ไขหรือลบวัตถุระบบ (System objects) และการตรวจเช็กความสัมพันธ์ห้ามลบวัตถุที่ถูกนำไปใช้ในกฎไฟร์วอลล์ (Referential integrity)
+   * [internal/model/types.go](file:///home/sapray/dev/pigate/backend/internal/model/types.go): โครงสร้างโมเดล Go Structs ทั้งหมดที่แมปคู่เข้ากับความต้องการของสเปก API ของ Frontend
+   * [internal/db/connection.go](file:///home/sapray/dev/pigate/backend/internal/db/connection.go): จัดการการเปิดและเชื่อมโยงฐานข้อมูล SQLite และสั่งรัน DDL SQL เพื่อจัดสร้างโครงสร้างตาราง พร้อมใส่ข้อมูลเริ่มต้น (Default User, Seed subnets, Predefined services, Interfaces, Routes) ตอนเริ่มระบบอัตโนมัติ
+   * [internal/db/repository.go](file:///home/sapray/dev/pigate/backend/internal/db/repository.go): พัฒนาระบบคิวรี CRUD ครบทุกตาราง มีการเขียนส่วนประมวลผลความปลอดภัย เช่น การล็อกห้ามแก้ไขหรือลบวัตถุระบบ (System objects) และการตรวจเช็กความสัมพันธ์ห้ามลบวัตถุที่ถูกนำไปใช้ในกฎไฟร์วอลล์ (Referential integrity)
 3. **ระบบจำลอง/Production การทำงานของ OS (Kernel Wrapper, Mock & Real):**
-   * [internal/kernel/interfaces.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/internal/kernel/interfaces.go): ประกาศ Interface สำหรับดึงค่าและสั่งงาน firewall, routes, NetworkManager และ DHCP
-   * [internal/kernel/mock.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/internal/kernel/mock.go): พัฒนาระบบจำลองการสแกนหา SSID Wi-Fi, สลับสถานะการ์ดแลน, และดึงข้อมูล leases เพื่อให้ทดสอบ API บน Local PC ได้โดยไม่ต้องเชื่อมระบบปฏิบัติการ Linux จริง
-   * **[ใหม่]** [internal/kernel/real_network.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/internal/kernel/real_network.go): `RealNetwork` implement `NetworkManager` ผ่าน **Netlink Socket** (`vishvananda/netlink`) โดยตรง ไม่เรียก shell command — `ToggleInterface` เปลี่ยน `IFF_UP` flag ใน kernel จริง, `ScanWifi` ใช้ `iw` (primary) / `nmcli` (fallback) — build tag: `linux`
-   * [internal/logs/ringbuffer.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/internal/logs/ringbuffer.go): คลาสจำลองเก็บ Log ในรูปแบบ Ring Buffer บนแรมเพื่อถนอมอายุ SD card
+   * [internal/kernel/interfaces.go](file:///home/sapray/dev/pigate/backend/internal/kernel/interfaces.go): ประกาศ Interface สำหรับดึงค่าและสั่งงาน firewall, routes, NetworkManager และ DHCP
+   * [internal/kernel/mock.go](file:///home/sapray/dev/pigate/backend/internal/kernel/mock.go): พัฒนาระบบจำลองการสแกนหา SSID Wi-Fi, สลับสถานะการ์ดแลน, และดึงข้อมูล leases เพื่อให้ทดสอบ API บน Local PC ได้โดยไม่ต้องเชื่อมระบบปฏิบัติการ Linux จริง
+   * **[ใหม่]** [internal/kernel/real_network.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_network.go): `RealNetwork` implement `NetworkManager` ผ่าน **Netlink Socket** (`vishvananda/netlink`) โดยตรง ไม่เรียก shell command — `ToggleInterface` เปลี่ยน `IFF_UP` flag ใน kernel จริง, `ScanWifi` ใช้ `iw` (primary) / `nmcli` (fallback) — build tag: `linux`
+   * [internal/logs/ringbuffer.go](file:///home/sapray/dev/pigate/backend/internal/logs/ringbuffer.go): คลาสจำลองเก็บ Log ในรูปแบบ Ring Buffer บนแรมเพื่อถนอมอายุ SD card
 4. **ระบบจัดการ REST API & Middleware:**
-   * [internal/api/middleware.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/internal/api/middleware.go): ติดตั้ง CORS (อนุญาตให้หน้าบ้าน React dev server ที่พอร์ต 5173 เรียกใช้), ตรวจสอบโทเค็นสิทธิ์การเข้าใช้งาน (Authorization: Bearer <token>) และติดตั้ง Rate Limiter สกัดกั้นการสุ่มรหัสผ่าน
-   * [internal/api/handlers.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/internal/api/handlers.go): ส่วนประมวลผลคำขอ (Request handlers) ตามสเปก OpenAPI ครบถ้วน รวมถึงฟังก์ชันการ Import/Export ค่าการตั้งค่าของเครื่องเป็น JSON
-   * [internal/api/router.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/internal/api/router.go): จัดเส้นทางและสิทธิ์การเข้าถึง API
+   * [internal/api/middleware.go](file:///home/sapray/dev/pigate/backend/internal/api/middleware.go): ติดตั้ง CORS (อนุญาตให้หน้าบ้าน React dev server ที่พอร์ต 5173 เรียกใช้), ตรวจสอบโทเค็นสิทธิ์การเข้าใช้งาน (Authorization: Bearer <token>) และติดตั้ง Rate Limiter สกัดกั้นการสุ่มรหัสผ่าน
+   * [internal/api/handlers.go](file:///home/sapray/dev/pigate/backend/internal/api/handlers.go): ส่วนประมวลผลคำขอ (Request handlers) ตามสเปก OpenAPI ครบถ้วน รวมถึงฟังก์ชันการ Import/Export ค่าการตั้งค่าของเครื่องเป็น JSON
+   * [internal/api/router.go](file:///home/sapray/dev/pigate/backend/internal/api/router.go): จัดเส้นทางและสิทธิ์การเข้าถึง API
 5. **โปรแกรมจุดเริ่มการรันระบบหลัก (Server Boot):**
-   * [cmd/pigate/main.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/cmd/pigate/main.go): รันเรียกพารามิเตอร์ของระบบ ตั้งค่าพอร์ต ดึง DB และสั่งสตาร์ท HTTP Server (ยิงทดสอบระบบที่ http://localhost:8080)
+   * [cmd/pigate/main.go](file:///home/sapray/dev/pigate/backend/cmd/pigate/main.go): รันเรียกพารามิเตอร์ของระบบ ตั้งค่าพอร์ต ดึง DB และสั่งสตาร์ท HTTP Server (ยิงทดสอบระบบที่ http://localhost:8080)
 
 ---
 
@@ -32,8 +32,8 @@
 
 เราได้ติดตั้งระบบทดสอบทั้ง 2 มิติ คือ Unit Tests (สำหรับตรวจสอบ DB Repository logic) และ Integration Tests (สำหรับจำลอง HTTP Request) ดังไฟล์ด้านล่างนี้:
 
-* **[internal/db/repository_test.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/internal/db/repository_test.go):** ทดสอบการทำ Migration และคิวรีฐานข้อมูลโดยใช้ `:memory:` SQLite ที่แยกขาดจากไฟล์ DB จริง
-* **[internal/api/handlers_test.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/internal/api/handlers_test.go):** ทดสอบการส่งคำขอด้วย `httptest.NewRecorder()` ทั้งเรื่อง CORS, Login (ผ่าน/ไม่ผ่าน), การยืนยันสิทธิ์ Token, และการทำ CRUD Address API
+* **[internal/db/repository_test.go](file:///home/sapray/dev/pigate/backend/internal/db/repository_test.go):** ทดสอบการทำ Migration และคิวรีฐานข้อมูลโดยใช้ `:memory:` SQLite ที่แยกขาดจากไฟล์ DB จริง
+* **[internal/api/handlers_test.go](file:///home/sapray/dev/pigate/backend/internal/api/handlers_test.go):** ทดสอบการส่งคำขอด้วย `httptest.NewRecorder()` ทั้งเรื่อง CORS, Login (ผ่าน/ไม่ผ่าน), การยืนยันสิทธิ์ Token, และการทำ CRUD Address API
 
 ### 2.1 ผลการทดสอบ (Test Results Log)
 รันคำสั่งทดสอบแบบตัดแคชด้วย `-count=1` ผลลัพธ์ผ่านสำเร็จ 100% ปราศจากข้อผิดพลาด:
@@ -132,5 +132,5 @@ sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
 
 ### 4.7 Kernel Integration — Real NetworkManager ผ่าน Netlink Socket
 * **ปัญหาที่พบ:** `kernel.NetworkManager.ToggleInterface()` เดิมใช้ `MockNetwork` ที่ `return nil` เฉยๆ ทำให้การสั่ง toggle interface ผ่าน API ไม่ได้เปลี่ยนสถานะ kernel (`IFF_UP`) จริง ส่งผลให้ `SyncInterfacesFromOS()` อ่านค่า `FlagUp` ไม่ reflect สถานะจริง
-* **แนวทางแก้ไข:** สร้างไฟล์ [internal/kernel/real_network.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/internal/kernel/real_network.go) implement `RealNetwork struct` ด้วย `github.com/vishvananda/netlink` เพื่อสื่อสารกับ kernel ผ่าน Netlink Socket โดยตรงไม่ใช้ shell command (ป้องกัน Command Injection) — `ToggleInterface` ใช้ `netlink.LinkSetUp/Down()` เทียบเท่า `ip link set up/down` แต่ไม่ต้องเรียก binary ภายนอก — เลือกใช้ใน production path เมื่อ `--mock=false` พร้อมติดตั้ง `cap_net_admin` capability ไว้ที่ binary
+* **แนวทางแก้ไข:** สร้างไฟล์ [internal/kernel/real_network.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_network.go) implement `RealNetwork struct` ด้วย `github.com/vishvananda/netlink` เพื่อสื่อสารกับ kernel ผ่าน Netlink Socket โดยตรงไม่ใช้ shell command (ป้องกัน Command Injection) — `ToggleInterface` ใช้ `netlink.LinkSetUp/Down()` เทียบเท่า `ip link set up/down` แต่ไม่ต้องเรียก binary ภายนอก — เลือกใช้ใน production path เมื่อ `--mock=false` พร้อมติดตั้ง `cap_net_admin` capability ไว้ที่ binary
 

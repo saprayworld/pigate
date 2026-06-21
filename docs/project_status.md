@@ -97,10 +97,15 @@
     * **ฟีเจอร์จำกัดสิทธิ์แก้ไขข้อมูลจำลอง (Disable Edit Mode) [สำเร็จ]:** เพิ่มแฟล็ก `-disable-edit` เพื่อเปิดใช้งานโหมดอ่านอย่างเดียว (Read-Only) ในฝั่งหลังบ้าน ป้องกันการทำ CRUD เพื่อความปลอดภัยในบางสภาวะแวดล้อม
     * **ระบบสแกนคลื่นไร้สายที่รัดกุม (Wireless Scan Validation) [สำเร็จ]:** เพิ่มการกรองและยืนยันประเภทของการ์ดเชื่อมต่อเครือข่ายก่อนทำการค้นหาสัญญาณ Wi-Fi (Wi-Fi Scan) เพื่อบังคับให้ทำรายการเฉพาะการ์ดที่ระบุประเภทเป็น `wireless` เท่านั้น
     * **ระบบจัดการ DNS เชิงลึกแบบรวมศูนย์ (Centralized DNS Management) [สำเร็จ]:** เพิ่มการรองรับ API การตั้งค่าเซิร์ฟเวอร์ DNS ทั้งแบบคงที่และแบบรับไดนามิก พร้อมทั้งการเชื่อมโยงระบบ Local Domain Name
+    * **การฝังหน้าจอ React Frontend เข้ากับ Go Backend (Frontend Embedding) [สำเร็จ]:** พัฒนาการฝังไฟล์หน้าบ้าน (`dist/`) เข้าไปใน Go backend binary ผ่าน `go:embed` ใน [internal/api/embed.go](file:///home/sapray/dev/pigate/backend/internal/api/embed.go) ส่งผลให้ตัวแอปพลิเคชันทำงานเป็น Single Binary ที่สามารถเสิร์ฟหน้าจอผู้ใช้งานได้ด้วยตัวเองและยังคงรองรับ Routing แบบ Client-side (SPA fallback)
+    * **ระบบจัดการและลบอินเตอร์เฟสจำลอง (Interface CRUD & DB Order Fix) [สำเร็จ]:** เพิ่มระบบ API สำหรับ Delete/Reset การตั้งค่าการ์ดเครือข่ายจำลอง เพื่อความยืดหยุ่นในการทดสอบ และปรับแก้อันดับอาร์กิวเมนต์คิวรีในการซิงค์ข้อมูลลงฐานข้อมูลให้ถูกต้อง
+    * **การตั้งค่ารายละเอียดอินเตอร์เฟสเครือข่ายจริงผ่าน Netlink (Netlink IP Configuration) [สำเร็จ]:** พัฒนา `ConfigureInterface` ใน [internal/kernel/real_network.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_network.go) ให้ทำการล้างค่า IP/DHCP เก่า (ยกเลิก dhclient/dhcpcd) และลงทะเบียนการตั้งค่า static IP, netmask, default gateway บนการ์ดเครือข่ายลินุกซ์ด้วย Netlink
+    * **การทำความสะอาดโครงสร้างเครือข่ายล้าสมัย (Network Struct Cleanup) [สำเร็จ]:** ทำการถอนฟิลด์ `dns1` และ `dns2` ที่ไม่ใช้งานออกจากการตั้งค่าการ์ดเครือข่าย เพื่อไปใช้ระบบจัดส่ง DNS แบบรวมศูนย์อย่างสมบูรณ์
+    * **การสร้างเอกสารอ้างอิงสำหรับผู้พัฒนา (Developer Portal generation) [สำเร็จ]:** สร้างเอกสารอ้างอิงสำหรับผู้พัฒนาทั้งรูปแบบ HTML และ Markdown ในโฟลเดอร์ `docs/` เพื่อสรุปแนวทางความปลอดภัย กฎไฟร์วอลล์ และตาราง DHCP/Routing
 
 * **แก้ไขข้อเสนอแนะความสำคัญสูง (Priority High Recommendations) จากผลการรีวิวหน้าบ้าน [สำเร็จ]**:
-  * **แทนที่ Native Dialogs:** พัฒนาและติดตั้ง [AlertDialogProvider.tsx](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/frontend/src/components/AlertDialogProvider.tsx) เพื่อใช้ Custom AlertDialog ของ shadcn/ui ครอบคลุมการเตือนและการยืนยันคำสั่งทั้งหมด แทนการเรียกใช้ `alert()` และ `confirm()` ดั้งเดิมของเบราว์เซอร์
-  * **ระบบตรวจสอบค่า IP Address (Strict Validation):** อัปเดตและติดตั้ง Regex/Logic ตรวจสอบความถูกต้องของ IPv4, CIDR, และ IP Range โดยเช็กค่า Octet ละเอียด 0-255 ใน [utils.ts](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/frontend/src/lib/utils.ts) และนำไปใช้ตรวจสอบความมั่นคงปลอดภัยของอินพุตในทุกหน้ารวมถึง Static Routes, DHCP Server, Addresses และ Interfaces
+  * **แทนที่ Native Dialogs:** พัฒนาและติดตั้ง [AlertDialogProvider.tsx](file:///home/sapray/dev/pigate/frontend/src/components/AlertDialogProvider.tsx) เพื่อใช้ Custom AlertDialog ของ shadcn/ui ครอบคลุมการเตือนและการยืนยันคำสั่งทั้งหมด แทนการเรียกใช้ `alert()` และ `confirm()` ดั้งเดิมของเบราว์เซอร์
+  * **ระบบตรวจสอบค่า IP Address (Strict Validation):** อัปเดตและติดตั้ง Regex/Logic ตรวจสอบความถูกต้องของ IPv4, CIDR, และ IP Range โดยเช็กค่า Octet ละเอียด 0-255 ใน [utils.ts](file:///home/sapray/dev/pigate/frontend/src/lib/utils.ts) และนำไปใช้ตรวจสอบความมั่นคงปลอดภัยของอินพุตในทุกหน้ารวมถึง Static Routes, DHCP Server, Addresses และ Interfaces
   * **ตารางแบบ Responsive:** ครอบตารางแสดงข้อมูลกฎความปลอดภัย (Firewall Policies) และตารางพอร์ตเชื่อมต่อ (Interfaces) ด้วย `<div className="overflow-x-auto w-full">` ป้องกันเนื้อหาล้น (overflow) เมื่อแสดงผลบนหน้าจอขนาดเล็ก/สมาร์ทโฟน
 
 ---
@@ -135,15 +140,17 @@
   * เพิ่มเติมฟีเจอร์รันระบบหลังบ้านโดยดึงข้อมูลจริงจาก Kernel แต่อัปเดตลงเฉพาะฐานข้อมูล (-mock-from-real) พร้อมระบบจำกัดสิทธิ์อ่านอย่างเดียว (-disable-edit), ระบบ DNS และการตรวจสอบ Wifi Scan พร้อมปรับปรุง API Specs `[เสร็จสิ้น]`
 
 * **พัฒนา Kernel Integration ระยะที่ 1 — Real NetworkManager ผ่าน Netlink Socket [สำเร็จ]**:
-  * สร้างไฟล์ [internal/kernel/real_network.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/internal/kernel/real_network.go) implement `RealNetwork struct` ตาม `NetworkManager` interface สำหรับรันบน Linux production จริง
+  * สร้างไฟล์ [internal/kernel/real_network.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_network.go) implement `RealNetwork struct` ตาม `NetworkManager` interface สำหรับรันบน Linux production จริง
   * `ToggleInterface` ใช้ `github.com/vishvananda/netlink` — `netlink.LinkSetUp/Down()` สื่อสารกับ kernel ผ่าน Netlink Socket โดยตรง ไม่ผ่าน shell command (ป้องกัน Command Injection ตามข้อ 4.1 ใน tech_stack_design.md)
   * `ScanWifi` ใช้ `iw dev scan` (primary) และ `nmcli` (fallback) โดยไม่ต้องการ root
-  * อัปเดต [cmd/pigate/main.go](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/backend/cmd/pigate/main.go) ให้ production path (`--mock=false`) ใช้ `kernel.NewRealNetwork()` แทน MockNetwork
+  * อัปเดต [cmd/pigate/main.go](file:///home/sapray/dev/pigate/backend/cmd/pigate/main.go) ให้ production path (`--mock=false`) ใช้ `kernel.NewRealNetwork()` แทน MockNetwork
+  * เพิ่มเติมระบบตรวจจับ Netlink Subtypes (เช่น loopback, bridge, vlan ฯลฯ) เพื่อแสดงผลใน UI หน้าบ้าน
+  * เพิ่มปุ่ม Refresh ในหน้า Interfaces และระบบคงการตั้งค่า (Config retention) ของการ์ดเครือข่ายไว้แม้ว่าจะ offline/sync
   * ทดสอบ compile ผ่าน 100% ด้วย `go build ./...`
   * ทดสอบรันจริงด้วย `./pigate-backend -port=8081 -mock=false` ผ่านสำเร็จ (ต้องการ `cap_net_admin` บน RPi5)
 
 * **สเตปที่ 6: Kernel Integration ระยะที่ 2 — Real Firewall & Routing (TODO)**:
+  * **[สำเร็จ]** พัฒนา `RealRouting` ใน [internal/kernel/real_routing.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_routing.go) โดยใช้ `netlink.RouteAdd/Del/Replace` ในการเชื่อมกับ Linux Routing Table โดยตรง ไม่ผ่าน shell command พร้อมรองรับรายละเอียด Scope, Metric, Protocol, Src IP และระบบจัดเรียงความสำคัญของ Kernel Route
   * **[TODO]** สร้าง `RealFirewall` ใช้ `github.com/google/nftables` แทน MockFirewall
-  * **[TODO]** สร้าง `RealRouting` ใช้ `netlink.RouteAdd/Del()` แทน MockRouting
   * **[TODO]** ทดสอบบน Raspberry Pi 5 จริงพร้อม `sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend`
 

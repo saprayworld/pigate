@@ -36,9 +36,9 @@ graph TD
 * **Component Library**: **shadcn/ui** (Radix UI Primitives)
   * *เหตุผล*: ต่างจาก UI library ทั่วไป เพราะ shadcn/ui เป็นการ Copy-paste โค้ดคอมโพเนนต์ลงในโปรเจกต์โดยตรง ทำให้เราควบคุมและแก้ไขสไตล์ระดับล่าง (Fine-grain customization) ได้เอง ไม่มีปัญหา Package Bloat หรือส่งผลกระทบต่อขนาด Bundle และมี Accessibility (a11y) สูงมากจากตัว Radix UI
 * **UI Controls & Components**:
-  * **@dnd-kit/core** & **@dnd-kit/sortable**: เครื่องมือสำหรับทำ Drag & Drop จัดเรียงกฎความสำคัญของนโยบายไฟร์วอลล์ในหน้า [02-firewall-policies.html](file:///home/sapray/Dev/pigate/docs/sketchs/frontend/02-firewall-policies.html)
+  * **@dnd-kit/core** & **@dnd-kit/sortable**: เครื่องมือสำหรับทำ Drag & Drop จัดเรียงกฎความสำคัญของนโยบายไฟร์วอลล์ในหน้า [02-firewall-policies.html](file:///home/sapray/dev/pigate/docs/sketchs/frontend/02-firewall-policies.html)
     * *เหตุผล*: เป็นระบบ Drag & Drop ยุคใหม่ที่ออกแบบมาสำหรับ React โดยเฉพาะ มีขนาดเล็ก รองรับ Touch/Mouse Sensor เต็มรูปแบบ และลื่นไหลกว่าระบบเดิม
-  * **Recharts**: ไลบรารีวาดกราฟสถิติ Real-time Traffic ในหน้า [01-dashboard.html](file:///home/sapray/Dev/pigate/docs/sketchs/frontend/01-dashboard.html)
+  * **Recharts**: ไลบรารีวาดกราฟสถิติ Real-time Traffic ในหน้า [01-dashboard.html](file:///home/sapray/dev/pigate/docs/sketchs/frontend/01-dashboard.html)
   * **Lucide React**: ชุดไอคอนมินิมอลรองรับ SVG
 * **Deployment Pattern**:
   * เมื่อบิวด์โปรเจกต์เสร็จสิ้น (รัน `npm run build` หรือ `yarn build` ด้วย Yarn) ไฟล์ HTML, CSS, JS จะถูกนำมาฝังลงในตัวแอปพลิเคชันหลังบ้านผ่านฟีเจอร์ **`go:embed`** ของภาษา Go
