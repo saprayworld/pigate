@@ -122,12 +122,12 @@
 
 ## 2. ปัญหาและประเด็นที่ต้องพิจารณาในปัจจุบัน (Current Issues & Limitations)
 
-> [!CAUTION]
-> ### 🔴 ประเด็นความมั่นคงปลอดภัยระดับวิกฤต (Security Vulnerabilities - MUST FIX)
-> จากการตรวจสอบซอร์สโค้ดและสถาปัตยกรรมระบบหลังบ้าน พบจุดอ่อนร้ายแรง 2 ประเด็นที่จะต้องได้รับการแก้ไขก่อนเผยแพร่สู่การใช้งานจริง:
+> [!NOTE]
+> ### 🟢 ประเด็นความมั่นคงปลอดภัยได้รับการแก้ไขแล้ว (Security Hardening - Resolved)
+> จุดอ่อนทางความปลอดภัยได้รับการแก้ไขเรียบร้อยแล้ว:
 > 
-> 1. **Auth Bypass Backdoor (CWE-259 & CWE-287 - Critical)**: โค้ดตรวจสอบสิทธิ์การล็อกอินในฟังก์ชัน `HandleLogin` ([handlers.go](file:///home/sapray/dev/pigate/backend/internal/api/handlers.go#L92-L98)) ยินยอมให้ข้ามการตรวจสอบ Bcrypt ได้หากระบุบัญชี `pigate:pigate` (ใช้เป็นรหัสผ่านเริ่มต้นสำหรับการจำลอง) ซึ่งสามารถถูกใช้เจาะระบบได้แม้จะเปลี่ยนรหัสผ่านหลักใน SQLite ไปแล้ว
-> 2. **CORS Mismatch with Credentials (CWE-346 - Medium)**: ใน [middleware.go](file:///home/sapray/dev/pigate/backend/internal/api/middleware.go#L50-L60) มีการตั้งค่า `Access-Control-Allow-Origin: "*"` ควบคู่กับการใช้ Credentials ซึ่งผิดข้อกำหนดความปลอดภัยของเบราว์เซอร์ยุคใหม่ และอาจทำให้การสื่อสารข้าม Origin ถูกบล็อก
+> 1. **Auth Bypass Backdoor (CWE-259 & CWE-287 - Resolved)**: โค้ดตรวจสอบสิทธิ์การล็อกอินในฟังก์ชัน `HandleLogin` และ `HandleChangePassword` ใน [handlers.go](file:///home/sapray/dev/pigate/backend/internal/api/handlers.go) ถูกนำเอาโค้ดข้ามการเช็ก Bcrypt ออกไปทั้งหมดแล้ว ระบบใช้การยืนยันรหัสผ่านแบบจริงเท่านั้น
+> 2. **CORS Mismatch with Credentials (CWE-346 - Resolved)**: ได้แก้ไขใน [middleware.go](file:///home/sapray/dev/pigate/backend/internal/api/middleware.go) ให้ทำการตั้งค่า `Access-Control-Allow-Credentials: true` เฉพาะ origin ที่ได้รับอนุญาตเท่านั้น (หลีกเลี่ยงการใช้ wildcard `*`)
 
 > [!NOTE]
 > **สถานะปัจจุบันพร้อมทดสอบจำลองแล้ว (Mock OS Interface Verified):**
@@ -175,7 +175,7 @@
   * **[TODO]** ทดสอบบน Raspberry Pi 5 จริงพร้อม `sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend`
 
 * **สเตปที่ 7: การแก้ไขและลดระดับช่องโหว่ทางความปลอดภัย (Security Hardening - MUST FIX)**:
-  * **[TODO]** ลบหรือปิดกั้นช่องโหว่การข้าม Bcrypt (HandleLogin Backdoor) ในไฟล์ `handlers.go`
-  * **[TODO]** ปรับปรุงโครงสร้างของ CORS Origin ใน `middleware.go` ไม่ให้ตั้งค่า Wildcard `*` ปะปนกับ Credentials `true` เพื่อรักษาระเบียบความถูกต้องตามมาตรฐาน Web API
+  * **[สำเร็จ]** ลบหรือปิดกั้นช่องโหว่การข้าม Bcrypt (HandleLogin Backdoor) ในไฟล์ `handlers.go`
+  * **[สำเร็จ]** ปรับปรุงโครงสร้างของ CORS Origin ใน `middleware.go` ไม่ให้ตั้งค่า Wildcard `*` ปะปนกับ Credentials `true` เพื่อรักษาระเบียบความถูกต้องตามมาตรฐาน Web API
 
 

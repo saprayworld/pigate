@@ -37,10 +37,6 @@ func IsSessionValid(token string) bool {
 	sessionMutex.RLock()
 	defer sessionMutex.RUnlock()
 	_, valid := activeSessions[token]
-	// If it's mock mode, allow any mock token starting with mock_session_id_
-	if !valid && strings.HasPrefix(token, "mock_session_id_") {
-		return true
-	}
 	return valid
 }
 
@@ -51,13 +47,11 @@ func CORSMiddleware(next http.Handler) http.Handler {
 		// Allow local development ports and same origin
 		if origin == "http://localhost:5173" || origin == "http://localhost:3000" || origin == "http://127.0.0.1:5173" {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
-		} else {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
 
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

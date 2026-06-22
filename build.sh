@@ -27,6 +27,10 @@ cd backend
 go build -o pigate-backend ./cmd/pigate
 cd ..
 
-cp ./backend/pigate-backend pigate
+mv ./backend/pigate-backend pigate
 
-echo "=== Build Complete! Binary is available at backend/pigate-backend ==="
+echo "=== Build Complete! Binary is available at pigate ==="
+
+echo "You need to run setcap to add permission: sudo setcap cap_net_admin,cap_net_raw+ep ./pigate"
+
+echo "To start the service: ./pigate -mock=false"

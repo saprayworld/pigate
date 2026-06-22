@@ -73,7 +73,7 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	var req model.LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
-		return;
+		return
 	}
 
 	user, err := s.repo.GetUserByUsername(req.Username)
@@ -89,16 +89,11 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	// Verify Password hash using Bcrypt
 	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password))
 	if err != nil {
-		// Mock fallback for development if bcrypt fail but password is "pigate"
-		if req.Username == "pigate" && req.Password == "pigate" {
-			// Proceed
-		} else {
-			s.writeError(w, http.StatusUnauthorized, "Invalid username or password")
-			return
-		}
+		s.writeError(w, http.StatusUnauthorized, "Invalid username or password")
+		return
 	}
 
-	token := "mock_session_id_" + generateRandomToken()
+	token := "session_id_" + generateRandomToken()
 	AddSession(token, user.Username)
 
 	// Set secure cookie
@@ -1054,12 +1049,8 @@ func (s *Server) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 
 	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.CurrentPassword))
 	if err != nil {
-		if req.CurrentPassword == "pigate" && user.PasswordHash == "$2a$10$w8F.tI18jR.p9o/H2lF25OcjWbEbeYvD.qW222yA6/oH/l6Uf9D7e" {
-			// Proceed for mock
-		} else {
-			s.writeError(w, http.StatusBadRequest, "รหัสผ่านปัจจุบันไม่ถูกต้อง")
-			return
-		}
+		s.writeError(w, http.StatusBadRequest, "รหัสผ่านปัจจุบันไม่ถูกต้อง")
+		return
 	}
 
 	newHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), 10)
@@ -1111,9 +1102,9 @@ func (s *Server) HandleExportConfig(w http.ResponseWriter, r *http.Request) {
 	sysTime, _ := s.repo.GetSystemTimeSettings()
 
 	backup := map[string]interface{}{
-		"device":     "PiGate Firewall Gateway",
-		"version":    "v1.0.0-Release",
-		"exportedAt": time.Now().Format(time.RFC3339),
+		"device":         "PiGate Firewall Gateway",
+		"version":        "v1.0.0-Release",
+		"exportedAt":     time.Now().Format(time.RFC3339),
 		"systemSettings": sysTime,
 		"config": map[string]interface{}{
 			"addresses":      addrs,
@@ -1135,14 +1126,14 @@ func (s *Server) HandleImportConfig(w http.ResponseWriter, r *http.Request) {
 	var dump struct {
 		SystemSettings *model.SystemTimeSettings `json:"systemSettings"`
 		Config         struct {
-			Addresses      []model.AddressObject     `json:"addresses"`
-			ServiceObjects []model.ServiceObject     `json:"serviceObjects"`
-			Policies       []model.PolicyRule        `json:"policies"`
-			Routes         []model.StaticRoute       `json:"routes"`
-			Interfaces     []model.NetworkInterface  `json:"interfaces"`
+			Addresses      []model.AddressObject    `json:"addresses"`
+			ServiceObjects []model.ServiceObject    `json:"serviceObjects"`
+			Policies       []model.PolicyRule       `json:"policies"`
+			Routes         []model.StaticRoute      `json:"routes"`
+			Interfaces     []model.NetworkInterface `json:"interfaces"`
 			DHCP           *struct {
-				Config       *model.DhcpConfig        `json:"config"`
-				Reservations []model.DhcpReservation  `json:"reservations"`
+				Config       *model.DhcpConfig       `json:"config"`
+				Reservations []model.DhcpReservation `json:"reservations"`
 			} `json:"dhcp"`
 		} `json:"config"`
 	}

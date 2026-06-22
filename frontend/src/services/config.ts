@@ -5,10 +5,7 @@
 // 1. VITE_USE_MOCK env variable is "true"
 // 2. OR localstorage has "PIGATE_DEV_MODE" set to "mock"
 // 3. OR fallback is true for local offline preview/testing.
-export const IS_MOCK_MODE =
-  import.meta.env.VITE_USE_MOCK === "true" ||
-  localStorage.getItem("PIGATE_DEV_MODE") === "mock" ||
-  false;
+export const IS_MOCK_MODE = false;
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
@@ -36,7 +33,7 @@ if (typeof window !== "undefined" && !(window as any).__pigate_fetch_hooked__) {
       }
     }
     const response = await originalFetch(input, init);
-    
+
     // Automatically handle session expiration/invalidation
     if (url.includes("/api/") && response.status === 401) {
       if (!url.includes("/auth/session") && !url.includes("/auth/login")) {
@@ -45,7 +42,7 @@ if (typeof window !== "undefined" && !(window as any).__pigate_fetch_hooked__) {
         window.location.href = "/login";
       }
     }
-    
+
     return response;
   };
   (window as any).__pigate_fetch_hooked__ = true;

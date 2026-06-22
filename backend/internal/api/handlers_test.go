@@ -30,6 +30,9 @@ func setupTestServer(t *testing.T) (http.Handler, *db.Repository) {
 	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false)
 	handler := RegisterRoutes(server)
 
+	// Add test session token to activeSessions since IsSessionValid no longer allows mock_session_id_* bypass
+	AddSession("mock_session_id_test_token", "pigate")
+
 	return handler, repo
 }
 
@@ -269,6 +272,9 @@ func TestDisableEditMode(t *testing.T) {
 	// Server initialized with disableEdit = true
 	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, true)
 	handler := RegisterRoutes(server)
+
+	// Add test session token to activeSessions since IsSessionValid no longer allows mock_session_id_* bypass
+	AddSession("mock_session_id_test_token", "pigate")
 
 	// 1. Login should succeed (POST /api/auth/login)
 	loginPayload := model.LoginRequest{Username: "pigate", Password: "pigate"}
