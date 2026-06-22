@@ -22,6 +22,7 @@ func main() {
 	disableEdit := flag.Bool("disable-edit", false, "Disable edit operations (Read-only mode)")
 	allowEditSystemRoutes := flag.Bool("allow-edit-system-routes", false, "Allow editing and deleting system predefined static routes")
 	prioritizeKernelRoutes := flag.Bool("prioritize-kernel-routes", false, "Prioritize kernel route information over database if duplicate")
+	dockerCompat := flag.Bool("docker-compat", true, "Enable Docker compatibility (bypass docker0 and br-* interfaces)")
 	flag.Parse()
 
 	log.Printf("Starting PiGate Backend Server (Go v1.26.4)...")
@@ -32,6 +33,7 @@ func main() {
 	log.Printf("Disable Edit Mode: %t", *disableEdit)
 	log.Printf("Allow Edit System Routes: %t", *allowEditSystemRoutes)
 	log.Printf("Prioritize Kernel Routes: %t", *prioritizeKernelRoutes)
+	log.Printf("Docker Compatibility: %t", *dockerCompat)
 
 	// 2. Initialize in-memory logs circular buffer (Ring Buffer)
 	ringBuffer := logs.NewRingBuffer(50)
@@ -73,7 +75,7 @@ func main() {
 	var dhcp kernel.DhcpManager
 
 	if *mockOS || *mockFromReal {
-		fw = kernel.NewMockFirewall()
+		fw = kernel.NewMockFirewall(*dockerCompat)
 		net = kernel.NewMockNetwork()
 		rt = kernel.NewMockRouting()
 		mDhcp := kernel.NewMockDhcp()
@@ -82,7 +84,7 @@ func main() {
 	} else {
 		// Real kernel integrations via netlink — used on Raspberry Pi 5 production.
 		// Requires: sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
-		fw = kernel.NewMockFirewall() // nftables real impl: TODO (google/nftables)
+		fw = kernel.NewRealFirewall(*dockerCompat)
 		net = kernel.NewRealNetwork()
 		rt = kernel.NewRealRouting(*allowEditSystemRoutes)
 		mDhcp := kernel.NewMockDhcp()

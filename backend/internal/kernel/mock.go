@@ -10,14 +10,29 @@ import (
 )
 
 // MockFirewall implements FirewallManager for local testing
-type MockFirewall struct{}
-
-func NewMockFirewall() *MockFirewall {
-	return &MockFirewall{}
+type MockFirewall struct {
+	dockerCompat bool
 }
 
-func (m *MockFirewall) ApplyRules(rules []model.PolicyRule) error {
-	// Mock success
+func NewMockFirewall(dockerCompat bool) *MockFirewall {
+	return &MockFirewall{
+		dockerCompat: dockerCompat,
+	}
+}
+
+func (m *MockFirewall) ApplyRules(rules []model.PolicyRule, ifaces []model.NetworkInterface) error {
+	log.Printf("[MockFirewall] Applying %d rules to mock kernel (Docker Compatibility: %t):", len(rules), m.dockerCompat)
+	if m.dockerCompat {
+		log.Printf("  [Docker Compat] Bypassing docker0 and br-* interfaces")
+	}
+	for _, r := range rules {
+		statusStr := "DISABLED"
+		if r.Status {
+			statusStr = "ENABLED"
+		}
+		log.Printf("  [%s] Name: %s, In: %s, Out: %s, Src: %v, Dest: %v, Svc: %v, Action: %s, Log: %t",
+			statusStr, r.Name, r.InInterface, r.OutInterface, r.Source, r.Destination, r.Service, r.Action, r.Log)
+	}
 	return nil
 }
 

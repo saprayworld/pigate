@@ -529,8 +529,14 @@ func (s *Server) HandleApplyPolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.firewall.ApplyRules(rules); err != nil {
-		s.writeError(w, http.StatusInternalServerError, "OS Firewall update failed")
+	ifaces, err := s.repo.GetInterfaces()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Failed to load interfaces: "+err.Error())
+		return
+	}
+
+	if err := s.firewall.ApplyRules(rules, ifaces); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "OS Firewall update failed: "+err.Error())
 		return
 	}
 

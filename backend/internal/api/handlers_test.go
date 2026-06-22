@@ -21,7 +21,7 @@ func setupTestServer(t *testing.T) (http.Handler, *db.Repository) {
 	}
 
 	repo := db.NewRepository(sqliteDB)
-	fw := kernel.NewMockFirewall()
+	fw := kernel.NewMockFirewall(true)
 	net := kernel.NewMockNetwork()
 	rt := kernel.NewMockRouting()
 	dhcp := kernel.NewMockDhcp()
@@ -263,7 +263,7 @@ func TestDisableEditMode(t *testing.T) {
 		t.Fatalf("Failed to init memory db: %v", err)
 	}
 	repo := db.NewRepository(sqliteDB)
-	fw := kernel.NewMockFirewall()
+	fw := kernel.NewMockFirewall(true)
 	net := kernel.NewMockNetwork()
 	rt := kernel.NewMockRouting()
 	dhcp := kernel.NewMockDhcp()
@@ -393,7 +393,7 @@ func TestForcePasswordChangeFlow(t *testing.T) {
 	}
 
 	repo := db.NewRepository(sqliteDB)
-	fw := kernel.NewMockFirewall()
+	fw := kernel.NewMockFirewall(true)
 	net := kernel.NewMockNetwork()
 	rt := kernel.NewMockRouting()
 	dhcp := kernel.NewMockDhcp()
@@ -462,7 +462,7 @@ func TestCheckSessionAPI(t *testing.T) {
 	defer sqliteDB.Close()
 
 	repo := db.NewRepository(sqliteDB)
-	fw := kernel.NewMockFirewall()
+	fw := kernel.NewMockFirewall(true)
 	net := kernel.NewMockNetwork()
 	rt := kernel.NewMockRouting()
 	dhcp := kernel.NewMockDhcp()

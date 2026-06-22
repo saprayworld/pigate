@@ -171,11 +171,11 @@
 
 * **สเตปที่ 6: Kernel Integration ระยะที่ 2 — Real Firewall & Routing (TODO)**:
   * **[สำเร็จ]** พัฒนา `RealRouting` ใน [internal/kernel/real_routing.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_routing.go) โดยใช้ `netlink.RouteAdd/Del/Replace` ในการเชื่อมกับ Linux Routing Table โดยตรง ไม่ผ่าน shell command พร้อมรองรับรายละเอียด Scope, Metric, Protocol, Src IP และระบบจัดเรียงความสำคัญของ Kernel Route
-  * **[TODO]** สร้าง `RealFirewall` ใช้ `github.com/google/nftables` ในการจัดการกฎไฟร์วอลล์จริง (รวมถึงการทำ Stateful filtering บน INPUT/FORWARD chains และระบบตรวจคัดกรอง IP Spoofing ผ่าน `sapray-not-local`)
+  * **[กำลังดำเนินการ]** สร้าง `RealFirewall` ใช้ `github.com/google/nftables` ในการจัดการกฎไฟร์วอลล์จริง (ปัจจุบันวางโครงสร้างพื้นฐานและเชื่อมต่ออินเทอร์เฟซเพื่อรับรายการ Network Interface เพื่อคัดกรองพอร์ตและสิทธิ์เข้าถึงแล้ว)
   * **[TODO]** พัฒนาระบบ NAT (Network Address Translation / IP Masquerade): สำหรับแชร์อินเทอร์เน็ตให้วง LAN โดยทำการตรวจหาการ์ดเครือข่ายขาออกที่มีบทบาทเป็น WAN (`Role = WAN`) จากฐานข้อมูลอัตโนมัติ และแมปกฎ Masquerade ลงในตาราง `pigate_nat` (`postrouting` hook) ในเคอร์เนล
-  * **[TODO]** พัฒนาระบบความเข้ากันได้กับ Docker (Docker Compatibility):
-    * เริ่มแรก: เพิ่ม CLI flag `-docker-compat` (เปิด/ปิด อัตโนมัติ) เพื่อให้ใส่กฎเว้นการบล็อก (Bypass) อินเทอร์เฟซ `docker0` และบริดจ์เน็ตเวิร์กจำลอง `br-*`
-    * ระยะถัดไป: พัฒนา API และระบบตั้งค่า (Settings Toggle) บนหน้า Web UI ของแอดมิน เพื่อควบคุมสถานะผ่านตารางการตั้งค่าระบบใน SQLite
+  * **[กำลังดำเนินการ]** พัฒนาระบบความเข้ากันได้กับ Docker (Docker Compatibility):
+    * **[สำเร็จ]** เพิ่ม CLI flag `-docker-compat` (เปิด/ปิด อัตโนมัติ) เพื่อให้ใส่กฎเว้นการบล็อก (Bypass) อินเทอร์เฟซ `docker0` และบริดจ์เน็ตเวิร์กจำลอง `br-*`
+    * **[TODO]** ระยะถัดไป: พัฒนา API และระบบตั้งค่า (Settings Toggle) บนหน้า Web UI ของแอดมิน เพื่อควบคุมสถานะผ่านตารางการตั้งค่าระบบใน SQLite
   * **[TODO]** พัฒนาระบบรักษาความปลอดภัยสำหรับการทำงานพลาด (Fail-Safe Rollback / Test & Rollback): เพื่อป้องกันปัญหากรณีแอดมินบล็อกพอร์ตเว็บควบคุมหรือ SSH จนล็อกตัวเองออก (Admin Lockout) โดยถ้า Apply กฎใหม่แล้วไม่มีการยืนยัน Confirm จากเบราว์เซอร์ภายใน 30 วินาที ระบบจะดึงกฎเก่าขึ้นมารีสโตร์ใช้งานแทนทันที
   * **[TODO]** ติดตั้งระบบสถิติกฎไฟร์วอลล์ (Rule Counters): ใช้ `counter` ของ nftables ในการนับจำนวน Hit (packets) และขนาดปริมาณทราฟฟิก (bytes) บนกฎแต่ละข้อ โดยสืบค้นสดผ่าน Netlink (`GetRules`) แล้วส่งเป็น Live telemetry ไปหน้าบ้านแทนการเขียนลง SQLite ตลอดเวลาเพื่อถนอมอายุของ SD Card
   * **[TODO]** พัฒนาระบบประมวลผลล็อกความปลอดภัยสด (Firewall Logs Ring-Buffer Stream): ดึงข้อมูลบันทึก Kernel messages จาก `/dev/kmsg` หรือ Journald ที่มีการพ่นข้อความ Prefix `[PiGate]` ขึ้นมาเก็บพักใน In-Memory Ring Buffer บนแรมของบอร์ดเพื่อส่งไปสตรีมสดแสดงผลบนหน้า Dashboard
