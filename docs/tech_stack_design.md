@@ -80,6 +80,65 @@ sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
 * **`cap_net_raw`**: สิทธิ์ในการสร้าง Raw Sockets (จำเป็นสำหรับการรันคำสั่ง Ping หรือจับแพ็กเก็ต)
 * *ข้อดี*: หากแอปพลิเคชันหน้าเว็บมีช่องโหว่ RCE แฮกเกอร์ก็จะไม่สามารถเข้ามาเขียนทับไฟล์ระบบ หรือลบไฟล์ส่วนอื่นๆ ใน OS ได้เนื่องจากรันภายใต้สิทธิ์ผู้ใช้จำกัดทั่วไป
 
+### 4.3 Default Firewall Rules & Auditing Architecture (การตั้งค่ากฎไฟร์วอลล์หลักและการตรวจสอบบัญชี)
+ระบบ PiGate ได้กำหนดโครงสร้างของกฎไฟร์วอลล์พื้นฐาน (Default rules) สำหรับปกป้องอินเทอร์เฟซขาเข้า (INPUT Chain) โดยจัดวางแบบ **Declarative nftables format** และจัดลำดับการคัดกรองร่วมกับระบบ Auditing และ Docker Compatibility ดังต่อไปนี้:
+
+1. **โครงสร้างการประมวลผล (Processing Sequence)**:
+   * **ส่วนที่ 1: กฎความปลอดภัยเบื้องต้น (Drop & Sanity Checks)**: บล็อกแพ็กเก็ตชำรุด (INVALID), Loopback whitelist, ICMP diagnostics, บล็อกพอร์ต Samba/SMB, บล็อก rogue DHCP, บล็อก Broadcast, คัดกรอง IP Spoofing ผ่าน custom chain `sapray-not-local` และยอมรับ mDNS/SSDP
+   * **ส่วนที่ 2: จุดเริ่มต้นการตรวจสอบสิทธิ์ (Audit Log)**: พ่นข้อมูลแพ็กเก็ตที่ผ่านการกรองเบื้องต้นลง syslog ด้วย Prefix `[PiGate] INP AUDIT : ` เพื่อเป็นหลักฐานว่ามีข้อมูลผ่านเข้ามาสู่ชั้นตัดสินสิทธิ์
+   * **ส่วนที่ 3: กฎไดนามิกและการอนุญาต (Dynamic Accept Rules)**: ยอมรับและสตรีมล็อก (`[PiGate] INP ACCEPT: `) สำหรับพอร์ตบริการ/IP ที่ผ่านเงื่อนไขจาก Database (เช่น HTTP, HTTPS, SSH, PING) และเชื่อมโยงกับการตั้งค่า Docker Compatibility (เช่น การยอมรับ `docker0` และ `br-*` อัตโนมัติเมื่อเปิดแฟล็ก)
+   * **ส่วนที่ 4: แพ็กเก็ตที่เหลือทั้งหมด (Drop Log)**: พ่นล็อกลง syslog ด้วย Prefix `[PiGate] INP DROP  : ` เพื่อความสะดวกในการติดตามเหตุการณ์ว่าแพ็กเก็ตชิ้นใดถูกบล็อกโดย Default Policy (`DROP`)
+
+2. **โครงสร้างโมเดล nftables ตัวอย่าง**:
+   * การประยุกต์กฎไฟร์วอลล์โดยใช้ Netlink (ผ่าน `google/nftables` ใน Go) จะทำงานแบบ Transactional API โครงสร้างโค้ดที่สร้างใน Kernel จะสอดคล้องตามตัวอย่างด้านล่าง:
+
+```nftables
+table inet pigate {
+    chain pigate-not-local {
+        fib daddr type local return
+        fib daddr type multicast return
+        fib daddr type broadcast return
+        limit rate 3/minute burst 10 packets log prefix "[PiGate]  INP DROP  : "
+        drop
+    }
+
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        # --- Section 1: Sanity & Drop Checks ---
+        ct state established,related accept
+        ct state invalid drop
+        iifname "lo" accept
+        icmp type { destination-unreachable, time-exceeded, parameter-problem, echo-request } accept
+        udp dport { 137, 138, 67, 68 } drop
+        tcp dport { 139, 445 } drop
+        fib daddr type broadcast drop
+        jump pigate-not-local
+        ip daddr 224.0.0.251 udp dport 5353 accept
+        ip daddr 239.255.255.250 udp dport 1900 accept
+
+        # --- Section 2: Audit Point ---
+        log prefix "[PiGate] INP AUDIT : "
+
+        # --- Section 3: Dynamic Accepts (From DB / Docker Compat) ---
+        # [Docker Compat]
+        # iifname "docker0" log prefix "[PiGate] INP ACCEPT: " accept
+        # iifname "br-*" log prefix "[PiGate] INP ACCEPT: " accept
+        
+        # [Dynamic from DB AdminAccess config]
+        # iifname "eth0" tcp dport { 22, 2479 } log prefix "[PiGate] INP ACCEPT: " accept
+
+        # --- Section 4: Final Drop Log ---
+        log prefix "[PiGate] INP DROP  : "
+    }
+}
+```
+
+3. **การบันทึกสถิติกฎไฟร์วอลล์ (Firewall Rule Counters)**:
+   * **กลไกการทำงาน**: ทุกกฎไฟร์วอลล์ไดนามิกใน `forward` และ `input` chain จะถูกแนบตัวจับคู่สถิติ (`counter`) ในเคอร์เนล โดย Linux Kernel จะบันทึกจำนวนครั้งที่เงื่อนไขกฎสอดคล้อง (`packets` หรือ hit count) และปริมาณขนาดข้อมูลของแต่ละแพ็กเก็ต (`bytes`) โดยอัตโนมัติ
+   * **การดึงข้อมูลสด (Real-time Fetching)**: Go Backend จะเรียกอ่านค่าสถิติเหล่านี้ผ่านทาง Netlink API (`c.GetRules()`) แล้วส่งค่าสด (Live telemetry) ไปยังหน้าบ้านผ่าน REST API `/api/policies` เพื่อลดภาระการเขียนข้อมูลปริมาณมากลงหน่วยความจำถาวร SQLite บน SD Card ช่วยยืดอายุการใช้งาน MicroSD Card ของ Raspberry Pi 5 (สอดคล้องกับแนวทางในหัวข้อที่ 8)
+   * **การแสดงผลบนหน้าต่างควบคุม (UI Visualization)**: หน้าจอระบบจัดการกฎไฟร์วอลล์ฝั่งหน้าบ้านจะแสดงผล Hit Count และ Traffic Volume ท้ายแถวของแต่ละนโยบาย เพื่อให้ผู้ดูแลระบบมองเห็นประสิทธิภาพและความจำเป็นของกฎแต่ละข้อได้ทันที
+
 ---
 
 ## 5. Security & Protection Against Supply Chain Attack
