@@ -139,6 +139,19 @@ table inet pigate {
    * **การดึงข้อมูลสด (Real-time Fetching)**: Go Backend จะเรียกอ่านค่าสถิติเหล่านี้ผ่านทาง Netlink API (`c.GetRules()`) แล้วส่งค่าสด (Live telemetry) ไปยังหน้าบ้านผ่าน REST API `/api/policies` เพื่อลดภาระการเขียนข้อมูลปริมาณมากลงหน่วยความจำถาวร SQLite บน SD Card ช่วยยืดอายุการใช้งาน MicroSD Card ของ Raspberry Pi 5 (สอดคล้องกับแนวทางในหัวข้อที่ 8)
    * **การแสดงผลบนหน้าต่างควบคุม (UI Visualization)**: หน้าจอระบบจัดการกฎไฟร์วอลล์ฝั่งหน้าบ้านจะแสดงผล Hit Count และ Traffic Volume ท้ายแถวของแต่ละนโยบาย เพื่อให้ผู้ดูแลระบบมองเห็นประสิทธิภาพและความจำเป็นของกฎแต่ละข้อได้ทันที
 
+4. **การจัดการ NAT (Network Address Translation / IP Masquerade) บนขา WAN**:
+   * **กลไกการทำงาน**: เพื่อให้เครื่องภายในวง LAN สามารถเชื่อมต่อออกสู่อินเทอร์เน็ตภายนอกได้ ระบบจะทำการแชร์อินเทอร์เน็ตผ่านการทำ IP Masquerade บนอินเทอร์เฟซฝั่ง WAN
+   * **โครงสร้าง nftables**: โครงสร้าง NAT จะแยกเป็นตารางเฉพาะ (เช่น `pigate_nat` ของ Family `ip`) และจัดการผ่าน `postrouting` hook ดังตัวอย่าง:
+```nftables
+table ip pigate_nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname "wlan0" masquerade  # ทำ Masquerade เฉพาะข้อมูลขาออกผ่านการ์ดที่เป็น WAN
+    }
+}
+```
+   * **การประยุกต์แบบไดนามิก (Dynamic Binding)**: Go Backend จะตรวจสอบรายชื่อการ์ดเครือข่ายจากฐานข้อมูลที่มีหน้าที่เป็น WAN (`Role = WAN`) และสร้างกฎ Masquerade สำหรับอินเทอร์เฟซเหล่านั้นโดยอัตโนมัติเมื่อสั่ง Apply Settings
+
 ---
 
 ## 5. Security & Protection Against Supply Chain Attack

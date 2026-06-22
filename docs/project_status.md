@@ -172,6 +172,7 @@
 * **สเตปที่ 6: Kernel Integration ระยะที่ 2 — Real Firewall & Routing (TODO)**:
   * **[สำเร็จ]** พัฒนา `RealRouting` ใน [internal/kernel/real_routing.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_routing.go) โดยใช้ `netlink.RouteAdd/Del/Replace` ในการเชื่อมกับ Linux Routing Table โดยตรง ไม่ผ่าน shell command พร้อมรองรับรายละเอียด Scope, Metric, Protocol, Src IP และระบบจัดเรียงความสำคัญของ Kernel Route
   * **[TODO]** สร้าง `RealFirewall` ใช้ `github.com/google/nftables` ในการจัดการกฎไฟร์วอลล์จริง (รวมถึงการทำ Stateful filtering บน INPUT/FORWARD chains และระบบตรวจคัดกรอง IP Spoofing ผ่าน `sapray-not-local`)
+  * **[TODO]** พัฒนาระบบ NAT (Network Address Translation / IP Masquerade): สำหรับแชร์อินเทอร์เน็ตให้วง LAN โดยทำการตรวจหาการ์ดเครือข่ายขาออกที่มีบทบาทเป็น WAN (`Role = WAN`) จากฐานข้อมูลอัตโนมัติ และแมปกฎ Masquerade ลงในตาราง `pigate_nat` (`postrouting` hook) ในเคอร์เนล
   * **[TODO]** พัฒนาระบบความเข้ากันได้กับ Docker (Docker Compatibility):
     * เริ่มแรก: เพิ่ม CLI flag `-docker-compat` (เปิด/ปิด อัตโนมัติ) เพื่อให้ใส่กฎเว้นการบล็อก (Bypass) อินเทอร์เฟซ `docker0` และบริดจ์เน็ตเวิร์กจำลอง `br-*`
     * ระยะถัดไป: พัฒนา API และระบบตั้งค่า (Settings Toggle) บนหน้า Web UI ของแอดมิน เพื่อควบคุมสถานะผ่านตารางการตั้งค่าระบบใน SQLite
