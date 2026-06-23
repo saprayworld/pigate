@@ -20,8 +20,13 @@ func NewMockFirewall(dockerCompat bool) *MockFirewall {
 	}
 }
 
-func (m *MockFirewall) ApplyRules(rules []model.PolicyRule, ifaces []model.NetworkInterface) error {
-	log.Printf("[MockFirewall] Applying %d rules to mock kernel (Docker Compatibility: %t):", len(rules), m.dockerCompat)
+func (m *MockFirewall) ApplyRules(
+	rules []model.PolicyRule,
+	ifaces []model.NetworkInterface,
+	addrs []model.AddressObject,
+	svcs []model.ServiceObject,
+) error {
+	log.Printf("[MockFirewall] Applying %d rules to mock kernel (Docker Compatibility: %t, Addresses: %d, Services: %d):", len(rules), m.dockerCompat, len(addrs), len(svcs))
 	if m.dockerCompat {
 		log.Printf("  [Docker Compat] Bypassing docker0 and br-* interfaces")
 	}

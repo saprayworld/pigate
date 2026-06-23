@@ -4,7 +4,12 @@ import "pigate/internal/model"
 
 // FirewallManager abstracts nftables kernel modifications
 type FirewallManager interface {
-	ApplyRules(rules []model.PolicyRule, ifaces []model.NetworkInterface) error
+	ApplyRules(
+		rules []model.PolicyRule,
+		ifaces []model.NetworkInterface,
+		addrs []model.AddressObject,
+		svcs []model.ServiceObject,
+	) error
 }
 
 // NetworkManager abstracts Wi-Fi scanning and interface control

@@ -535,7 +535,19 @@ func (s *Server) HandleApplyPolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.firewall.ApplyRules(rules, ifaces); err != nil {
+	addrs, err := s.repo.GetAddresses()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Failed to load address objects: "+err.Error())
+		return
+	}
+
+	svcs, err := s.repo.GetServices()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Failed to load service objects: "+err.Error())
+		return
+	}
+
+	if err := s.firewall.ApplyRules(rules, ifaces, addrs, svcs); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "OS Firewall update failed: "+err.Error())
 		return
 	}
