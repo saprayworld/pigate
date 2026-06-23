@@ -92,6 +92,34 @@ func main() {
 		dhcp = mDhcp
 	}
 
+	// 4.5 Apply Firewall Rules at startup
+	log.Printf("Applying database-configured firewall rules to kernel at startup...")
+	rules, err := repo.GetPolicies()
+	if err != nil {
+		log.Printf("Warning: Failed to load policies from DB for startup apply: %v", err)
+	} else {
+		ifaces, err := repo.GetInterfaces()
+		if err != nil {
+			log.Printf("Warning: Failed to load interfaces from DB for startup apply: %v", err)
+		} else {
+			addrs, err := repo.GetAddresses()
+			if err != nil {
+				log.Printf("Warning: Failed to load address objects from DB for startup apply: %v", err)
+			} else {
+				svcs, err := repo.GetServices()
+				if err != nil {
+					log.Printf("Warning: Failed to load service objects from DB for startup apply: %v", err)
+				} else {
+					if err := fw.ApplyRules(rules, ifaces, addrs, svcs); err != nil {
+						log.Printf("Warning: Failed to apply firewall rules to kernel at startup: %v", err)
+					} else {
+						log.Printf("Successfully applied firewall rules at startup.")
+					}
+				}
+			}
+		}
+	}
+
 	// 5. Instantiate Server & Router
 	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit)
 	handler := api.RegisterRoutes(server)

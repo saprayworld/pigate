@@ -527,3 +527,97 @@ func TestCheckSessionAPI(t *testing.T) {
 		t.Errorf("Unexpected session response for initial user: %v", sessionRes)
 	}
 }
+
+func setupTestServerWithFirewall(t *testing.T) (http.Handler, *db.Repository, *kernel.MockFirewall) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+
+	repo := db.NewRepository(sqliteDB)
+	fw := kernel.NewMockFirewall(true)
+	net := kernel.NewMockNetwork()
+	rt := kernel.NewMockRouting()
+	dhcp := kernel.NewMockDhcp()
+	ringBuffer := logs.NewRingBuffer(50)
+
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false)
+	handler := RegisterRoutes(server)
+
+	AddSession("mock_session_id_test_token", "pigate")
+
+	return handler, repo, fw
+}
+
+func TestInterfaceUpdateSyncsFirewall(t *testing.T) {
+	handler, repo, fw := setupTestServerWithFirewall(t)
+	authToken := "mock_session_id_test_token"
+
+	// Seed test interface
+	macMode := "hardware"
+	reconnect := false
+	failover := false
+	macAddr := "DC:A6:32:AA:BB:C1"
+	
+	iface := model.NetworkInterface{
+		ID:                   "iface-test-sync",
+		Name:                 "eth-test-sync",
+		Alias:                "LAN_Internal",
+		Role:                 "LAN",
+		Type:                 "ethernet",
+		AddressingMode:       "static",
+		IP:                   "192.168.1.1",
+		Netmask:              "24",
+		MacAddress:           macAddr,
+		AdminAccess:          []string{"PING", "HTTP", "SSH"},
+		Status:               "up",
+		Speed:                "1000 Mbps",
+		MacMode:              &macMode,
+		RealMacAddress:       &macAddr,
+		RandomizeOnReconnect: &reconnect,
+		FailoverEnabled:      &failover,
+	}
+	if err := repo.CreateInterfaceForTest(iface); err != nil {
+		t.Fatalf("CreateInterfaceForTest failed: %v", err)
+	}
+
+	// Reset ApplyCount (just in case)
+	fw.ApplyCount = 0
+
+	// 1. Update interface with NO changes to AdminAccess (different order)
+	updatePayloadNoChange := iface
+	updatePayloadNoChange.Alias = "LAN_Updated_Alias"
+	updatePayloadNoChange.AdminAccess = []string{"SSH", "PING", "HTTP"} 
+
+	bodyBytes, _ := json.Marshal(updatePayloadNoChange)
+	req := httptest.NewRequest("PUT", "/api/interfaces/iface-test-sync", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	if fw.ApplyCount != 0 {
+		t.Errorf("Expected firewall sync count to be 0 (no admin access change), got %d", fw.ApplyCount)
+	}
+
+	// 2. Update interface WITH changes to AdminAccess
+	updatePayloadWithChange := updatePayloadNoChange
+	updatePayloadWithChange.AdminAccess = []string{"PING", "HTTPS"} 
+
+	bodyBytes2, _ := json.Marshal(updatePayloadWithChange)
+	req = httptest.NewRequest("PUT", "/api/interfaces/iface-test-sync", bytes.NewBuffer(bodyBytes2))
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	if fw.ApplyCount != 1 {
+		t.Errorf("Expected firewall sync count to be 1 after admin access change, got %d", fw.ApplyCount)
+	}
+}

@@ -224,6 +224,25 @@ func (s *Server) HandleGetInterfaces(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, list)
 }
 
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	m := make(map[string]int)
+	for _, x := range a {
+		m[strings.TrimSpace(strings.ToUpper(x))]++
+	}
+	for _, x := range b {
+		m[strings.TrimSpace(strings.ToUpper(x))]--
+	}
+	for _, count := range m {
+		if count != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	iface, err := s.repo.GetInterfaceByID(id)
@@ -237,6 +256,9 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
 		return
 	}
+
+	// Check if admin access has changed
+	adminAccessChanged := !equalStringSlices(iface.AdminAccess, updates.AdminAccess)
 
 	// Apply updates to existing interface object
 	iface.Alias = updates.Alias
@@ -273,6 +295,13 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 	if err := s.repo.UpdateInterface(*iface); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	if adminAccessChanged {
+		if err := s.syncFirewallRules(); err != nil {
+			s.writeError(w, http.StatusInternalServerError, "OS Firewall update failed: "+err.Error())
+			return
+		}
 	}
 
 	s.writeJSON(w, http.StatusOK, iface)
@@ -522,36 +551,38 @@ func (s *Server) HandleTogglePolicyStatus(w http.ResponseWriter, r *http.Request
 	s.writeJSON(w, http.StatusOK, p)
 }
 
-func (s *Server) HandleApplyPolicies(w http.ResponseWriter, r *http.Request) {
+func (s *Server) syncFirewallRules() error {
 	rules, err := s.repo.GetPolicies()
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return fmt.Errorf("failed to load policies: %w", err)
 	}
 
 	ifaces, err := s.repo.GetInterfaces()
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "Failed to load interfaces: "+err.Error())
-		return
+		return fmt.Errorf("failed to load interfaces: %w", err)
 	}
 
 	addrs, err := s.repo.GetAddresses()
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "Failed to load address objects: "+err.Error())
-		return
+		return fmt.Errorf("failed to load address objects: %w", err)
 	}
 
 	svcs, err := s.repo.GetServices()
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "Failed to load service objects: "+err.Error())
-		return
+		return fmt.Errorf("failed to load service objects: %w", err)
 	}
 
 	if err := s.firewall.ApplyRules(rules, ifaces, addrs, svcs); err != nil {
+		return fmt.Errorf("failed to apply firewall rules: %w", err)
+	}
+	return nil
+}
+
+func (s *Server) HandleApplyPolicies(w http.ResponseWriter, r *http.Request) {
+	if err := s.syncFirewallRules(); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "OS Firewall update failed: "+err.Error())
 		return
 	}
-
 	s.writeJSON(w, http.StatusOK, true)
 }
 

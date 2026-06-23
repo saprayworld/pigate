@@ -12,11 +12,13 @@ import (
 // MockFirewall implements FirewallManager for local testing
 type MockFirewall struct {
 	dockerCompat bool
+	ApplyCount   int
 }
 
 func NewMockFirewall(dockerCompat bool) *MockFirewall {
 	return &MockFirewall{
 		dockerCompat: dockerCompat,
+		ApplyCount:   0,
 	}
 }
 
@@ -26,6 +28,7 @@ func (m *MockFirewall) ApplyRules(
 	addrs []model.AddressObject,
 	svcs []model.ServiceObject,
 ) error {
+	m.ApplyCount++
 	log.Printf("[MockFirewall] Applying %d rules to mock kernel (Docker Compatibility: %t, Addresses: %d, Services: %d):", len(rules), m.dockerCompat, len(addrs), len(svcs))
 	if m.dockerCompat {
 		log.Printf("  [Docker Compat] Bypassing docker0 and br-* interfaces")
