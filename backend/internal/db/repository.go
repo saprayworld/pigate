@@ -1301,7 +1301,7 @@ func (r *Repository) SyncInterfacesFromOS() error {
 
 	foundInOS := make(map[string]bool)
 
-	for idx, netIface := range netIfaces {
+	for _, netIface := range netIfaces {
 
 		// log.Printf("[DB] Processing interface: %s, ifaceType: %s", netIface.Name, netIface.Type)
 
@@ -1369,8 +1369,7 @@ func (r *Repository) SyncInterfacesFromOS() error {
 			}
 		} else {
 			log.Printf("[DB] Interface %s not exists, creating new record", netIface.Name)
-			// Insert a new interface record — read real values from OS
-			id := fmt.Sprintf("iface-os-%d", idx)
+			id := "iface-" + netIface.Name
 			alias := netIface.Name + ""
 			role := "LAN"
 			if strings.Contains(netIface.Name, "wan") {
