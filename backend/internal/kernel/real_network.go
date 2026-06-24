@@ -23,6 +23,8 @@ import (
 // Requires cap_net_admin capability on the binary:
 //
 //	sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
+var execCommand = exec.Command
+
 type RealNetwork struct{}
 
 func NewRealNetwork() *RealNetwork {
@@ -50,26 +52,26 @@ func (r *RealNetwork) ToggleInterface(name string, up bool) error {
 		if isWireless {
 			serviceName := fmt.Sprintf("wpa_supplicant@%s", name)
 			log.Printf("[RealNetwork] Interface is wireless. Verifying service state: %s", serviceName)
-			if exec.Command("sudo", "systemctl", "is-active", "--quiet", serviceName).Run() != nil {
+			if execCommand("sudo", "systemctl", "is-active", "--quiet", serviceName).Run() != nil {
 				log.Printf("[RealNetwork] Service %s is not active, starting it...", serviceName)
-				_ = exec.Command("sudo", "systemctl", "start", serviceName).Run()
+				_ = execCommand("sudo", "systemctl", "start", serviceName).Run()
 			} else {
 				log.Printf("[RealNetwork] Service %s is already active", serviceName)
 			}
 
 			// Clean up old DHCP client instances first
-			_ = exec.Command("sudo", "dhclient", "-r", name).Run()
-			_ = exec.Command("sudo", "dhcpcd", "-k", name).Run()
+			_ = execCommand("sudo", "dhclient", "-r", name).Run()
+			_ = execCommand("sudo", "dhcpcd", "-k", name).Run()
 
 			// Launch DHCP client in background to request an IP address on association
 			go func() {
 				time.Sleep(1 * time.Second)
 				log.Printf("[RealNetwork] Launching DHCP client for %s...", name)
-				if err := exec.Command("sudo", "dhclient", name).Start(); err == nil {
+				if err := execCommand("sudo", "dhclient", name).Start(); err == nil {
 					log.Printf("[RealNetwork] dhclient started for %s via ToggleInterface", name)
 					return
 				}
-				if err := exec.Command("sudo", "dhcpcd", name).Start(); err == nil {
+				if err := execCommand("sudo", "dhcpcd", name).Start(); err == nil {
 					log.Printf("[RealNetwork] dhcpcd started for %s via ToggleInterface", name)
 					return
 				}
@@ -82,12 +84,12 @@ func (r *RealNetwork) ToggleInterface(name string, up bool) error {
 	if isWireless {
 		serviceName := fmt.Sprintf("wpa_supplicant@%s", name)
 		log.Printf("[RealNetwork] Interface %s is wireless. Stopping wpa_supplicant service: %s", name, serviceName)
-		_ = exec.Command("sudo", "systemctl", "stop", serviceName).Run()
+		_ = execCommand("sudo", "systemctl", "stop", serviceName).Run()
 
 		// Release DHCP lease when bringing interface DOWN
 		log.Printf("[RealNetwork] Releasing DHCP client for %s...", name)
-		_ = exec.Command("sudo", "dhclient", "-r", name).Run()
-		_ = exec.Command("sudo", "dhcpcd", "-k", name).Run()
+		_ = execCommand("sudo", "dhclient", "-r", name).Run()
+		_ = execCommand("sudo", "dhcpcd", "-k", name).Run()
 	}
 
 	log.Printf("[RealNetwork] Bringing interface %s DOWN via netlink link...", name)
@@ -144,7 +146,7 @@ func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, s
 
 	// Systemd service management
 	serviceName := fmt.Sprintf("wpa_supplicant@%s", name)
-	isActive := exec.Command("sudo", "systemctl", "is-active", "--quiet", serviceName).Run() == nil
+	isActive := execCommand("sudo", "systemctl", "is-active", "--quiet", serviceName).Run() == nil
 
 	if isActive {
 		// Send RECONFIGURE command via wpa_supplicant UNIX socket
@@ -157,7 +159,7 @@ func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, s
 	} else {
 		// Start service via systemd
 		log.Printf("[RealNetwork] Service %s is inactive. Initiating systemd start...", serviceName)
-		if err := exec.Command("sudo", "systemctl", "start", serviceName).Run(); err != nil {
+		if err := execCommand("sudo", "systemctl", "start", serviceName).Run(); err != nil {
 			log.Printf("[RealNetwork] systemd start %s failed: %v", serviceName, err)
 			return fmt.Errorf("failed to start %s service: %w", serviceName, err)
 		}
@@ -184,8 +186,8 @@ func (r *RealNetwork) ConfigureInterface(name string, mode string, ip string, ne
 	}
 
 	// Always release DHCP client and clean up first to prevent conflicts/duplicates
-	_ = exec.Command("sudo", "dhclient", "-r", name).Run()
-	_ = exec.Command("sudo", "dhcpcd", "-k", name).Run()
+	_ = execCommand("sudo", "dhclient", "-r", name).Run()
+	_ = execCommand("sudo", "dhcpcd", "-k", name).Run()
 	log.Printf("[RealNetwork] dhclient released for %s", name)
 
 	// Always clear existing IPv4 addresses from the interface
@@ -198,12 +200,12 @@ func (r *RealNetwork) ConfigureInterface(name string, mode string, ip string, ne
 
 	if mode == "dhcp" {
 		// Try starting dhclient in background
-		if err := exec.Command("sudo", "dhclient", name).Start(); err == nil {
+		if err := execCommand("sudo", "dhclient", name).Start(); err == nil {
 			log.Printf("[RealNetwork] dhclient started for %s", name)
 			return nil
 		}
 		// Try fallback to dhcpcd
-		if err := exec.Command("sudo", "dhcpcd", name).Start(); err == nil {
+		if err := execCommand("sudo", "dhcpcd", name).Start(); err == nil {
 			log.Printf("[RealNetwork] dhcpcd started for %s", name)
 			return nil
 		}
@@ -276,7 +278,7 @@ func (r *RealNetwork) ScanWifi(name string) ([]model.WifiScanResult, error) {
 
 // scanWifiWithIW uses `iw dev <name> scan` to list nearby APs.
 func scanWifiWithIW(name string) ([]model.WifiScanResult, error) {
-	out, err := exec.Command("iw", "dev", name, "scan").Output()
+	out, err := execCommand("iw", "dev", name, "scan").Output()
 	if err != nil {
 		return nil, fmt.Errorf("iw scan failed: %w", err)
 	}
@@ -373,10 +375,10 @@ func scanWifiWithIW(name string) ([]model.WifiScanResult, error) {
 // scanWifiWithNmcli uses nmcli as fallback Wi-Fi scanner.
 func scanWifiWithNmcli(name string) ([]model.WifiScanResult, error) {
 	// Trigger a fresh scan first
-	_ = exec.Command("nmcli", "dev", "wifi", "rescan", "ifname", name).Run()
+	_ = execCommand("nmcli", "dev", "wifi", "rescan", "ifname", name).Run()
 
 	// Fields: SSID, SIGNAL, SECURITY, CHAN, FREQ
-	out, err := exec.Command(
+	out, err := execCommand(
 		"nmcli", "--terse", "--fields", "SSID,SIGNAL,SECURITY,CHAN,FREQ",
 		"dev", "wifi", "list", "ifname", name,
 	).Output()

@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -12,6 +13,7 @@ import (
 // Global variables that can be overridden in tests to redirect outputs
 var wpaConfigDir = "/etc/wpa_supplicant"
 var wpaSocketDir = "/var/run/wpa_supplicant"
+var wpaLocalSocketDir = "/run/pigate"
 
 // SanitizeWpaInput strips newlines and double quotes to prevent configuration injection
 func SanitizeWpaInput(val string) string {
@@ -78,10 +80,23 @@ func SendWpaCommand(ifaceName string, command string) (string, error) {
 	destAddr := fmt.Sprintf("%s/%s", wpaSocketDir, ifaceName)
 	log.Printf("[WPA Socket] Resolving socket address: destination=%s", destAddr)
 	
-	// Ensure the local socket directory exists (fall back to /tmp if write to /run is denied)
-	localDir := "/run/pigate"
+	// Ensure the local socket directory exists (fall back to /tmp if write to /run is denied or not writable)
+	localDir := wpaLocalSocketDir
+	useTemp := false
 	if err := os.MkdirAll(localDir, 0755); err != nil {
-		log.Printf("[WPA Socket] Failed to create /run/pigate, falling back to temp dir: %v", err)
+		useTemp = true
+	} else {
+		// Test writability by creating a temporary test file
+		testFile := filepath.Join(localDir, fmt.Sprintf(".write_test_%d", time.Now().UnixNano()))
+		if f, err := os.OpenFile(testFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600); err != nil {
+			useTemp = true
+		} else {
+			f.Close()
+			_ = os.Remove(testFile)
+		}
+	}
+	if useTemp {
+		log.Printf("[WPA Socket] Directory %s is not writable or cannot be created, falling back to temp dir", localDir)
 		localDir = os.TempDir()
 	}
 	localAddr := fmt.Sprintf("%s/wpa_ctrl_%d_%d", localDir, os.Getpid(), time.Now().UnixNano())

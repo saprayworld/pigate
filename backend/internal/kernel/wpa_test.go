@@ -3,6 +3,7 @@ package kernel
 import (
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -89,7 +90,12 @@ func TestSendWpaCommand(t *testing.T) {
 	// Override socket path configurations
 	oldSocketDir := wpaSocketDir
 	wpaSocketDir = tmpDir
-	defer func() { wpaSocketDir = oldSocketDir }()
+	oldLocalSocketDir := wpaLocalSocketDir
+	wpaLocalSocketDir = tmpDir
+	defer func() {
+		wpaSocketDir = oldSocketDir
+		wpaLocalSocketDir = oldLocalSocketDir
+	}()
 
 	destSocketPath := filepath.Join(tmpDir, "wlan0_test")
 
@@ -140,10 +146,15 @@ func TestConfigureWifiAtomicWrite(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Override config directory path
+	// Override config directory path and mock system command execution
 	oldConfigDir := wpaConfigDir
 	wpaConfigDir = tmpDir
-	defer func() { wpaConfigDir = oldConfigDir }()
+	oldExecCommand := execCommand
+	execCommand = fakeExecCommand
+	defer func() {
+		wpaConfigDir = oldConfigDir
+		execCommand = oldExecCommand
+	}()
 
 	netMgr := NewRealNetwork()
 	
@@ -175,5 +186,45 @@ func TestConfigureWifiAtomicWrite(t *testing.T) {
 		if !strings.Contains(content, "ssid=\"MyHomeSSID\"") || !strings.Contains(content, "psk=\"secpass\"") {
 			t.Errorf("Configuration file content mismatch:\n%s", content)
 		}
+	}
+}
+
+// Helper process for mocking exec.Command in tests
+func fakeExecCommand(command string, args ...string) *exec.Cmd {
+	cs := []string{"-test.run=TestHelperProcess", "--", command}
+	cs = append(cs, args...)
+	cmd := exec.Command(os.Args[0], cs...)
+	cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
+	return cmd
+}
+
+func TestHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+	args := os.Args
+	for i, arg := range args {
+		if arg == "--" {
+			args = args[i+1:]
+			break
+		}
+	}
+	if len(args) == 0 {
+		os.Exit(0)
+	}
+
+	subCmd := args[0]
+	switch subCmd {
+	case "sudo":
+		if len(args) > 2 && args[1] == "systemctl" {
+			action := args[2]
+			if action == "is-active" {
+				os.Exit(1) // Return inactive (non-zero) to trigger systemctl start path
+			}
+			os.Exit(0) // Success for start/stop
+		}
+		os.Exit(0)
+	default:
+		os.Exit(0)
 	}
 }
