@@ -68,3 +68,14 @@
   ```bash
   yarn add <ชื่อแพ็กเกจ>
   ```
+
+---
+
+## 4. กฎการจัดการการเชื่อมต่อ Wi-Fi และเครือข่ายไร้สาย (Wi-Fi Configuration Rules)
+
+* **ข้อกำหนดการทำงาน**: การตั้งค่าการเชื่อมต่อ Wi-Fi Client บน Linux Host จะต้องใช้ `wpa_supplicant` เป็นเครื่องมือหลัก และหลีกเลี่ยงการติดตั้งหรือใช้งาน `NetworkManager` (`nmcli`) เพื่อลดปัญหาขัดแย้งเชิงระบบ (Conflict)
+* **แนวทางปฏิบัติ**:
+  * โค้ดหลังบ้านที่แก้ไขการตั้งค่า Wi-Fi จะต้องเขียนบันทึกไฟล์คอนฟิกรายพอร์ต เช่น `/etc/wpa_supplicant/wpa_supplicant-wlan0.conf` จากนั้นส่งคำสั่ง `RECONFIGURE` ผ่าน UNIX Domain Socket (`unixgram`) ของ `wpa_supplicant` แทนการเรียกคำสั่งภายนอกผ่าน subprocesses
+  * การบันทึกไฟล์คอนฟิก Wi-Fi ต้องทำแบบอะตอมมิก (Atomic write) เสมอเพื่อความมั่นคงปลอดภัย
+  * ศึกษารายละเอียดแนวทางการเขียนโค้ดและข้อควรระวังความปลอดภัยในการพัฒนา Wi-Fi Client เพิ่มเติมที่คู่มือ [wifi_wpa_working_instruction.md](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/docs/wifi_wpa_working_instruction.md)
+

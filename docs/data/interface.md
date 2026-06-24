@@ -263,7 +263,125 @@ sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
 
 ---
 
-## 9. ไฟล์ที่เกี่ยวข้อง
+---
+
+## 9. Wi-Fi Client Management & wpa_supplicant Integration
+
+ระบบควบคุม Wi-Fi ของ PiGate หลีกเลี่ยงการใช้งาน `NetworkManager` (`nmcli`) เพื่อลด Overhead ของระบบปฏิบัติการ และป้องกันสิทธิ์การแย่งชิงควบคุมอินเทอร์เฟซ (IP/Routing Conflict) โดยใช้ **`wpa_supplicant`** ซึ่งเป็นมาตรฐานน้ำหนักเบาและเชื่อมโยงการทำงานในระดับ Link Layer (Layer 2) แทน
+
+### 9.1 Auto-Failover & Priority ใน wpa_supplicant
+
+`wpa_supplicant` สามารถจัดการการสลับสายไปยังคลื่นสำรองและสลับกลับ (Failover & Failback) ได้ในตัวเองโดยการระบุบล็อก `network` หลายตัวและใช้ระบบความสำคัญ (`priority`) ในไฟล์คอนฟิก `/etc/wpa_supplicant/wpa_supplicant-wlan0.conf`:
+
+```wpa_supplicant
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country=TH
+
+# เครือข่ายหลัก (SSID หลัก)
+network={
+    ssid="MyHome_WiFi"
+    psk="primary-password-here"
+    priority=10
+}
+
+# เครือข่ายสำรอง (Backup SSID)
+network={
+    ssid="Backup_WiFi"
+    psk="backup-password-here"
+    priority=5
+}
+```
+
+* **การสลับคลื่น**: หากสัญญาณคลื่นหลักหายไป ระบบจะสลับมาเชื่อมคลื่นสำรองอัตโนมัติ
+* **การดึงข้อมูลกลับ**: เมื่อคลื่นที่มี `priority` สูงกว่ากลับมาส่งสัญญาณ ระบบจะย้ายกลับไปเชื่อมต่อคลื่นหลักให้อัตโนมัติ
+
+---
+
+### 9.2 wpa_supplicant Control Socket Mechanism
+
+แทนการเรียกใช้ Subprocess ด้วยเชลล์คำสั่ง `wpa_cli` ทางระบบ Go Backend สื่อสารผ่าน **UNIX Domain Datagram Socket (`SOCK_DGRAM`)** ของ `wpa_supplicant` โดยตรง
+
+```text
+  Go Backend (Client)                                   wpa_supplicant (Server)
+┌─────────────────────────────────┐                   ┌───────────────────────────────┐
+│ Local Temp Socket:              │                   │ Master Control Socket:        │
+│ `/run/pigate/wpa_ctrl_12345`    │                   │ `/var/run/wpa_supplicant/wlan0`│
+│                                 │                   │                               │
+│      1. Bind Local Temp Socket ─┼───────────────────┼─► [Listening]                 │
+│      2. Send Command Datagram  ─┼───────────────────┼──► (เช่น "PING")               │
+│                                 │                   │                               │
+│      3. Wait and Receive ◄──────┼───────────────────┼─── Send Response ("PONG")     │
+│                                 │                   │                               │
+│      4. Unlink/Delete Temp File │                   │                               │
+└─────────────────────────────────┘                   └───────────────────────────────┘
+```
+
+#### การสื่อสารระดับต่ำ (Low-level Go Socket Code Pattern):
+
+```go
+package kernel
+
+import (
+	"fmt"
+	"net"
+	"os"
+	"time"
+)
+
+// SendWpaCommand ส่งคำสั่งตรงไปยัง wpa_supplicant socket (เช่น "RECONFIGURE" เพื่อโหลดคอนฟิกใหม่)
+func SendWpaCommand(ifaceName string, command string) (string, error) {
+	destAddr := fmt.Sprintf("/var/run/wpa_supplicant/%s", ifaceName)
+	localAddr := fmt.Sprintf("/run/pigate/wpa_ctrl_%d", os.Getpid())
+	
+	_ = os.Remove(localAddr)
+
+	lAddr, err := net.ResolveUnixAddr("unixgram", localAddr)
+	if err != nil {
+		return "", err
+	}
+	rAddr, err := net.ResolveUnixAddr("unixgram", destAddr)
+	if err != nil {
+		return "", err
+	}
+
+	conn, err := net.DialUnix("unixgram", lAddr, rAddr)
+	if err != nil {
+		return "", fmt.Errorf("failed to dial wpa_supplicant socket: %w", err)
+	}
+	defer func() {
+		conn.Close()
+		os.Remove(localAddr)
+	}()
+
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+
+	_, err = conn.Write([]byte(command))
+	if err != nil {
+		return "", fmt.Errorf("failed to send command: %w", err)
+	}
+
+	buf := make([]byte, 2048)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	return string(buf[:n]), nil
+}
+```
+
+---
+
+### 9.3 ข้อควรระวังความปลอดภัย (Security Controls)
+
+1. **สิทธิ์การอ่านรหัสผ่าน (File Permissions)**: ไฟล์คอนฟิก `/etc/wpa_supplicant/wpa_supplicant-wlan0.conf` เก็บความลับของรหัสผ่าน จึงต้องเขียนไฟล์ด้วยสิทธิ์จำกัดระดับ `0600` (`chmod 600` - อ่านเขียนเฉพาะเจ้าของไฟล์) เท่านั้น
+2. **การป้องกัน Configuration Injection**: ก่อนเขียนข้อมูล SSID และ Password ลงในไฟล์คอนฟิก Go Backend ต้องทำความสะอาดอักขระพิเศษ เช่น `"` และ `\n` เพื่อป้องกันการบิดเบือนรูปแบบบล็อกเน็ตเวิร์ก
+3. **การเข้าถึง Socket**: โปรแกรมที่รันต้องอยู่ในกลุ่ม `netdev` เพื่อมีสิทธิ์เขียนไปยัง `/var/run/wpa_supplicant/` socket
+
+---
+
+## 10. ไฟล์ที่เกี่ยวข้อง
 
 | ไฟล์ | หน้าที่ |
 |---|---|
