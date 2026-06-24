@@ -33,7 +33,7 @@ func TestSanitizeWpaInput(t *testing.T) {
 // TestGenerateWpaConfig tests configuration file structure generation
 func TestGenerateWpaConfig(t *testing.T) {
 	// 1. Open Wifi
-	cfgOpen := GenerateWpaConfig("OpenSSID", "", "Open", "", "")
+	cfgOpen := GenerateWpaConfig("OpenSSID", "", "Open", "", "", "hardware")
 	if !strings.Contains(cfgOpen, "ssid=\"OpenSSID\"") {
 		t.Errorf("Expected ssid OpenSSID in config, got:\n%s", cfgOpen)
 	}
@@ -42,7 +42,7 @@ func TestGenerateWpaConfig(t *testing.T) {
 	}
 
 	// 2. WPA2-PSK
-	cfgWpa2 := GenerateWpaConfig("Wpa2SSID", "wpa2pass", "WPA2-PSK", "", "")
+	cfgWpa2 := GenerateWpaConfig("Wpa2SSID", "wpa2pass", "WPA2-PSK", "", "", "hardware")
 	if !strings.Contains(cfgWpa2, "ssid=\"Wpa2SSID\"") {
 		t.Errorf("Expected ssid Wpa2SSID in config, got:\n%s", cfgWpa2)
 	}
@@ -54,7 +54,7 @@ func TestGenerateWpaConfig(t *testing.T) {
 	}
 
 	// 3. WPA3-SAE
-	cfgWpa3 := GenerateWpaConfig("Wpa3SSID", "wpa3pass", "WPA3", "", "")
+	cfgWpa3 := GenerateWpaConfig("Wpa3SSID", "wpa3pass", "WPA3", "", "", "hardware")
 	if !strings.Contains(cfgWpa3, "key_mgmt=WPA-PSK SAE") {
 		t.Errorf("Expected key_mgmt=WPA-PSK SAE in config, got:\n%s", cfgWpa3)
 	}
@@ -63,7 +63,7 @@ func TestGenerateWpaConfig(t *testing.T) {
 	}
 
 	// 4. Backup SSIDs
-	cfgBackup := GenerateWpaConfig("PrimarySSID", "primpass", "WPA2-PSK", "BackupSSID", "backpass")
+	cfgBackup := GenerateWpaConfig("PrimarySSID", "primpass", "WPA2-PSK", "BackupSSID", "backpass", "hardware")
 	if !strings.Contains(cfgBackup, "priority=10") {
 		t.Errorf("Expected priority 10 in config, got:\n%s", cfgBackup)
 	}
@@ -75,6 +75,17 @@ func TestGenerateWpaConfig(t *testing.T) {
 	}
 	if !strings.Contains(cfgBackup, "priority=5") {
 		t.Errorf("Expected priority 5 in config, got:\n%s", cfgBackup)
+	}
+
+	// 5. Randomized MAC Mode
+	cfgRand := GenerateWpaConfig("PrimarySSID", "primpass", "WPA2-PSK", "BackupSSID", "backpass", "randomized")
+	if !strings.Contains(cfgRand, "preassoc_mac_addr=1") {
+		t.Errorf("Expected preassoc_mac_addr=1 in config, got:\n%s", cfgRand)
+	}
+	// Check that both network blocks have mac_addr=1
+	count := strings.Count(cfgRand, "    mac_addr=1")
+	if count != 2 {
+		t.Errorf("Expected mac_addr=1 to appear exactly 2 times (primary & backup), got %d times in config:\n%s", count, cfgRand)
 	}
 }
 
@@ -228,7 +239,7 @@ func TestConfigureWifiAtomicWrite(t *testing.T) {
 	// To prevent executing real 'systemctl' command errors failing the test, we'll verify the config is created.
 	// Since wlan_test is not a systemctl service, starting it will fail, which is expected.
 	// Let's call ConfigureWifi and expect an error from systemctl, but check if the config file was written correctly!
-	err = netMgr.ConfigureWifi("wlan_test", "MyHomeSSID", "secpass", "WPA2-PSK", "BackupSSID", "backpass")
+	err = netMgr.ConfigureWifi("wlan_test", "MyHomeSSID", "secpass", "WPA2-PSK", "BackupSSID", "backpass", "hardware")
 	
 	// The file should have been written despite systemctl service failing to start
 	configPath := filepath.Join(tmpDir, "wpa_supplicant-wlan_test.conf")

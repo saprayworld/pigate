@@ -24,15 +24,19 @@ func SanitizeWpaInput(val string) string {
 }
 
 // GenerateWpaConfig constructs the raw text content for a wpa_supplicant configuration file.
-// It incorporates security options (Open, WPA2, WPA3) and weight-based priorities.
-func GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword string) string {
-	log.Printf("[WPA Config] Building config layout for SSID=%q (Security=%s, HasPassword=%t), BackupSSID=%q (HasBackupPassword=%t)",
-		ssid, security, password != "", backupSSID, backupPassword != "")
+// It incorporates security options (Open, WPA2, WPA3), MAC randomization, and weight-based priorities.
+func GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword, macMode string) string {
+	log.Printf("[WPA Config] Building config layout for SSID=%q (Security=%s, HasPassword=%t), BackupSSID=%q (HasBackupPassword=%t), MacMode=%s",
+		ssid, security, password != "", backupSSID, backupPassword != "", macMode)
 
 	var sb strings.Builder
 	sb.WriteString("ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\n")
 	sb.WriteString("update_config=1\n")
-	sb.WriteString("country=TH\n\n")
+	sb.WriteString("country=TH\n")
+	if macMode == "randomized" {
+		sb.WriteString("preassoc_mac_addr=1\n")
+	}
+	sb.WriteString("\n")
 
 	cleanSSID := SanitizeWpaInput(ssid)
 	cleanPassword := SanitizeWpaInput(password)
@@ -51,6 +55,9 @@ func GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword stri
 	} else {
 		sb.WriteString("    key_mgmt=NONE\n")
 	}
+	if macMode == "randomized" {
+		sb.WriteString("    mac_addr=1\n")
+	}
 	sb.WriteString("    priority=10\n")
 	sb.WriteString("}\n")
 
@@ -67,6 +74,9 @@ func GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword stri
 			sb.WriteString("    ieee80211w=2\n")
 		} else {
 			sb.WriteString("    key_mgmt=NONE\n")
+		}
+		if macMode == "randomized" {
+			sb.WriteString("    mac_addr=1\n")
 		}
 		sb.WriteString("    priority=5\n")
 		sb.WriteString("}\n")

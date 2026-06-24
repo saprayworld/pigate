@@ -61,7 +61,7 @@ func (m *MockNetwork) ConfigureInterface(name string, mode string, ip string, ne
 	return nil
 }
 
-func (m *MockNetwork) ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string) error {
+func (m *MockNetwork) ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string, macMode string) error {
 	// Mock success
 	return nil
 }
@@ -78,9 +78,10 @@ func (m *MockNetwork) ScanWifi(name string) ([]model.WifiScanResult, error) {
 
 func (m *MockNetwork) GetWifiStatus(name string) (*model.WifiConnectionStatus, error) {
 	return &model.WifiConnectionStatus{
-		State: "COMPLETED",
-		SSID:  "MyHome_5G",
-		BSSID: "00:11:22:33:44:55",
+		State:     "COMPLETED",
+		SSID:      "MyHome_5G",
+		BSSID:     "00:11:22:33:44:55",
+		ActiveMac: "00:11:22:33:44:55",
 	}, nil
 }
 

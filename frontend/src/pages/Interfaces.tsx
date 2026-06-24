@@ -94,20 +94,7 @@ function SignalBar({ signal }: { signal: number }) {
   )
 }
 
-// Helper: Generate a valid LAA (Locally Administered Address) MAC Address
-function generateRandomMac(): string {
-  const hex = "0123456789ABCDEF";
-  // The first byte's second nibble must be 2, 6, A, or E for standard LAA
-  const laaDigits = ["2", "6", "A", "E"];
-  const firstByte = hex[Math.floor(Math.random() * 16)] + laaDigits[Math.floor(Math.random() * 4)];
-  const parts = [firstByte];
-  for (let i = 0; i < 5; i++) {
-    parts.push(
-      hex[Math.floor(Math.random() * 16)] + hex[Math.floor(Math.random() * 16)]
-    );
-  }
-  return parts.join(":");
-}
+
 
 const ALL_ACCESS_OPTIONS: AdminAccess[] = ["HTTPS", "HTTP", "PING", "SSH"]
 
@@ -164,10 +151,7 @@ export default function Interfaces() {
   const [formWifiPassword, setFormWifiPassword] = useState("")
 
   // Wi-Fi MAC Address Randomization & LAA Form State
-  const [formMacMode, setFormMacMode] = useState<"hardware" | "randomized" | "laa">("hardware")
-  const [formLaaMac, setFormLaaMac] = useState("")
-  const [formRandomizedMac, setFormRandomizedMac] = useState("")
-  const [formRandomizeOnReconnect, setFormRandomizeOnReconnect] = useState(false)
+  const [formMacMode, setFormMacMode] = useState<"hardware" | "randomized">("hardware")
 
   // Wi-Fi Backup & Failover Form State
   const [formFailoverEnabled, setFormFailoverEnabled] = useState(false)
@@ -201,7 +185,7 @@ export default function Interfaces() {
     }
   }
 
-  const [wifiLiveStatuses, setWifiLiveStatuses] = useState<Record<string, { state: string; ssid: string }>>({})
+  const [wifiLiveStatuses, setWifiLiveStatuses] = useState<Record<string, { state: string; ssid: string; activeMac?: string }>>({})
 
   useEffect(() => {
     loadData()
@@ -214,7 +198,7 @@ export default function Interfaces() {
           const status = await interfaceService.getWifiStatus(iface.id)
           setWifiLiveStatuses((prev) => ({
             ...prev,
-            [iface.id]: { state: status.state, ssid: status.ssid }
+            [iface.id]: { state: status.state, ssid: status.ssid, activeMac: status.activeMac }
           }))
         } catch (e) {
           console.error("Failed to fetch live wifi status:", e)
@@ -252,11 +236,7 @@ export default function Interfaces() {
     setFormWifiPassword("")
 
     // MAC fields
-    const defaultRandomMac = iface.randomizedMac || (iface.type === "wireless" ? generateRandomMac() : "")
-    setFormMacMode(iface.macMode || "hardware")
-    setFormLaaMac(iface.laaMacAddress || "")
-    setFormRandomizedMac(defaultRandomMac)
-    setFormRandomizeOnReconnect(iface.randomizeOnReconnect ?? false)
+    setFormMacMode(iface.macMode === "randomized" ? "randomized" : "hardware")
 
     // Failover fields
     setFormFailoverEnabled(iface.failoverEnabled ?? false)
@@ -450,22 +430,6 @@ export default function Interfaces() {
         return
       }
 
-      // Validation for LAA MAC
-      if (formMacMode === "laa") {
-        const macRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/
-        if (!macRegex.test(formLaaMac)) {
-          setFormError("รูปแบบ LAA MAC Address ไม่ถูกต้อง (ตัวอย่าง: 9A:11:22:33:44:55)")
-          return
-        }
-
-        // Check LAA bit (first byte's second nibble must be 2, 6, A, E)
-        const secondChar = formLaaMac.charAt(1).toUpperCase()
-        if (!["2", "6", "A", "E"].includes(secondChar)) {
-          setFormError("ที่อยู่ LAA MAC ไม่ตรงตามมาตรฐาน (อักขระหลักที่ 2 ต้องเป็น 2, 6, A หรือ E เช่น 9A:11:22:...)")
-          return
-        }
-      }
-
       // Wi-Fi Failover validations
       if (formFailoverEnabled) {
         if (formIpCheckTimeout < 5) {
@@ -497,9 +461,9 @@ export default function Interfaces() {
       if (editingIface.type === "wireless") {
         updates.wifiSSID = formSSID
         updates.macMode = formMacMode
-        updates.randomizedMac = formRandomizedMac
-        updates.laaMacAddress = formLaaMac
-        updates.randomizeOnReconnect = formRandomizeOnReconnect
+        updates.randomizedMac = ""
+        updates.laaMacAddress = ""
+        updates.randomizeOnReconnect = false
         if (formWifiPassword) {
           updates.wifiPassword = formWifiPassword
         }
@@ -801,32 +765,24 @@ export default function Interfaces() {
                   <Wifi className="h-3.5 w-3.5 text-indigo-400" />
                 )}
                 <span className="text-xs font-semibold text-foreground">{iface.name}</span>
-                {iface.type === "wireless" && iface.macMode && iface.macMode !== "hardware" && (
+                {iface.type === "wireless" && iface.macMode === "randomized" && (
                   <Badge
                     variant="outline"
-                    className={`text-[9px] px-1 py-0 rounded font-normal ${iface.macMode === "randomized"
-                      ? "bg-indigo-500/10 text-indigo-400 border-indigo-500/20"
-                      : "bg-amber-500/10 text-amber-400 border-amber-500/20"
-                      }`}
+                    className="text-[9px] px-1 py-0 rounded font-normal bg-indigo-500/10 text-indigo-400 border-indigo-500/20"
                   >
-                    {iface.macMode === "randomized" ? "Randomized" : "LAA"}
-                  </Badge>
-                )}
-                {iface.type === "wireless" && iface.macMode === "randomized" && iface.randomizeOnReconnect && (
-                  <Badge
-                    variant="outline"
-                    className="text-[9px] px-1 py-0 rounded font-normal bg-primary/10 text-primary border-primary/20"
-                    title="สุ่มที่อยู่ MAC ใหม่ทุกครั้งที่มีการเชื่อมต่อ"
-                  >
-                    Rotate
+                    Randomized
                   </Badge>
                 )}
               </div>
               <div className="flex flex-col items-end gap-0.5">
-                <span className="text-xs font-mono text-foreground">{iface.macAddress}</span>
-                {iface.type === "wireless" && iface.macMode && iface.macMode !== "hardware" && (
+                <span className="text-xs font-mono text-foreground">
+                  {iface.type === "wireless" && iface.macMode === "randomized"
+                    ? (wifiLiveStatuses[iface.id]?.activeMac || "สุ่มอัตโนมัติเมื่อเชื่อมต่อ")
+                    : iface.macAddress}
+                </span>
+                {iface.type === "wireless" && iface.macMode === "randomized" && (
                   <span className="text-[10px] font-mono text-muted-foreground">
-                    Real: {iface.realMacAddress}
+                    Real: {iface.realMacAddress || iface.macAddress}
                   </span>
                 )}
               </div>
@@ -1090,85 +1046,17 @@ export default function Interfaces() {
                     </Label>
                     <Select
                       value={formMacMode}
-                      onValueChange={(value: "hardware" | "randomized" | "laa") => setFormMacMode(value)}
+                      onValueChange={(value: "hardware" | "randomized") => setFormMacMode(value)}
                     >
                       <SelectTrigger id="form-mac-mode" size="sm" className="w-full sm:w-[220px] bg-background border-border/80 text-xs font-semibold text-foreground focus-visible:ring-indigo-500/20 focus-visible:border-indigo-500">
                         <SelectValue placeholder="เลือกโหมด MAC Address" />
                       </SelectTrigger>
                       <SelectContent className="border border-border/80 bg-popover text-foreground rounded-md text-xs font-semibold">
                         <SelectItem value="hardware">Hardware MAC (ที่อยู่จริง)</SelectItem>
-                        <SelectItem value="randomized">Randomized MAC (สุ่มที่อยู่)</SelectItem>
-                        <SelectItem value="laa">LAA MAC (กำหนดเอง)</SelectItem>
+                        <SelectItem value="randomized">Random MAC (สุ่มที่อยู่โดย wpa_supplicant)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-
-                  {/* Randomized MAC Details */}
-                  {formMacMode === "randomized" && (
-                    <div className="space-y-3 pt-1 animate-fade-in">
-                      <div className="space-y-1">
-                        <Label htmlFor="form-randomized-mac" className="text-[11px] text-muted-foreground">
-                          Randomized MAC Address (ค่าที่สุ่มได้)
-                        </Label>
-                        <div className="flex gap-2">
-                          <Input
-                            id="form-randomized-mac"
-                            type="text"
-                            readOnly
-                            value={formRandomizedMac}
-                            className="bg-background/30 h-8 font-mono text-xs flex-1 cursor-not-allowed select-all border-indigo-500/10"
-                          />
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setFormRandomizedMac(generateRandomMac())}
-                            className="cursor-pointer gap-1 text-xs h-8 px-3 border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10 hover:text-indigo-300"
-                          >
-                            <RefreshCw className="h-3 w-3" />
-                            สุ่มใหม่
-                          </Button>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between p-2.5 rounded-lg bg-background/30 border border-border/20">
-                        <div className="space-y-0.5 pr-2">
-                          <Label htmlFor="form-randomize-reconnect" className="text-xs font-semibold text-foreground block cursor-pointer">
-                            สุ่มใหม่ทุกครั้งที่เชื่อมต่อใหม่
-                          </Label>
-                          <span className="text-[10px] text-muted-foreground block leading-relaxed">
-                            สุ่ม MAC Address ชุดใหม่โดยอัตโนมัติเมื่อตัดการทำงานหรือสัญญาณหลุด (Reconnect)
-                          </span>
-                        </div>
-                        <Switch
-                          id="form-randomize-reconnect"
-                          size="sm"
-                          checked={formRandomizeOnReconnect}
-                          onCheckedChange={formMacMode === "randomized" ? setFormRandomizeOnReconnect : undefined}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* LAA Details */}
-                  {formMacMode === "laa" && (
-                    <div className="space-y-1.5 pt-1 animate-fade-in">
-                      <Label htmlFor="form-laa-mac" className="text-[11px] text-muted-foreground">
-                        Locally Administered MAC Address (LAA) <span className="text-red-500">*</span>
-                      </Label>
-                      <Input
-                        id="form-laa-mac"
-                        type="text"
-                        value={formLaaMac}
-                        onChange={(e) => setFormLaaMac(e.target.value.toUpperCase())}
-                        placeholder="เช่น 9A:11:22:33:44:55"
-                        className="bg-background/50 h-8 font-mono text-xs border-indigo-500/20 focus-visible:ring-indigo-500"
-                      />
-                      <p className="text-[10px] text-amber-400/90 italic leading-relaxed">
-                        * มาตรฐาน LAA: อักขระหลักที่ 2 ของกลุ่มแรกต้องเป็น 2, 6, A หรือ E (เช่น X2:XX:XX:XX:XX:XX)
-                      </p>
-                    </div>
-                  )}
 
                   {/* Comparison Panel */}
                   <div className="mt-1 text-xs bg-background/40 p-3 rounded-lg border border-indigo-500/10 space-y-1.5 font-mono">
@@ -1177,13 +1065,11 @@ export default function Interfaces() {
                       <span className="text-foreground">{editingIface?.realMacAddress || editingIface?.macAddress}</span>
                     </div>
                     <div className="flex justify-between border-t border-indigo-500/5 pt-1.5">
-                      <span className="text-muted-foreground">ที่อยู่ MAC ที่ใช้จริง (Effective):</span>
+                      <span className="text-muted-foreground">ที่อยู่ MAC ที่ใช้งานจริง (Active):</span>
                       <span className="text-indigo-400 font-bold">
                         {formMacMode === "hardware"
                           ? (editingIface?.realMacAddress || editingIface?.macAddress)
-                          : formMacMode === "randomized"
-                            ? formRandomizedMac
-                            : formLaaMac || "—"}
+                          : (editingIface && wifiLiveStatuses[editingIface.id]?.activeMac) || "สุ่มอัตโนมัติเมื่อเชื่อมต่อ"}
                       </span>
                     </div>
                   </div>

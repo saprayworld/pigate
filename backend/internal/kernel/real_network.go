@@ -101,9 +101,9 @@ func (r *RealNetwork) ToggleInterface(name string, up bool) error {
 }
 
 // ConfigureWifi writes the wpa_supplicant config file atomically and reloads/starts the service.
-func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string) error {
-	log.Printf("[RealNetwork] ConfigureWifi started: interface=%s, SSID=%q, Security=%s, BackupSSID=%q",
-		name, ssid, security, backupSSID)
+func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string, macMode string) error {
+	log.Printf("[RealNetwork] ConfigureWifi started: interface=%s, SSID=%q, Security=%s, BackupSSID=%q, MacMode=%s",
+		name, ssid, security, backupSSID, macMode)
 
 	// Validate interface name to prevent traversal or command parameter injection
 	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "..") {
@@ -116,7 +116,7 @@ func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, s
 	}
 
 	// Generate the wpa_supplicant config content
-	configContent := GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword)
+	configContent := GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword, macMode)
 
 	// Determine the paths
 	configPath := filepath.Join(wpaConfigDir, fmt.Sprintf("wpa_supplicant-%s.conf", name))
@@ -473,6 +473,11 @@ func (r *RealNetwork) GetWifiStatus(name string) (*model.WifiConnectionStatus, e
 		}
 	}
 
-	log.Printf("[RealNetwork] GetWifiStatus result: State=%s, SSID=%s, BSSID=%s", status.State, status.SSID, status.BSSID)
+	// Fetch actual active MAC address of the interface
+	if iface, err := net.InterfaceByName(name); err == nil {
+		status.ActiveMac = iface.HardwareAddr.String()
+	}
+
+	log.Printf("[RealNetwork] GetWifiStatus result: State=%s, SSID=%s, BSSID=%s, ActiveMac=%s", status.State, status.SSID, status.BSSID, status.ActiveMac)
 	return status, nil
 }

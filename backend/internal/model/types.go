@@ -137,9 +137,10 @@ type WifiScanResult struct {
 
 // WifiConnectionStatus represents the current real-time state of a Wi-Fi connection
 type WifiConnectionStatus struct {
-	State string `json:"state"` // e.g. "COMPLETED", "DISCONNECTED", "SCANNING", etc.
-	SSID  string `json:"ssid"`  // Connected network name
-	BSSID string `json:"bssid"` // MAC address of the connected AP
+	State     string `json:"state"` // e.g. "COMPLETED", "DISCONNECTED", "SCANNING", etc.
+	SSID      string `json:"ssid"`  // Connected network name
+	BSSID     string `json:"bssid"` // MAC address of the connected AP
+	ActiveMac string `json:"activeMac"` // The currently active/effective MAC address of the interface
 }
 
 // StaticRoute represents a gateway route configuration

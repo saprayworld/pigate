@@ -359,8 +359,12 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 		if iface.BackupWifiPassword != nil {
 			backupPassword = *iface.BackupWifiPassword
 		}
+		macMode := "hardware"
+		if iface.MacMode != nil {
+			macMode = *iface.MacMode
+		}
 
-		if err := s.network.ConfigureWifi(iface.Name, ssid, password, security, backupSSID, backupPassword); err != nil {
+		if err := s.network.ConfigureWifi(iface.Name, ssid, password, security, backupSSID, backupPassword, macMode); err != nil {
 			s.writeError(w, http.StatusInternalServerError, "OS level Wi-Fi configuration failed: "+err.Error())
 			return
 		}

@@ -156,13 +156,14 @@ export const interfaceService = {
   },
 
   // Fetch live Wi-Fi connection status
-  getWifiStatus: async (id: string): Promise<{ state: string; ssid: string; bssid: string }> => {
+  getWifiStatus: async (id: string): Promise<{ state: string; ssid: string; bssid: string; activeMac?: string }> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 200));
       return {
         state: "COMPLETED",
         ssid: "MyHome_5G",
         bssid: "00:11:22:33:44:55",
+        activeMac: "00:11:22:33:44:55",
       };
     }
 
