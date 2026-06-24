@@ -76,6 +76,14 @@ func (m *MockNetwork) ScanWifi(name string) ([]model.WifiScanResult, error) {
 	}, nil
 }
 
+func (m *MockNetwork) GetWifiStatus(name string) (*model.WifiConnectionStatus, error) {
+	return &model.WifiConnectionStatus{
+		State: "COMPLETED",
+		SSID:  "MyHome_5G",
+		BSSID: "00:11:22:33:44:55",
+	}, nil
+}
+
 // MockRouting implements RoutingManager for local testing
 type MockRouting struct{}
 

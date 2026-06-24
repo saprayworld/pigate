@@ -63,7 +63,7 @@ func GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword stri
 		if cleanBackupPassword != "" {
 			sb.WriteString(fmt.Sprintf("    psk=\"%s\"\n", cleanBackupPassword))
 			// Default backup key_mgmt to WPA-PSK SAE for maximum compatibility with both WPA2/WPA3
-			sb.WriteString("    key_mgmt=WPA-PSK SAE\n")
+			sb.WriteString("    key_mgmt=WPA-PSK\n")
 			sb.WriteString("    ieee80211w=2\n")
 		} else {
 			sb.WriteString("    key_mgmt=NONE\n")
@@ -79,7 +79,7 @@ func GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword stri
 func SendWpaCommand(ifaceName string, command string) (string, error) {
 	destAddr := fmt.Sprintf("%s/%s", wpaSocketDir, ifaceName)
 	log.Printf("[WPA Socket] Resolving socket address: destination=%s", destAddr)
-	
+
 	// Ensure the local socket directory exists (fall back to /tmp if write to /run is denied or not writable)
 	localDir := wpaLocalSocketDir
 	useTemp := false

@@ -430,3 +430,49 @@ func scanWifiWithNmcli(name string) ([]model.WifiScanResult, error) {
 
 	return results, nil
 }
+
+// GetWifiStatus queries wpa_supplicant via socket to fetch live status details.
+func (r *RealNetwork) GetWifiStatus(name string) (*model.WifiConnectionStatus, error) {
+	log.Printf("[RealNetwork] GetWifiStatus called for interface %s", name)
+
+	// Validate interface name to prevent traversal or parameter injection
+	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "..") {
+		return nil, fmt.Errorf("invalid interface name: %q", name)
+	}
+
+	resp, err := SendWpaCommand(name, "STATUS")
+	if err != nil {
+		log.Printf("[RealNetwork] SendWpaCommand STATUS failed: %v", err)
+		return nil, fmt.Errorf("failed to send STATUS command to wpa_supplicant: %w", err)
+	}
+
+	status := &model.WifiConnectionStatus{
+		State: "DISCONNECTED",
+	}
+
+	lines := strings.Split(resp, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := parts[0]
+		val := parts[1]
+
+		switch key {
+		case "wpa_state":
+			status.State = val
+		case "ssid":
+			status.SSID = val
+		case "bssid":
+			status.BSSID = val
+		}
+	}
+
+	log.Printf("[RealNetwork] GetWifiStatus result: State=%s, SSID=%s, BSSID=%s", status.State, status.SSID, status.BSSID)
+	return status, nil
+}

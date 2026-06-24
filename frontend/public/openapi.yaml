@@ -204,7 +204,7 @@ paths:
                     type: string
                     enum: [HTTPS, HTTP, PING, SSH]
                 # Wireless specific
-                connectedSSID:
+                wifiSSID:
                   type: string
                 wifiPassword:
                   type: string
@@ -350,6 +350,29 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/WifiScanResult'
+
+  /interfaces/{id}/wifi-status:
+    get:
+      tags:
+        - Network Interfaces
+      summary: Retrieve the live real-time Wi-Fi connection status (Wireless interfaces only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Wi-Fi connection status retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WifiConnectionStatus'
+        '400':
+          description: Interface is not wireless
+        '404':
+          description: Interface not found
 
   # =========================================================================
   # FIREWALL POLICIES
@@ -1346,7 +1369,7 @@ components:
           type: string
           example: "1000 Mbps"
         # Optional Wireless Fields
-        connectedSSID:
+        wifiSSID:
           type: string
           example: MyHome_5G
         wifiPassword:
@@ -1416,6 +1439,23 @@ components:
         frequency:
           type: string
           example: "5 GHz"
+
+    WifiConnectionStatus:
+      type: object
+      required:
+        - state
+        - ssid
+        - bssid
+      properties:
+        state:
+          type: string
+          example: COMPLETED
+        ssid:
+          type: string
+          example: MyHome_5G
+        bssid:
+          type: string
+          example: "00:11:22:33:44:55"
 
     # --- Firewall Policy Schemas ---
     PolicyRule:

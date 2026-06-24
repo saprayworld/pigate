@@ -201,9 +201,32 @@ export default function Interfaces() {
     }
   }
 
+  const [wifiLiveStatuses, setWifiLiveStatuses] = useState<Record<string, { state: string; ssid: string }>>({})
+
   useEffect(() => {
     loadData()
   }, [])
+
+  useEffect(() => {
+    interfaces.forEach(async (iface) => {
+      if (iface.type === "wireless" && iface.status === "up") {
+        try {
+          const status = await interfaceService.getWifiStatus(iface.id)
+          setWifiLiveStatuses((prev) => ({
+            ...prev,
+            [iface.id]: { state: status.state, ssid: status.ssid }
+          }))
+        } catch (e) {
+          console.error("Failed to fetch live wifi status:", e)
+        }
+      } else if (iface.type === "wireless" && iface.status !== "up") {
+        setWifiLiveStatuses((prev) => ({
+          ...prev,
+          [iface.id]: { state: "DISCONNECTED", ssid: "" }
+        }))
+      }
+    })
+  }, [interfaces])
 
   // --- Statistics ---
   const stats = useMemo(() => {
@@ -225,7 +248,7 @@ export default function Interfaces() {
     setFormNetmask(iface.netmask)
     setFormGateway(iface.gateway)
     setFormAccess([...iface.adminAccess])
-    setFormSSID(iface.connectedSSID || "")
+    setFormSSID(iface.wifiSSID || "")
     setFormWifiPassword("")
 
     // MAC fields
@@ -472,7 +495,7 @@ export default function Interfaces() {
       }
 
       if (editingIface.type === "wireless") {
-        updates.connectedSSID = formSSID
+        updates.wifiSSID = formSSID
         updates.macMode = formMacMode
         updates.randomizedMac = formRandomizedMac
         updates.laaMacAddress = formLaaMac
@@ -610,10 +633,35 @@ export default function Interfaces() {
                         <Badge variant="secondary" className="text-[9px] px-1.5 py-0.5 rounded capitalize bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 border-none font-mono font-medium">
                           {iface.subtype || iface.type}
                         </Badge>
-                        {iface.type === "wireless" && iface.connectedSSID && iface.status === "up" && (
+                        {
+                          iface.type === "wireless" ? (
+                            wifiLiveStatuses[iface.id]?.state === "COMPLETED" ? (
+                              <Badge className="bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                                Connected
+                              </Badge>
+                            ) : wifiLiveStatuses[iface.id]?.state === "SCANNING" ? (
+                              <Badge className="bg-amber-500/10 text-amber-500 border border-amber-500/20 hover:bg-amber-500/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                                Scanning
+                              </Badge>
+                            ) : wifiLiveStatuses[iface.id]?.state === "ASSOCIATING" ||
+                              wifiLiveStatuses[iface.id]?.state === "AUTHENTICATING" ||
+                              wifiLiveStatuses[iface.id]?.state === "ASSOCIATED" ||
+                              wifiLiveStatuses[iface.id]?.state === "4WAY_HANDSHAKE" ||
+                              wifiLiveStatuses[iface.id]?.state === "GROUP_HANDSHAKE" ? (
+                              <Badge className="bg-amber-500/10 text-amber-500 border border-amber-500/20 hover:bg-amber-500/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                                Connecting
+                              </Badge>
+                            ) : (
+                              <Badge className="bg-red-500/10 text-red-500 border border-red-500/20 hover:bg-red-500/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                                Disconnected
+                              </Badge>
+                            )
+                          ) : <></>
+                        }
+                        {iface.type === "wireless" && iface.status === "up" && wifiLiveStatuses[iface.id]?.ssid && (
                           <div className="flex items-center gap-1 ml-0.5">
                             <Signal className="h-3 w-3 text-indigo-400" />
-                            <span className="text-[10px] text-indigo-400 font-mono">{iface.connectedSSID}</span>
+                            <span className="text-[10px] text-indigo-400 font-mono">{wifiLiveStatuses[iface.id].ssid}</span>
                           </div>
                         )}
                       </div>

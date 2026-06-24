@@ -109,7 +109,8 @@ type NetworkInterface struct {
 	AdminAccess          []string     `json:"adminAccess"` // PING, HTTP, HTTPS, SSH
 	Status               string       `json:"status"`      // "up", "down"
 	Speed                string       `json:"speed"`       // e.g. "1000 Mbps"
-	ConnectedSSID        *string      `json:"connectedSSID,omitempty"`
+
+	WifiSSID             *string      `json:"wifiSSID,omitempty"`
 	WifiPassword         *string      `json:"wifiPassword,omitempty"`
 	WifiSecurity         *string      `json:"wifiSecurity,omitempty"`
 	MacMode              *string      `json:"macMode,omitempty"` // "hardware", "randomized", "laa"
@@ -132,6 +133,13 @@ type WifiScanResult struct {
 	Security  string `json:"security"`
 	Channel   int    `json:"channel"`
 	Frequency string `json:"frequency"` // "2.4 GHz" or "5 GHz"
+}
+
+// WifiConnectionStatus represents the current real-time state of a Wi-Fi connection
+type WifiConnectionStatus struct {
+	State string `json:"state"` // e.g. "COMPLETED", "DISCONNECTED", "SCANNING", etc.
+	SSID  string `json:"ssid"`  // Connected network name
+	BSSID string `json:"bssid"` // MAC address of the connected AP
 }
 
 // StaticRoute represents a gateway route configuration

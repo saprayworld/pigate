@@ -18,6 +18,7 @@ type NetworkManager interface {
 	ScanWifi(name string) ([]model.WifiScanResult, error)
 	ConfigureInterface(name string, mode string, ip string, netmask string, gateway string) error
 	ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string) error
+	GetWifiStatus(name string) (*model.WifiConnectionStatus, error)
 }
 
 // RoutingManager abstracts netlink route modifications

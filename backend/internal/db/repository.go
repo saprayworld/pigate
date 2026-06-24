@@ -1451,7 +1451,7 @@ func (r *Repository) SyncInterfacesFromOS() error {
 				Speed:          "72 Mbps",
 			}
 			mockSSID := "MyHome_5G"
-			mockWifi.ConnectedSSID = &mockSSID
+			mockWifi.WifiSSID = &mockSSID
 			mockSec := "WPA2-PSK"
 			mockWifi.WifiSecurity = &mockSec
 			mockMode := "randomized"
@@ -1510,7 +1510,7 @@ func (r *Repository) GetInterfaces() ([]model.NetworkInterface, error) {
 			&iface.IP, &iface.Netmask, &iface.Gateway, &iface.MacAddress,
 			&adminAccessStr, &iface.Status, &iface.Speed,
 			&iface.MacMode, &iface.RealMacAddress, &iface.RandomizedMac, &iface.LaaMacAddress, &reconnectInt,
-			&iface.ConnectedSSID, &iface.WifiSecurity, &failoverInt, &iface.BackupSSID, &iface.BackupWifiPassword,
+			&iface.WifiSSID, &iface.WifiSecurity, &failoverInt, &iface.BackupSSID, &iface.BackupWifiPassword,
 			&iface.IPCheckTimeout, &iface.PrimaryMaxRetries, &iface.FailoverCooldown,
 		)
 		if err != nil {
@@ -1547,7 +1547,7 @@ func (r *Repository) GetInterfaceByID(id string) (*model.NetworkInterface, error
 		&iface.IP, &iface.Netmask, &iface.Gateway, &iface.MacAddress,
 		&adminAccessStr, &iface.Status, &iface.Speed,
 		&iface.MacMode, &iface.RealMacAddress, &iface.RandomizedMac, &iface.LaaMacAddress, &reconnectInt,
-		&iface.ConnectedSSID, &iface.WifiSecurity, &failoverInt, &iface.BackupSSID, &iface.BackupWifiPassword,
+		&iface.WifiSSID, &iface.WifiSecurity, &failoverInt, &iface.BackupSSID, &iface.BackupWifiPassword,
 		&iface.IPCheckTimeout, &iface.PrimaryMaxRetries, &iface.FailoverCooldown,
 	)
 	if err == sql.ErrNoRows {
@@ -1587,7 +1587,7 @@ func (r *Repository) UpdateInterface(iface model.NetworkInterface) error {
 		WHERE id = ?`,
 		iface.Alias, iface.Role, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.MacAddress, adminAccessStr,
 		iface.MacMode, iface.RealMacAddress, iface.RandomizedMac, iface.LaaMacAddress, reconInt,
-		iface.ConnectedSSID, iface.WifiSecurity, foInt, iface.BackupSSID, iface.BackupWifiPassword,
+		iface.WifiSSID, iface.WifiSecurity, foInt, iface.BackupSSID, iface.BackupWifiPassword,
 		iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown, iface.ID)
 	return err
 }

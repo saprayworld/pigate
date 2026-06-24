@@ -137,6 +137,71 @@ func TestSendWpaCommand(t *testing.T) {
 	}
 }
 
+// TestGetWifiStatus tests the RealNetwork.GetWifiStatus method and parsing
+func TestGetWifiStatus(t *testing.T) {
+	// Create a temporary directory for UNIX sockets
+	tmpDir, err := os.MkdirTemp("", "wpa_status_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Override socket path configurations
+	oldSocketDir := wpaSocketDir
+	wpaSocketDir = tmpDir
+	oldLocalSocketDir := wpaLocalSocketDir
+	wpaLocalSocketDir = tmpDir
+	defer func() {
+		wpaSocketDir = oldSocketDir
+		wpaLocalSocketDir = oldLocalSocketDir
+	}()
+
+	destSocketPath := filepath.Join(tmpDir, "wlan0_status_test")
+
+	// Set up mock wpa_supplicant server using UNIX gram
+	lAddr, err := net.ResolveUnixAddr("unixgram", destSocketPath)
+	if err != nil {
+		t.Fatalf("ResolveUnixAddr failed: %v", err)
+	}
+
+	conn, err := net.ListenUnixgram("unixgram", lAddr)
+	if err != nil {
+		t.Fatalf("ListenUnixgram failed: %v", err)
+	}
+	defer conn.Close()
+
+	// Goroutine that listens on the mock wpa_supplicant socket and replies
+	go func() {
+		buf := make([]byte, 1024)
+		n, rAddr, err := conn.ReadFrom(buf)
+		if err != nil {
+			return
+		}
+		cmd := string(buf[:n])
+		if cmd == "STATUS" {
+			reply := "bssid=00:11:22:33:44:55\nfreq=5180\nssid=MyHome_5G\nid=0\nmode=station\npairwise_cipher=CCMP\ngroup_cipher=CCMP\nkey_mgmt=WPA2-PSK\nwpa_state=COMPLETED\nip_address=10.0.0.45\naddress=dc:a6:32:aa:bb:c1\n"
+			_, _ = conn.WriteTo([]byte(reply), rAddr)
+		}
+	}()
+
+	netMgr := NewRealNetwork()
+	status, err := netMgr.GetWifiStatus("wlan0_status_test")
+	if err != nil {
+		t.Fatalf("GetWifiStatus returned unexpected error: %v", err)
+	}
+
+	if status.State != "COMPLETED" {
+		t.Errorf("Expected State COMPLETED, got %q", status.State)
+	}
+	if status.SSID != "MyHome_5G" {
+		t.Errorf("Expected SSID MyHome_5G, got %q", status.SSID)
+	}
+	if status.BSSID != "00:11:22:33:44:55" {
+		t.Errorf("Expected BSSID 00:11:22:33:44:55, got %q", status.BSSID)
+	}
+}
+
+
 // TestConfigureWifiAtomicWrite tests the atomic file writing configuration of wifi
 func TestConfigureWifiAtomicWrite(t *testing.T) {
 	// Create a temporary directory for wpa_supplicant configuration files

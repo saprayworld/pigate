@@ -47,16 +47,16 @@ export default function Dashboard() {
       const now = new Date()
       setSystemTime(
         now.getFullYear() +
-          "-" +
-          String(now.getMonth() + 1).padStart(2, "0") +
-          "-" +
-          String(now.getDate()).padStart(2, "0") +
-          " " +
-          String(now.getHours()).padStart(2, "0") +
-          ":" +
-          String(now.getMinutes()).padStart(2, "0") +
-          ":" +
-          String(now.getSeconds()).padStart(2, "0")
+        "-" +
+        String(now.getMonth() + 1).padStart(2, "0") +
+        "-" +
+        String(now.getDate()).padStart(2, "0") +
+        " " +
+        String(now.getHours()).padStart(2, "0") +
+        ":" +
+        String(now.getMinutes()).padStart(2, "0") +
+        ":" +
+        String(now.getSeconds()).padStart(2, "0")
       )
       // Tick uptime
       setUptimeSeconds((prev) => prev + 1)
@@ -91,7 +91,7 @@ export default function Dashboard() {
     try {
       const data = await dashboardService.getStats()
       setStats(data)
-    } catch (err) {}
+    } catch (err) { }
   }
 
   useEffect(() => {
@@ -107,7 +107,7 @@ export default function Dashboard() {
         setCpuUsage(perf.cpu)
         setMemUsage(perf.memory)
         setBoardTemp(perf.temp)
-      } catch (err) {}
+      } catch (err) { }
     }
 
     fetchPerf() // initial fetch
@@ -123,8 +123,8 @@ export default function Dashboard() {
     for (let i = 14; i >= 0; i--) {
       const t = new Date(now.getTime() - i * 2000)
       const timeStr = String(t.getHours()).padStart(2, "0") + ":" +
-                      String(t.getMinutes()).padStart(2, "0") + ":" +
-                      String(t.getSeconds()).padStart(2, "0")
+        String(t.getMinutes()).padStart(2, "0") + ":" +
+        String(t.getSeconds()).padStart(2, "0")
       base.push({
         time: timeStr,
         inbound: Math.round((4.0 + Math.random() * 2) * 10) / 10,
@@ -139,8 +139,8 @@ export default function Dashboard() {
       setTrafficData((prev) => {
         const t = new Date()
         const timeStr = String(t.getHours()).padStart(2, "0") + ":" +
-                        String(t.getMinutes()).padStart(2, "0") + ":" +
-                        String(t.getSeconds()).padStart(2, "0")
+          String(t.getMinutes()).padStart(2, "0") + ":" +
+          String(t.getSeconds()).padStart(2, "0")
 
         // New speeds
         const lastIn = prev[prev.length - 1].inbound
@@ -176,7 +176,7 @@ export default function Dashboard() {
       try {
         const initialLogs = await dashboardService.getRecentLogs()
         setLogs(initialLogs)
-      } catch (err) {}
+      } catch (err) { }
     }
     loadLogs()
   }, [])
@@ -237,7 +237,7 @@ export default function Dashboard() {
       setCpuUsage(perf.cpu)
       setMemUsage(perf.memory)
       setBoardTemp(perf.temp)
-    } catch (err) {}
+    } catch (err) { }
   }
 
   const handleClearLogs = async () => {
@@ -342,7 +342,7 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent className="space-y-1">
             <span className="text-2xl font-bold text-foreground">{stats.wifiStatus}</span>
-            <CardDescription className="text-xs text-muted-foreground truncate">SSID: {stats.wifiSSID} (8 Clients)</CardDescription>
+            <CardDescription className="text-xs text-muted-foreground truncate">SSID: {stats.wifiSSID}</CardDescription>
           </CardContent>
         </Card>
       </div>
@@ -496,11 +496,10 @@ export default function Dashboard() {
                 <button
                   key={filter}
                   onClick={() => setActionFilter(filter)}
-                  className={`flex-1 py-1 rounded text-center cursor-pointer font-medium transition ${
-                    actionFilter === filter
-                      ? "bg-card text-foreground font-semibold"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
+                  className={`flex-1 py-1 rounded text-center cursor-pointer font-medium transition ${actionFilter === filter
+                    ? "bg-card text-foreground font-semibold"
+                    : "text-muted-foreground hover:text-foreground"
+                    }`}
                 >
                   {filter}
                 </button>
@@ -534,11 +533,10 @@ export default function Dashboard() {
                     <span className="text-muted-foreground font-mono">{log.time}</span>
                     <Badge
                       variant={log.action === "DROP" ? "destructive" : "outline"}
-                      className={`h-4.5 rounded px-1.5 text-[9px] font-bold ${
-                        log.action === "PASS"
-                          ? "bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20"
-                          : "bg-red-500/10 text-red-500 border-red-500/20 hover:bg-red-500/20"
-                      }`}
+                      className={`h-4.5 rounded px-1.5 text-[9px] font-bold ${log.action === "PASS"
+                        ? "bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20"
+                        : "bg-red-500/10 text-red-500 border-red-500/20 hover:bg-red-500/20"
+                        }`}
                     >
                       {log.action}
                     </Badge>
@@ -676,9 +674,18 @@ export default function Dashboard() {
                   <Radio className="h-4 w-4 text-amber-500" />
                   wlan0 (WAN)
                 </span>
-                <Badge className="bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
-                  Connected
-                </Badge>
+                {
+                  stats.wifiStatus === "Connected" ? (
+                    <Badge className="bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                      Connected
+                    </Badge>
+                  ) : (
+                    <Badge className="bg-red-500/10 text-red-500 border-red-500/20 hover:bg-red-500/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                      Disconnected
+                    </Badge>
+                  )
+                }
+
               </div>
               <div className="text-xs space-y-1.5 font-mono text-muted-foreground">
                 <div className="flex justify-between">
@@ -687,7 +694,7 @@ export default function Dashboard() {
                 </div>
                 <div className="flex justify-between">
                   <span>SSID:</span>
-                  <span className="text-foreground font-medium italic">MyHome_5G</span>
+                  <span className="text-foreground font-medium italic">{stats.wifiSSID}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Signal:</span>
@@ -736,11 +743,11 @@ export default function Dashboard() {
         </p>
         <pre className="overflow-x-auto rounded-lg bg-neutral-900 dark:bg-black p-3.5 font-mono text-[11px] text-neutral-300 border border-neutral-800">
           {"// 1. การดึงค่า CPU / RAM / Temp (ใช้ `/sys/class/` หรือ `gopsutil` ใน Go Backend)\n" +
-           "// ดึงความร้อนบอร์ด RPI5:\n" +
-           "// Reading /sys/class/thermal/thermal_zone0/temp -> Divide by 1000\n\n" +
-           "// 2. การดึงประวัติการบล็อกคัดกรองแพ็กเก็ตจาก nftables มาแสดงในตาราง Log\n" +
-           "// ต้องเปิดการทำ log ในกฎ nftables ก่อน (เช่น nft add rule ip filter FORWARD log prefix \"PiGate_Drop: \" drop)\n" +
-           "// จากนั้นอ่าน log สดผ่าน D-Bus หรือ tail dmesg / journald logs"}
+            "// ดึงความร้อนบอร์ด RPI5:\n" +
+            "// Reading /sys/class/thermal/thermal_zone0/temp -> Divide by 1000\n\n" +
+            "// 2. การดึงประวัติการบล็อกคัดกรองแพ็กเก็ตจาก nftables มาแสดงในตาราง Log\n" +
+            "// ต้องเปิดการทำ log ในกฎ nftables ก่อน (เช่น nft add rule ip filter FORWARD log prefix \"PiGate_Drop: \" drop)\n" +
+            "// จากนั้นอ่าน log สดผ่าน D-Bus หรือ tail dmesg / journald logs"}
         </pre>
       </div>
     </div>

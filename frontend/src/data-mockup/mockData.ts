@@ -264,7 +264,7 @@ export interface NetworkInterface {
   status: "up" | "down" | "offline"
   speed: string               // e.g. "1000 Mbps", "72 Mbps"
   // Wi-Fi specific
-  connectedSSID?: string
+  wifiSSID?: string
   wifiPassword?: string       // masked
   wifiSecurity?: string       // e.g. "WPA2-PSK"
   // MAC Address Randomization & LAA support
@@ -322,7 +322,7 @@ export const initialNetworkInterfaces: NetworkInterface[] = [
     adminAccess: ["PING"],
     status: "up",
     speed: "72 Mbps",
-    connectedSSID: "MyHome_5G",
+    wifiSSID: "MyHome_5G",
     wifiPassword: "••••••••",
     wifiSecurity: "WPA2-PSK",
     failoverEnabled: false,

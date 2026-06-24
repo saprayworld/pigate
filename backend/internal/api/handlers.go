@@ -167,6 +167,25 @@ func (s *Server) HandleCheckSession(w http.ResponseWriter, r *http.Request) {
 // DASHBOARD HANDLERS
 // =========================================================================
 
+func mapWpaState(state string) string {
+	switch state {
+	case "COMPLETED":
+		return "Connected"
+	case "DISCONNECTED":
+		return "Disconnected"
+	case "INACTIVE":
+		return "Inactive"
+	case "SCANNING":
+		return "Scanning"
+	case "ASSOCIATING", "AUTHENTICATING", "ASSOCIATED", "4WAY_HANDSHAKE", "GROUP_HANDSHAKE":
+		return "Connecting"
+	case "INTERFACE_DISABLED":
+		return "Disabled"
+	default:
+		return state
+	}
+}
+
 func (s *Server) HandleGetDashboardStats(w http.ResponseWriter, r *http.Request) {
 	leases, _ := s.dhcp.GetActiveLeases()
 	ifaces, _ := s.repo.GetInterfaces()
@@ -174,9 +193,20 @@ func (s *Server) HandleGetDashboardStats(w http.ResponseWriter, r *http.Request)
 	wifiSSID := "None"
 	wifiStatus := "Disconnected"
 	for _, iface := range ifaces {
-		if iface.Type == "wireless" && iface.ConnectedSSID != nil {
-			wifiSSID = *iface.ConnectedSSID
-			wifiStatus = "wlan0 Master"
+		if iface.Type == "wireless" {
+			if wifiStat, err := s.network.GetWifiStatus(iface.Name); err == nil {
+				wifiStatus = mapWpaState(wifiStat.State)
+				if wifiStat.SSID != "" {
+					wifiSSID = wifiStat.SSID
+				} else {
+					wifiSSID = "None"
+				}
+			} else {
+				if iface.WifiSSID != nil && *iface.WifiSSID != "" {
+					wifiSSID = *iface.WifiSSID
+					wifiStatus = "Connected (DB)"
+				}
+			}
 		}
 	}
 
@@ -286,8 +316,8 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 	if updates.BackupWifiPassword != nil {
 		iface.BackupWifiPassword = updates.BackupWifiPassword
 	}
-	if updates.ConnectedSSID != nil {
-		iface.ConnectedSSID = updates.ConnectedSSID
+	if updates.WifiSSID != nil {
+		iface.WifiSSID = updates.WifiSSID
 	}
 	if updates.WifiPassword != nil {
 		iface.WifiPassword = updates.WifiPassword
@@ -310,8 +340,8 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 
 	if iface.Type == "wireless" {
 		ssid := ""
-		if iface.ConnectedSSID != nil {
-			ssid = *iface.ConnectedSSID
+		if iface.WifiSSID != nil {
+			ssid = *iface.WifiSSID
 		}
 		password := ""
 		if iface.WifiPassword != nil {
@@ -400,6 +430,27 @@ func (s *Server) HandleScanWifi(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, results)
+}
+
+func (s *Server) HandleGetWifiStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	iface, err := s.repo.GetInterfaceByID(id)
+	if err != nil || iface == nil {
+		s.writeError(w, http.StatusNotFound, "Interface not found")
+		return
+	}
+
+	if iface.Type != "wireless" {
+		s.writeError(w, http.StatusBadRequest, "Interface is not a wireless interface")
+		return
+	}
+
+	status, err := s.network.GetWifiStatus(iface.Name)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, status)
 }
 
 func (s *Server) HandleDeleteInterface(w http.ResponseWriter, r *http.Request) {
