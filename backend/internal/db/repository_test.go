@@ -609,14 +609,14 @@ func TestHexIPParserAndRouteSyncFallback(t *testing.T) {
 		t.Errorf("Failed to get interfaces: %v", err)
 	}
 
-	hasMockWifi := false
+	hasWifi := false
 	for _, iface := range ifaces {
-		if iface.Name == "wlan0" && iface.Type == "wireless" {
-			hasMockWifi = true
+		if iface.Type == "wireless" {
+			hasWifi = true
 		}
 	}
-	if !hasMockWifi {
-		t.Errorf("Expected wlan0 mock wireless interface to be injected, but was not found in %v", ifaces)
+	if !hasWifi {
+		t.Errorf("Expected at least one wireless interface to be present, but none was found in %v", ifaces)
 	}
 
 	// Verify that interfaces and routes were actually imported if on Linux

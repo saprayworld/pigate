@@ -17,6 +17,7 @@ type NetworkManager interface {
 	ToggleInterface(name string, up bool) error
 	ScanWifi(name string) ([]model.WifiScanResult, error)
 	ConfigureInterface(name string, mode string, ip string, netmask string, gateway string) error
+	ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string) error
 }
 
 // RoutingManager abstracts netlink route modifications

@@ -5,9 +5,13 @@ package kernel
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"pigate/internal/model"
 
@@ -28,21 +32,138 @@ func NewRealNetwork() *RealNetwork {
 // ToggleInterface brings a network interface up or down via netlink socket.
 // Equivalent to `ip link set <name> up/down` but without shell execution.
 func (r *RealNetwork) ToggleInterface(name string, up bool) error {
+	log.Printf("[RealNetwork] ToggleInterface called: interface=%s, up=%t", name, up)
 	link, err := netlink.LinkByName(name)
 	if err != nil {
+		log.Printf("[RealNetwork] Interface %q not found: %v", name, err)
 		return fmt.Errorf("interface %q not found: %w", name, err)
 	}
 
+	isWireless := strings.HasPrefix(name, "w")
+
 	if up {
+		log.Printf("[RealNetwork] Bringing interface %s UP via netlink link...", name)
 		if err := netlink.LinkSetUp(link); err != nil {
+			log.Printf("[RealNetwork] Failed to set LinkSetUp for %s: %v", name, err)
 			return fmt.Errorf("failed to bring interface %q up: %w", name, err)
+		}
+		if isWireless {
+			serviceName := fmt.Sprintf("wpa_supplicant@%s", name)
+			log.Printf("[RealNetwork] Interface is wireless. Verifying service state: %s", serviceName)
+			if exec.Command("sudo", "systemctl", "is-active", "--quiet", serviceName).Run() != nil {
+				log.Printf("[RealNetwork] Service %s is not active, starting it...", serviceName)
+				_ = exec.Command("sudo", "systemctl", "start", serviceName).Run()
+			} else {
+				log.Printf("[RealNetwork] Service %s is already active", serviceName)
+			}
+
+			// Clean up old DHCP client instances first
+			_ = exec.Command("sudo", "dhclient", "-r", name).Run()
+			_ = exec.Command("sudo", "dhcpcd", "-k", name).Run()
+
+			// Launch DHCP client in background to request an IP address on association
+			go func() {
+				time.Sleep(1 * time.Second)
+				log.Printf("[RealNetwork] Launching DHCP client for %s...", name)
+				if err := exec.Command("sudo", "dhclient", name).Start(); err == nil {
+					log.Printf("[RealNetwork] dhclient started for %s via ToggleInterface", name)
+					return
+				}
+				if err := exec.Command("sudo", "dhcpcd", name).Start(); err == nil {
+					log.Printf("[RealNetwork] dhcpcd started for %s via ToggleInterface", name)
+					return
+				}
+				log.Printf("[RealNetwork] Failed to start dhclient or dhcpcd on %s via ToggleInterface", name)
+			}()
 		}
 		return nil
 	}
 
+	if isWireless {
+		serviceName := fmt.Sprintf("wpa_supplicant@%s", name)
+		log.Printf("[RealNetwork] Interface %s is wireless. Stopping wpa_supplicant service: %s", name, serviceName)
+		_ = exec.Command("sudo", "systemctl", "stop", serviceName).Run()
+
+		// Release DHCP lease when bringing interface DOWN
+		log.Printf("[RealNetwork] Releasing DHCP client for %s...", name)
+		_ = exec.Command("sudo", "dhclient", "-r", name).Run()
+		_ = exec.Command("sudo", "dhcpcd", "-k", name).Run()
+	}
+
+	log.Printf("[RealNetwork] Bringing interface %s DOWN via netlink link...", name)
 	if err := netlink.LinkSetDown(link); err != nil {
+		log.Printf("[RealNetwork] Failed to set LinkSetDown for %s: %v", name, err)
 		return fmt.Errorf("failed to bring interface %q down: %w", name, err)
 	}
+	return nil
+}
+
+// ConfigureWifi writes the wpa_supplicant config file atomically and reloads/starts the service.
+func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string) error {
+	log.Printf("[RealNetwork] ConfigureWifi started: interface=%s, SSID=%q, Security=%s, BackupSSID=%q",
+		name, ssid, security, backupSSID)
+
+	// Validate interface name to prevent traversal or command parameter injection
+	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "..") {
+		return fmt.Errorf("invalid interface name: %q", name)
+	}
+	for _, char := range name {
+		if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' || char == '_') {
+			return fmt.Errorf("interface name %q contains disallowed characters", name)
+		}
+	}
+
+	// Generate the wpa_supplicant config content
+	configContent := GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword)
+
+	// Determine the paths
+	configPath := filepath.Join(wpaConfigDir, fmt.Sprintf("wpa_supplicant-%s.conf", name))
+	tmpPath := configPath + ".tmp"
+
+	// Ensure config directory exists
+	log.Printf("[RealNetwork] Ensuring directory exists: %s", filepath.Dir(configPath))
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		log.Printf("[RealNetwork] MkdirAll config directory failed: %v", err)
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// Write atomically: write to temp file with 0600 permissions
+	log.Printf("[RealNetwork] Writing temporary config file: %s", tmpPath)
+	if err := os.WriteFile(tmpPath, []byte(configContent), 0600); err != nil {
+		log.Printf("[RealNetwork] Write temporary config file failed: %v", err)
+		return fmt.Errorf("failed to write temporary config file: %w", err)
+	}
+
+	// Rename atomically
+	log.Printf("[RealNetwork] Overwriting main config atomically: %s -> %s", tmpPath, configPath)
+	if err := os.Rename(tmpPath, configPath); err != nil {
+		log.Printf("[RealNetwork] Rename temporary config file failed: %v", err)
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to replace config file: %w", err)
+	}
+
+	// Systemd service management
+	serviceName := fmt.Sprintf("wpa_supplicant@%s", name)
+	isActive := exec.Command("sudo", "systemctl", "is-active", "--quiet", serviceName).Run() == nil
+
+	if isActive {
+		// Send RECONFIGURE command via wpa_supplicant UNIX socket
+		log.Printf("[RealNetwork] Service %s is already running. Triggering socket RECONFIGURE...", serviceName)
+		if _, err := SendWpaCommand(name, "RECONFIGURE"); err != nil {
+			log.Printf("[RealNetwork] RECONFIGURE socket command failed: %v", err)
+			return fmt.Errorf("failed to reload wpa_supplicant config: %w", err)
+		}
+		log.Printf("[RealNetwork] wpa_supplicant config reloaded successfully")
+	} else {
+		// Start service via systemd
+		log.Printf("[RealNetwork] Service %s is inactive. Initiating systemd start...", serviceName)
+		if err := exec.Command("sudo", "systemctl", "start", serviceName).Run(); err != nil {
+			log.Printf("[RealNetwork] systemd start %s failed: %v", serviceName, err)
+			return fmt.Errorf("failed to start %s service: %w", serviceName, err)
+		}
+		log.Printf("[RealNetwork] Service %s started successfully", serviceName)
+	}
+
 	return nil
 }
 
@@ -63,8 +184,9 @@ func (r *RealNetwork) ConfigureInterface(name string, mode string, ip string, ne
 	}
 
 	// Always release DHCP client and clean up first to prevent conflicts/duplicates
-	_ = exec.Command("dhclient", "-r", name).Run()
-	_ = exec.Command("dhcpcd", "-k", name).Run()
+	_ = exec.Command("sudo", "dhclient", "-r", name).Run()
+	_ = exec.Command("sudo", "dhcpcd", "-k", name).Run()
+	log.Printf("[RealNetwork] dhclient released for %s", name)
 
 	// Always clear existing IPv4 addresses from the interface
 	addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
@@ -76,13 +198,16 @@ func (r *RealNetwork) ConfigureInterface(name string, mode string, ip string, ne
 
 	if mode == "dhcp" {
 		// Try starting dhclient in background
-		if err := exec.Command("dhclient", name).Start(); err == nil {
+		if err := exec.Command("sudo", "dhclient", name).Start(); err == nil {
+			log.Printf("[RealNetwork] dhclient started for %s", name)
 			return nil
 		}
 		// Try fallback to dhcpcd
-		if err := exec.Command("dhcpcd", name).Start(); err == nil {
+		if err := exec.Command("sudo", "dhcpcd", name).Start(); err == nil {
+			log.Printf("[RealNetwork] dhcpcd started for %s", name)
 			return nil
 		}
+		log.Printf("[RealNetwork] failed to start dhclient or dhcpcd for DHCP mode on %s", name)
 		// If neither dhclient nor dhcpcd exists or starts, we return error
 		return fmt.Errorf("failed to start dhclient or dhcpcd for DHCP mode on %s", name)
 	}

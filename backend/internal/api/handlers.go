@@ -286,6 +286,55 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 	if updates.BackupWifiPassword != nil {
 		iface.BackupWifiPassword = updates.BackupWifiPassword
 	}
+	if updates.ConnectedSSID != nil {
+		iface.ConnectedSSID = updates.ConnectedSSID
+	}
+	if updates.WifiPassword != nil {
+		iface.WifiPassword = updates.WifiPassword
+	}
+	if updates.WifiSecurity != nil {
+		iface.WifiSecurity = updates.WifiSecurity
+	}
+	if updates.FailoverEnabled != nil {
+		iface.FailoverEnabled = updates.FailoverEnabled
+	}
+	if updates.IPCheckTimeout != nil {
+		iface.IPCheckTimeout = updates.IPCheckTimeout
+	}
+	if updates.PrimaryMaxRetries != nil {
+		iface.PrimaryMaxRetries = updates.PrimaryMaxRetries
+	}
+	if updates.FailoverCooldown != nil {
+		iface.FailoverCooldown = updates.FailoverCooldown
+	}
+
+	if iface.Type == "wireless" {
+		ssid := ""
+		if iface.ConnectedSSID != nil {
+			ssid = *iface.ConnectedSSID
+		}
+		password := ""
+		if iface.WifiPassword != nil {
+			password = *iface.WifiPassword
+		}
+		security := "WPA2-PSK"
+		if iface.WifiSecurity != nil {
+			security = *iface.WifiSecurity
+		}
+		backupSSID := ""
+		if iface.BackupSSID != nil {
+			backupSSID = *iface.BackupSSID
+		}
+		backupPassword := ""
+		if iface.BackupWifiPassword != nil {
+			backupPassword = *iface.BackupWifiPassword
+		}
+
+		if err := s.network.ConfigureWifi(iface.Name, ssid, password, security, backupSSID, backupPassword); err != nil {
+			s.writeError(w, http.StatusInternalServerError, "OS level Wi-Fi configuration failed: "+err.Error())
+			return
+		}
+	}
 
 	if err := s.network.ConfigureInterface(iface.Name, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "OS level configuration failed: "+err.Error())
