@@ -53,6 +53,12 @@ func (r *RealNetwork) ToggleInterface(name string, up bool) error {
 			serviceName := fmt.Sprintf("wpa_supplicant@%s", name)
 			log.Printf("[RealNetwork] Interface is wireless. Verifying service state: %s", serviceName)
 			if execCommand("sudo", "systemctl", "is-active", "--quiet", serviceName).Run() != nil {
+				// Clean up stale socket file before starting the service
+				socketPath := filepath.Join(wpaSocketDir, name)
+				log.Printf("[RealNetwork] Cleaning up stale wpa_supplicant socket if exists: %s", socketPath)
+				_ = os.Remove(socketPath)
+				// _ = execCommand("sudo", "rm", "-f", socketPath).Run()
+
 				log.Printf("[RealNetwork] Service %s is not active, starting it...", serviceName)
 				_ = execCommand("sudo", "systemctl", "start", serviceName).Run()
 			} else {
@@ -159,6 +165,13 @@ func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, s
 	} else {
 		// Start service via systemd
 		log.Printf("[RealNetwork] Service %s is inactive. Initiating systemd start...", serviceName)
+
+		// Clean up stale socket file before starting the service
+		socketPath := filepath.Join(wpaSocketDir, name)
+		log.Printf("[RealNetwork] Cleaning up stale wpa_supplicant socket if exists: %s", socketPath)
+		_ = os.Remove(socketPath)
+		// _ = execCommand("sudo", "rm", "-f", socketPath).Run()
+
 		if err := execCommand("sudo", "systemctl", "start", serviceName).Run(); err != nil {
 			log.Printf("[RealNetwork] systemd start %s failed: %v", serviceName, err)
 			return fmt.Errorf("failed to start %s service: %w", serviceName, err)

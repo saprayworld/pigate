@@ -265,6 +265,7 @@ func TestConfigureWifiAtomicWrite(t *testing.T) {
 	}
 }
 
+
 // Helper process for mocking exec.Command in tests
 func fakeExecCommand(command string, args ...string) *exec.Cmd {
 	cs := []string{"-test.run=TestHelperProcess", "--", command}
@@ -304,3 +305,46 @@ func TestHelperProcess(t *testing.T) {
 		os.Exit(0)
 	}
 }
+
+// TestConfigureWifiCleansStaleSocket tests that ConfigureWifi cleans up any stale socket files
+// in the socket directory before starting the service.
+func TestConfigureWifiCleansStaleSocket(t *testing.T) {
+	// Create a temporary directory for UNIX sockets
+	tmpDir, err := os.MkdirTemp("", "wpa_stale_socket_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Override socket path configurations and mock system command execution
+	oldSocketDir := wpaSocketDir
+	wpaSocketDir = tmpDir
+	oldConfigDir := wpaConfigDir
+	wpaConfigDir = tmpDir
+	oldLocalSocketDir := wpaLocalSocketDir
+	wpaLocalSocketDir = tmpDir
+	oldExecCommand := execCommand
+	execCommand = fakeExecCommand
+	defer func() {
+		wpaSocketDir = oldSocketDir
+		wpaConfigDir = oldConfigDir
+		wpaLocalSocketDir = oldLocalSocketDir
+		execCommand = oldExecCommand
+	}()
+
+	// Pre-create a stale socket file
+	staleSocketPath := filepath.Join(tmpDir, "wlan_test_stale")
+	if err := os.WriteFile(staleSocketPath, []byte("stale-data"), 0600); err != nil {
+		t.Fatalf("Failed to create mock stale socket file: %v", err)
+	}
+
+	netMgr := NewRealNetwork()
+	// Call ConfigureWifi which will trigger the start path (since fake systemctl returns inactive)
+	_ = netMgr.ConfigureWifi("wlan_test_stale", "MyHomeSSID", "secpass", "WPA2-PSK", "", "", "hardware")
+
+	// The stale socket file should have been deleted
+	if _, err := os.Stat(staleSocketPath); !os.IsNotExist(err) {
+		t.Errorf("Expected stale socket file to be deleted, but it still exists")
+	}
+}
+

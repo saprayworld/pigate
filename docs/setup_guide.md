@@ -40,3 +40,10 @@ sudo -u pigate ./pigate -mock=false -db=/var/lib/pigate/pigate.db
 sudo cp ./pigate /usr/local/bin/.
 sudo -u pigate pigate -mock=false -db=/var/lib/pigate/pigate.db
 ```
+
+# More
+
+```bash
+sudo rm /var/run/wpa_supplicant/wlx0cef1548ff2b
+
+```
