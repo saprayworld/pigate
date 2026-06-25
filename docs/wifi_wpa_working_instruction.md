@@ -170,6 +170,27 @@ func SendWpaCommand(ifaceName string, command string) (string, error) {
 * เมื่อสั่งเปิดอินเทอร์เฟซ (Up) ต้องเช็กว่า `wpa_supplicant@wlan0.service` ทำงานอยู่หรือไม่ หากไม่ทำงานให้สั่ง start
 * เมื่อสั่งปิดอินเทอร์เฟซ (Down) ควรหยุดระบบด้วย `systemctl stop wpa_supplicant@wlan0` เพื่อไม่ให้เปลืองพลังงานและตัดการใช้สัญญาณวิทยุ
 
+### 4.6 ระบบสุ่ม MAC Address แบบดั้งเดิม (Native MAC Address Randomization)
+`wpa_supplicant` มีการสนับสนุนการสุ่มที่อยู่ MAC (MAC Address Randomization) ในตัวทั้งในขั้นตอนการสแกนหาสัญญาณ (Pre-association scanning) และระหว่างเชื่อมต่อจริงกับสถานีแม่ข่าย (Association):
+* **เปิดใช้งานในระดับ Global (Pre-association scanning):** กำหนดค่า `preassoc_mac_addr=1` เพื่อสุ่ม MAC Address ทุกครั้งเมื่อสแกนหา SSID
+* **เปิดใช้งานในแต่ละเครือข่าย (Association):** กำหนดค่า `mac_addr=1` ในบล็อก `network={ ... }` เพื่อให้ wpa_supplicant สุ่ม MAC Address ใหม่ทุกครั้งที่เชื่อมต่อกับเครือข่ายนั้น ๆ
+
+ตัวอย่างคอนฟิกที่ประยุกต์ใช้งานสุ่ม MAC Address:
+```wpa_supplicant
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country=TH
+preassoc_mac_addr=1
+
+network={
+    ssid="MyHome_WiFi"
+    psk="password1234"
+    key_mgmt=WPA-PSK
+    mac_addr=1
+    priority=10
+}
+```
+
 ---
 
 ## 5. การตรวจสอบความมั่นคงปลอดภัย (Security Guidelines)

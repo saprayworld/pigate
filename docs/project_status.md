@@ -59,7 +59,7 @@
   * พัฒนาหน้า [Interfaces.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/Interfaces.tsx) ครอบคลุมการแสดงผล eth0 (Ethernet) และ wlan0 (Wireless)
   * เพิ่มการสลับประเภท/หน้าที่พอร์ต (**Port Role**) ได้แก่ **LAN** และ **WAN** ในหน้าแก้ไข และแสดงผลเป็นสัญลักษณ์สีแยกแยะชัดเจนในตารางการ์ดเครือข่าย
   * ติดตั้งเครื่องมือสแกนหาคลื่น Wi-Fi (SSID Scanner) ที่มีระบบพรีวิวสัญญาณตามระดับความแรงช่องสัญญาณและความปลอดภัยของเครือข่าย
-  * เพิ่มฟีเจอร์ความปลอดภัยขั้นสูง ได้แก่ **MAC Address Randomization** สำหรับการสุ่ม MAC Address เพื่อความปลอดภัย และ **LAA MAC Address** (กำหนด MAC เองแบบ Locally Administered) สำหรับการ์ด Wi-Fi พร้อมระบบตรวจสอบมาตรฐานความถูกต้อง LAA (หลักที่สองของ Byte แรก ต้องเป็น 2, 6, A, E) และตัวสลับสุ่ม MAC ใหม่เมื่อ Reconnect โดยอัตโนมัติ
+  * เพิ่มฟีเจอร์ความปลอดภัย ได้แก่ **Native MAC Address Randomization** ของ `wpa_supplicant` สำหรับการสุ่ม MAC Address เพื่อความปลอดภัยระดับชั้นสื่อสาร (Link Layer) และแสดงที่อยู่ MAC จริง (Active/Effective MAC) ที่สุ่มได้ในตารางแสดงผลสด
 
 * **พัฒนาหน้าจอและระบบจัดการเส้นทางแบบคงที่ (Static Routes) [สำเร็จ]**:
   * พัฒนาหน้า [StaticRoutes.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/StaticRoutes.tsx) สำหรับควบคุมตารางการกำหนดเส้นทางเครือข่ายย่อยต่าง ๆ
@@ -107,6 +107,8 @@
     * **การฝังหน้าจอ React Frontend เข้ากับ Go Backend (Frontend Embedding) [สำเร็จ]:** พัฒนาการฝังไฟล์หน้าบ้าน (`dist/`) เข้าไปใน Go backend binary ผ่าน `go:embed` ใน [internal/api/embed.go](file:///home/sapray/dev/pigate/backend/internal/api/embed.go) ส่งผลให้ตัวแอปพลิเคชันทำงานเป็น Single Binary ที่สามารถเสิร์ฟหน้าจอผู้ใช้งานได้ด้วยตัวเองและยังคงรองรับ Routing แบบ Client-side (SPA fallback)
     * **ระบบจัดการและลบอินเตอร์เฟสจำลอง (Interface CRUD & DB Order Fix) [สำเร็จ]:** เพิ่มระบบ API สำหรับ Delete/Reset การตั้งค่าการ์ดเครือข่ายจำลอง เพื่อความยืดหยุ่นในการทดสอบ และปรับแก้อันดับอาร์กิวเมนต์คิวรีในการซิงค์ข้อมูลลงฐานข้อมูลให้ถูกต้อง
     * **การตั้งค่ารายละเอียดอินเตอร์เฟสเครือข่ายจริงผ่าน Netlink (Netlink IP Configuration) [สำเร็จ]:** พัฒนา `ConfigureInterface` ใน [internal/kernel/real_network.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_network.go) ให้ทำการล้างค่า IP/DHCP เก่า (ยกเลิก dhclient/dhcpcd) และลงทะเบียนการตั้งค่า static IP, netmask, default gateway บนการ์ดเครือข่ายลินุกซ์ด้วย Netlink
+    * **ระบบตั้งค่า Wi-Fi Client และการสื่อสารผ่าน UNIX Domain Socket [สำเร็จ]:** พัฒนา REST API และระบบเขียนคอนฟิก `wpa_supplicant` แบบอะตอมมิก พร้อมติดตั้งระบบสื่อสารผ่าน Control Socket (UNIX Domain Socket) ในรูปแบบ Datagram (`unixgram`) เพื่อเชื่อมต่อและดูสถานะจริงแบบเรียลไทม์ (SSID, State, BSSID, Active MAC)
+    * **ระบบสุ่ม MAC Address แบบดั้งเดิม (Native MAC Randomization) [สำเร็จ]:** รองรับการสุ่ม MAC Address ด้วยฟังก์ชันในตัวของ `wpa_supplicant` (`preassoc_mac_addr=1` และ `mac_addr=1`) โดยส่งผลทั้งขั้นตอนสแกนและเชื่อมต่อ และอัปเดตหน้า UI ในการสลับโหมดและแสดงผล MAC จริงที่ใช้งานอยู่
     * **การทำความสะอาดโครงสร้างเครือข่ายล้าสมัย (Network Struct Cleanup) [สำเร็จ]:** ทำการถอนฟิลด์ `dns1` และ `dns2` ที่ไม่ใช้งานออกจากการตั้งค่าการ์ดเครือข่าย เพื่อไปใช้ระบบจัดส่ง DNS แบบรวมศูนย์อย่างสมบูรณ์
     * **การสร้างเอกสารอ้างอิงสำหรับผู้พัฒนา (Developer Portal generation) [สำเร็จ]:** สร้างเอกสารอ้างอิงสำหรับผู้พัฒนาทั้งรูปแบบ HTML และ Markdown ในโฟลเดอร์ `docs/` เพื่อสรุปแนวทางความปลอดภัย กฎไฟร์วอลล์ และตาราง DHCP/Routing
     * **ระบบยืนยันสิทธิ์เซสชันและการบังคับเปลี่ยนรหัสผ่านครั้งแรก (Active Session Verification & Force Password Change Enforcement) [สำเร็จ]:**
@@ -149,7 +151,7 @@
 * **สเตปที่ 3: พัฒนาหน้า Dashboard (`01-dashboard.html`)** `[เสร็จสิ้น]`
 * **สเตปที่ 4: พัฒนาหน้าจอการตั้งค่าเครือข่ายและความปลอดภัย**:
   * จัดสร้างหน้า Firewall Policies พร้อมติดตั้งความสามารถในการลากจัดเรียงลำดับความสำคัญ (Drag & Drop ด้วย `@dnd-kit`) และปรับปรุงฟอร์มโมดอลให้ใช้งาน Multiple Selection Combobox แบบถูกต้องตามคู่มืออ้างอิงของ shadcn `[เสร็จสิ้น]`
-  * พัฒนาหน้าจอการจัดการ Physical & Virtual Interfaces (eth0, wlan0) และระบบจำลองสำหรับคลิกแสกนหาคลื่น Wi-Fi (SSID Scanner) พร้อมระบบสุ่ม MAC Address (MAC Randomization / LAA) `[เสร็จสิ้น]`
+  * พัฒนาหน้าจอการจัดการ Physical & Virtual Interfaces (eth0, wlan0) และระบบจำลองสำหรับคลิกแสกนหาคลื่น Wi-Fi (SSID Scanner) พร้อมระบบสุ่ม MAC Address ด้วย wpa_supplicant (Native MAC Randomization) และเชื่อมต่อ Wi-Fi WPA Client จริง `[เสร็จสิ้น]`
   * พัฒนาหน้าจอจัดการที่อยู่ไอพี (Address Objects) และบริการพอร์ต (Service Objects) พร้อมระบบจำลองพรีวิว `nftables` `[เสร็จสิ้น]`
   * พัฒนาหน้าจอและระบบ Static Route สำเร็จเรียบร้อย `[เสร็จสิ้น]`
   * พัฒนาหน้าจอและระบบ DHCP Server สำเร็จเรียบร้อย `[เสร็จสิ้น]`

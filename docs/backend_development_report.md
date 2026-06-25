@@ -18,11 +18,12 @@
    * [internal/kernel/interfaces.go](file:///home/sapray/dev/pigate/backend/internal/kernel/interfaces.go): ประกาศ Interface สำหรับดึงค่าและสั่งงาน firewall, routes, NetworkManager และ DHCP
    * [internal/kernel/mock.go](file:///home/sapray/dev/pigate/backend/internal/kernel/mock.go): พัฒนาระบบจำลองการสแกนหา SSID Wi-Fi, สลับสถานะการ์ดแลน, และดึงข้อมูล leases เพื่อให้ทดสอบ API บน Local PC ได้โดยไม่ต้องเชื่อมระบบปฏิบัติการ Linux จริง
    * **[ใหม่]** [internal/kernel/real_network.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_network.go): `RealNetwork` implement `NetworkManager` ผ่าน **Netlink Socket** (`vishvananda/netlink`) โดยตรง ไม่เรียก shell command — `ToggleInterface` เปลี่ยน `IFF_UP` flag ใน kernel จริง, `ScanWifi` ใช้ `iw` (primary) / `nmcli` (fallback) — build tag: `linux`
+   * **[ใหม่]** [internal/kernel/wpa.go](file:///home/sapray/dev/pigate/backend/internal/kernel/wpa.go): จัดการสร้างคอนฟิก `wpa_supplicant` แยกตามอินเตอร์เฟสแบบอะตอมมิก (Atomic writing) รองรับความมั่นคงปลอดภัยแบบ Open, WPA2, WPA3 และการสุ่ม MAC Address แบบดั้งเดิม (Native MAC Randomization) รวมถึงพัฒนาระบบ socket client สื่อสารผ่าน UNIX Domain Socket แบบ Datagram (`unixgram`) ไปยัง wpa_supplicant control socket
    * [internal/logs/ringbuffer.go](file:///home/sapray/dev/pigate/backend/internal/logs/ringbuffer.go): คลาสจำลองเก็บ Log ในรูปแบบ Ring Buffer บนแรมเพื่อถนอมอายุ SD card
 4. **ระบบจัดการ REST API & Middleware:**
    * [internal/api/middleware.go](file:///home/sapray/dev/pigate/backend/internal/api/middleware.go): ติดตั้ง CORS (อนุญาตให้หน้าบ้าน React dev server ที่พอร์ต 5173 เรียกใช้), ตรวจสอบโทเค็นสิทธิ์การเข้าใช้งาน (Authorization: Bearer <token>) และติดตั้ง Rate Limiter สกัดกั้นการสุ่มรหัสผ่าน
-   * [internal/api/handlers.go](file:///home/sapray/dev/pigate/backend/internal/api/handlers.go): ส่วนประมวลผลคำขอ (Request handlers) ตามสเปก OpenAPI ครบถ้วน รวมถึงฟังก์ชันการ Import/Export ค่าการตั้งค่าของเครื่องเป็น JSON
-   * [internal/api/router.go](file:///home/sapray/dev/pigate/backend/internal/api/router.go): จัดเส้นทางและสิทธิ์การเข้าถึง API
+   * [internal/api/handlers.go](file:///home/sapray/dev/pigate/backend/internal/api/handlers.go): ส่วนประมวลผลคำขอ (Request handlers) ตามสเปก OpenAPI รวมถึงฟังก์ชันการ Import/Export การตั้งค่าเป็น JSON, การเพิ่ม Endpoint `/api/interfaces/{id}/wifi-status` เพื่อดึงสถานะ Wi-Fi เรียลไทม์ และการเปลี่ยนชื่อตัวแปรการ์ดเครือข่ายจาก `ConnectedSSID` เป็น `WifiSSID`
+   * [internal/api/router.go](file:///home/sapray/dev/pigate/backend/internal/api/router.go): จัดเส้นทางและสิทธิ์การเข้าถึง API โดยเพิ่มเส้นทางสำหรับ Wi-Fi Status และ Wi-Fi Client config
 5. **โปรแกรมจุดเริ่มการรันระบบหลัก (Server Boot):**
    * [cmd/pigate/main.go](file:///home/sapray/dev/pigate/backend/cmd/pigate/main.go): รันเรียกพารามิเตอร์ของระบบ ตั้งค่าพอร์ต ดึง DB และสั่งสตาร์ท HTTP Server (ยิงทดสอบระบบที่ http://localhost:8080)
 
@@ -151,25 +152,25 @@ sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
   - ปรับปรุง `.gitignore` ทั่วไปเพื่อละเว้นไฟล์ข้อมูล SQLite (`*.db`, `*.db-shm`, `*.db-wal`) และไฟล์รันไบนารีระบบ (`pigate`)
   - ปรับปรุง `build.sh` ให้ย้ายไฟล์ไบนารีหลังบ้านจาก `./backend/pigate-backend` ไปยังไฟล์รันชื่อ `./pigate` ที่รูทโฟลเดอร์หลักโดยตรง
 
+### 4.11 การสุ่ม MAC Address แบบดั้งเดิม (Native MAC Address Randomization Support)
+* **ปัญหาที่พบ/ความต้องการ:** เพื่อหลีกเลี่ยงการสุ่ม MAC Address ฝั่งหน้าบ้าน (Frontend) และการสลับสุ่ม MAC ด้วยสคริปต์ภายนอกที่อาจส่งผลกระทบต่อระบบปฏิบัติการของ Raspberry Pi 5 และลดความซ้ำซ้อนของโค้ดในหน้า UI
+* **แนวทางแก้ไข:** เปลี่ยนระบบการสุ่ม MAC Address ไปใช้ฟีเจอร์ภายในตัวของ `wpa_supplicant` ด้วยการเขียนพารามิเตอร์ `preassoc_mac_addr=1` และ `mac_addr=1` ในไฟล์คอนฟิก ทำให้ระบบปฏิบัติการสุ่ม MAC สำหรับสแกนและเชื่อมต่อโดยตรงแบบ Native
+
 ---
 
-## 5. ประเด็นความมั่นคงปลอดภัยและช่องโหว่ที่ต้องได้รับการแก้ไข (Security Vulnerabilities to Fix)
+## 5. ประเด็นความมั่นคงปลอดภัยและช่องโหว่ได้รับการแก้ไขแล้ว (Security Hardening - Resolved)
 
-> [!IMPORTANT]
-> **สถานะความสำคัญ: ต้องแก้ไขทันทีก่อนการนำขึ้นระบบจริง (MUST FIX - CRITICAL PRIORITY)**
-> ตรวจพบช่องโหว่ความปลอดภัยทางซอร์สโค้ด (Source Code Review Findings) สรุปรายละเอียดระดับความสำคัญและแนวทางแก้ไขดังนี้:
+> [!NOTE]
+> **สถานะปัจจุบัน: ได้รับการแก้ไขเรียบร้อยแล้ว (ALL RESOLVED)**
+> ได้ดำเนินการแก้ไขและลดความเสี่ยงจากช่องโหว่ทางความปลอดภัยหลักทั้งหมดแล้ว ดังนี้:
 
-### 5.1 ช่องโหว่การข้ามการยืนยันสิทธิ์ล็อกอิน / บัญชีลับ (Critical - Auth Bypass & Backdoor)
-* **ตำแหน่งโค้ด:** ฟังก์ชัน `HandleLogin` ในไฟล์ [internal/api/handlers.go](file:///home/sapray/dev/pigate/backend/internal/api/handlers.go#L92-L98)
-* **รายละเอียด:** โค้ดมีการตรวจสอบสิทธิ์ล็อกอินแบบ Hardcoded Bypass หากผู้ใช้ป้อนชื่อผู้ใช้ `pigate` และรหัสผ่าน `pigate` ระบบจะยินยอมให้ล็อกอินผ่านระบบความปลอดภัย (Bcrypt comparison bypass) โดยตรง ส่งผลให้ถึงแม้ว่าผู้ดูแลระบบจะเปลี่ยนรหัสผ่านใน SQLite ไปแล้ว ผู้โจมตีก็ยังสามารถใช้รหัสผ่านเริ่มต้นในการเจาะระบบได้ตลอดเวลา
-* **ระดับความสำคัญ:** 🔴 **CRITICAL (ต้องแก้ไขทันที)**
-* **แนวทางแก้ไข:** กำจัดโค้ดตรวจสอบเงื่อนไข `req.Username == "pigate" && req.Password == "pigate"` ออกจาก Handler ฝั่ง Production หรือแยกสวิตช์ตรวจเช็กให้อนุญาตเฉพาะเมื่อเปิดใช้งาน Mock Mode เท่านั้น
+### 5.1 ช่องโหว่การข้ามการยืนยันสิทธิ์ล็อกอิน / บัญชีลับ (Critical - Auth Bypass & Backdoor) - [แก้ไขเสร็จสิ้น]
+* **ตำแหน่งโค้ด:** ฟังก์ชัน `HandleLogin` และ `HandleChangePassword` ในไฟล์ [internal/api/handlers.go](file:///home/sapray/dev/pigate/backend/internal/api/handlers.go)
+* **การแก้ไข:** ลบการข้าม Bcrypt comparison และการตรวจสอบ Hardcoded credentials สำหรับผู้ใช้ `pigate` ออกทั้งหมด บังคับให้การล็อกอินทำผ่านการเปรียบเทียบรหัสผ่านใน SQLite ด้วย Bcrypt จริงเท่านั้น
 
-### 5.2 ปัญหาการสับสนการตั้งค่า CORS ร่วมกับการส่ง Credentials (Medium - CORS Configuration Conflict)
-* **ตำแหน่งโค้ด:** `CORSMiddleware` ในไฟล์ [internal/api/middleware.go](file:///home/sapray/dev/pigate/backend/internal/api/middleware.go#L50-L60)
-* **รายละเอียด:** ระบบมีการตั้งค่า `Access-Control-Allow-Origin: "*"` เมื่อพอร์ต/ Origin ไม่ตรงกับรายการ Local Development แต่ในขณะเดียวกันก็เปิดใช้งาน `Access-Control-Allow-Credentials: "true"` ซึ่งตามข้อกำหนดของเว็บเบราว์เซอร์จะไม่ยินยอมให้ใช้สัญลักษณ์ Wildcard `*` ร่วมกับการส่ง Credentials ส่งผลให้การเชื่อมต่อถูกเบราว์เซอร์บล็อกโดยอัตโนมัติ
-* **ระดับความสำคัญ:** 🟡 **MEDIUM (ควรปรับปรุงก่อนเข้าสู่ช่วงใช้งานจริง)**
-* **แนวทางแก้ไข:** ปรับแก้การคืนค่า Origin ของ CORS ให้สะท้อน Origin ที่ส่งคำขอเข้ามา หรือปิดใช้งาน Credentials สำหรับโดเมนที่ไม่ได้รับอนุญาต
+### 5.2 ปัญหาการสับสนการตั้งค่า CORS ร่วมกับการส่ง Credentials (Medium - CORS Configuration Conflict) - [แก้ไขเสร็จสิ้น]
+* **ตำแหน่งโค้ด:** `CORSMiddleware` ในไฟล์ [internal/api/middleware.go](file:///home/sapray/dev/pigate/backend/internal/api/middleware.go)
+* **การแก้ไข:** ปรับปรุงการส่งค่า `Access-Control-Allow-Origin` ให้สะท้อน Origin ที่ร้องขอที่ได้รับอนุญาตโดยตรงแทนการใช้ Wildcard `*` เมื่อมีการส่ง Credentials (`true`) เพื่อให้เป็นไปตามข้อกำหนดความมั่นคงปลอดภัยของเบราว์เซอร์
 
 
 
