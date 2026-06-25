@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -107,9 +108,9 @@ func (r *RealNetwork) ToggleInterface(name string, up bool) error {
 }
 
 // ConfigureWifi writes the wpa_supplicant config file atomically and reloads/starts the service.
-func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string, macMode string) error {
-	log.Printf("[RealNetwork] ConfigureWifi started: interface=%s, SSID=%q, Security=%s, BackupSSID=%q, MacMode=%s",
-		name, ssid, security, backupSSID, macMode)
+func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string, backupSecurity string, macMode string) error {
+	log.Printf("[RealNetwork] ConfigureWifi started: interface=%s, SSID=%q, Security=%s, BackupSSID=%q, BackupSecurity=%s, MacMode=%s",
+		name, ssid, security, backupSSID, backupSecurity, macMode)
 
 	// Validate interface name to prevent traversal or command parameter injection
 	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "..") {
@@ -122,7 +123,7 @@ func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, s
 	}
 
 	// Generate the wpa_supplicant config content
-	configContent := GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword, macMode)
+	configContent := GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode)
 
 	// Determine the paths
 	configPath := filepath.Join(wpaConfigDir, fmt.Sprintf("wpa_supplicant-%s.conf", name))
@@ -483,6 +484,56 @@ func (r *RealNetwork) GetWifiStatus(name string) (*model.WifiConnectionStatus, e
 			status.SSID = val
 		case "bssid":
 			status.BSSID = val
+		case "freq":
+			if f, err := strconv.Atoi(val); err == nil {
+				status.Freq = f
+			}
+		case "key_mgmt":
+			// Normalize key_mgmt to standard security modes
+			normalized := val
+			switch val {
+			case "WPA2-PSK", "WPA-PSK":
+				normalized = "WPA2"
+			case "SAE":
+				normalized = "WPA3"
+			case "WPA-PSK SAE":
+				normalized = "WPA2/WPA3"
+			case "NONE":
+				normalized = "Open"
+			}
+			status.KeyMgmt = normalized
+		case "wifi_generation":
+			switch val {
+			case "4":
+				status.WifiGen = "WiFi 4"
+			case "5":
+				status.WifiGen = "WiFi 5"
+			case "6":
+				status.WifiGen = "WiFi 6"
+			case "7":
+				status.WifiGen = "WiFi 7"
+			}
+		case "ieee80211ax":
+			if val == "1" {
+				status.WifiGen = "WiFi 6"
+			}
+		case "ieee80211ac":
+			if val == "1" && status.WifiGen == "" {
+				status.WifiGen = "WiFi 5"
+			}
+		case "ieee80211n":
+			if val == "1" && status.WifiGen == "" {
+				status.WifiGen = "WiFi 4"
+			}
+		}
+	}
+
+	// Fallback heuristic for wifi generation based on frequency if not explicitly provided
+	if status.WifiGen == "" && status.State == "COMPLETED" {
+		if status.Freq > 5000 {
+			status.WifiGen = "WiFi 5"
+		} else if status.Freq > 0 {
+			status.WifiGen = "WiFi 4"
 		}
 	}
 
@@ -491,6 +542,7 @@ func (r *RealNetwork) GetWifiStatus(name string) (*model.WifiConnectionStatus, e
 		status.ActiveMac = iface.HardwareAddr.String()
 	}
 
-	log.Printf("[RealNetwork] GetWifiStatus result: State=%s, SSID=%s, BSSID=%s, ActiveMac=%s", status.State, status.SSID, status.BSSID, status.ActiveMac)
+	log.Printf("[RealNetwork] GetWifiStatus result: State=%s, SSID=%s, BSSID=%s, ActiveMac=%s, Freq=%d, KeyMgmt=%s, WifiGen=%s", 
+		status.State, status.SSID, status.BSSID, status.ActiveMac, status.Freq, status.KeyMgmt, status.WifiGen)
 	return status, nil
 }

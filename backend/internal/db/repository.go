@@ -1470,6 +1470,8 @@ func (r *Repository) SyncInterfacesFromOS() error {
 			mockWifi.BackupSSID = &backupSSID
 			backupPass := "backupPassword123"
 			mockWifi.BackupWifiPassword = &backupPass
+			backupSec := "WPA2"
+			mockWifi.BackupWifiSecurity = &backupSec
 			timeout := 15
 			mockWifi.IPCheckTimeout = &timeout
 			retries := 3
@@ -1493,7 +1495,7 @@ func (r *Repository) GetInterfaces() ([]model.NetworkInterface, error) {
 	rows, err := r.db.Query(`SELECT 
 		id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
 		mac_mode, real_mac_address, randomized_mac, laa_mac_address, randomize_on_reconnect,
-		connected_ssid, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, ip_check_timeout, primary_max_retries, failover_cooldown
+		connected_ssid, wifi_password, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, backup_wifi_security, ip_check_timeout, primary_max_retries, failover_cooldown
 		FROM network_interfaces`)
 	if err != nil {
 		return nil, err
@@ -1510,8 +1512,8 @@ func (r *Repository) GetInterfaces() ([]model.NetworkInterface, error) {
 			&iface.IP, &iface.Netmask, &iface.Gateway, &iface.MacAddress,
 			&adminAccessStr, &iface.Status, &iface.Speed,
 			&iface.MacMode, &iface.RealMacAddress, &iface.RandomizedMac, &iface.LaaMacAddress, &reconnectInt,
-			&iface.WifiSSID, &iface.WifiSecurity, &failoverInt, &iface.BackupSSID, &iface.BackupWifiPassword,
-			&iface.IPCheckTimeout, &iface.PrimaryMaxRetries, &iface.FailoverCooldown,
+			&iface.WifiSSID, &iface.WifiPassword, &iface.WifiSecurity, &failoverInt, &iface.BackupSSID, &iface.BackupWifiPassword,
+			&iface.BackupWifiSecurity, &iface.IPCheckTimeout, &iface.PrimaryMaxRetries, &iface.FailoverCooldown,
 		)
 		if err != nil {
 			return nil, err
@@ -1537,7 +1539,7 @@ func (r *Repository) GetInterfaceByID(id string) (*model.NetworkInterface, error
 	row := r.db.QueryRow(`SELECT 
 		id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
 		mac_mode, real_mac_address, randomized_mac, laa_mac_address, randomize_on_reconnect,
-		connected_ssid, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, ip_check_timeout, primary_max_retries, failover_cooldown
+		connected_ssid, wifi_password, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, backup_wifi_security, ip_check_timeout, primary_max_retries, failover_cooldown
 		FROM network_interfaces WHERE id = ?`, id)
 	var iface model.NetworkInterface
 	var adminAccessStr string
@@ -1547,8 +1549,8 @@ func (r *Repository) GetInterfaceByID(id string) (*model.NetworkInterface, error
 		&iface.IP, &iface.Netmask, &iface.Gateway, &iface.MacAddress,
 		&adminAccessStr, &iface.Status, &iface.Speed,
 		&iface.MacMode, &iface.RealMacAddress, &iface.RandomizedMac, &iface.LaaMacAddress, &reconnectInt,
-		&iface.WifiSSID, &iface.WifiSecurity, &failoverInt, &iface.BackupSSID, &iface.BackupWifiPassword,
-		&iface.IPCheckTimeout, &iface.PrimaryMaxRetries, &iface.FailoverCooldown,
+		&iface.WifiSSID, &iface.WifiPassword, &iface.WifiSecurity, &failoverInt, &iface.BackupSSID, &iface.BackupWifiPassword,
+		&iface.BackupWifiSecurity, &iface.IPCheckTimeout, &iface.PrimaryMaxRetries, &iface.FailoverCooldown,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1582,12 +1584,12 @@ func (r *Repository) UpdateInterface(iface model.NetworkInterface) error {
 	_, err := r.db.Exec(`UPDATE network_interfaces SET 
 		alias = ?, role = ?, addressing_mode = ?, ip = ?, netmask = ?, gateway = ?, mac_address = ?, admin_access = ?, 
 		mac_mode = ?, real_mac_address = ?, randomized_mac = ?, laa_mac_address = ?, randomize_on_reconnect = ?,
-		connected_ssid = ?, wifi_security = ?, failover_enabled = ?, backup_ssid = ?, backup_wifi_password = ?, 
+		connected_ssid = ?, wifi_password = ?, wifi_security = ?, failover_enabled = ?, backup_ssid = ?, backup_wifi_password = ?, backup_wifi_security = ?,
 		ip_check_timeout = ?, primary_max_retries = ?, failover_cooldown = ?
 		WHERE id = ?`,
 		iface.Alias, iface.Role, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.MacAddress, adminAccessStr,
 		iface.MacMode, iface.RealMacAddress, iface.RandomizedMac, iface.LaaMacAddress, reconInt,
-		iface.WifiSSID, iface.WifiSecurity, foInt, iface.BackupSSID, iface.BackupWifiPassword,
+		iface.WifiSSID, iface.WifiPassword, iface.WifiSecurity, foInt, iface.BackupSSID, iface.BackupWifiPassword, iface.BackupWifiSecurity,
 		iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown, iface.ID)
 	return err
 }

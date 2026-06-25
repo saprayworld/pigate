@@ -277,6 +277,7 @@ export interface NetworkInterface {
   failoverEnabled?: boolean
   backupSsid?: string
   backupWifiPassword?: string
+  backupWifiSecurity?: string
   ipCheckTimeout?: number
   primaryMaxRetries?: number
   failoverCooldown?: number
@@ -324,10 +325,11 @@ export const initialNetworkInterfaces: NetworkInterface[] = [
     speed: "72 Mbps",
     wifiSSID: "MyHome_5G",
     wifiPassword: "••••••••",
-    wifiSecurity: "WPA2-PSK",
+    wifiSecurity: "WPA2",
     failoverEnabled: false,
     backupSsid: "MyHome_2G",
     backupWifiPassword: "backupPassword123",
+    backupWifiSecurity: "WPA2",
     ipCheckTimeout: 15,
     primaryMaxRetries: 3,
     failoverCooldown: 60

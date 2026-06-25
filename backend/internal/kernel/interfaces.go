@@ -17,7 +17,7 @@ type NetworkManager interface {
 	ToggleInterface(name string, up bool) error
 	ScanWifi(name string) ([]model.WifiScanResult, error)
 	ConfigureInterface(name string, mode string, ip string, netmask string, gateway string) error
-	ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string, macMode string) error
+	ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string, backupSecurity string, macMode string) error
 	GetWifiStatus(name string) (*model.WifiConnectionStatus, error)
 }
 

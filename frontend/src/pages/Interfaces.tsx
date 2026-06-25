@@ -119,6 +119,8 @@ function getInterfaceIcon(type: string, subtype?: string, className = "h-5 w-5 m
       return <Cable className={`${className} text-cyan-400`} />
     case "loopback":
       return <RotateCcw className={`${className} text-pink-400`} />
+    case "tunnel":
+      return <Network className={`${className} text-blue-400`} />
     default:
       return <HelpCircle className={`${className} text-muted-foreground`} />
   }
@@ -149,6 +151,7 @@ export default function Interfaces() {
   // Wi-Fi Form State
   const [formSSID, setFormSSID] = useState("")
   const [formWifiPassword, setFormWifiPassword] = useState("")
+  const [formWifiSecurity, setFormWifiSecurity] = useState("WPA2")
 
   // Wi-Fi MAC Address Randomization & LAA Form State
   const [formMacMode, setFormMacMode] = useState<"hardware" | "randomized">("hardware")
@@ -157,6 +160,7 @@ export default function Interfaces() {
   const [formFailoverEnabled, setFormFailoverEnabled] = useState(false)
   const [formBackupSSID, setFormBackupSSID] = useState("")
   const [formBackupWifiPassword, setFormBackupWifiPassword] = useState("")
+  const [formBackupWifiSecurity, setFormBackupWifiSecurity] = useState("WPA2")
   const [formIpCheckTimeout, setFormIpCheckTimeout] = useState(15)
   const [formPrimaryMaxRetries, setFormPrimaryMaxRetries] = useState(3)
   const [formFailoverCooldown, setFormFailoverCooldown] = useState(60)
@@ -185,7 +189,14 @@ export default function Interfaces() {
     }
   }
 
-  const [wifiLiveStatuses, setWifiLiveStatuses] = useState<Record<string, { state: string; ssid: string; activeMac?: string }>>({})
+  const [wifiLiveStatuses, setWifiLiveStatuses] = useState<Record<string, { 
+    state: string; 
+    ssid: string; 
+    activeMac?: string;
+    freq?: number;
+    keyMgmt?: string;
+    wifiGen?: string;
+  }>>({})
 
   useEffect(() => {
     loadData()
@@ -198,7 +209,14 @@ export default function Interfaces() {
           const status = await interfaceService.getWifiStatus(iface.id)
           setWifiLiveStatuses((prev) => ({
             ...prev,
-            [iface.id]: { state: status.state, ssid: status.ssid, activeMac: status.activeMac }
+            [iface.id]: { 
+              state: status.state, 
+              ssid: status.ssid, 
+              activeMac: status.activeMac,
+              freq: status.freq,
+              keyMgmt: status.keyMgmt,
+              wifiGen: status.wifiGen
+            }
           }))
         } catch (e) {
           console.error("Failed to fetch live wifi status:", e)
@@ -233,7 +251,11 @@ export default function Interfaces() {
     setFormGateway(iface.gateway)
     setFormAccess([...iface.adminAccess])
     setFormSSID(iface.wifiSSID || "")
+
+    // เพื่อความปลอดภัย จะไม่รับค่าจาก api มาใส่ และจะอัปเดตข้อมูลเมื่อผู้ใช้แก้ไขเท่านั้น
     setFormWifiPassword("")
+
+    setFormWifiSecurity(iface.wifiSecurity || "WPA2")
 
     // MAC fields
     setFormMacMode(iface.macMode === "randomized" ? "randomized" : "hardware")
@@ -241,7 +263,11 @@ export default function Interfaces() {
     // Failover fields
     setFormFailoverEnabled(iface.failoverEnabled ?? false)
     setFormBackupSSID(iface.backupSsid || "")
-    setFormBackupWifiPassword(iface.backupWifiPassword || "")
+
+    // เพื่อความปลอดภัย จะไม่รับค่าจาก api มาใส่ และจะอัปเดตข้อมูลเมื่อผู้ใช้แก้ไขเท่านั้น
+    setFormBackupWifiPassword("")
+
+    setFormBackupWifiSecurity(iface.backupWifiSecurity || "WPA2")
     setFormIpCheckTimeout(iface.ipCheckTimeout ?? 15)
     setFormPrimaryMaxRetries(iface.primaryMaxRetries ?? 3)
     setFormFailoverCooldown(iface.failoverCooldown ?? 60)
@@ -276,6 +302,16 @@ export default function Interfaces() {
   const selectSSID = (ssid: string) => {
     setFormSSID(ssid)
     setShowScanResults(false)
+    const matched = scanResults.find((r) => r.ssid === ssid)
+    if (matched) {
+      if (matched.security.includes("WPA3")) {
+        setFormWifiSecurity("WPA3")
+      } else if (matched.security.includes("WPA2") || matched.security.includes("WPA-PSK")) {
+        setFormWifiSecurity("WPA2")
+      } else if (matched.security === "Open") {
+        setFormWifiSecurity("Open")
+      }
+    }
   }
 
   const [simActive, setSimActive] = useState(false)
@@ -467,10 +503,15 @@ export default function Interfaces() {
         if (formWifiPassword) {
           updates.wifiPassword = formWifiPassword
         }
+        updates.wifiSecurity = formWifiSecurity
+
         // Failover properties
         updates.failoverEnabled = formFailoverEnabled
         updates.backupSsid = formBackupSSID
-        updates.backupWifiPassword = formBackupWifiPassword
+        if (formBackupWifiPassword) {
+          updates.backupWifiPassword = formBackupWifiPassword
+        }
+        updates.backupWifiSecurity = formBackupWifiSecurity
         updates.ipCheckTimeout = formIpCheckTimeout
         updates.primaryMaxRetries = formPrimaryMaxRetries
         updates.failoverCooldown = formFailoverCooldown
@@ -565,12 +606,12 @@ export default function Interfaces() {
             <TableHeader>
               <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
                 <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[6%] font-semibold">Port</th>
-                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[15%] font-semibold">Name (Alias)</th>
-                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[8%] font-semibold">Role</th>
+                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[25%] font-semibold">Name (Alias)</th>
+                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[5%] font-semibold">Role</th>
                 <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[20%] font-semibold">IP / Netmask</th>
                 <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[18%] font-semibold">Admin Access</th>
-                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[10%] font-semibold">Speed</th>
-                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[10%] font-semibold">Status</th>
+                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[5%] font-semibold">Speed</th>
+                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[5%] font-semibold">Status</th>
                 <TableHead className="p-3 w-[13%] text-right text-[11px] uppercase tracking-wider font-semibold">Action</TableHead>
               </TableRow>
             </TableHeader>
@@ -620,6 +661,27 @@ export default function Interfaces() {
                                 Disconnected
                               </Badge>
                             )
+                          ) : <></>
+                        }
+                        {
+                          iface.type === "wireless" && iface.status === "up" && wifiLiveStatuses[iface.id] ? (
+                            <>
+                              {wifiLiveStatuses[iface.id].freq ? (
+                                <Badge className="bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                                  {wifiLiveStatuses[iface.id].freq} MHz
+                                </Badge>
+                              ) : null}
+                              {wifiLiveStatuses[iface.id].wifiGen ? (
+                                <Badge className="bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                                  {wifiLiveStatuses[iface.id].wifiGen}
+                                </Badge>
+                              ) : null}
+                              {wifiLiveStatuses[iface.id].keyMgmt ? (
+                                <Badge className="bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                                  {wifiLiveStatuses[iface.id].keyMgmt}
+                                </Badge>
+                              ) : null}
+                            </>
                           ) : <></>
                         }
                         {iface.type === "wireless" && iface.status === "up" && wifiLiveStatuses[iface.id]?.ssid && (
@@ -1017,20 +1079,43 @@ export default function Interfaces() {
                     </div>
                   )}
 
-                  {/* Wi-Fi Password */}
-                  <div className="space-y-1">
-                    <Label htmlFor="form-wifi-password" className="text-[11px] text-muted-foreground">
-                      Password (PSK)
-                    </Label>
-                    <Input
-                      id="form-wifi-password"
-                      type="password"
-                      value={formWifiPassword}
-                      onChange={(e) => setFormWifiPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="bg-background/50 h-8 font-mono text-xs"
-                    />
-                    <p className="text-[10px] text-muted-foreground italic">เว้นว่างหากไม่ต้องการเปลี่ยนรหัสผ่าน</p>
+                  {/* Wi-Fi Password & Security */}
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="form-wifi-security" className="text-[11px] text-muted-foreground block font-semibold uppercase tracking-wider">
+                        Key Management (ระบบความปลอดภัย)
+                      </Label>
+                      <Select
+                        value={formWifiSecurity}
+                        onValueChange={(value) => setFormWifiSecurity(value)}
+                      >
+                        <SelectTrigger id="form-wifi-security" className="bg-background/50 border-border/80 h-8 text-xs font-semibold text-foreground">
+                          <SelectValue placeholder="เลือกประเภทความปลอดภัย" />
+                        </SelectTrigger>
+                        <SelectContent className="border border-border/80 bg-popover text-foreground rounded-md text-xs font-semibold">
+                          <SelectItem value="Open">Open (ไม่มีรหัสผ่าน)</SelectItem>
+                          <SelectItem value="WPA2">WPA2 (แนะนำทั่วไป)</SelectItem>
+                          <SelectItem value="WPA3">WPA3 (SAE-only)</SelectItem>
+                          <SelectItem value="WPA2/WPA3">WPA2/WPA3 Mixed (Transition)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {formWifiSecurity !== "Open" && (
+                      <div className="space-y-1.5">
+                        <Label htmlFor="form-wifi-password" className="text-[11px] text-muted-foreground block">
+                          Password (PSK)
+                        </Label>
+                        <Input
+                          id="form-wifi-password"
+                          type="password"
+                          value={formWifiPassword}
+                          onChange={(e) => setFormWifiPassword(e.target.value)}
+                          placeholder="••••••••"
+                          className="bg-background/50 h-8 font-mono text-xs w-full"
+                        />
+                        <p className="text-[10px] text-muted-foreground italic mt-0.5">เว้นว่างหากไม่ต้องการเปลี่ยนรหัสผ่าน</p>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1090,7 +1175,7 @@ export default function Interfaces() {
 
                   {formFailoverEnabled && (
                     <div className="space-y-4 pt-1 animate-fade-in text-xs">
-                      {/* Optional Backup SSID */}
+                      {/* Optional Backup SSID & Security */}
                       <div className="grid gap-3 sm:grid-cols-2">
                         <div className="space-y-1.5">
                           <Label htmlFor="form-backup-ssid" className="text-[11px] text-muted-foreground">
@@ -1106,7 +1191,30 @@ export default function Interfaces() {
                           />
                         </div>
                         <div className="space-y-1.5">
-                          <Label htmlFor="form-backup-wifi-password" className="text-[11px] text-muted-foreground">
+                          <Label htmlFor="form-backup-wifi-security" className="text-[11px] text-muted-foreground block font-semibold uppercase tracking-wider">
+                            Backup Security (ระบบความปลอดภัยสำรอง)
+                          </Label>
+                          <Select
+                            value={formBackupWifiSecurity}
+                            onValueChange={(value) => setFormBackupWifiSecurity(value)}
+                          >
+                            <SelectTrigger id="form-backup-wifi-security" className="bg-background/50 border-border/80 h-8 text-xs font-semibold text-foreground">
+                              <SelectValue placeholder="เลือกประเภทความปลอดภัย" />
+                            </SelectTrigger>
+                            <SelectContent className="border border-border/80 bg-popover text-foreground rounded-md text-xs font-semibold">
+                              <SelectItem value="Open">Open (ไม่มีรหัสผ่าน)</SelectItem>
+                              <SelectItem value="WPA2">WPA2 (แนะนำทั่วไป)</SelectItem>
+                              <SelectItem value="WPA3">WPA3 (SAE-only)</SelectItem>
+                              <SelectItem value="WPA2/WPA3">WPA2/WPA3 Mixed (Transition)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+
+                      {/* Backup Password (conditional) */}
+                      {formBackupWifiSecurity !== "Open" && (
+                        <div className="space-y-1.5 max-w-md">
+                          <Label htmlFor="form-backup-wifi-password" className="text-[11px] text-muted-foreground block">
                             Backup Password (รหัสผ่านสำรอง)
                           </Label>
                           <Input
@@ -1115,10 +1223,11 @@ export default function Interfaces() {
                             value={formBackupWifiPassword}
                             onChange={(e) => setFormBackupWifiPassword(e.target.value)}
                             placeholder="รหัสผ่านสำรอง"
-                            className="bg-background/50 h-8 font-mono text-xs"
+                            className="bg-background/50 h-8 font-mono text-xs w-full"
                           />
+                          <p className="text-[10px] text-muted-foreground italic mt-0.5">เว้นว่างหากไม่ต้องการเปลี่ยนรหัสผ่านสำรอง</p>
                         </div>
-                      </div>
+                      )}
 
                       {/* Settings grid */}
                       <div className="grid gap-3 sm:grid-cols-3">

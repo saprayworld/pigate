@@ -621,3 +621,131 @@ func TestInterfaceUpdateSyncsFirewall(t *testing.T) {
 		t.Errorf("Expected firewall sync count to be 1 after admin access change, got %d", fw.ApplyCount)
 	}
 }
+
+func TestInterfacePatchAPI(t *testing.T) {
+	handler, repo := setupTestServer(t)
+	authToken := "mock_session_id_test_token"
+
+	// Seed test interface with some initial settings, including wifi SSID and password
+	macMode := "hardware"
+	reconnect := false
+	failover := false
+	macAddr := "DC:A6:32:AA:BB:C1"
+	wifiSSID := "InitialSSID"
+	wifiPassword := "InitialPassword"
+	wifiSecurity := "WPA2"
+
+	iface := model.NetworkInterface{
+		ID:                   "iface-test-patch",
+		Name:                 "wlan_patch_test",
+		Alias:                "WLAN_Initial",
+		Role:                 "WAN",
+		Type:                 "wireless",
+		AddressingMode:       "dhcp",
+		IP:                   "10.0.0.99",
+		Netmask:              "24",
+		MacAddress:           macAddr,
+		AdminAccess:          []string{"PING"},
+		Status:               "up",
+		Speed:                "72 Mbps",
+		MacMode:              &macMode,
+		RealMacAddress:       &macAddr,
+		RandomizeOnReconnect: &reconnect,
+		FailoverEnabled:      &failover,
+		WifiSSID:             &wifiSSID,
+		WifiPassword:         &wifiPassword,
+		WifiSecurity:         &wifiSecurity,
+	}
+
+	if err := repo.CreateInterfaceForTest(iface); err != nil {
+		t.Fatalf("CreateInterfaceForTest failed: %v", err)
+	}
+	if err := repo.UpdateInterface(iface); err != nil {
+		t.Fatalf("UpdateInterface failed: %v", err)
+	}
+
+	// Update only SSID via PATCH, omitting the password field. The password should not be overwritten.
+	patchPayload := map[string]interface{}{
+		"wifiSSID": "PatchedSSID",
+	}
+	bodyBytes, _ := json.Marshal(patchPayload)
+	req := httptest.NewRequest("PATCH", "/api/interfaces/iface-test-patch", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify that the response masks the password
+	var responseData model.NetworkInterface
+	if err := json.Unmarshal(rec.Body.Bytes(), &responseData); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+	if responseData.WifiPassword == nil || *responseData.WifiPassword != "••••••••" {
+		t.Errorf("Expected response WifiPassword to be masked as '••••••••', got %v", responseData.WifiPassword)
+	}
+
+	// Verify database state
+	updated, err := repo.GetInterfaceByID("iface-test-patch")
+	if err != nil {
+		t.Fatalf("GetInterfaceByID failed: %v", err)
+	}
+
+	if updated.WifiSSID == nil || *updated.WifiSSID != "PatchedSSID" {
+		t.Errorf("Expected SSID to be PatchedSSID, got %v", updated.WifiSSID)
+	}
+
+	if updated.WifiPassword == nil || *updated.WifiPassword != "InitialPassword" {
+		t.Errorf("Expected password to remain InitialPassword, got %v", updated.WifiPassword)
+	}
+
+	// Now try PATCH sending an empty password string. Since security is not "Open", it should also not be overwritten.
+	patchPayloadEmptyPassword := map[string]interface{}{
+		"wifiPassword": "",
+	}
+	bodyBytes, _ = json.Marshal(patchPayloadEmptyPassword)
+	req = httptest.NewRequest("PATCH", "/api/interfaces/iface-test-patch", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	updated2, _ := repo.GetInterfaceByID("iface-test-patch")
+	if updated2.WifiPassword == nil || *updated2.WifiPassword != "InitialPassword" {
+		t.Errorf("Expected password to remain InitialPassword even when empty string is sent in PATCH, got %v", updated2.WifiPassword)
+	}
+
+	// Now try PATCH sending the masked password placeholder ('••••••••'). It should ignore it and keep the original password.
+	patchPayloadMaskedPassword := map[string]interface{}{
+		"wifiPassword": "••••••••",
+	}
+	bodyBytes, _ = json.Marshal(patchPayloadMaskedPassword)
+	req = httptest.NewRequest("PATCH", "/api/interfaces/iface-test-patch", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Check DB again
+	updated3, _ := repo.GetInterfaceByID("iface-test-patch")
+	if updated3.WifiPassword == nil || *updated3.WifiPassword != "InitialPassword" {
+		t.Errorf("Expected password to remain InitialPassword even when '••••••••' masked password is sent in PATCH, got %v", updated3.WifiPassword)
+	}
+
+	// Also check that response returned has '••••••••'
+	var responseData3 model.NetworkInterface
+	if err := json.Unmarshal(rec.Body.Bytes(), &responseData3); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+	if responseData3.WifiPassword == nil || *responseData3.WifiPassword != "••••••••" {
+		t.Errorf("Expected response WifiPassword to be masked as '••••••••', got %v", responseData3.WifiPassword)
+	}
+}

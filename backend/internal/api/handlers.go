@@ -59,6 +59,17 @@ func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 	s.writeJSON(w, status, map[string]string{"message": message})
 }
 
+func maskInterfacePasswords(iface *model.NetworkInterface) {
+	if iface.WifiPassword != nil && *iface.WifiPassword != "" {
+		masked := "••••••••"
+		iface.WifiPassword = &masked
+	}
+	if iface.BackupWifiPassword != nil && *iface.BackupWifiPassword != "" {
+		masked := "••••••••"
+		iface.BackupWifiPassword = &masked
+	}
+}
+
 func generateRandomToken() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
@@ -251,6 +262,9 @@ func (s *Server) HandleGetInterfaces(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	for i := range list {
+		maskInterfacePasswords(&list[i])
+	}
 	s.writeJSON(w, http.StatusOK, list)
 }
 
@@ -313,17 +327,41 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 	if updates.BackupSSID != nil {
 		iface.BackupSSID = updates.BackupSSID
 	}
+	// Safe password updates in PUT: only set if password is not empty and not masked, or if security is Open
 	if updates.BackupWifiPassword != nil {
-		iface.BackupWifiPassword = updates.BackupWifiPassword
+		backupSec := ""
+		if updates.BackupWifiSecurity != nil {
+			backupSec = *updates.BackupWifiSecurity
+		} else if iface.BackupWifiSecurity != nil {
+			backupSec = *iface.BackupWifiSecurity
+		}
+		if *updates.BackupWifiPassword != "••••••••" {
+			if *updates.BackupWifiPassword != "" || backupSec == "Open" {
+				iface.BackupWifiPassword = updates.BackupWifiPassword
+			}
+		}
 	}
 	if updates.WifiSSID != nil {
 		iface.WifiSSID = updates.WifiSSID
 	}
 	if updates.WifiPassword != nil {
-		iface.WifiPassword = updates.WifiPassword
+		primarySec := ""
+		if updates.WifiSecurity != nil {
+			primarySec = *updates.WifiSecurity
+		} else if iface.WifiSecurity != nil {
+			primarySec = *iface.WifiSecurity
+		}
+		if *updates.WifiPassword != "••••••••" {
+			if *updates.WifiPassword != "" || primarySec == "Open" {
+				iface.WifiPassword = updates.WifiPassword
+			}
+		}
 	}
 	if updates.WifiSecurity != nil {
 		iface.WifiSecurity = updates.WifiSecurity
+	}
+	if updates.BackupWifiSecurity != nil {
+		iface.BackupWifiSecurity = updates.BackupWifiSecurity
 	}
 	if updates.FailoverEnabled != nil {
 		iface.FailoverEnabled = updates.FailoverEnabled
@@ -347,7 +385,7 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 		if iface.WifiPassword != nil {
 			password = *iface.WifiPassword
 		}
-		security := "WPA2-PSK"
+		security := "WPA2"
 		if iface.WifiSecurity != nil {
 			security = *iface.WifiSecurity
 		}
@@ -359,12 +397,16 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 		if iface.BackupWifiPassword != nil {
 			backupPassword = *iface.BackupWifiPassword
 		}
+		backupSecurity := "WPA2"
+		if iface.BackupWifiSecurity != nil {
+			backupSecurity = *iface.BackupWifiSecurity
+		}
 		macMode := "hardware"
 		if iface.MacMode != nil {
 			macMode = *iface.MacMode
 		}
 
-		if err := s.network.ConfigureWifi(iface.Name, ssid, password, security, backupSSID, backupPassword, macMode); err != nil {
+		if err := s.network.ConfigureWifi(iface.Name, ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode); err != nil {
 			s.writeError(w, http.StatusInternalServerError, "OS level Wi-Fi configuration failed: "+err.Error())
 			return
 		}
@@ -387,6 +429,176 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	maskInterfacePasswords(iface)
+	s.writeJSON(w, http.StatusOK, iface)
+}
+
+func (s *Server) HandlePatchInterface(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	iface, err := s.repo.GetInterfaceByID(id)
+	if err != nil || iface == nil {
+		s.writeError(w, http.StatusNotFound, "Interface not found")
+		return
+	}
+
+	var body map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	// Check if admin access has changed
+	adminAccessChanged := false
+	if val, ok := body["adminAccess"]; ok {
+		var access []string
+		if err := json.Unmarshal(val, &access); err == nil {
+			adminAccessChanged = !equalStringSlices(iface.AdminAccess, access)
+			iface.AdminAccess = access
+		}
+	}
+
+	updateString := func(key string, field *string) {
+		if val, ok := body[key]; ok {
+			var str string
+			if err := json.Unmarshal(val, &str); err == nil {
+				*field = str
+			}
+		}
+	}
+
+	updatePtrString := func(key string, field **string) {
+		if val, ok := body[key]; ok {
+			var str *string
+			if err := json.Unmarshal(val, &str); err == nil {
+				*field = str
+			}
+		}
+	}
+
+	updatePtrBool := func(key string, field **bool) {
+		if val, ok := body[key]; ok {
+			var b *bool
+			if err := json.Unmarshal(val, &b); err == nil {
+				*field = b
+			}
+		}
+	}
+
+	updatePtrInt := func(key string, field **int) {
+		if val, ok := body[key]; ok {
+			var valInt *int
+			if err := json.Unmarshal(val, &valInt); err == nil {
+				*field = valInt
+			}
+		}
+	}
+
+	updateString("alias", &iface.Alias)
+	updateString("role", &iface.Role)
+	updateString("addressingMode", &iface.AddressingMode)
+	updateString("ip", &iface.IP)
+	updateString("netmask", &iface.Netmask)
+	updateString("gateway", &iface.Gateway)
+	updateString("macAddress", &iface.MacAddress)
+	updateString("status", &iface.Status)
+
+	updatePtrString("wifiSSID", &iface.WifiSSID)
+	updatePtrString("wifiSecurity", &iface.WifiSecurity)
+	updatePtrString("macMode", &iface.MacMode)
+	updatePtrString("laaMacAddress", &iface.LaaMacAddress)
+	updatePtrBool("randomizeOnReconnect", &iface.RandomizeOnReconnect)
+	updatePtrBool("failoverEnabled", &iface.FailoverEnabled)
+	updatePtrString("backupSsid", &iface.BackupSSID)
+	updatePtrString("backupWifiSecurity", &iface.BackupWifiSecurity)
+	updatePtrInt("ipCheckTimeout", &iface.IPCheckTimeout)
+	updatePtrInt("primaryMaxRetries", &iface.PrimaryMaxRetries)
+	updatePtrInt("failoverCooldown", &iface.FailoverCooldown)
+
+	// Safe password updates: only if non-empty and not masked, or if security is explicitly set to Open
+	if val, ok := body["wifiPassword"]; ok {
+		var pass *string
+		if err := json.Unmarshal(val, &pass); err == nil {
+			secMode := ""
+			if iface.WifiSecurity != nil {
+				secMode = *iface.WifiSecurity
+			}
+			if pass != nil && *pass != "••••••••" {
+				if *pass != "" || secMode == "Open" {
+					iface.WifiPassword = pass
+				}
+			}
+		}
+	}
+
+	if val, ok := body["backupWifiPassword"]; ok {
+		var pass *string
+		if err := json.Unmarshal(val, &pass); err == nil {
+			backupSecMode := ""
+			if iface.BackupWifiSecurity != nil {
+				backupSecMode = *iface.BackupWifiSecurity
+			}
+			if pass != nil && *pass != "••••••••" {
+				if *pass != "" || backupSecMode == "Open" {
+					iface.BackupWifiPassword = pass
+				}
+			}
+		}
+	}
+
+	if iface.Type == "wireless" {
+		ssid := ""
+		if iface.WifiSSID != nil {
+			ssid = *iface.WifiSSID
+		}
+		password := ""
+		if iface.WifiPassword != nil {
+			password = *iface.WifiPassword
+		}
+		security := "WPA2"
+		if iface.WifiSecurity != nil {
+			security = *iface.WifiSecurity
+		}
+		backupSSID := ""
+		if iface.BackupSSID != nil {
+			backupSSID = *iface.BackupSSID
+		}
+		backupPassword := ""
+		if iface.BackupWifiPassword != nil {
+			backupPassword = *iface.BackupWifiPassword
+		}
+		backupSecurity := "WPA2"
+		if iface.BackupWifiSecurity != nil {
+			backupSecurity = *iface.BackupWifiSecurity
+		}
+		macMode := "hardware"
+		if iface.MacMode != nil {
+			macMode = *iface.MacMode
+		}
+
+		if err := s.network.ConfigureWifi(iface.Name, ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode); err != nil {
+			s.writeError(w, http.StatusInternalServerError, "OS level Wi-Fi configuration failed: "+err.Error())
+			return
+		}
+	}
+
+	if err := s.network.ConfigureInterface(iface.Name, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "OS level configuration failed: "+err.Error())
+		return
+	}
+
+	if err := s.repo.UpdateInterface(*iface); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if adminAccessChanged {
+		if err := s.syncFirewallRules(); err != nil {
+			s.writeError(w, http.StatusInternalServerError, "OS Firewall update failed: "+err.Error())
+			return
+		}
+	}
+
+	maskInterfacePasswords(iface)
 	s.writeJSON(w, http.StatusOK, iface)
 }
 
@@ -412,6 +624,7 @@ func (s *Server) HandleToggleInterface(w http.ResponseWriter, r *http.Request) {
 
 	_ = s.repo.ToggleInterfaceStatus(id, nextStatus)
 	iface.Status = nextStatus
+	maskInterfacePasswords(iface)
 	s.writeJSON(w, http.StatusOK, iface)
 }
 
@@ -530,6 +743,7 @@ func (s *Server) HandleResetInterface(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	maskInterfacePasswords(iface)
 	s.writeJSON(w, http.StatusOK, iface)
 }
 

@@ -121,6 +121,7 @@ type NetworkInterface struct {
 	FailoverEnabled      *bool        `json:"failoverEnabled,omitempty"`
 	BackupSSID           *string      `json:"backupSsid,omitempty"`
 	BackupWifiPassword   *string      `json:"backupWifiPassword,omitempty"`
+	BackupWifiSecurity   *string      `json:"backupWifiSecurity,omitempty"`
 	IPCheckTimeout       *int         `json:"ipCheckTimeout,omitempty"`
 	PrimaryMaxRetries    *int         `json:"primaryMaxRetries,omitempty"`
 	FailoverCooldown     *int         `json:"failoverCooldown,omitempty"`
@@ -141,6 +142,9 @@ type WifiConnectionStatus struct {
 	SSID      string `json:"ssid"`  // Connected network name
 	BSSID     string `json:"bssid"` // MAC address of the connected AP
 	ActiveMac string `json:"activeMac"` // The currently active/effective MAC address of the interface
+	Freq      int    `json:"freq"`      // Frequency in MHz (e.g. 5180)
+	KeyMgmt   string `json:"keyMgmt"`   // Security protocol (e.g. "WPA3", "WPA2", "Open")
+	WifiGen   string `json:"wifiGen"`   // WiFi Generation (e.g. "WiFi 6", "WiFi 5", "WiFi 4")
 }
 
 // StaticRoute represents a gateway route configuration

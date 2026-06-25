@@ -28,6 +28,7 @@ func RegisterRoutes(s *Server) http.Handler {
 	// 3. Network Interfaces
 	authRoute("GET /api/interfaces", s.HandleGetInterfaces)
 	authRoute("PUT /api/interfaces/{id}", s.HandleUpdateInterface)
+	authRoute("PATCH /api/interfaces/{id}", s.HandlePatchInterface)
 	authRoute("POST /api/interfaces/{id}/toggle", s.HandleToggleInterface)
 	authRoute("POST /api/interfaces/{id}/reset", s.HandleResetInterface)
 	authRoute("DELETE /api/interfaces/{id}", s.HandleDeleteInterface)

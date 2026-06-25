@@ -47,3 +47,16 @@ sudo -u pigate pigate -mock=false -db=/var/lib/pigate/pigate.db
 sudo rm /var/run/wpa_supplicant/wlx0cef1548ff2b
 
 ```
+
+# Service
+
+ใช้ข้อมูลนี้สร้างไฟล์สำหรับทำ Service
+
+```bash
+# /etc/systemd/system/pigate.service
+[Service]
+User=pigate
+Group=netdev
+RuntimeDirectory=pigate
+RuntimeDirectoryMode=0755
+```

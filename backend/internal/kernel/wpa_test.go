@@ -33,7 +33,7 @@ func TestSanitizeWpaInput(t *testing.T) {
 // TestGenerateWpaConfig tests configuration file structure generation
 func TestGenerateWpaConfig(t *testing.T) {
 	// 1. Open Wifi
-	cfgOpen := GenerateWpaConfig("OpenSSID", "", "Open", "", "", "hardware")
+	cfgOpen := GenerateWpaConfig("OpenSSID", "", "Open", "", "", "Open", "hardware")
 	if !strings.Contains(cfgOpen, "ssid=\"OpenSSID\"") {
 		t.Errorf("Expected ssid OpenSSID in config, got:\n%s", cfgOpen)
 	}
@@ -42,7 +42,7 @@ func TestGenerateWpaConfig(t *testing.T) {
 	}
 
 	// 2. WPA2-PSK
-	cfgWpa2 := GenerateWpaConfig("Wpa2SSID", "wpa2pass", "WPA2-PSK", "", "", "hardware")
+	cfgWpa2 := GenerateWpaConfig("Wpa2SSID", "wpa2pass", "WPA2-PSK", "", "", "WPA2", "hardware")
 	if !strings.Contains(cfgWpa2, "ssid=\"Wpa2SSID\"") {
 		t.Errorf("Expected ssid Wpa2SSID in config, got:\n%s", cfgWpa2)
 	}
@@ -54,16 +54,16 @@ func TestGenerateWpaConfig(t *testing.T) {
 	}
 
 	// 3. WPA3-SAE
-	cfgWpa3 := GenerateWpaConfig("Wpa3SSID", "wpa3pass", "WPA3", "", "", "hardware")
-	if !strings.Contains(cfgWpa3, "key_mgmt=WPA-PSK SAE") {
-		t.Errorf("Expected key_mgmt=WPA-PSK SAE in config, got:\n%s", cfgWpa3)
+	cfgWpa3 := GenerateWpaConfig("Wpa3SSID", "wpa3pass", "WPA3", "", "", "WPA2", "hardware")
+	if !strings.Contains(cfgWpa3, "key_mgmt=SAE") {
+		t.Errorf("Expected key_mgmt=SAE in config, got:\n%s", cfgWpa3)
 	}
 	if !strings.Contains(cfgWpa3, "ieee80211w=2") {
 		t.Errorf("Expected ieee80211w=2 in config, got:\n%s", cfgWpa3)
 	}
 
 	// 4. Backup SSIDs
-	cfgBackup := GenerateWpaConfig("PrimarySSID", "primpass", "WPA2-PSK", "BackupSSID", "backpass", "hardware")
+	cfgBackup := GenerateWpaConfig("PrimarySSID", "primpass", "WPA2-PSK", "BackupSSID", "backpass", "WPA2", "hardware")
 	if !strings.Contains(cfgBackup, "priority=10") {
 		t.Errorf("Expected priority 10 in config, got:\n%s", cfgBackup)
 	}
@@ -78,7 +78,7 @@ func TestGenerateWpaConfig(t *testing.T) {
 	}
 
 	// 5. Randomized MAC Mode
-	cfgRand := GenerateWpaConfig("PrimarySSID", "primpass", "WPA2-PSK", "BackupSSID", "backpass", "randomized")
+	cfgRand := GenerateWpaConfig("PrimarySSID", "primpass", "WPA2-PSK", "BackupSSID", "backpass", "WPA2", "randomized")
 	if !strings.Contains(cfgRand, "preassoc_mac_addr=1") {
 		t.Errorf("Expected preassoc_mac_addr=1 in config, got:\n%s", cfgRand)
 	}
@@ -210,6 +210,15 @@ func TestGetWifiStatus(t *testing.T) {
 	if status.BSSID != "00:11:22:33:44:55" {
 		t.Errorf("Expected BSSID 00:11:22:33:44:55, got %q", status.BSSID)
 	}
+	if status.Freq != 5180 {
+		t.Errorf("Expected Freq 5180, got %d", status.Freq)
+	}
+	if status.KeyMgmt != "WPA2" {
+		t.Errorf("Expected KeyMgmt WPA2, got %q", status.KeyMgmt)
+	}
+	if status.WifiGen != "WiFi 5" {
+		t.Errorf("Expected WifiGen WiFi 5, got %q", status.WifiGen)
+	}
 }
 
 
@@ -239,7 +248,7 @@ func TestConfigureWifiAtomicWrite(t *testing.T) {
 	// To prevent executing real 'systemctl' command errors failing the test, we'll verify the config is created.
 	// Since wlan_test is not a systemctl service, starting it will fail, which is expected.
 	// Let's call ConfigureWifi and expect an error from systemctl, but check if the config file was written correctly!
-	err = netMgr.ConfigureWifi("wlan_test", "MyHomeSSID", "secpass", "WPA2-PSK", "BackupSSID", "backpass", "hardware")
+	err = netMgr.ConfigureWifi("wlan_test", "MyHomeSSID", "secpass", "WPA2-PSK", "BackupSSID", "backpass", "WPA2", "hardware")
 	
 	// The file should have been written despite systemctl service failing to start
 	configPath := filepath.Join(tmpDir, "wpa_supplicant-wlan_test.conf")
@@ -340,7 +349,7 @@ func TestConfigureWifiCleansStaleSocket(t *testing.T) {
 
 	netMgr := NewRealNetwork()
 	// Call ConfigureWifi which will trigger the start path (since fake systemctl returns inactive)
-	_ = netMgr.ConfigureWifi("wlan_test_stale", "MyHomeSSID", "secpass", "WPA2-PSK", "", "", "hardware")
+	_ = netMgr.ConfigureWifi("wlan_test_stale", "MyHomeSSID", "secpass", "WPA2-PSK", "", "", "WPA2", "hardware")
 
 	// The stale socket file should have been deleted
 	if _, err := os.Stat(staleSocketPath); !os.IsNotExist(err) {

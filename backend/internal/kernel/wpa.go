@@ -24,10 +24,10 @@ func SanitizeWpaInput(val string) string {
 }
 
 // GenerateWpaConfig constructs the raw text content for a wpa_supplicant configuration file.
-// It incorporates security options (Open, WPA2, WPA3), MAC randomization, and weight-based priorities.
-func GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword, macMode string) string {
-	log.Printf("[WPA Config] Building config layout for SSID=%q (Security=%s, HasPassword=%t), BackupSSID=%q (HasBackupPassword=%t), MacMode=%s",
-		ssid, security, password != "", backupSSID, backupPassword != "", macMode)
+// It incorporates security options (Open, WPA2, WPA3, WPA2/WPA3), MAC randomization, and weight-based priorities.
+func GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode string) string {
+	log.Printf("[WPA Config] Building config layout for SSID=%q (Security=%s, HasPassword=%t), BackupSSID=%q (BackupSecurity=%s, HasBackupPassword=%t), MacMode=%s",
+		ssid, security, password != "", backupSSID, backupSecurity, backupPassword != "", macMode)
 
 	var sb strings.Builder
 	sb.WriteString("ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\n")
@@ -38,51 +38,60 @@ func GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword, mac
 	}
 	sb.WriteString("\n")
 
-	cleanSSID := SanitizeWpaInput(ssid)
-	cleanPassword := SanitizeWpaInput(password)
+	// Primary network block (priority 10)
+	writeNetworkBlock(&sb, ssid, password, security, 10, macMode == "randomized")
 
-	// Primary network block
-	sb.WriteString("network={\n")
-	sb.WriteString(fmt.Sprintf("    ssid=\"%s\"\n", cleanSSID))
-	if cleanPassword != "" && security != "Open" {
-		sb.WriteString(fmt.Sprintf("    psk=\"%s\"\n", cleanPassword))
-		if security == "WPA3" {
-			sb.WriteString("    key_mgmt=WPA-PSK SAE\n")
-			sb.WriteString("    ieee80211w=2\n") // PMF required for WPA3
-		} else {
-			sb.WriteString("    key_mgmt=WPA-PSK\n")
-		}
-	} else {
-		sb.WriteString("    key_mgmt=NONE\n")
-	}
-	if macMode == "randomized" {
-		sb.WriteString("    mac_addr=1\n")
-	}
-	sb.WriteString("    priority=10\n")
-	sb.WriteString("}\n")
-
-	// Backup network block
-	cleanBackupSSID := SanitizeWpaInput(backupSSID)
-	cleanBackupPassword := SanitizeWpaInput(backupPassword)
-	if cleanBackupSSID != "" {
-		sb.WriteString("\nnetwork={\n")
-		sb.WriteString(fmt.Sprintf("    ssid=\"%s\"\n", cleanBackupSSID))
-		if cleanBackupPassword != "" {
-			sb.WriteString(fmt.Sprintf("    psk=\"%s\"\n", cleanBackupPassword))
-			// Default backup key_mgmt to WPA-PSK SAE for maximum compatibility with both WPA2/WPA3
-			sb.WriteString("    key_mgmt=WPA-PSK\n")
-			sb.WriteString("    ieee80211w=2\n")
-		} else {
-			sb.WriteString("    key_mgmt=NONE\n")
-		}
-		if macMode == "randomized" {
-			sb.WriteString("    mac_addr=1\n")
-		}
-		sb.WriteString("    priority=5\n")
-		sb.WriteString("}\n")
+	// Backup network block (priority 5)
+	if SanitizeWpaInput(backupSSID) != "" {
+		sb.WriteString("\n")
+		writeNetworkBlock(&sb, backupSSID, backupPassword, backupSecurity, 5, macMode == "randomized")
 	}
 
 	return sb.String()
+}
+
+func writeNetworkBlock(sb *strings.Builder, ssid, password, security string, priority int, randomizeMac bool) {
+	cleanSSID := SanitizeWpaInput(ssid)
+	cleanPassword := SanitizeWpaInput(password)
+
+	sb.WriteString("network={\n")
+	sb.WriteString(fmt.Sprintf("    ssid=\"%s\"\n", cleanSSID))
+
+	switch security {
+	case "WPA3":
+		sb.WriteString("    key_mgmt=SAE\n")
+		sb.WriteString("    ieee80211w=2\n") // PMF required for WPA3
+		if cleanPassword != "" {
+			sb.WriteString(fmt.Sprintf("    psk=\"%s\"\n", cleanPassword))
+		}
+	case "WPA2/WPA3":
+		sb.WriteString("    key_mgmt=WPA-PSK SAE\n")
+		sb.WriteString("    ieee80211w=1\n") // PMF capable/optional for transition mode
+		if cleanPassword != "" {
+			sb.WriteString(fmt.Sprintf("    psk=\"%s\"\n", cleanPassword))
+		}
+	case "WPA2", "WPA2-PSK":
+		sb.WriteString("    key_mgmt=WPA-PSK\n")
+		if cleanPassword != "" {
+			sb.WriteString(fmt.Sprintf("    psk=\"%s\"\n", cleanPassword))
+		}
+	case "Open":
+		sb.WriteString("    key_mgmt=NONE\n")
+	default:
+		// Fallback
+		if cleanPassword != "" {
+			sb.WriteString("    key_mgmt=WPA-PSK\n")
+			sb.WriteString(fmt.Sprintf("    psk=\"%s\"\n", cleanPassword))
+		} else {
+			sb.WriteString("    key_mgmt=NONE\n")
+		}
+	}
+
+	if randomizeMac {
+		sb.WriteString("    mac_addr=1\n")
+	}
+	sb.WriteString(fmt.Sprintf("    priority=%d\n", priority))
+	sb.WriteString("}\n")
 }
 
 // SendWpaCommand sends a control command to the wpa_supplicant UNIX domain datagram socket.

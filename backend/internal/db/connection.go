@@ -123,6 +123,7 @@ func migrate(db *sql.DB) error {
 					failover_enabled INTEGER DEFAULT 0,
 					backup_ssid TEXT,
 					backup_wifi_password TEXT,
+					backup_wifi_security TEXT DEFAULT 'WPA2',
 					ip_check_timeout INTEGER,
 					primary_max_retries INTEGER,
 					failover_cooldown INTEGER
@@ -130,11 +131,11 @@ func migrate(db *sql.DB) error {
 				`INSERT INTO network_interfaces_new (
 					id, name, alias, role, type, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
 					connected_ssid, wifi_password, wifi_security, mac_mode, real_mac_address, randomized_mac, laa_mac_address, 
-					randomize_on_reconnect, failover_enabled, backup_ssid, backup_wifi_password, ip_check_timeout, primary_max_retries, failover_cooldown
+					randomize_on_reconnect, failover_enabled, backup_ssid, backup_wifi_password, backup_wifi_security, ip_check_timeout, primary_max_retries, failover_cooldown
 				) SELECT 
 					id, name, alias, role, type, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
 					connected_ssid, wifi_password, wifi_security, mac_mode, real_mac_address, randomized_mac, laa_mac_address, 
-					randomize_on_reconnect, failover_enabled, backup_ssid, backup_wifi_password, ip_check_timeout, primary_max_retries, failover_cooldown 
+					randomize_on_reconnect, failover_enabled, backup_ssid, backup_wifi_password, 'WPA2', ip_check_timeout, primary_max_retries, failover_cooldown 
 				FROM network_interfaces;`,
 				"DROP TABLE network_interfaces;",
 				"ALTER TABLE network_interfaces_new RENAME TO network_interfaces;",
@@ -156,6 +157,18 @@ func migrate(db *sql.DB) error {
 			_, err = db.Exec("ALTER TABLE network_interfaces ADD COLUMN subtype TEXT DEFAULT ''")
 			if err != nil {
 				return fmt.Errorf("failed to add subtype column: %w", err)
+			}
+		}
+	}
+
+	// Add backup_wifi_security column to network_interfaces if it doesn't exist
+	var sqlCreateIfaceBackupSecurity string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='network_interfaces'").Scan(&sqlCreateIfaceBackupSecurity)
+	if err == nil {
+		if !strings.Contains(sqlCreateIfaceBackupSecurity, "backup_wifi_security") {
+			_, err = db.Exec("ALTER TABLE network_interfaces ADD COLUMN backup_wifi_security TEXT DEFAULT 'WPA2'")
+			if err != nil {
+				return fmt.Errorf("failed to add backup_wifi_security column: %w", err)
 			}
 		}
 	}
@@ -283,6 +296,7 @@ func migrate(db *sql.DB) error {
 			failover_enabled INTEGER DEFAULT 0,
 			backup_ssid TEXT,
 			backup_wifi_password TEXT,
+			backup_wifi_security TEXT DEFAULT 'WPA2',
 			ip_check_timeout INTEGER,
 			primary_max_retries INTEGER,
 			failover_cooldown INTEGER
@@ -447,16 +461,16 @@ func seed(db *sql.DB, dsn string, mockMode bool) error {
 			_, err := db.Exec(`INSERT INTO network_interfaces (
 				id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
 				mac_mode, real_mac_address, randomized_mac, laa_mac_address, randomize_on_reconnect,
-				connected_ssid, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, ip_check_timeout, primary_max_retries, failover_cooldown
+				connected_ssid, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, backup_wifi_security, ip_check_timeout, primary_max_retries, failover_cooldown
 			) VALUES 
 			(
 				'iface-1', 'eth0', 'LAN_Internal', 'LAN', 'ethernet', 'device', 'static', '192.168.1.1', '24', '', 'DC:A6:32:AA:BB:C1', 'PING,HTTP,SSH', 'up', '1000 Mbps',
-				'hardware', 'DC:A6:32:AA:BB:C1', NULL, NULL, 0, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL
+				'hardware', 'DC:A6:32:AA:BB:C1', NULL, NULL, 0, NULL, NULL, 0, NULL, NULL, 'WPA2', NULL, NULL, NULL
 			),
 			(
 				'iface-2', 'wlan0', 'WAN_WiFi', 'WAN', 'wireless', 'device', 'dhcp', '10.0.0.45', '24', '10.0.0.1', '4E:88:2F:BC:A1:90', 'PING', 'up', '72 Mbps',
 				'randomized', 'DC:A6:32:AA:BB:C2', '4E:88:2F:BC:A1:90', '9A:11:22:33:44:55', 1,
-				'MyHome_5G', 'WPA2-PSK', 0, 'MyHome_2G', 'backupPassword123', 15, 3, 60
+				'MyHome_5G', 'WPA2-PSK', 0, 'MyHome_2G', 'backupPassword123', 'WPA2', 15, 3, 60
 			)`)
 			if err != nil {
 				return err

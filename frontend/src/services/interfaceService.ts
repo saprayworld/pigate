@@ -99,7 +99,7 @@ export const interfaceService = {
     }
 
     const response = await fetch(`${API_BASE_URL}/interfaces/${id}`, {
-      method: "PUT",
+      method: "PATCH",
       headers: {
         "Content-Type": "application/json",
       },
@@ -156,7 +156,15 @@ export const interfaceService = {
   },
 
   // Fetch live Wi-Fi connection status
-  getWifiStatus: async (id: string): Promise<{ state: string; ssid: string; bssid: string; activeMac?: string }> => {
+  getWifiStatus: async (id: string): Promise<{ 
+    state: string; 
+    ssid: string; 
+    bssid: string; 
+    activeMac?: string;
+    freq?: number;
+    keyMgmt?: string;
+    wifiGen?: string;
+  }> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 200));
       return {
@@ -164,6 +172,9 @@ export const interfaceService = {
         ssid: "MyHome_5G",
         bssid: "00:11:22:33:44:55",
         activeMac: "00:11:22:33:44:55",
+        freq: 5745,
+        keyMgmt: "WPA3",
+        wifiGen: "WiFi 6",
       };
     }
 
@@ -210,6 +221,7 @@ export const interfaceService = {
         failoverEnabled: false,
         backupSsid: "",
         backupWifiPassword: "",
+        backupWifiSecurity: "WPA2",
         ipCheckTimeout: 15,
         primaryMaxRetries: 3,
         failoverCooldown: 60,
