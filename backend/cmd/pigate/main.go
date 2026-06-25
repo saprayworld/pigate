@@ -92,6 +92,30 @@ func main() {
 		dhcp = mDhcp
 	}
 
+	// 5. Instantiate Server & Router
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit)
+
+	// Apply config form database to kernel
+
+	// 4.1 Apply Network Interfaces configuration at startup
+	log.Printf("Applying database-configured network interfaces to kernel at startup...")
+	if err := server.InitApplyConfigurationAtStartup(); err != nil {
+		log.Printf("Warning: Failed to apply network interfaces to kernel at startup: %v", err)
+	}
+
+	// 4.2 Apply Static Routes configuration at startup
+	log.Printf("Applying database-configured static routes to kernel at startup...")
+	// startupRoutes, err := repo.GetRoutes()
+	// if err != nil {
+	// 	log.Printf("Warning: Failed to load routes from DB for startup apply: %v", err)
+	// } else {
+	// 	if err := rt.ApplyRoutes(startupRoutes); err != nil {
+	// 		log.Printf("Warning: Failed to apply static routes to kernel at startup: %v", err)
+	// 	} else {
+	// 		log.Printf("Successfully applied static routes at startup.")
+	// 	}
+	// }
+
 	// 4.5 Apply Firewall Rules at startup
 	log.Printf("Applying database-configured firewall rules to kernel at startup...")
 	rules, err := repo.GetPolicies()
@@ -120,8 +144,6 @@ func main() {
 		}
 	}
 
-	// 5. Instantiate Server & Router
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit)
 	handler := api.RegisterRoutes(server)
 
 	// 6. Start HTTP API listener

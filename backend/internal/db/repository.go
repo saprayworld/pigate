@@ -39,6 +39,14 @@ func (r *Repository) SetMockMode(mockMode bool, mockFromReal bool) {
 	r.mockFromReal = mockFromReal
 }
 
+func (r *Repository) IsMockMode() bool {
+	return r.mockMode
+}
+
+func (r *Repository) IsMockFromReal() bool {
+	return r.mockFromReal
+}
+
 func (r *Repository) SetAllowEditSystemRoutes(allow bool) {
 	r.allowEditSystemRoutes = allow
 }
@@ -1133,9 +1141,9 @@ func (r *Repository) DeleteDHCPReservation(id string) error {
 // NETWORK INTERFACES
 // =========================================================================
 
-// detectAddressingMode checks whether a network interface is configured via DHCP or static IP.
+// DetectAddressingMode checks whether a network interface is configured via DHCP or static IP.
 // It probes common DHCP lease/PID file locations used by dhclient, dhcpcd, and systemd-networkd.
-func detectAddressingMode(ifaceName string, ifaceIndex int) string {
+func DetectAddressingMode(ifaceName string, ifaceIndex int) string {
 	// Check dhclient PID files
 	dhclientPaths := []string{
 		fmt.Sprintf("/run/dhclient-%s.pid", ifaceName),
@@ -1198,8 +1206,8 @@ func detectAddressingMode(ifaceName string, ifaceIndex int) string {
 	return "static"
 }
 
-// getGatewayForInterface reads /proc/net/route to find the default gateway for the given interface.
-func getGatewayForInterface(ifaceName string) string {
+// GetGatewayForInterface reads /proc/net/route to find the default gateway for the given interface.
+func GetGatewayForInterface(ifaceName string) string {
 	data, err := os.ReadFile("/proc/net/route")
 	if err != nil {
 		return ""
@@ -1243,9 +1251,9 @@ func getGatewayForInterface(ifaceName string) string {
 // NOTE: DNS is managed globally via system_dns_settings (SyncDNSFromOS / DNS Settings page).
 // Per-interface dns1/dns2 fields have been removed.
 
-// getInterfaceSpeed reads the link speed from /sys/class/net/<iface>/speed.
+// GetInterfaceSpeed reads the link speed from /sys/class/net/<iface>/speed.
 // Returns a human-readable string such as "1000 Mbps" or "unknown" if not available.
-func getInterfaceSpeed(ifaceName string) string {
+func GetInterfaceSpeed(ifaceName string) string {
 	speedPath := fmt.Sprintf("/sys/class/net/%s/speed", ifaceName)
 	data, err := os.ReadFile(speedPath)
 	if err != nil {
@@ -1352,21 +1360,34 @@ func (r *Repository) SyncInterfacesFromOS() error {
 		var ifaceSubtype = GetDeviceType(netIface.Name)
 		log.Printf("[DB] Interface %s subtype: %s", netIface.Name, ifaceSubtype)
 
+		// Detect addressing mode from OS DHCP lease/pid files
+		addrMode := DetectAddressingMode(netIface.Name, netIface.Index)
+
 		if id, exists := dbMap[netIface.Name]; exists {
 			log.Printf("[DB] Interface %s already exists with ID %s", netIface.Name, id)
 
-			speed := getInterfaceSpeed(netIface.Name)
+			speed := GetInterfaceSpeed(netIface.Name)
 
 			log.Printf("[DB] Interface %s ip: %s, netmask: %s, mac: %s, status: %s, speed: %s", netIface.Name, ipStr, netmaskStr, macAddr, status, speed)
 
 			// Update dynamic fields only (ip, netmask, mac, status, speed, subtype)
 			// addressing_mode and other user-configured fields are intentionally preserved
-			_, err = r.db.Exec(`UPDATE network_interfaces SET 
+			if addrMode == "static" {
+				_, err = r.db.Exec(`UPDATE network_interfaces SET 
+				mac_address = ?, status = ?, speed = ?, subtype = ? WHERE id = ?`,
+					macAddr, status, speed, ifaceSubtype, id)
+				if err != nil {
+					log.Printf("[DB] Failed to update interface %s: %v", netIface.Name, err)
+				}
+			} else {
+				_, err = r.db.Exec(`UPDATE network_interfaces SET 
 				ip = ?, netmask = ?, mac_address = ?, status = ?, speed = ?, subtype = ? WHERE id = ?`,
-				ipStr, netmaskStr, macAddr, status, speed, ifaceSubtype, id)
-			if err != nil {
-				log.Printf("[DB] Failed to update interface %s: %v", netIface.Name, err)
+					ipStr, netmaskStr, macAddr, status, speed, ifaceSubtype, id)
+				if err != nil {
+					log.Printf("[DB] Failed to update interface %s: %v", netIface.Name, err)
+				}
 			}
+
 		} else {
 			log.Printf("[DB] Interface %s not exists, creating new record", netIface.Name)
 			id := "iface-" + netIface.Name
@@ -1380,13 +1401,13 @@ func (r *Repository) SyncInterfacesFromOS() error {
 			failoverVal := 0
 
 			// Detect addressing mode from OS DHCP lease/pid files
-			addrMode := detectAddressingMode(netIface.Name, netIface.Index)
+			// addrMode := DetectAddressingMode(netIface.Name, netIface.Index)
 
 			// Read default gateway for this interface from kernel routing table
-			gateway := getGatewayForInterface(netIface.Name)
+			gateway := GetGatewayForInterface(netIface.Name)
 
 			// Read interface speed from sysfs
-			speed := getInterfaceSpeed(netIface.Name)
+			speed := GetInterfaceSpeed(netIface.Name)
 
 			// Default admin access based on role
 			adminAccess := "PING,HTTP,SSH"
@@ -1492,6 +1513,10 @@ func (r *Repository) GetInterfaces() ([]model.NetworkInterface, error) {
 		_ = r.SyncInterfacesFromOS()
 	}
 
+	return r.GetInterfacesFromDB()
+}
+
+func (r *Repository) GetInterfacesFromDB() ([]model.NetworkInterface, error) {
 	rows, err := r.db.Query(`SELECT 
 		id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
 		mac_mode, real_mac_address, randomized_mac, laa_mac_address, randomize_on_reconnect,
@@ -1529,8 +1554,6 @@ func (r *Repository) GetInterfaces() ([]model.NetworkInterface, error) {
 
 		list = append(list, iface)
 	}
-
-	// log.Println("[DB] Interfaces: ", list)
 
 	return list, nil
 }
@@ -1571,6 +1594,8 @@ func (r *Repository) GetInterfaceByID(id string) (*model.NetworkInterface, error
 }
 
 func (r *Repository) UpdateInterface(iface model.NetworkInterface) error {
+	log.Printf("[DB] Updating interface: %v", iface)
+
 	adminAccessStr := strings.Join(iface.AdminAccess, ",")
 	reconInt := 0
 	if iface.RandomizeOnReconnect != nil && *iface.RandomizeOnReconnect {
@@ -1581,7 +1606,7 @@ func (r *Repository) UpdateInterface(iface model.NetworkInterface) error {
 		foInt = 1
 	}
 
-	_, err := r.db.Exec(`UPDATE network_interfaces SET 
+	res, err := r.db.Exec(`UPDATE network_interfaces SET 
 		alias = ?, role = ?, addressing_mode = ?, ip = ?, netmask = ?, gateway = ?, mac_address = ?, admin_access = ?, 
 		mac_mode = ?, real_mac_address = ?, randomized_mac = ?, laa_mac_address = ?, randomize_on_reconnect = ?,
 		connected_ssid = ?, wifi_password = ?, wifi_security = ?, failover_enabled = ?, backup_ssid = ?, backup_wifi_password = ?, backup_wifi_security = ?,
@@ -1591,7 +1616,25 @@ func (r *Repository) UpdateInterface(iface model.NetworkInterface) error {
 		iface.MacMode, iface.RealMacAddress, iface.RandomizedMac, iface.LaaMacAddress, reconInt,
 		iface.WifiSSID, iface.WifiPassword, iface.WifiSecurity, foInt, iface.BackupSSID, iface.BackupWifiPassword, iface.BackupWifiSecurity,
 		iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown, iface.ID)
-	return err
+	if err != nil {
+		return err
+	}
+
+	rows, err := res.RowsAffected()
+	if err == nil && rows == 0 {
+		// Insert since it does not exist in the database
+		_, err = r.db.Exec(`INSERT INTO network_interfaces (
+			id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed,
+			mac_mode, real_mac_address, randomized_mac, laa_mac_address, randomize_on_reconnect,
+			connected_ssid, wifi_password, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, backup_wifi_security, ip_check_timeout, primary_max_retries, failover_cooldown
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			iface.ID, iface.Name, iface.Alias, iface.Role, iface.Type, iface.Subtype, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.MacAddress, adminAccessStr, iface.Status, iface.Speed,
+			iface.MacMode, iface.RealMacAddress, iface.RandomizedMac, iface.LaaMacAddress, reconInt,
+			iface.WifiSSID, iface.WifiPassword, iface.WifiSecurity, foInt, iface.BackupSSID, iface.BackupWifiPassword, iface.BackupWifiSecurity, iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown)
+		return err
+	}
+	log.Printf("[DB] Interface updated successfully")
+	return nil
 }
 
 func (r *Repository) ToggleInterfaceStatus(id string, status string) error {

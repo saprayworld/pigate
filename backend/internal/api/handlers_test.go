@@ -749,3 +749,110 @@ func TestInterfacePatchAPI(t *testing.T) {
 		t.Errorf("Expected response WifiPassword to be masked as '••••••••', got %v", responseData3.WifiPassword)
 	}
 }
+
+func TestGetDataLayerAndResetAPI(t *testing.T) {
+	handler, repo := setupTestServer(t)
+	authToken := "mock_session_id_test_token"
+
+	// 1. Fetch interfaces via GET /api/interfaces.
+	// Since we are in mockMode, it should return mock interfaces (eth0, wlan0, eth1).
+	// eth1 exists in kernel mock but NOT in DB.
+	req := httptest.NewRequest("GET", "/api/interfaces", nil)
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	var list []model.NetworkInterface
+	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
+		t.Fatalf("Failed to decode interfaces list: %v", err)
+	}
+
+	// Verify we have eth0, wlan0, and eth1
+	var foundEth1 bool
+	for _, item := range list {
+		if item.Name == "eth1" {
+			foundEth1 = true
+			if item.Alias != "eth1" {
+				t.Errorf("Expected default alias 'eth1' for eth1, got '%s'", item.Alias)
+			}
+		}
+	}
+	if !foundEth1 {
+		t.Fatal("Expected to find eth1 in data layer interfaces list")
+	}
+
+	// Verify eth1 is NOT in the database yet
+	dbIface, err := repo.GetInterfaceByID("iface-eth1")
+	if err != nil {
+		t.Fatalf("Failed to check DB: %v", err)
+	}
+	if dbIface != nil {
+		t.Fatal("Expected eth1 to NOT exist in DB initially")
+	}
+
+	// 2. Perform a PUT request on eth1 to modify it. This should UPSERT it into the DB.
+	var eth1Update model.NetworkInterface
+	for _, item := range list {
+		if item.Name == "eth1" {
+			eth1Update = item
+			break
+		}
+	}
+	eth1Update.Alias = "Configured_Eth1"
+	eth1Update.Role = "WAN"
+	eth1Update.AddressingMode = "static"
+	eth1Update.IP = "192.168.20.20"
+	eth1Update.Netmask = "24"
+	eth1Update.Gateway = "192.168.20.1"
+
+	bodyBytes, _ := json.Marshal(eth1Update)
+	req = httptest.NewRequest("PUT", "/api/interfaces/iface-eth1", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for updating eth1, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify it was saved to the DB
+	dbIface, err = repo.GetInterfaceByID("iface-eth1")
+	if err != nil || dbIface == nil {
+		t.Fatalf("Expected eth1 to be saved in DB, got error: %v or nil", err)
+	}
+	if dbIface.Alias != "Configured_Eth1" || dbIface.IP != "192.168.20.20" {
+		t.Errorf("Unexpected values in DB for eth1: %+v", dbIface)
+	}
+
+	// 3. Perform a Reset request via POST /api/interfaces/iface-eth1/reset.
+	// This should Flush/Delete it from DB and return kernel defaults.
+	req = httptest.NewRequest("POST", "/api/interfaces/iface-eth1/reset", nil)
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for reset eth1, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resetRes model.NetworkInterface
+	if err := json.NewDecoder(rec.Body).Decode(&resetRes); err != nil {
+		t.Fatalf("Failed to decode reset response: %v", err)
+	}
+	if resetRes.Alias != "eth1" || resetRes.IP != "192.168.2.100" {
+		t.Errorf("Expected reset interface to return kernel defaults, got: %+v", resetRes)
+	}
+
+	// Verify it was deleted from DB
+	dbIface, err = repo.GetInterfaceByID("iface-eth1")
+	if err != nil {
+		t.Fatalf("Failed to check DB: %v", err)
+	}
+	if dbIface != nil {
+		t.Fatal("Expected eth1 config to be flushed/deleted from DB")
+	}
+}
