@@ -25,6 +25,17 @@ func NewInterfaceService(repo *db.Repository, network kernel.NetworkManager) *In
 
 // InitApplyConfigurationAtStartup pulls configuration from the database and applies it to the kernel on startup.
 func (s *InterfaceService) InitApplyConfigurationAtStartup() error {
+	log.Printf("[Startup] Fetching interfaces from kernel...")
+	kernelIfaces, err := s.GetKernelInterfaces()
+	if err != nil {
+		return fmt.Errorf("failed to load interfaces from kernel: %w", err)
+	}
+
+	kernelMap := make(map[string]bool)
+	for _, kIface := range kernelIfaces {
+		kernelMap[kIface.Name] = true
+	}
+
 	log.Printf("[Startup] Fetching interfaces configuration from database...")
 	ifaces, err := s.repo.GetInterfacesFromDB()
 	if err != nil {
@@ -32,6 +43,11 @@ func (s *InterfaceService) InitApplyConfigurationAtStartup() error {
 	}
 
 	for _, iface := range ifaces {
+		if !kernelMap[iface.Name] {
+			log.Printf("[Startup] Warning: Interface %s configured in database does not exist in kernel. Skipping.", iface.Name)
+			continue
+		}
+
 		log.Printf("[Startup] Applying configuration to kernel for interface: %s (Type: %s, Role: %s)", iface.Name, iface.Type, iface.Role)
 
 		if iface.Type == "wireless" {

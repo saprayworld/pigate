@@ -277,22 +277,16 @@ func (r *RealNetwork) ConfigureInterface(name string, mode string, ip string, ne
 	return nil
 }
 
-// ScanWifi scans for nearby Wi-Fi networks using iw (or nmcli as fallback).
+// ScanWifi scans for nearby Wi-Fi networks using iw.
 // iw does not require root — only cap_net_raw for raw socket access.
 func (r *RealNetwork) ScanWifi(name string) ([]model.WifiScanResult, error) {
-	// Try iw first (lightweight, no D-Bus dependency)
-	results, err := scanWifiWithIW(name)
-	if err == nil && len(results) > 0 {
-		return results, nil
-	}
-
-	// Fallback: nmcli (requires NetworkManager running)
-	return scanWifiWithNmcli(name)
+	// Use iw (lightweight, no D-Bus dependency)
+	return scanWifiWithIW(name)
 }
 
 // scanWifiWithIW uses `iw dev <name> scan` to list nearby APs.
 func scanWifiWithIW(name string) ([]model.WifiScanResult, error) {
-	out, err := execCommand("iw", "dev", name, "scan").Output()
+	out, err := execCommand("sudo", "iw", "dev", name, "scan").Output()
 	if err != nil {
 		return nil, fmt.Errorf("iw scan failed: %w", err)
 	}
@@ -384,65 +378,6 @@ func scanWifiWithIW(name string) ([]model.WifiScanResult, error) {
 	}
 
 	return filtered, nil
-}
-
-// scanWifiWithNmcli uses nmcli as fallback Wi-Fi scanner.
-func scanWifiWithNmcli(name string) ([]model.WifiScanResult, error) {
-	// Trigger a fresh scan first
-	_ = execCommand("nmcli", "dev", "wifi", "rescan", "ifname", name).Run()
-
-	// Fields: SSID, SIGNAL, SECURITY, CHAN, FREQ
-	out, err := execCommand(
-		"nmcli", "--terse", "--fields", "SSID,SIGNAL,SECURITY,CHAN,FREQ",
-		"dev", "wifi", "list", "ifname", name,
-	).Output()
-	if err != nil {
-		return nil, fmt.Errorf("nmcli wifi list failed: %w", err)
-	}
-
-	var results []model.WifiScanResult
-	scanner := bufio.NewScanner(strings.NewReader(string(out)))
-	for scanner.Scan() {
-		line := scanner.Text()
-		// nmcli --terse separates fields with ":"
-		// Escaped colons in SSID appear as "\:"
-		parts := strings.Split(line, ":")
-		if len(parts) < 5 {
-			continue
-		}
-
-		ssid := parts[0]
-		if ssid == "" {
-			continue
-		}
-
-		var signal int
-		fmt.Sscanf(parts[1], "%d", &signal)
-
-		security := parts[2]
-		if security == "" || security == "--" {
-			security = "Open"
-		}
-
-		var channel int
-		fmt.Sscanf(parts[3], "%d", &channel)
-
-		freq := parts[4]
-		frequency := "2.4 GHz"
-		if strings.HasPrefix(freq, "5") {
-			frequency = "5 GHz"
-		}
-
-		results = append(results, model.WifiScanResult{
-			SSID:      ssid,
-			Signal:    signal,
-			Security:  security,
-			Channel:   channel,
-			Frequency: frequency,
-		})
-	}
-
-	return results, nil
 }
 
 // GetWifiStatus queries wpa_supplicant via socket to fetch live status details.
@@ -542,7 +477,7 @@ func (r *RealNetwork) GetWifiStatus(name string) (*model.WifiConnectionStatus, e
 		status.ActiveMac = iface.HardwareAddr.String()
 	}
 
-	log.Printf("[RealNetwork] GetWifiStatus result: State=%s, SSID=%s, BSSID=%s, ActiveMac=%s, Freq=%d, KeyMgmt=%s, WifiGen=%s", 
+	log.Printf("[RealNetwork] GetWifiStatus result: State=%s, SSID=%s, BSSID=%s, ActiveMac=%s, Freq=%d, KeyMgmt=%s, WifiGen=%s",
 		status.State, status.SSID, status.BSSID, status.ActiveMac, status.Freq, status.KeyMgmt, status.WifiGen)
 	return status, nil
 }

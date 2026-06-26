@@ -479,17 +479,19 @@ func seed(db *sql.DB, dsn string, mockMode bool) error {
 	}
 
 	// 7. Seed Default Static Routes
-	var routeCount int
-	if err := db.QueryRow("SELECT COUNT(*) FROM static_routes").Scan(&routeCount); err != nil {
-		return err
-	}
-	if routeCount == 0 {
-		_, err := db.Exec(`INSERT INTO static_routes (id, destination, gateway, interface, metric, description, status, type, scope, src, proto) VALUES 
-			('route-1', '0.0.0.0/0', '10.0.0.1', 'wlan0', 100, 'Default gateway route (WAN)', 1, 'system', 'global', '', 'boot'),
-			('route-2', '192.168.1.0/24', '', 'eth0', 0, 'Direct subnet route for LAN', 1, 'system', 'link', '', 'kernel'),
-			('route-3', '10.0.0.0/24', '', 'wlan0', 0, 'Direct subnet route for WAN', 1, 'system', 'link', '', 'kernel')`)
-		if err != nil {
+	if mockMode {
+		var routeCount int
+		if err := db.QueryRow("SELECT COUNT(*) FROM static_routes").Scan(&routeCount); err != nil {
 			return err
+		}
+		if routeCount == 0 {
+			_, err := db.Exec(`INSERT INTO static_routes (id, destination, gateway, interface, metric, description, status, type, scope, src, proto) VALUES 
+				('route-1', '0.0.0.0/0', '10.0.0.1', 'wlan0', 100, 'Default gateway route (WAN)', 1, 'system', 'global', '', 'boot'),
+				('route-2', '192.168.1.0/24', '', 'eth0', 0, 'Direct subnet route for LAN', 1, 'system', 'link', '', 'kernel'),
+				('route-3', '10.0.0.0/24', '', 'wlan0', 0, 'Direct subnet route for WAN', 1, 'system', 'link', '', 'kernel')`)
+			if err != nil {
+				return err
+			}
 		}
 	}
 

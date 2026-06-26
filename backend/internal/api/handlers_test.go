@@ -28,8 +28,9 @@ func setupTestServer(t *testing.T) (http.Handler, *db.Repository) {
 	dhcp := kernel.NewMockDhcp()
 	ringBuffer := logs.NewRingBuffer(50)
 	ifaceService := service.NewInterfaceService(repo, net)
+	routingService := service.NewRoutingService(repo, rt)
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService)
 	handler := RegisterRoutes(server)
 
 	// Add test session token to activeSessions since IsSessionValid no longer allows mock_session_id_* bypass
@@ -271,9 +272,10 @@ func TestDisableEditMode(t *testing.T) {
 	dhcp := kernel.NewMockDhcp()
 	ringBuffer := logs.NewRingBuffer(50)
 	ifaceService := service.NewInterfaceService(repo, net)
+	routingService := service.NewRoutingService(repo, rt)
 
 	// Server initialized with disableEdit = true
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, true, ifaceService)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, true, ifaceService, routingService)
 	handler := RegisterRoutes(server)
 
 	// Add test session token to activeSessions since IsSessionValid no longer allows mock_session_id_* bypass
@@ -402,8 +404,9 @@ func TestForcePasswordChangeFlow(t *testing.T) {
 	dhcp := kernel.NewMockDhcp()
 	ringBuffer := logs.NewRingBuffer(50)
 	ifaceService := service.NewInterfaceService(repo, net)
+	routingService := service.NewRoutingService(repo, rt)
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService)
 	handler := RegisterRoutes(server)
 
 	// 1. Login with correct password
@@ -472,8 +475,9 @@ func TestCheckSessionAPI(t *testing.T) {
 	dhcp := kernel.NewMockDhcp()
 	ringBuffer := logs.NewRingBuffer(50)
 	ifaceService := service.NewInterfaceService(repo, net)
+	routingService := service.NewRoutingService(repo, rt)
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService)
 	handler := RegisterRoutes(server)
 
 	// 1. Check session without token (should fail with 401)
@@ -546,8 +550,9 @@ func setupTestServerWithFirewall(t *testing.T) (http.Handler, *db.Repository, *k
 	dhcp := kernel.NewMockDhcp()
 	ringBuffer := logs.NewRingBuffer(50)
 	ifaceService := service.NewInterfaceService(repo, net)
+	routingService := service.NewRoutingService(repo, rt)
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService)
 	handler := RegisterRoutes(server)
 
 	AddSession("mock_session_id_test_token", "pigate")

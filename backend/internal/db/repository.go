@@ -830,7 +830,7 @@ func (r *Repository) TogglePolicyStatus(id string) error {
 // STATIC ROUTES
 // =========================================================================
 
-func (r *Repository) GetRoutes() ([]model.StaticRoute, error) {
+func (r *Repository) GetDatabaseRoutes() ([]model.StaticRoute, error) {
 	rows, err := r.db.Query("SELECT id, destination, gateway, interface, metric, description, status, type, scope, src, proto FROM static_routes")
 	if err != nil {
 		return nil, err
@@ -854,6 +854,14 @@ func (r *Repository) GetRoutes() ([]model.StaticRoute, error) {
 		}
 
 		dbRoutes = append(dbRoutes, rt)
+	}
+	return dbRoutes, nil
+}
+
+func (r *Repository) GetRoutes() ([]model.StaticRoute, error) {
+	dbRoutes, err := r.GetDatabaseRoutes()
+	if err != nil {
+		return nil, err
 	}
 
 	// Fetch routes from kernel

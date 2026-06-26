@@ -26,15 +26,15 @@ func main() {
 	dockerCompat := flag.Bool("docker-compat", true, "Enable Docker compatibility (bypass docker0 and br-* interfaces)")
 	flag.Parse()
 
-	log.Printf("Starting PiGate Backend Server (Go v1.26.4)...")
-	log.Printf("Port: %d", *port)
-	log.Printf("Database: %s", *dbPath)
-	log.Printf("Mock OS Integration: %t", *mockOS)
-	log.Printf("Mock From Real Data: %t", *mockFromReal)
-	log.Printf("Disable Edit Mode: %t", *disableEdit)
-	log.Printf("Allow Edit System Routes: %t", *allowEditSystemRoutes)
-	log.Printf("Prioritize Kernel Routes: %t", *prioritizeKernelRoutes)
-	log.Printf("Docker Compatibility: %t", *dockerCompat)
+	log.Printf("[Main] Starting PiGate Backend Server (Go v1.26.4)...")
+	log.Printf("[Main] Port: %d", *port)
+	log.Printf("[Main] Database: %s", *dbPath)
+	log.Printf("[Main] Mock OS Integration: %t", *mockOS)
+	log.Printf("[Main] Mock From Real Data: %t", *mockFromReal)
+	log.Printf("[Main] Disable Edit Mode: %t", *disableEdit)
+	log.Printf("[Main] Allow Edit System Routes: %t", *allowEditSystemRoutes)
+	log.Printf("[Main] Prioritize Kernel Routes: %t", *prioritizeKernelRoutes)
+	log.Printf("[Main] Docker Compatibility: %t", *dockerCompat)
 
 	// 2. Initialize in-memory logs circular buffer (Ring Buffer)
 	ringBuffer := logs.NewRingBuffer(50)
@@ -56,18 +56,18 @@ func main() {
 	repo.SetPrioritizeKernelRoutes(*prioritizeKernelRoutes)
 
 	// Perform initial synchronization of interfaces, routing table, and DNS if real mode or mock-from-real is enabled
-	if !*mockOS || *mockFromReal {
-		log.Printf("Initializing and syncing interfaces, routes, and DNS from OS kernel...")
-		if err := repo.SyncInterfacesFromOS(); err != nil {
-			log.Printf("Warning: Failed to sync network interfaces from OS: %v", err)
-		}
-		if err := repo.SyncRoutesFromOS(); err != nil {
-			log.Printf("Warning: Failed to sync static routes from OS: %v", err)
-		}
-		if err := repo.SyncDNSFromOS(); err != nil {
-			log.Printf("Warning: Failed to sync DNS settings from OS: %v", err)
-		}
-	}
+	// if !*mockOS || *mockFromReal {
+	// 	log.Printf("[Main] Initializing and syncing interfaces, routes, and DNS from OS kernel...")
+	// 	if err := repo.SyncInterfacesFromOS(); err != nil {
+	// 		log.Printf("[Main] Warning: Failed to sync network interfaces from OS: %v", err)
+	// 	}
+	// 	if err := repo.SyncRoutesFromOS(); err != nil {
+	// 		log.Printf("[Main] Warning: Failed to sync static routes from OS: %v", err)
+	// 	}
+	// 	if err := repo.SyncDNSFromOS(); err != nil {
+	// 		log.Printf("[Main] Warning: Failed to sync DNS settings from OS: %v", err)
+	// 	}
+	// }
 
 	// 4. Instantiate Kernel managers (Force Mock layer for now)
 	var fw kernel.FirewallManager
@@ -95,51 +95,49 @@ func main() {
 
 	// 5. Instantiate Server & Router
 	ifaceService := service.NewInterfaceService(repo, net)
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService)
+	routingService := service.NewRoutingService(repo, rt)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService)
 
 	// Apply config form database to kernel
 
-	// 4.1 Apply Network Interfaces configuration at startup
-	log.Printf("Applying database-configured network interfaces to kernel at startup...")
+	// 6.1 Apply Network Interfaces configuration at startup
+	log.Printf("[Main] Applying database-configured network interfaces to kernel at startup...")
 	if err := ifaceService.InitApplyConfigurationAtStartup(); err != nil {
-		log.Printf("Warning: Failed to apply network interfaces to kernel at startup: %v", err)
+		log.Printf("[Main] Warning: Failed to apply network interfaces to kernel at startup: %v", err)
 	}
 
-	// 4.2 Apply Static Routes configuration at startup
-	log.Printf("Applying database-configured static routes to kernel at startup...")
-	// startupRoutes, err := repo.GetRoutes()
-	// if err != nil {
-	// 	log.Printf("Warning: Failed to load routes from DB for startup apply: %v", err)
-	// } else {
-	// 	if err := rt.ApplyRoutes(startupRoutes); err != nil {
-	// 		log.Printf("Warning: Failed to apply static routes to kernel at startup: %v", err)
-	// 	} else {
-	// 		log.Printf("Successfully applied static routes at startup.")
-	// 	}
-	// }
+	// 6.2 Apply Static Routes configuration at startup
+	log.Printf("[Main] Applying database-configured static routes to kernel at startup...")
+	if err := routingService.InitApplyConfig(); err != nil {
+		log.Printf("[Main] Warning: Failed to apply static routes to kernel at startup: %v", err)
+	}
 
-	// 4.5 Apply Firewall Rules at startup
-	log.Printf("Applying database-configured firewall rules to kernel at startup...")
+	log.Printf("[Main] Applying database-configured DHCP settings to kernel at startup...")
+
+	log.Printf("[Main] Applying database-configured DNS settings to kernel at startup...")
+
+	// 6.3 Apply Firewall Rules at startup
+	log.Printf("[Main] Applying database-configured firewall rules to kernel at startup...")
 	rules, err := repo.GetPolicies()
 	if err != nil {
-		log.Printf("Warning: Failed to load policies from DB for startup apply: %v", err)
+		log.Printf("[Main] Warning: Failed to load policies from DB for startup apply: %v", err)
 	} else {
 		ifaces, err := repo.GetInterfaces()
 		if err != nil {
-			log.Printf("Warning: Failed to load interfaces from DB for startup apply: %v", err)
+			log.Printf("[Main] Warning: Failed to load interfaces from DB for startup apply: %v", err)
 		} else {
 			addrs, err := repo.GetAddresses()
 			if err != nil {
-				log.Printf("Warning: Failed to load address objects from DB for startup apply: %v", err)
+				log.Printf("[Main] Warning: Failed to load address objects from DB for startup apply: %v", err)
 			} else {
 				svcs, err := repo.GetServices()
 				if err != nil {
-					log.Printf("Warning: Failed to load service objects from DB for startup apply: %v", err)
+					log.Printf("[Main] Warning: Failed to load service objects from DB for startup apply: %v", err)
 				} else {
 					if err := fw.ApplyRules(rules, ifaces, addrs, svcs); err != nil {
-						log.Printf("Warning: Failed to apply firewall rules to kernel at startup: %v", err)
+						log.Printf("[Main] Warning: Failed to apply firewall rules to kernel at startup: %v", err)
 					} else {
-						log.Printf("Successfully applied firewall rules at startup.")
+						log.Printf("[Main] Successfully applied firewall rules at startup.")
 					}
 				}
 			}
@@ -148,9 +146,9 @@ func main() {
 
 	handler := api.RegisterRoutes(server)
 
-	// 6. Start HTTP API listener
+	// 7. Start HTTP API listener
 	address := ":" + strconv.Itoa(*port)
-	log.Printf("PiGate API Backend is listening at http://localhost%s", address)
+	log.Printf("[Main] ===== PiGate API Backend is listening at http://localhost%s =====", address)
 	if err := http.ListenAndServe(address, handler); err != nil {
 		log.Fatalf("Server listener failed: %v", err)
 	}
