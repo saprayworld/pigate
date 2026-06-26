@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"net/http"
@@ -111,6 +112,13 @@ func main() {
 	if err := routingService.InitApplyConfig(); err != nil {
 		log.Printf("[Main] Warning: Failed to apply static routes to kernel at startup: %v", err)
 	}
+
+	// 6.2.1 Start Netlink Monitor to dynamically handle network and routing events
+	log.Printf("[Main] Initializing Netlink event monitor...")
+	netlinkMonitor := service.NewNetlinkMonitor(repo, routingService)
+	monitorCtx, cancelMonitor := context.WithCancel(context.Background())
+	defer cancelMonitor()
+	netlinkMonitor.Start(monitorCtx)
 
 	log.Printf("[Main] Applying database-configured DHCP settings to kernel at startup...")
 

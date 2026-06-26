@@ -137,6 +137,21 @@ func (r *RealRouting) ApplyRoutes(routes []model.StaticRoute) error {
 			continue
 		}
 
+		// Check if interface is UP
+		if link.Attrs().Flags&net.FlagUp == 0 {
+			log.Printf("[Routing] Warning: interface %q is DOWN, skipping route to %s", route.Interface, route.Destination)
+			continue
+		}
+
+		// If a gateway is specified, ensure the interface has an active IPv4 address configured
+		if route.Gateway != "" {
+			addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
+			if err != nil || len(addrs) == 0 {
+				log.Printf("[Routing] Warning: interface %q has no active IPv4 address, skipping gateway route to %s via %s", route.Interface, route.Destination, route.Gateway)
+				continue
+			}
+		}
+
 		_, dstNet, err := net.ParseCIDR(route.Destination)
 		if err != nil {
 			log.Printf("[Routing] Warning: invalid destination network %q for route on %s, skipping: %v", route.Destination, route.Interface, err)
