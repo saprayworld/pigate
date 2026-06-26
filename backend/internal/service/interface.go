@@ -1,4 +1,4 @@
-package api
+package service
 
 import (
 	"fmt"
@@ -7,11 +7,24 @@ import (
 	"strings"
 
 	"pigate/internal/db"
+	"pigate/internal/kernel"
 	"pigate/internal/model"
 )
 
+type InterfaceService struct {
+	repo    *db.Repository
+	network kernel.NetworkManager
+}
+
+func NewInterfaceService(repo *db.Repository, network kernel.NetworkManager) *InterfaceService {
+	return &InterfaceService{
+		repo:    repo,
+		network: network,
+	}
+}
+
 // InitApplyConfigurationAtStartup pulls configuration from the database and applies it to the kernel on startup.
-func (s *Server) InitApplyConfigurationAtStartup() error {
+func (s *InterfaceService) InitApplyConfigurationAtStartup() error {
 	log.Printf("[Startup] Fetching interfaces configuration from database...")
 	ifaces, err := s.repo.GetInterfacesFromDB()
 	if err != nil {
@@ -74,7 +87,7 @@ func (s *Server) InitApplyConfigurationAtStartup() error {
 }
 
 // GetKernelInterfaces scans the OS for active interfaces (or returns mocked interfaces if mockMode is enabled).
-func (s *Server) GetKernelInterfaces() ([]model.NetworkInterface, error) {
+func (s *InterfaceService) GetKernelInterfaces() ([]model.NetworkInterface, error) {
 	if s.repo.IsMockMode() && !s.repo.IsMockFromReal() {
 		// Mock kernel interfaces
 		mockSSID := "MyHome_5G"
@@ -252,7 +265,7 @@ func (s *Server) GetKernelInterfaces() ([]model.NetworkInterface, error) {
 }
 
 // GetDataLayerInterface returns unified interfaces by overwriting OS-level interfaces with configuration in database.
-func (s *Server) GetDataLayerInterface() ([]model.NetworkInterface, error) {
+func (s *InterfaceService) GetDataLayerInterface() ([]model.NetworkInterface, error) {
 	kernelIfaces, err := s.GetKernelInterfaces()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get kernel interfaces: %w", err)
@@ -326,7 +339,7 @@ func (s *Server) GetDataLayerInterface() ([]model.NetworkInterface, error) {
 }
 
 // GetDataLayerInterfaceByID finds a specific interface in the data layer.
-func (s *Server) GetDataLayerInterfaceByID(id string) (*model.NetworkInterface, error) {
+func (s *InterfaceService) GetDataLayerInterfaceByID(id string) (*model.NetworkInterface, error) {
 	list, err := s.GetDataLayerInterface()
 	if err != nil {
 		return nil, err
@@ -340,7 +353,7 @@ func (s *Server) GetDataLayerInterfaceByID(id string) (*model.NetworkInterface, 
 }
 
 // ApplyInterfaceConfig saves the specified interface configuration to both kernel and DB.
-func (s *Server) ApplyInterfaceConfig(iface model.NetworkInterface) error {
+func (s *InterfaceService) ApplyInterfaceConfig(iface model.NetworkInterface) error {
 	if iface.Type == "wireless" {
 		ssid := ""
 		if iface.WifiSSID != nil {
@@ -388,6 +401,6 @@ func (s *Server) ApplyInterfaceConfig(iface model.NetworkInterface) error {
 }
 
 // FlushInterfaceConfig flushes configuration of the specified interface from the database.
-func (s *Server) FlushInterfaceConfig(id string) error {
+func (s *InterfaceService) FlushInterfaceConfig(id string) error {
 	return s.repo.DeleteInterface(id)
 }

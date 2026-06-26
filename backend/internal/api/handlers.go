@@ -16,16 +16,18 @@ import (
 	"pigate/internal/kernel"
 	"pigate/internal/logs"
 	"pigate/internal/model"
+	"pigate/internal/service"
 )
 
 type Server struct {
-	repo        *db.Repository
-	firewall    kernel.FirewallManager
-	network     kernel.NetworkManager
-	routing     kernel.RoutingManager
-	dhcp        kernel.DhcpManager
-	logs        *logs.RingBuffer
-	disableEdit bool
+	repo             *db.Repository
+	firewall         kernel.FirewallManager
+	network          kernel.NetworkManager
+	routing          kernel.RoutingManager
+	dhcp             kernel.DhcpManager
+	logs             *logs.RingBuffer
+	disableEdit      bool
+	interfaceService *service.InterfaceService
 }
 
 func NewServer(
@@ -36,15 +38,17 @@ func NewServer(
 	dhcp kernel.DhcpManager,
 	l *logs.RingBuffer,
 	disableEdit bool,
+	ifaceService *service.InterfaceService,
 ) *Server {
 	return &Server{
-		repo:        repo,
-		firewall:    fw,
-		network:     net,
-		routing:     rt,
-		dhcp:        dhcp,
-		logs:        l,
-		disableEdit: disableEdit,
+		repo:             repo,
+		firewall:         fw,
+		network:          net,
+		routing:          rt,
+		dhcp:             dhcp,
+		logs:             l,
+		disableEdit:      disableEdit,
+		interfaceService: ifaceService,
 	}
 }
 
@@ -199,7 +203,7 @@ func mapWpaState(state string) string {
 
 func (s *Server) HandleGetDashboardStats(w http.ResponseWriter, r *http.Request) {
 	leases, _ := s.dhcp.GetActiveLeases()
-	ifaces, _ := s.GetDataLayerInterface()
+	ifaces, _ := s.interfaceService.GetDataLayerInterface()
 
 	wifiSSID := "None"
 	wifiStatus := "Disconnected"
@@ -257,7 +261,7 @@ func (s *Server) HandleClearLogs(w http.ResponseWriter, r *http.Request) {
 // =========================================================================
 
 func (s *Server) HandleGetInterfaces(w http.ResponseWriter, r *http.Request) {
-	list, err := s.GetDataLayerInterface()
+	list, err := s.interfaceService.GetDataLayerInterface()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -289,7 +293,7 @@ func equalStringSlices(a, b []string) bool {
 
 func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	iface, err := s.GetDataLayerInterfaceByID(id)
+	iface, err := s.interfaceService.GetDataLayerInterfaceByID(id)
 	if err != nil || iface == nil {
 		s.writeError(w, http.StatusNotFound, "Interface not found")
 		return
@@ -376,7 +380,7 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 		iface.FailoverCooldown = updates.FailoverCooldown
 	}
 
-	if err := s.ApplyInterfaceConfig(*iface); err != nil {
+	if err := s.interfaceService.ApplyInterfaceConfig(*iface); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -394,7 +398,7 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandlePatchInterface(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	iface, err := s.GetDataLayerInterfaceByID(id)
+	iface, err := s.interfaceService.GetDataLayerInterfaceByID(id)
 	if err != nil || iface == nil {
 		s.writeError(w, http.StatusNotFound, "Interface not found")
 		return
@@ -504,7 +508,7 @@ func (s *Server) HandlePatchInterface(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.ApplyInterfaceConfig(*iface); err != nil {
+	if err := s.interfaceService.ApplyInterfaceConfig(*iface); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -522,7 +526,7 @@ func (s *Server) HandlePatchInterface(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleToggleInterface(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	iface, err := s.GetDataLayerInterfaceByID(id)
+	iface, err := s.interfaceService.GetDataLayerInterfaceByID(id)
 	if err != nil || iface == nil {
 		s.writeError(w, http.StatusNotFound, "Interface not found")
 		return
@@ -551,7 +555,7 @@ func (s *Server) HandleToggleInterface(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleScanWifi(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	iface, err := s.GetDataLayerInterfaceByID(id)
+	iface, err := s.interfaceService.GetDataLayerInterfaceByID(id)
 	if err != nil || iface == nil {
 		s.writeError(w, http.StatusNotFound, "Interface not found")
 		return
@@ -572,7 +576,7 @@ func (s *Server) HandleScanWifi(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleGetWifiStatus(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	iface, err := s.GetDataLayerInterfaceByID(id)
+	iface, err := s.interfaceService.GetDataLayerInterfaceByID(id)
 	if err != nil || iface == nil {
 		s.writeError(w, http.StatusNotFound, "Interface not found")
 		return
@@ -593,7 +597,7 @@ func (s *Server) HandleGetWifiStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleDeleteInterface(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	iface, err := s.GetDataLayerInterfaceByID(id)
+	iface, err := s.interfaceService.GetDataLayerInterfaceByID(id)
 	if err != nil || iface == nil {
 		s.writeError(w, http.StatusNotFound, "Interface not found")
 		return
@@ -614,19 +618,19 @@ func (s *Server) HandleDeleteInterface(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleResetInterface(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	iface, err := s.GetDataLayerInterfaceByID(id)
+	iface, err := s.interfaceService.GetDataLayerInterfaceByID(id)
 	if err != nil || iface == nil {
 		s.writeError(w, http.StatusNotFound, "Interface not found")
 		return
 	}
 
-	if err := s.FlushInterfaceConfig(id); err != nil {
+	if err := s.interfaceService.FlushInterfaceConfig(id); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	// Refreshed default settings from kernel
-	refreshed, err := s.GetDataLayerInterfaceByID(id)
+	refreshed, err := s.interfaceService.GetDataLayerInterfaceByID(id)
 	if err != nil || refreshed == nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to load refreshed interface default config")
 		return

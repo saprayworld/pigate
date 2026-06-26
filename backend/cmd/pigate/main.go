@@ -11,6 +11,7 @@ import (
 	"pigate/internal/kernel"
 	"pigate/internal/logs"
 	"pigate/internal/model"
+	"pigate/internal/service"
 )
 
 func main() {
@@ -93,13 +94,14 @@ func main() {
 	}
 
 	// 5. Instantiate Server & Router
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit)
+	ifaceService := service.NewInterfaceService(repo, net)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService)
 
 	// Apply config form database to kernel
 
 	// 4.1 Apply Network Interfaces configuration at startup
 	log.Printf("Applying database-configured network interfaces to kernel at startup...")
-	if err := server.InitApplyConfigurationAtStartup(); err != nil {
+	if err := ifaceService.InitApplyConfigurationAtStartup(); err != nil {
 		log.Printf("Warning: Failed to apply network interfaces to kernel at startup: %v", err)
 	}
 
