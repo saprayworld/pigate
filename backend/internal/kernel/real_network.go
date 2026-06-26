@@ -3,19 +3,21 @@
 package kernel
 
 import (
-	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"pigate/internal/model"
 
+	"github.com/mdlayher/wifi"
 	"github.com/vishvananda/netlink"
 )
 
@@ -277,107 +279,112 @@ func (r *RealNetwork) ConfigureInterface(name string, mode string, ip string, ne
 	return nil
 }
 
-// ScanWifi scans for nearby Wi-Fi networks using iw.
-// iw does not require root — only cap_net_raw for raw socket access.
+// ScanWifi scans for nearby Wi-Fi networks using Netlink (nl80211).
 func (r *RealNetwork) ScanWifi(name string) ([]model.WifiScanResult, error) {
-	// Use iw (lightweight, no D-Bus dependency)
-	return scanWifiWithIW(name)
-}
-
-// scanWifiWithIW uses `iw dev <name> scan` to list nearby APs.
-func scanWifiWithIW(name string) ([]model.WifiScanResult, error) {
-	out, err := execCommand("sudo", "iw", "dev", name, "scan").Output()
+	c, err := wifi.New()
 	if err != nil {
-		return nil, fmt.Errorf("iw scan failed: %w", err)
+		return nil, fmt.Errorf("failed to initialize wifi client: %w", err)
+	}
+	defer c.Close()
+
+	ifis, err := c.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list wifi interfaces: %w", err)
+	}
+
+	var ifi *wifi.Interface
+	for _, i := range ifis {
+		if i.Name == name {
+			ifi = i
+			break
+		}
+	}
+	if ifi == nil {
+		return nil, fmt.Errorf("wifi interface %s not found", name)
+	}
+
+	// Trigger a scan in the kernel
+	ctx := context.TODO()
+	if err := c.Scan(ctx, ifi); err != nil {
+		return nil, fmt.Errorf("wifi scan trigger failed: %w", err)
+	}
+
+	// Fetch scanned Basic Service Sets (BSS) list
+	bssList, err := c.AccessPoints(ifi)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve bss list: %w", err)
 	}
 
 	var results []model.WifiScanResult
-	var current *model.WifiScanResult
-
-	scanner := bufio.NewScanner(strings.NewReader(string(out)))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-
-		// Start of a new BSS block
-		if strings.HasPrefix(line, "BSS ") {
-			if current != nil {
-				results = append(results, *current)
-			}
-			current = &model.WifiScanResult{}
-			continue
-		}
-		if current == nil {
-			continue
+	for _, b := range bssList {
+		if b.SSID == "" {
+			continue // skip hidden SSIDs
 		}
 
-		switch {
-		case strings.HasPrefix(line, "SSID: "):
-			current.SSID = strings.TrimPrefix(line, "SSID: ")
+		// Convert Signal strength (in mBm) to dBm
+		dBm := float64(b.Signal) / 100.0
+		var signalPercent int
+		if dBm <= -100 {
+			signalPercent = 0
+		} else if dBm >= -30 {
+			signalPercent = 100
+		} else {
+			signalPercent = int(2 * (dBm + 100))
+		}
 
-		case strings.HasPrefix(line, "signal: "):
-			// Format: "signal: -65.00 dBm"
-			raw := strings.TrimPrefix(line, "signal: ")
-			raw = strings.Fields(raw)[0]
-			var dBm float64
-			fmt.Sscanf(raw, "%f", &dBm)
-			// Convert dBm to 0–100% signal quality
-			// Range: -100 dBm (0%) to -30 dBm (100%)
-			if dBm <= -100 {
-				current.Signal = 0
-			} else if dBm >= -30 {
-				current.Signal = 100
-			} else {
-				current.Signal = int(2 * (dBm + 100))
-			}
+		// Map Frequency (MHz) to Channel
+		channel := frequencyToChannel(b.Frequency)
 
-		case strings.HasPrefix(line, "DS Parameter set: channel "):
-			fmt.Sscanf(strings.TrimPrefix(line, "DS Parameter set: channel "), "%d", &current.Channel)
+		// Map Frequency to Band Type (2.4 GHz / 5 GHz)
+		frequencyBand := "2.4 GHz"
+		if b.Frequency >= 5000 {
+			frequencyBand = "5 GHz"
+		}
 
-		case strings.Contains(line, "WPA"):
-			if current.Security == "" || current.Security == "Open" {
-				if strings.Contains(line, "WPA3") {
-					current.Security = "WPA3"
-				} else if strings.Contains(line, "WPA2") {
-					current.Security = "WPA2-PSK"
-				} else {
-					current.Security = "WPA"
+		// Detect Security capability from RSN (Robust Security Network)
+		security := "Open"
+		if b.RSN.IsInitialized() {
+			security = "WPA2-PSK" // default fallback
+			
+			// Check AKMs (Authentication and Key Management)
+			for _, akm := range b.RSN.AKMs {
+				akmStr := akm.String()
+				if strings.Contains(akmStr, "SAE") {
+					security = "WPA3"
+					break
+				} else if strings.Contains(akmStr, "802.1X") {
+					security = "WPA2-Enterprise"
+					break
 				}
 			}
-
-		case strings.HasPrefix(line, "* primary channel:"):
-			// 5 GHz channels are > 14
-			if current.Channel > 14 {
-				current.Frequency = "5 GHz"
-			} else {
-				current.Frequency = "2.4 GHz"
-			}
 		}
+
+		results = append(results, model.WifiScanResult{
+			SSID:      b.SSID,
+			Signal:    signalPercent,
+			Security:  security,
+			Channel:   channel,
+			Frequency: frequencyBand,
+		})
 	}
 
-	// Append last block
-	if current != nil {
-		if current.Security == "" {
-			current.Security = "Open"
-		}
-		if current.Frequency == "" {
-			if current.Channel > 14 {
-				current.Frequency = "5 GHz"
-			} else {
-				current.Frequency = "2.4 GHz"
-			}
-		}
-		results = append(results, *current)
-	}
+	// Sort results by signal strength descending
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Signal > results[j].Signal
+	})
 
-	// Remove entries with no SSID (hidden networks)
-	filtered := results[:0]
-	for _, r := range results {
-		if r.SSID != "" {
-			filtered = append(filtered, r)
-		}
-	}
+	return results, nil
+}
 
-	return filtered, nil
+func frequencyToChannel(freq int) int {
+	if freq >= 2412 && freq <= 2472 {
+		return (freq - 2407) / 5
+	} else if freq == 2484 {
+		return 14
+	} else if freq >= 5000 && freq <= 5900 {
+		return (freq - 5000) / 5
+	}
+	return 0
 }
 
 // GetWifiStatus queries wpa_supplicant via socket to fetch live status details.

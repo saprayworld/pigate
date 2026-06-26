@@ -357,3 +357,29 @@ func TestConfigureWifiCleansStaleSocket(t *testing.T) {
 	}
 }
 
+// TestFrequencyToChannel tests the frequency-to-channel calculation helper
+func TestFrequencyToChannel(t *testing.T) {
+	cases := []struct {
+		freq     int
+		expected int
+	}{
+		{2412, 1},
+		{2437, 6},
+		{2472, 13},
+		{2484, 14},
+		{5180, 36},
+		{5500, 100},
+		{5825, 165},
+		{0, 0},
+		{9999, 0},
+	}
+
+	for _, tc := range cases {
+		got := frequencyToChannel(tc.freq)
+		if got != tc.expected {
+			t.Errorf("frequencyToChannel(%d) = %d; expected %d", tc.freq, got, tc.expected)
+		}
+	}
+}
+
+
