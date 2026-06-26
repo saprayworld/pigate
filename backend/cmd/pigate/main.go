@@ -25,8 +25,12 @@ func main() {
 	allowEditSystemRoutes := flag.Bool("allow-edit-system-routes", false, "Allow editing and deleting system predefined static routes")
 	prioritizeKernelRoutes := flag.Bool("prioritize-kernel-routes", false, "Prioritize kernel route information over database if duplicate")
 	dockerCompat := flag.Bool("docker-compat", true, "Enable Docker compatibility (bypass docker0 and br-* interfaces)")
+	version := flag.Bool("v", false, "Print Version")
 	flag.Parse()
-
+	if *version {
+		log.Printf("PiGate Server version %s", "v0.1.0-pre")
+		return
+	}
 	log.Printf("[Main] Starting PiGate Backend Server (Go v1.26.4)...")
 	log.Printf("[Main] Port: %d", *port)
 	log.Printf("[Main] Database: %s", *dbPath)
@@ -120,37 +124,37 @@ func main() {
 	defer cancelMonitor()
 	netlinkMonitor.Start(monitorCtx)
 
-	log.Printf("[Main] Applying database-configured DHCP settings to kernel at startup...")
+	log.Printf("[Main] [Not Implemented] Applying database-configured DHCP settings to kernel at startup...")
 
-	log.Printf("[Main] Applying database-configured DNS settings to kernel at startup...")
+	log.Printf("[Main] [Not Implemented] Applying database-configured DNS settings to kernel at startup...")
 
 	// 6.3 Apply Firewall Rules at startup
-	log.Printf("[Main] Applying database-configured firewall rules to kernel at startup...")
-	rules, err := repo.GetPolicies()
-	if err != nil {
-		log.Printf("[Main] Warning: Failed to load policies from DB for startup apply: %v", err)
-	} else {
-		ifaces, err := repo.GetInterfaces()
-		if err != nil {
-			log.Printf("[Main] Warning: Failed to load interfaces from DB for startup apply: %v", err)
-		} else {
-			addrs, err := repo.GetAddresses()
-			if err != nil {
-				log.Printf("[Main] Warning: Failed to load address objects from DB for startup apply: %v", err)
-			} else {
-				svcs, err := repo.GetServices()
-				if err != nil {
-					log.Printf("[Main] Warning: Failed to load service objects from DB for startup apply: %v", err)
-				} else {
-					if err := fw.ApplyRules(rules, ifaces, addrs, svcs); err != nil {
-						log.Printf("[Main] Warning: Failed to apply firewall rules to kernel at startup: %v", err)
-					} else {
-						log.Printf("[Main] Successfully applied firewall rules at startup.")
-					}
-				}
-			}
-		}
-	}
+	log.Printf("[Main] [Not Implemented] Applying database-configured firewall rules to kernel at startup...")
+	// rules, err := repo.GetPolicies()
+	// if err != nil {
+	// 	log.Printf("[Main] Warning: Failed to load policies from DB for startup apply: %v", err)
+	// } else {
+	// 	ifaces, err := repo.GetInterfaces()
+	// 	if err != nil {
+	// 		log.Printf("[Main] Warning: Failed to load interfaces from DB for startup apply: %v", err)
+	// 	} else {
+	// 		addrs, err := repo.GetAddresses()
+	// 		if err != nil {
+	// 			log.Printf("[Main] Warning: Failed to load address objects from DB for startup apply: %v", err)
+	// 		} else {
+	// 			svcs, err := repo.GetServices()
+	// 			if err != nil {
+	// 				log.Printf("[Main] Warning: Failed to load service objects from DB for startup apply: %v", err)
+	// 			} else {
+	// 				if err := fw.ApplyRules(rules, ifaces, addrs, svcs); err != nil {
+	// 					log.Printf("[Main] Warning: Failed to apply firewall rules to kernel at startup: %v", err)
+	// 				} else {
+	// 					log.Printf("[Main] Successfully applied firewall rules at startup.")
+	// 				}
+	// 			}
+	// 		}
+	// 	}
+	// }
 
 	handler := api.RegisterRoutes(server)
 
