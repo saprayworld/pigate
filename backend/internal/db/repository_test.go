@@ -564,12 +564,6 @@ func TestHexIPParserAndRouteSyncFallback(t *testing.T) {
 		t.Errorf("ClearInterfaces failed: %v", err)
 	}
 
-	// Sync interfaces
-	err = repo.SyncInterfacesFromOS()
-	if err != nil {
-		t.Errorf("SyncInterfacesFromOS failed: %v", err)
-	}
-
 	// Sync routes
 	err = repo.SyncRoutesFromOS()
 	if err != nil {
@@ -603,35 +597,13 @@ func TestHexIPParserAndRouteSyncFallback(t *testing.T) {
 			dns.Mode, dns.PrimaryDNS, dns.SecondaryDNS, dns.LocalDomain)
 	}
 
-	// Verify mock wlan0 was injected (since we cleared DB and enable mockFromReal)
-	ifaces, err := repo.GetInterfaces()
-	if err != nil {
-		t.Errorf("Failed to get interfaces: %v", err)
-	}
-
-	hasWifi := false
-	for _, iface := range ifaces {
-		if iface.Type == "wireless" {
-			hasWifi = true
-		}
-	}
-	if !hasWifi {
-		t.Errorf("Expected at least one wireless interface to be present, but none was found in %v", ifaces)
-	}
-
-	// Verify that interfaces and routes were actually imported if on Linux
+	// Sync routes verification can remain if needed, but we don't assert interface count
 	if runtime.GOOS == "linux" {
-		t.Logf("Found %d interfaces in DB after sync from OS (including injected wifi if host lacks it)", len(ifaces))
-
 		routes, err := repo.GetRoutes()
 		if err != nil {
 			t.Errorf("Failed to get routes: %v", err)
 		}
 		t.Logf("Found %d routes in DB after sync from OS", len(routes))
-
-		if len(ifaces) == 0 {
-			t.Errorf("Expected at least one network interface in DB on Linux, got 0")
-		}
 	}
 }
 

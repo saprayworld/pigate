@@ -37,6 +37,7 @@ next-env.d.ts
 
 # pigate
 /pigate
+/backend/pigate
 *.db
 *.db-shm
 *.db-wal

@@ -60,20 +60,6 @@ func main() {
 	repo.SetAllowEditSystemRoutes(*allowEditSystemRoutes)
 	repo.SetPrioritizeKernelRoutes(*prioritizeKernelRoutes)
 
-	// Perform initial synchronization of interfaces, routing table, and DNS if real mode or mock-from-real is enabled
-	// if !*mockOS || *mockFromReal {
-	// 	log.Printf("[Main] Initializing and syncing interfaces, routes, and DNS from OS kernel...")
-	// 	if err := repo.SyncInterfacesFromOS(); err != nil {
-	// 		log.Printf("[Main] Warning: Failed to sync network interfaces from OS: %v", err)
-	// 	}
-	// 	if err := repo.SyncRoutesFromOS(); err != nil {
-	// 		log.Printf("[Main] Warning: Failed to sync static routes from OS: %v", err)
-	// 	}
-	// 	if err := repo.SyncDNSFromOS(); err != nil {
-	// 		log.Printf("[Main] Warning: Failed to sync DNS settings from OS: %v", err)
-	// 	}
-	// }
-
 	// 4. Instantiate Kernel managers (Force Mock layer for now)
 	var fw kernel.FirewallManager
 	var net kernel.NetworkManager
@@ -101,7 +87,8 @@ func main() {
 	// 5. Instantiate Server & Router
 	ifaceService := service.NewInterfaceService(repo, net)
 	routingService := service.NewRoutingService(repo, rt)
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService)
+	firewallService := service.NewFirewallService(repo, fw, ifaceService)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService)
 
 	// Apply config form database to kernel
 
@@ -129,32 +116,10 @@ func main() {
 	log.Printf("[Main] [Not Implemented] Applying database-configured DNS settings to kernel at startup...")
 
 	// 6.3 Apply Firewall Rules at startup
-	log.Printf("[Main] [Not Implemented] Applying database-configured firewall rules to kernel at startup...")
-	// rules, err := repo.GetPolicies()
-	// if err != nil {
-	// 	log.Printf("[Main] Warning: Failed to load policies from DB for startup apply: %v", err)
-	// } else {
-	// 	ifaces, err := repo.GetInterfaces()
-	// 	if err != nil {
-	// 		log.Printf("[Main] Warning: Failed to load interfaces from DB for startup apply: %v", err)
-	// 	} else {
-	// 		addrs, err := repo.GetAddresses()
-	// 		if err != nil {
-	// 			log.Printf("[Main] Warning: Failed to load address objects from DB for startup apply: %v", err)
-	// 		} else {
-	// 			svcs, err := repo.GetServices()
-	// 			if err != nil {
-	// 				log.Printf("[Main] Warning: Failed to load service objects from DB for startup apply: %v", err)
-	// 			} else {
-	// 				if err := fw.ApplyRules(rules, ifaces, addrs, svcs); err != nil {
-	// 					log.Printf("[Main] Warning: Failed to apply firewall rules to kernel at startup: %v", err)
-	// 				} else {
-	// 					log.Printf("[Main] Successfully applied firewall rules at startup.")
-	// 				}
-	// 			}
-	// 		}
-	// 	}
-	// }
+	log.Printf("[Main] Applying database-configured firewall rules to kernel at startup...")
+	if err := firewallService.InitApplyConfig(); err != nil {
+		log.Printf("[Main] Warning: Failed to apply firewall rules to kernel at startup: %v", err)
+	}
 
 	handler := api.RegisterRoutes(server)
 

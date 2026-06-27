@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -28,6 +27,7 @@ type Server struct {
 	disableEdit      bool
 	interfaceService *service.InterfaceService
 	routingService   *service.RoutingService
+	firewallService  *service.FirewallService
 }
 
 func NewServer(
@@ -40,6 +40,7 @@ func NewServer(
 	disableEdit bool,
 	ifaceService *service.InterfaceService,
 	routingService *service.RoutingService,
+	fwService *service.FirewallService,
 ) *Server {
 	return &Server{
 		repo:             repo,
@@ -51,6 +52,7 @@ func NewServer(
 		disableEdit:      disableEdit,
 		interfaceService: ifaceService,
 		routingService:   routingService,
+		firewallService:  fwService,
 	}
 }
 
@@ -647,7 +649,7 @@ func (s *Server) HandleResetInterface(w http.ResponseWriter, r *http.Request) {
 // =========================================================================
 
 func (s *Server) HandleGetPolicies(w http.ResponseWriter, r *http.Request) {
-	list, err := s.repo.GetPolicies()
+	list, err := s.firewallService.GetPolicies()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -675,7 +677,7 @@ func (s *Server) HandleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		Status:       input.Status,
 	}
 
-	if err := s.repo.CreatePolicy(rule); err != nil {
+	if err := s.firewallService.CreatePolicy(rule); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -685,7 +687,7 @@ func (s *Server) HandleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	existing, err := s.repo.GetPolicyByID(id)
+	existing, err := s.firewallService.GetPolicyByID(id)
 	if err != nil || existing == nil {
 		s.writeError(w, http.StatusNotFound, "Policy rule not found")
 		return
@@ -710,7 +712,7 @@ func (s *Server) HandleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		Status:       input.Status,
 	}
 
-	if err := s.repo.UpdatePolicy(rule); err != nil {
+	if err := s.firewallService.UpdatePolicy(rule); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -720,7 +722,7 @@ func (s *Server) HandleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleDeletePolicy(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := s.repo.DeletePolicy(id); err != nil {
+	if err := s.firewallService.DeletePolicy(id); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -736,7 +738,7 @@ func (s *Server) HandleReorderPolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.repo.SaveAllPolicies(body.Policies); err != nil {
+	if err := s.firewallService.ReorderPolicies(body.Policies); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -746,49 +748,26 @@ func (s *Server) HandleReorderPolicies(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleTogglePolicyLog(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := s.repo.TogglePolicyLog(id); err != nil {
+	p, err := s.firewallService.TogglePolicyLog(id)
+	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	p, _ := s.repo.GetPolicyByID(id)
 	s.writeJSON(w, http.StatusOK, p)
 }
 
 func (s *Server) HandleTogglePolicyStatus(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := s.repo.TogglePolicyStatus(id); err != nil {
+	p, err := s.firewallService.TogglePolicyStatus(id)
+	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	p, _ := s.repo.GetPolicyByID(id)
 	s.writeJSON(w, http.StatusOK, p)
 }
 
 func (s *Server) syncFirewallRules() error {
-	rules, err := s.repo.GetPolicies()
-	if err != nil {
-		return fmt.Errorf("failed to load policies: %w", err)
-	}
-
-	ifaces, err := s.repo.GetInterfaces()
-	if err != nil {
-		return fmt.Errorf("failed to load interfaces: %w", err)
-	}
-
-	addrs, err := s.repo.GetAddresses()
-	if err != nil {
-		return fmt.Errorf("failed to load address objects: %w", err)
-	}
-
-	svcs, err := s.repo.GetServices()
-	if err != nil {
-		return fmt.Errorf("failed to load service objects: %w", err)
-	}
-
-	if err := s.firewall.ApplyRules(rules, ifaces, addrs, svcs); err != nil {
-		return fmt.Errorf("failed to apply firewall rules: %w", err)
-	}
-	return nil
+	return s.firewallService.SyncFirewallRules()
 }
 
 func (s *Server) HandleApplyPolicies(w http.ResponseWriter, r *http.Request) {
@@ -804,7 +783,7 @@ func (s *Server) HandleApplyPolicies(w http.ResponseWriter, r *http.Request) {
 // =========================================================================
 
 func (s *Server) HandleGetAddresses(w http.ResponseWriter, r *http.Request) {
-	list, err := s.repo.GetAddresses()
+	list, err := s.firewallService.GetAddresses()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -828,7 +807,7 @@ func (s *Server) HandleCreateAddress(w http.ResponseWriter, r *http.Request) {
 		RefPolicies: []string{},
 	}
 
-	if err := s.repo.CreateAddress(addr); err != nil {
+	if err := s.firewallService.CreateAddress(addr); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -837,7 +816,7 @@ func (s *Server) HandleCreateAddress(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleUpdateAddress(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	existing, err := s.repo.GetAddressByID(id)
+	existing, err := s.firewallService.GetAddressByID(id)
 	if err != nil || existing == nil {
 		s.writeError(w, http.StatusNotFound, "Address object not found")
 		return
@@ -857,7 +836,7 @@ func (s *Server) HandleUpdateAddress(w http.ResponseWriter, r *http.Request) {
 		System: false,
 	}
 
-	if err := s.repo.UpdateAddress(addr); err != nil {
+	if err := s.firewallService.UpdateAddress(addr); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -866,7 +845,7 @@ func (s *Server) HandleUpdateAddress(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleDeleteAddress(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := s.repo.DeleteAddress(id); err != nil {
+	if err := s.firewallService.DeleteAddress(id); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -882,7 +861,7 @@ func (s *Server) HandleBulkDeleteAddresses(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := s.repo.BulkDeleteAddresses(body.IDs); err != nil {
+	if err := s.firewallService.BulkDeleteAddresses(body.IDs); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -894,7 +873,7 @@ func (s *Server) HandleBulkDeleteAddresses(w http.ResponseWriter, r *http.Reques
 // =========================================================================
 
 func (s *Server) HandleGetServices(w http.ResponseWriter, r *http.Request) {
-	list, err := s.repo.GetServices()
+	list, err := s.firewallService.GetServices()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -918,7 +897,7 @@ func (s *Server) HandleCreateService(w http.ResponseWriter, r *http.Request) {
 		RefPolicies: []string{},
 	}
 
-	if err := s.repo.CreateService(svc); err != nil {
+	if err := s.firewallService.CreateService(svc); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -927,7 +906,7 @@ func (s *Server) HandleCreateService(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleUpdateService(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	existing, err := s.repo.GetServiceByID(id)
+	existing, err := s.firewallService.GetServiceByID(id)
 	if err != nil || existing == nil {
 		s.writeError(w, http.StatusNotFound, "Service object not found")
 		return
@@ -947,7 +926,7 @@ func (s *Server) HandleUpdateService(w http.ResponseWriter, r *http.Request) {
 		Type:     "custom",
 	}
 
-	if err := s.repo.UpdateService(svc); err != nil {
+	if err := s.firewallService.UpdateService(svc); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -956,7 +935,7 @@ func (s *Server) HandleUpdateService(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleDeleteService(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := s.repo.DeleteService(id); err != nil {
+	if err := s.firewallService.DeleteService(id); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
