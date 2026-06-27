@@ -86,6 +86,9 @@ func (r *RealRouting) ApplyRoutes(routes []model.StaticRoute) error {
 			// Matches an active target route. Update priority, protocol, scope, or src if they differ.
 			targetScope := parseScope(targetRoute.Scope)
 			targetProto := netlink.RouteProtocol(parseProtocol(targetRoute.Proto))
+			if targetRoute.Type == "custom" && (targetRoute.Proto == "static" || targetRoute.Proto == "") {
+				targetProto = 120
+			}
 			targetSrc := net.ParseIP(targetRoute.Src)
 
 			srcMatches := (rt.Src == nil && len(targetRoute.Src) == 0) || (rt.Src != nil && rt.Src.Equal(targetSrc))

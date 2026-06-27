@@ -139,9 +139,10 @@ export default function StaticRoutes() {
     })
   }, [routes, searchQuery, selectedTypeFilter, selectedStatusFilter])
 
+  // disabled={(route.type === "system" && !allowEditSystemRoutes) || route.kernelOnly}
   // --- Checkbox Actions (Only Custom / Default Gateway Routes or all routes if system route editing is allowed) ---
   const selectableRoutes = useMemo(() => {
-    return filteredRoutes.filter(r => r.type === "custom" || r.type === "defaultgateway" || allowEditSystemRoutes)
+    return filteredRoutes.filter(r => (!r.kernelOnly && (r.type === "custom" || r.type === "defaultgateway" || allowEditSystemRoutes)))
   }, [filteredRoutes, allowEditSystemRoutes])
 
   const handleSelectAll = (checked: boolean) => {
@@ -560,7 +561,7 @@ export default function StaticRoutes() {
                   <TableCell className="p-3">
                     <input
                       type="checkbox"
-                      disabled={route.type === "system" && !allowEditSystemRoutes}
+                      disabled={(route.type === "system" && !allowEditSystemRoutes) || route.kernelOnly}
                       checked={selectedIds.includes(route.id)}
                       onChange={(e) => handleSelectRow(route.id, e.target.checked)}
                       className="rounded border-input bg-background text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer accent-primary disabled:opacity-30 disabled:cursor-not-allowed"
@@ -636,6 +637,7 @@ export default function StaticRoutes() {
                   <TableCell className="p-3">
                     <Switch
                       checked={route.status}
+                      disabled={(route.type === "system" && !allowEditSystemRoutes) || route.kernelOnly}
                       onCheckedChange={() => handleToggleStatus(route.id)}
                       className="data-[state=checked]:bg-primary"
                     />
