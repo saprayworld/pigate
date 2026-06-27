@@ -23,6 +23,7 @@ func main() {
 	mockFromReal := flag.Bool("mock-from-real", false, "Mock operations but initialize/pull from real kernel data at startup")
 	disableEdit := flag.Bool("disable-edit", false, "Disable edit operations (Read-only mode)")
 	allowEditSystemRoutes := flag.Bool("allow-edit-system-routes", false, "Allow editing and deleting system predefined static routes")
+	enableEditSystemRoute := flag.Bool("enable-edit-system-route", false, "Enable direct kernel management of system/kernel-only routes without database")
 	prioritizeKernelRoutes := flag.Bool("prioritize-kernel-routes", false, "Prioritize kernel route information over database if duplicate")
 	dockerCompat := flag.Bool("docker-compat", true, "Enable Docker compatibility (bypass docker0 and br-* interfaces)")
 	version := flag.Bool("v", false, "Print Version")
@@ -38,6 +39,7 @@ func main() {
 	log.Printf("[Main] Mock From Real Data: %t", *mockFromReal)
 	log.Printf("[Main] Disable Edit Mode: %t", *disableEdit)
 	log.Printf("[Main] Allow Edit System Routes: %t", *allowEditSystemRoutes)
+	log.Printf("[Main] Enable Edit System Route (Bypass DB): %t", *enableEditSystemRoute)
 	log.Printf("[Main] Prioritize Kernel Routes: %t", *prioritizeKernelRoutes)
 	log.Printf("[Main] Docker Compatibility: %t", *dockerCompat)
 
@@ -87,6 +89,7 @@ func main() {
 	// 5. Instantiate Server & Router
 	ifaceService := service.NewInterfaceService(repo, net)
 	routingService := service.NewRoutingService(repo, rt)
+	routingService.SetEnableEditSystemRoute(*enableEditSystemRoute)
 	firewallService := service.NewFirewallService(repo, fw, ifaceService)
 	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService)
 

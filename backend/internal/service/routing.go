@@ -12,15 +12,67 @@ import (
 )
 
 type RoutingService struct {
-	repo    *db.Repository
-	routing kernel.RoutingManager
+	repo                  *db.Repository
+	routing               kernel.RoutingManager
+	enableEditSystemRoute bool
+	disabledSystemRoutes  map[string]model.StaticRoute
 }
 
 func NewRoutingService(repo *db.Repository, routing kernel.RoutingManager) *RoutingService {
 	return &RoutingService{
-		repo:    repo,
-		routing: routing,
+		repo:                  repo,
+		routing:               routing,
+		enableEditSystemRoute: false,
+		disabledSystemRoutes:  make(map[string]model.StaticRoute),
 	}
+}
+
+func (s *RoutingService) SetEnableEditSystemRoute(enable bool) {
+	s.enableEditSystemRoute = enable
+	s.routing.SetEnableEditSystemRoute(enable)
+}
+
+func (s *RoutingService) IsEnableEditSystemRoute() bool {
+	return s.enableEditSystemRoute
+}
+
+func (s *RoutingService) ToggleSystemRouteDirectly(id string) error {
+	if !s.enableEditSystemRoute {
+		return fmt.Errorf("enable-edit-system-route flag is not enabled")
+	}
+
+	if route, found := s.disabledSystemRoutes[id]; found {
+		// Currently disabled, enable it back
+		route.Status = true
+		if err := s.routing.AddRoute(route); err != nil {
+			return err
+		}
+		delete(s.disabledSystemRoutes, id)
+		return nil
+	}
+
+	// Currently enabled in kernel, disable it
+	routes, err := s.GetKernelRouting()
+	if err != nil {
+		return err
+	}
+	var targetRoute *model.StaticRoute
+	for _, r := range routes {
+		if r.ID == id {
+			targetRoute = &r
+			break
+		}
+	}
+	if targetRoute == nil {
+		return fmt.Errorf("system route with ID %q not found", id)
+	}
+
+	if err := s.routing.DeleteRoute(*targetRoute); err != nil {
+		return err
+	}
+	targetRoute.Status = false
+	s.disabledSystemRoutes[id] = *targetRoute
+	return nil
 }
 
 // GetKernelRouting retrieves active routing configuration from the kernel.
@@ -43,6 +95,16 @@ func (s *RoutingService) GetRouting() ([]model.StaticRoute, error) {
 	dbRoutes, err := s.GetDatabaseRouting()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get database routes: %w", err)
+	}
+
+	if s.enableEditSystemRoute {
+		var filtered []model.StaticRoute
+		for _, r := range dbRoutes {
+			if r.Type == "custom" {
+				filtered = append(filtered, r)
+			}
+		}
+		dbRoutes = filtered
 	}
 
 	// Helper to get canonical CIDR representation
@@ -121,11 +183,69 @@ func (s *RoutingService) GetRouting() ([]model.StaticRoute, error) {
 		}
 	}
 
+	if s.enableEditSystemRoute {
+		for _, dr := range s.disabledSystemRoutes {
+			result = append(result, dr)
+		}
+	}
+
 	return result, nil
 }
 
 // ApplyConfigRoute saves static route configuration to the DB and applies it to the kernel.
 func (s *RoutingService) ApplyConfigRoute(route model.StaticRoute) error {
+	// Basic input validation
+	if _, _, err := net.ParseCIDR(route.Destination); err != nil {
+		return fmt.Errorf("invalid destination CIDR %q: %w", route.Destination, err)
+	}
+	if route.Gateway != "" && net.ParseIP(route.Gateway) == nil {
+		return fmt.Errorf("invalid gateway IP %q", route.Gateway)
+	}
+	if route.Interface == "" {
+		return fmt.Errorf("interface name cannot be empty")
+	}
+
+	if s.enableEditSystemRoute && (route.KernelOnly || strings.HasPrefix(route.ID, "route-sys-") || route.Type == "system") {
+		log.Printf("[RoutingService] Bypassing database. Applying system route directly to kernel: %+v", route)
+		
+		// If it's an update, the destination/gateway/interface might have changed, meaning we need to delete the old route
+		var oldRoute *model.StaticRoute
+		routes, err := s.GetKernelRouting()
+		if err == nil {
+			for _, r := range routes {
+				if r.ID == route.ID {
+					oldRoute = &r
+					break
+				}
+			}
+		}
+		if oldRoute == nil {
+			if r, found := s.disabledSystemRoutes[route.ID]; found {
+				oldRoute = &r
+			}
+		}
+
+		if oldRoute != nil {
+			log.Printf("[RoutingService] Deleting old system route from kernel: %+v", oldRoute)
+			if oldRoute.Status {
+				_ = s.routing.DeleteRoute(*oldRoute)
+			}
+		}
+
+		// Remove from disabled list if it was there
+		delete(s.disabledSystemRoutes, route.ID)
+
+		if route.Status {
+			if err := s.routing.AddRoute(route); err != nil {
+				return fmt.Errorf("failed to add route directly to kernel: %w", err)
+			}
+		} else {
+			// Save in disabled list
+			s.disabledSystemRoutes[route.ID] = route
+		}
+		return nil
+	}
+
 	existing, err := s.repo.GetRouteByID(route.ID)
 	if err != nil {
 		return fmt.Errorf("failed to check existing route: %w", err)
@@ -151,6 +271,45 @@ func (s *RoutingService) ApplyConfigRoute(route model.StaticRoute) error {
 
 // RemoveConfigRoute deletes a static route configuration from DB and updates the kernel.
 func (s *RoutingService) RemoveConfigRoute(id string) error {
+	if s.enableEditSystemRoute && strings.HasPrefix(id, "route-sys-") {
+		log.Printf("[RoutingService] Bypassing database. Removing system route directly: %s", id)
+		if _, found := s.disabledSystemRoutes[id]; found {
+			delete(s.disabledSystemRoutes, id)
+			return nil
+		}
+
+		routes, err := s.GetKernelRouting()
+		if err != nil {
+			return fmt.Errorf("failed to list kernel routes: %w", err)
+		}
+		var targetRoute *model.StaticRoute
+		for _, r := range routes {
+			if r.ID == id {
+				targetRoute = &r
+				break
+			}
+		}
+		if targetRoute == nil {
+			// Try merged view
+			merged, err := s.GetRouting()
+			if err == nil {
+				for _, r := range merged {
+					if r.ID == id {
+						targetRoute = &r
+						break
+					}
+				}
+			}
+		}
+		if targetRoute == nil {
+			return fmt.Errorf("system route with ID %q not found", id)
+		}
+		if err := s.routing.DeleteRoute(*targetRoute); err != nil {
+			return fmt.Errorf("failed to delete system route directly from kernel: %w", err)
+		}
+		return nil
+	}
+
 	if err := s.repo.DeleteRoute(id); err != nil {
 		return fmt.Errorf("failed to delete route from database: %w", err)
 	}
@@ -165,20 +324,40 @@ func (s *RoutingService) RemoveConfigRoute(id string) error {
 
 // BulkRemoveConfigRoutes deletes multiple static route configurations from DB and updates the kernel.
 func (s *RoutingService) BulkRemoveConfigRoutes(ids []string) error {
-	if err := s.repo.BulkDeleteRoutes(ids); err != nil {
-		return fmt.Errorf("failed to bulk delete routes from database: %w", err)
+	var systemIDs []string
+	var dbIDs []string
+	for _, id := range ids {
+		if s.enableEditSystemRoute && strings.HasPrefix(id, "route-sys-") {
+			systemIDs = append(systemIDs, id)
+		} else {
+			dbIDs = append(dbIDs, id)
+		}
 	}
 
-	// Reconcile system/kernel routing table
-	if err := s.reconcileKernelRoutingTable(); err != nil {
-		return fmt.Errorf("routes deleted from database but failed to apply to kernel: %w", err)
+	for _, id := range systemIDs {
+		if err := s.RemoveConfigRoute(id); err != nil {
+			return err
+		}
 	}
 
+	if len(dbIDs) > 0 {
+		if err := s.repo.BulkDeleteRoutes(dbIDs); err != nil {
+			return fmt.Errorf("failed to bulk delete routes from database: %w", err)
+		}
+		// Reconcile system/kernel routing table
+		if err := s.reconcileKernelRoutingTable(); err != nil {
+			return fmt.Errorf("routes deleted from database but failed to apply to kernel: %w", err)
+		}
+	}
 	return nil
 }
 
 // ToggleConfigRoute toggles route status in the DB and reconciles kernel routing.
 func (s *RoutingService) ToggleConfigRoute(id string) error {
+	if s.enableEditSystemRoute && strings.HasPrefix(id, "route-sys-") {
+		return s.ToggleSystemRouteDirectly(id)
+	}
+
 	if err := s.repo.ToggleRouteStatus(id); err != nil {
 		return fmt.Errorf("failed to toggle route status in database: %w", err)
 	}

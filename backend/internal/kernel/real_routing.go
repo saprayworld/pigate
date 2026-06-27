@@ -17,12 +17,18 @@ import (
 // Requires cap_net_admin capability on the binary.
 type RealRouting struct {
 	allowEditSystemRoutes bool
+	enableEditSystemRoute bool
 }
 
 func NewRealRouting(allowEditSystemRoutes bool) *RealRouting {
 	return &RealRouting{
 		allowEditSystemRoutes: allowEditSystemRoutes,
+		enableEditSystemRoute: false,
 	}
+}
+
+func (r *RealRouting) SetEnableEditSystemRoute(enable bool) {
+	r.enableEditSystemRoute = enable
 }
 
 // ApplyRoutes reconciles the kernel routing table with the list of configured routes in DB.
@@ -119,7 +125,7 @@ func (r *RealRouting) ApplyRoutes(routes []model.StaticRoute) error {
 				if allTargetMap[key].Type == "custom" || r.allowEditSystemRoutes {
 					shouldDelete = true
 				}
-			} else if !existsInTargetList && r.allowEditSystemRoutes && gwStr != "" {
+			} else if !existsInTargetList && r.allowEditSystemRoutes && !r.enableEditSystemRoute && gwStr != "" {
 				// System route deleted from database (not present in DB routes list at all)
 				// We only delete if it is a gateway route (has gwStr) to avoid disrupting link local networks
 				shouldDelete = true
@@ -243,4 +249,99 @@ func parseProtocol(protoStr string) int {
 		}
 		return 120
 	}
+}
+
+func (r *RealRouting) AddRoute(route model.StaticRoute) error {
+	link, err := netlink.LinkByName(route.Interface)
+	if err != nil {
+		return fmt.Errorf("interface %q not found: %w", route.Interface, err)
+	}
+
+	_, dstNet, err := net.ParseCIDR(route.Destination)
+	if err != nil {
+		return fmt.Errorf("invalid destination network %q: %w", route.Destination, err)
+	}
+
+	var gwIP net.IP
+	if route.Gateway != "" {
+		gwIP = net.ParseIP(route.Gateway)
+		if gwIP == nil {
+			return fmt.Errorf("invalid gateway IP %q", route.Gateway)
+		}
+	}
+
+	targetScope := parseScope(route.Scope)
+	targetProto := netlink.RouteProtocol(parseProtocol(route.Proto))
+	if route.Type == "custom" && (route.Proto == "static" || route.Proto == "") {
+		targetProto = 120
+	}
+	var srcIP net.IP
+	if route.Src != "" {
+		srcIP = net.ParseIP(route.Src)
+	}
+
+	netlinkRoute := &netlink.Route{
+		LinkIndex: link.Attrs().Index,
+		Dst:       dstNet,
+		Gw:        gwIP,
+		Priority:  route.Metric,
+		Protocol:  targetProto,
+		Scope:     targetScope,
+		Src:       srcIP,
+	}
+
+	if err := netlink.RouteAdd(netlinkRoute); err != nil {
+		// Fallback retry with replace in case it exists in a slightly different configuration
+		if err := netlink.RouteReplace(netlinkRoute); err != nil {
+			return fmt.Errorf("failed to add/replace route in kernel: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *RealRouting) DeleteRoute(route model.StaticRoute) error {
+	existingRoutes, err := netlink.RouteList(nil, netlink.FAMILY_V4)
+	if err != nil {
+		return fmt.Errorf("failed to list kernel routes: %w", err)
+	}
+
+	canonicalCIDR := func(s string) string {
+		_, ipNet, err := net.ParseCIDR(s)
+		if err != nil {
+			return s
+		}
+		return ipNet.String()
+	}
+
+	targetDest := canonicalCIDR(route.Destination)
+	targetGw := strings.TrimSpace(route.Gateway)
+	targetIface := strings.TrimSpace(route.Interface)
+
+	for _, rt := range existingRoutes {
+		dstStr := "0.0.0.0/0"
+		if rt.Dst != nil {
+			dstStr = canonicalCIDR(rt.Dst.String())
+		}
+		gwStr := ""
+		if rt.Gw != nil {
+			gwStr = rt.Gw.String()
+		}
+		if gwStr == "0.0.0.0" {
+			gwStr = ""
+		}
+
+		link, err := netlink.LinkByIndex(rt.LinkIndex)
+		if err != nil {
+			continue
+		}
+		ifaceName := link.Attrs().Name
+
+		if dstStr == targetDest && gwStr == targetGw && ifaceName == targetIface {
+			if err := netlink.RouteDel(&rt); err != nil {
+				return fmt.Errorf("failed to delete route from kernel: %w", err)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("route to %s via %s on %s not found in kernel", route.Destination, route.Gateway, route.Interface)
 }

@@ -1631,14 +1631,14 @@ func (r *Repository) parseProcNetRoute() ([]model.StaticRoute, error) {
 }
 
 func (r *Repository) GetKernelRoutes() ([]model.StaticRoute, error) {
+	if r.mockMode {
+		return []model.StaticRoute{
+			{ID: "route-sys-0_0_0_0_0-10_0_0_1-wlan0", Destination: "0.0.0.0/0", Gateway: "10.0.0.1", Interface: "wlan0", Metric: 100, Description: "System route fetched from kernel", Status: true, Type: "defaultgateway", Scope: "global", Src: "", Proto: "boot"},
+			{ID: "route-sys-192_168_1_0_24--eth0", Destination: "192.168.1.0/24", Gateway: "", Interface: "eth0", Metric: 0, Description: "System route fetched from kernel", Status: true, Type: "system", Scope: "link", Src: "192.168.1.1", Proto: "kernel"},
+			{ID: "route-sys-10_0_0_0_24--wlan0", Destination: "10.0.0.0/24", Gateway: "", Interface: "wlan0", Metric: 0, Description: "System route fetched from kernel", Status: true, Type: "system", Scope: "link", Src: "10.0.0.45", Proto: "kernel"},
+		}, nil
+	}
 	if runtime.GOOS != "linux" {
-		if r.mockMode {
-			return []model.StaticRoute{
-				{ID: "route-sys-0_0_0_0_0-10_0_0_1-wlan0", Destination: "0.0.0.0/0", Gateway: "10.0.0.1", Interface: "wlan0", Metric: 100, Description: "System route fetched from kernel", Status: true, Type: "defaultgateway", Scope: "global", Src: "", Proto: "boot"},
-				{ID: "route-sys-192_168_1_0_24--eth0", Destination: "192.168.1.0/24", Gateway: "", Interface: "eth0", Metric: 0, Description: "System route fetched from kernel", Status: true, Type: "system", Scope: "link", Src: "192.168.1.1", Proto: "kernel"},
-				{ID: "route-sys-10_0_0_0_24--wlan0", Destination: "10.0.0.0/24", Gateway: "", Interface: "wlan0", Metric: 0, Description: "System route fetched from kernel", Status: true, Type: "system", Scope: "link", Src: "10.0.0.45", Proto: "kernel"},
-			}, nil
-		}
 		return nil, nil
 	}
 	return r.parseProcNetRoute()

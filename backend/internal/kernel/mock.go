@@ -89,10 +89,26 @@ func (m *MockNetwork) GetWifiStatus(name string) (*model.WifiConnectionStatus, e
 }
 
 // MockRouting implements RoutingManager for local testing
-type MockRouting struct{}
+type MockRouting struct {
+	enableEditSystemRoute bool
+}
 
 func NewMockRouting() *MockRouting {
 	return &MockRouting{}
+}
+
+func (m *MockRouting) SetEnableEditSystemRoute(enable bool) {
+	m.enableEditSystemRoute = enable
+}
+
+func (m *MockRouting) AddRoute(route model.StaticRoute) error {
+	log.Printf("[MockRouting] AddRoute called: Dest: %s, Gateway: %s, Interface: %s", route.Destination, route.Gateway, route.Interface)
+	return nil
+}
+
+func (m *MockRouting) DeleteRoute(route model.StaticRoute) error {
+	log.Printf("[MockRouting] DeleteRoute called: Dest: %s, Gateway: %s, Interface: %s", route.Destination, route.Gateway, route.Interface)
+	return nil
 }
 
 func (m *MockRouting) ApplyRoutes(routes []model.StaticRoute) error {

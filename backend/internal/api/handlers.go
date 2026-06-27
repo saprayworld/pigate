@@ -985,7 +985,23 @@ func (s *Server) HandleCreateRoute(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleUpdateRoute(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	existing, err := s.repo.GetRouteByID(id)
+	var existing *model.StaticRoute
+	var err error
+
+	if s.routingService.IsEnableEditSystemRoute() && strings.HasPrefix(id, "route-sys-") {
+		routes, getErr := s.routingService.GetRouting()
+		if getErr == nil {
+			for _, r := range routes {
+				if r.ID == id {
+					existing = &r
+					break
+				}
+			}
+		}
+	} else {
+		existing, err = s.repo.GetRouteByID(id)
+	}
+
 	if err != nil || existing == nil {
 		s.writeError(w, http.StatusNotFound, "Route not found")
 		return
@@ -997,6 +1013,11 @@ func (s *Server) HandleUpdateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	routeType := "custom"
+	if s.routingService.IsEnableEditSystemRoute() && strings.HasPrefix(id, "route-sys-") {
+		routeType = existing.Type
+	}
+
 	route := model.StaticRoute{
 		ID:          id,
 		Destination: input.Destination,
@@ -1005,7 +1026,7 @@ func (s *Server) HandleUpdateRoute(w http.ResponseWriter, r *http.Request) {
 		Metric:      input.Metric,
 		Description: input.Description,
 		Status:      input.Status,
-		Type:        "custom",
+		Type:        routeType,
 		Scope:       input.Scope,
 		Src:         input.Src,
 		Proto:       input.Proto,
@@ -1049,7 +1070,21 @@ func (s *Server) HandleToggleRoute(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	route, _ := s.repo.GetRouteByID(id)
+	
+	var route *model.StaticRoute
+	if s.routingService.IsEnableEditSystemRoute() && strings.HasPrefix(id, "route-sys-") {
+		routes, err := s.routingService.GetRouting()
+		if err == nil {
+			for _, r := range routes {
+				if r.ID == id {
+					route = &r
+					break
+				}
+			}
+		}
+	} else {
+		route, _ = s.repo.GetRouteByID(id)
+	}
 	s.writeJSON(w, http.StatusOK, route)
 }
 
@@ -1065,6 +1100,7 @@ func (s *Server) HandleGetRoutesConfig(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"allowEditSystemRoutes":  s.repo.GetAllowEditSystemRoutes(),
 		"prioritizeKernelRoutes": s.repo.GetPrioritizeKernelRoutes(),
+		"enableEditSystemRoute":  s.routingService.IsEnableEditSystemRoute(),
 	})
 }
 

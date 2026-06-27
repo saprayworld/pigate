@@ -8,12 +8,29 @@ import (
 )
 
 type trackingRoutingManager struct {
-	appliedRoutes []model.StaticRoute
+	appliedRoutes         []model.StaticRoute
+	addedRoutes           []model.StaticRoute
+	deletedRoutes         []model.StaticRoute
+	enableEditSystemRoute bool
 }
 
 func (t *trackingRoutingManager) ApplyRoutes(routes []model.StaticRoute) error {
 	t.appliedRoutes = routes
 	return nil
+}
+
+func (t *trackingRoutingManager) AddRoute(route model.StaticRoute) error {
+	t.addedRoutes = append(t.addedRoutes, route)
+	return nil
+}
+
+func (t *trackingRoutingManager) DeleteRoute(route model.StaticRoute) error {
+	t.deletedRoutes = append(t.deletedRoutes, route)
+	return nil
+}
+
+func (t *trackingRoutingManager) SetEnableEditSystemRoute(enable bool) {
+	t.enableEditSystemRoute = enable
 }
 
 func TestGetRouting(t *testing.T) {
@@ -229,5 +246,123 @@ func TestInitApplyConfig(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("Expected seeded route route-seed-1 to be applied to kernel during InitApplyConfig")
+	}
+}
+
+func TestEnableEditSystemRouteDirectly(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	repo.SetMockMode(true, false)
+
+	tracker := &trackingRoutingManager{}
+	svc := NewRoutingService(repo, tracker)
+	svc.SetEnableEditSystemRoute(true)
+
+	// Verify setter worked
+	if !svc.IsEnableEditSystemRoute() {
+		t.Errorf("Expected IsEnableEditSystemRoute to return true")
+	}
+
+	// 1. Create a system route directly bypassing DB
+	systemRoute := model.StaticRoute{
+		ID:          "route-sys-10_0_0_0_24--wlan0",
+		Destination: "10.0.0.0/24",
+		Gateway:     "",
+		Interface:   "wlan0",
+		Metric:      0,
+		Status:      true,
+		Type:        "system",
+		KernelOnly:  true,
+	}
+
+	if err := svc.ApplyConfigRoute(systemRoute); err != nil {
+		t.Fatalf("ApplyConfigRoute failed for system route: %v", err)
+	}
+
+	// Verify it was NOT saved to DB
+	dbRoute, _ := repo.GetRouteByID(systemRoute.ID)
+	if dbRoute != nil {
+		t.Errorf("System route should NOT be saved in DB")
+	}
+
+	// Verify it was added to the tracker/kernel directly
+	if len(tracker.addedRoutes) != 1 || tracker.addedRoutes[0].ID != systemRoute.ID {
+		t.Errorf("System route was not directly added to kernel")
+	}
+
+	// Reset tracker to isolate the update step
+	tracker.deletedRoutes = nil
+	tracker.addedRoutes = nil
+
+	// 1.5 Update the system route (e.g. change metric and gateway)
+	updatedSystemRoute := systemRoute
+	updatedSystemRoute.Metric = 20
+	updatedSystemRoute.Gateway = "10.0.0.254"
+	if err := svc.ApplyConfigRoute(updatedSystemRoute); err != nil {
+		t.Fatalf("ApplyConfigRoute failed for updating system route: %v", err)
+	}
+
+	// Verify the old system route was deleted from kernel, and new one added
+	if len(tracker.deletedRoutes) != 1 || tracker.deletedRoutes[0].ID != systemRoute.ID {
+		t.Errorf("Expected old system route to be deleted from kernel during update, but it wasn't")
+	}
+	if len(tracker.addedRoutes) != 1 || tracker.addedRoutes[0].Metric != 20 {
+		t.Errorf("Expected updated system route to be added to kernel, but it wasn't")
+	}
+
+	// Clear/Reset tracker history for subsequent steps to work with the same lengths
+	tracker.deletedRoutes = nil
+	tracker.addedRoutes = []model.StaticRoute{updatedSystemRoute}
+	systemRoute = updatedSystemRoute
+
+	// 2. Toggle the route (disable it)
+	if err := svc.ToggleConfigRoute(systemRoute.ID); err != nil {
+		t.Fatalf("ToggleConfigRoute failed: %v", err)
+	}
+
+	// Verify it was deleted from kernel (added to tracker.deletedRoutes)
+	if len(tracker.deletedRoutes) != 1 || tracker.deletedRoutes[0].ID != systemRoute.ID {
+		t.Errorf("System route was not directly deleted from kernel during toggle-disable")
+	}
+
+	// Verify it shows up in merged list as disabled
+	merged, err := svc.GetRouting()
+	if err != nil {
+		t.Fatalf("GetRouting failed: %v", err)
+	}
+	foundDisabled := false
+	for _, r := range merged {
+		if r.ID == systemRoute.ID && !r.Status {
+			foundDisabled = true
+			break
+		}
+	}
+	if !foundDisabled {
+		t.Errorf("Expected disabled system route in GetRouting output, but not found or status is true")
+	}
+
+	// 3. Toggle it back (enable it)
+	if err := svc.ToggleConfigRoute(systemRoute.ID); err != nil {
+		t.Fatalf("ToggleConfigRoute failed: %v", err)
+	}
+
+	// Verify it was added back to kernel (addedRoutes length should be 2)
+	if len(tracker.addedRoutes) != 2 || tracker.addedRoutes[1].ID != systemRoute.ID {
+		t.Errorf("System route was not directly re-added to kernel during toggle-enable")
+	}
+
+	// 4. Remove the system route
+	if err := svc.RemoveConfigRoute(systemRoute.ID); err != nil {
+		t.Fatalf("RemoveConfigRoute failed: %v", err)
+	}
+
+	// Verify deletedRoutes length is 2
+	if len(tracker.deletedRoutes) != 2 || tracker.deletedRoutes[1].ID != systemRoute.ID {
+		t.Errorf("System route was not directly deleted from kernel during removal")
 	}
 }

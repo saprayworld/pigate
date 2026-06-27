@@ -50,6 +50,7 @@ export default function StaticRoutes() {
   const [routes, setRoutes] = useState<StaticRoute[]>([])
   const [interfaces, setInterfaces] = useState<NetworkInterface[]>([])
   const [allowEditSystemRoutes, setAllowEditSystemRoutes] = useState(false)
+  const [enableEditSystemRoute, setEnableEditSystemRoute] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<"all" | "system" | "custom">("all")
@@ -94,6 +95,7 @@ export default function StaticRoutes() {
       ])
       setRoutes(routesData)
       setAllowEditSystemRoutes(configData.allowEditSystemRoutes)
+      setEnableEditSystemRoute(configData.enableEditSystemRoute)
       setInterfaces(interfacesData)
     } catch (err: any) {
       console.error(err)
@@ -139,11 +141,41 @@ export default function StaticRoutes() {
     })
   }, [routes, searchQuery, selectedTypeFilter, selectedStatusFilter])
 
-  // disabled={(route.type === "system" && !allowEditSystemRoutes) || route.kernelOnly}
+  const isRouteActionDisabled = (route: StaticRoute) => {
+    if (enableEditSystemRoute) return false
+    if (route.kernelOnly) return true
+    if (route.type === "system" && !allowEditSystemRoutes) return true
+    return false
+  }
+
+  const getEditTitle = (route: StaticRoute) => {
+    if (enableEditSystemRoute) {
+      if (route.kernelOnly || route.type === "system") {
+        return "แก้ไขเส้นทางระบบ (แก้ไขในเคอร์เนลโดยตรง)"
+      }
+      return "แก้ไขเส้นทาง"
+    }
+    if (route.kernelOnly) return "เส้นทางระดับระบบปฏิบัติการเท่านั้น ไม่สามารถแก้ไขได้"
+    if (route.type === "system" && !allowEditSystemRoutes) return "ไม่สามารถแก้ไขข้อมูลระบบได้"
+    return "แก้ไขเส้นทาง"
+  }
+
+  const getDeleteTitle = (route: StaticRoute) => {
+    if (enableEditSystemRoute) {
+      if (route.kernelOnly || route.type === "system") {
+        return "ลบเส้นทางระบบ (ลบออกจากเคอร์เนลโดยตรง)"
+      }
+      return "ลบเส้นทาง"
+    }
+    if (route.kernelOnly) return "เส้นทางระดับระบบปฏิบัติการเท่านั้น ไม่สามารถลบได้"
+    if (route.type === "system" && !allowEditSystemRoutes) return "ไม่สามารถลบข้อมูลระบบได้"
+    return "ลบเส้นทาง"
+  }
+
   // --- Checkbox Actions (Only Custom / Default Gateway Routes or all routes if system route editing is allowed) ---
   const selectableRoutes = useMemo(() => {
-    return filteredRoutes.filter(r => (!r.kernelOnly && (r.type === "custom" || r.type === "defaultgateway" || allowEditSystemRoutes)))
-  }, [filteredRoutes, allowEditSystemRoutes])
+    return filteredRoutes.filter(r => !isRouteActionDisabled(r))
+  }, [filteredRoutes, allowEditSystemRoutes, enableEditSystemRoute])
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
@@ -223,7 +255,7 @@ export default function StaticRoutes() {
 
   const handleDelete = async (id: string, dest: string) => {
     const route = routes.find(r => r.id === id)
-    if (route?.type === "system" && !allowEditSystemRoutes) {
+    if (route && isRouteActionDisabled(route)) {
       await alert("การดำเนินการล้มเหลว", "ไม่สามารถลบ System Route ของระบบปฏิบัติการได้")
       return
     }
@@ -561,7 +593,7 @@ export default function StaticRoutes() {
                   <TableCell className="p-3">
                     <input
                       type="checkbox"
-                      disabled={(route.type === "system" && !allowEditSystemRoutes) || route.kernelOnly}
+                      disabled={isRouteActionDisabled(route)}
                       checked={selectedIds.includes(route.id)}
                       onChange={(e) => handleSelectRow(route.id, e.target.checked)}
                       className="rounded border-input bg-background text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer accent-primary disabled:opacity-30 disabled:cursor-not-allowed"
@@ -637,7 +669,7 @@ export default function StaticRoutes() {
                   <TableCell className="p-3">
                     <Switch
                       checked={route.status}
-                      disabled={(route.type === "system" && !allowEditSystemRoutes) || route.kernelOnly}
+                      disabled={isRouteActionDisabled(route)}
                       onCheckedChange={() => handleToggleStatus(route.id)}
                       className="data-[state=checked]:bg-primary"
                     />
@@ -647,20 +679,20 @@ export default function StaticRoutes() {
                       <Button
                         variant="ghost"
                         size="icon-xs"
-                        disabled={(route.type === "system" && !allowEditSystemRoutes) || route.kernelOnly}
+                        disabled={isRouteActionDisabled(route)}
                         onClick={() => openEditModal(route)}
                         className="cursor-pointer text-muted-foreground hover:text-foreground hover:bg-muted/50 disabled:opacity-25 disabled:cursor-not-allowed"
-                        title={route.kernelOnly ? "เส้นทางระดับระบบปฏิบัติการเท่านั้น ไม่สามารถแก้ไขได้" : (route.type === "system" && !allowEditSystemRoutes ? "ไม่สามารถแก้ไขข้อมูลระบบได้" : "แก้ไขเส้นทาง")}
+                        title={getEditTitle(route)}
                       >
                         <Edit className="h-3.5 w-3.5" />
                       </Button>
                       <Button
                         variant="ghost"
                         size="icon-xs"
-                        disabled={(route.type === "system" && !allowEditSystemRoutes) || route.kernelOnly}
+                        disabled={isRouteActionDisabled(route)}
                         onClick={() => handleDelete(route.id, route.destination)}
                         className="cursor-pointer text-muted-foreground hover:text-red-500 hover:bg-red-500/10 disabled:opacity-25 disabled:cursor-not-allowed"
-                        title={route.kernelOnly ? "เส้นทางระดับระบบปฏิบัติการเท่านั้น ไม่สามารถลบได้" : (route.type === "system" && !allowEditSystemRoutes ? "ไม่สามารถลบข้อมูลระบบได้" : "ลบเส้นทาง")}
+                        title={getDeleteTitle(route)}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>

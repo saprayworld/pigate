@@ -40,10 +40,11 @@ export const staticRouteService = {
   },
 
   // Fetch routes configuration parameters (such as allowEditSystemRoutes)
-  getConfig: async (): Promise<{ allowEditSystemRoutes: boolean }> => {
+  getConfig: async (): Promise<{ allowEditSystemRoutes: boolean; enableEditSystemRoute: boolean }> => {
     if (IS_MOCK_MODE) {
       const stored = localStorage.getItem("pigate_allow_edit_system_routes") === "true";
-      return { allowEditSystemRoutes: stored };
+      const enableEditSys = localStorage.getItem("pigate_enable_edit_system_route") === "true";
+      return { allowEditSystemRoutes: stored, enableEditSystemRoute: enableEditSys };
     }
 
     const response = await fetch(`${API_BASE_URL}/routes/config`);
@@ -94,8 +95,8 @@ export const staticRouteService = {
       if (!target) {
         throw new Error(`Static route with id ${id} not found`);
       }
-      const allowEdit = localStorage.getItem("pigate_allow_edit_system_routes") === "true";
-      if (target.type === "system" && !allowEdit) {
+      const allowEdit = localStorage.getItem("pigate_allow_edit_system_routes") === "true" || localStorage.getItem("pigate_enable_edit_system_route") === "true";
+      if ((target.type === "system" || target.kernelOnly) && !allowEdit) {
         throw new Error(`Cannot update system predefined static routes`);
       }
       const updatedRoute: StaticRoute = {
@@ -129,8 +130,8 @@ export const staticRouteService = {
       if (!target) {
         throw new Error(`Static route with id ${id} not found`);
       }
-      const allowEdit = localStorage.getItem("pigate_allow_edit_system_routes") === "true";
-      if (target.type === "system" && !allowEdit) {
+      const allowEdit = localStorage.getItem("pigate_allow_edit_system_routes") === "true" || localStorage.getItem("pigate_enable_edit_system_route") === "true";
+      if ((target.type === "system" || target.kernelOnly) && !allowEdit) {
         throw new Error(`Cannot delete system predefined static routes`);
       }
       const updatedList = current.filter((r) => r.id !== id);
@@ -154,8 +155,8 @@ export const staticRouteService = {
       const current = getLocalRoutes();
       const targets = current.filter((r) => ids.includes(r.id));
       const hasSystem = targets.some((r) => r.type === "system");
-      const allowEdit = localStorage.getItem("pigate_allow_edit_system_routes") === "true";
-      if (hasSystem && !allowEdit) {
+      const allowEdit = localStorage.getItem("pigate_allow_edit_system_routes") === "true" || localStorage.getItem("pigate_enable_edit_system_route") === "true";
+      if ((hasSystem || targets.some(r => r.kernelOnly)) && !allowEdit) {
         throw new Error(`Cannot delete system predefined static routes in bulk`);
       }
       const updatedList = current.filter((r) => !ids.includes(r.id));

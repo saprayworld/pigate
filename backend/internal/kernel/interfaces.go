@@ -24,6 +24,9 @@ type NetworkManager interface {
 // RoutingManager abstracts netlink route modifications
 type RoutingManager interface {
 	ApplyRoutes(routes []model.StaticRoute) error
+	AddRoute(route model.StaticRoute) error
+	DeleteRoute(route model.StaticRoute) error
+	SetEnableEditSystemRoute(enable bool)
 }
 
 // DhcpManager abstracts DHCP configuration updates and active lease logs parsing
