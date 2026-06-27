@@ -92,7 +92,7 @@ func (r *RealRouting) ApplyRoutes(routes []model.StaticRoute) error {
 			// Matches an active target route. Update priority, protocol, scope, or src if they differ.
 			targetScope := parseScope(targetRoute.Scope)
 			targetProto := netlink.RouteProtocol(parseProtocol(targetRoute.Proto))
-			if targetRoute.Type == "custom" && (targetRoute.Proto == "static" || targetRoute.Proto == "") {
+			if (targetRoute.Type == "custom" || targetRoute.Type == "customgateway") && (targetRoute.Proto == "static" || targetRoute.Proto == "") {
 				targetProto = 120
 			}
 			targetSrc := net.ParseIP(targetRoute.Src)
@@ -100,6 +100,9 @@ func (r *RealRouting) ApplyRoutes(routes []model.StaticRoute) error {
 			srcMatches := (rt.Src == nil && len(targetRoute.Src) == 0) || (rt.Src != nil && rt.Src.Equal(targetSrc))
 
 			if rt.Priority != targetRoute.Metric || rt.Protocol != targetProto || rt.Scope != targetScope || !srcMatches {
+				priorityChanged := rt.Priority != targetRoute.Metric
+				oldRt := rt // copy of the old route configuration
+
 				rt.Priority = targetRoute.Metric
 				rt.Protocol = targetProto
 				rt.Scope = targetScope
@@ -108,7 +111,14 @@ func (r *RealRouting) ApplyRoutes(routes []model.StaticRoute) error {
 				} else {
 					rt.Src = nil
 				}
-				_ = netlink.RouteReplace(&rt)
+
+				if priorityChanged {
+					log.Printf("[Routing] Metric changed from %d to %d. Deleting old route and adding new one.", oldRt.Priority, rt.Priority)
+					_ = netlink.RouteDel(&oldRt)
+					_ = netlink.RouteAdd(&rt)
+				} else {
+					_ = netlink.RouteReplace(&rt)
+				}
 			}
 			// Remove from map since it's already active in the kernel
 			delete(activeTargetMap, key)
@@ -178,7 +188,7 @@ func (r *RealRouting) ApplyRoutes(routes []model.StaticRoute) error {
 
 		targetScope := parseScope(route.Scope)
 		targetProto := netlink.RouteProtocol(parseProtocol(route.Proto))
-		if route.Type == "custom" && (route.Proto == "static" || route.Proto == "") {
+		if (route.Type == "custom" || route.Type == "customgateway") && (route.Proto == "static" || route.Proto == "") {
 			targetProto = 120
 		}
 		var srcIP net.IP
@@ -272,7 +282,7 @@ func (r *RealRouting) AddRoute(route model.StaticRoute) error {
 
 	targetScope := parseScope(route.Scope)
 	targetProto := netlink.RouteProtocol(parseProtocol(route.Proto))
-	if route.Type == "custom" && (route.Proto == "static" || route.Proto == "") {
+	if (route.Type == "custom" || route.Type == "customgateway") && (route.Proto == "static" || route.Proto == "") {
 		targetProto = 120
 	}
 	var srcIP net.IP

@@ -100,7 +100,7 @@ func (s *RoutingService) GetRouting() ([]model.StaticRoute, error) {
 	if s.enableEditSystemRoute {
 		var filtered []model.StaticRoute
 		for _, r := range dbRoutes {
-			if r.Type == "custom" {
+			if r.Type == "custom" || r.Type == "customgateway" {
 				filtered = append(filtered, r)
 			}
 		}
@@ -151,11 +151,6 @@ func (s *RoutingService) GetRouting() ([]model.StaticRoute, error) {
 				dbRoute.Scope = kr.Scope
 				dbRoute.Src = kr.Src
 				dbRoute.Proto = kr.Proto
-				if dbRoute.Destination == "0.0.0.0/0" {
-					dbRoute.Type = "defaultgateway"
-				} else if dbRoute.Gateway == "" {
-					dbRoute.Type = "system"
-				}
 			}
 		} else {
 			if prioritizeKernelRoutes && (dbRoute.Type == "system" || dbRoute.Type == "defaultgateway") {
@@ -198,7 +193,7 @@ func (s *RoutingService) ApplyConfigRoute(route model.StaticRoute) error {
 	if _, _, err := net.ParseCIDR(route.Destination); err != nil {
 		return fmt.Errorf("invalid destination CIDR %q: %w", route.Destination, err)
 	}
-	if route.Gateway != "" && net.ParseIP(route.Gateway) == nil {
+	if route.Gateway != "" && route.Gateway != "default" && net.ParseIP(route.Gateway) == nil {
 		return fmt.Errorf("invalid gateway IP %q", route.Gateway)
 	}
 	if route.Interface == "" {
@@ -244,6 +239,23 @@ func (s *RoutingService) ApplyConfigRoute(route model.StaticRoute) error {
 			s.disabledSystemRoutes[route.ID] = route
 		}
 		return nil
+	}
+
+	// Set type based on gateway
+	if route.Gateway == "" {
+		route.Type = "custom"
+	} else {
+		route.Type = "customgateway"
+	}
+
+	// Resolve/check default gateway
+	defaultGw := s.repo.GetDefaultGatewayIP("")
+	if defaultGw == "" {
+		defaultGw = s.repo.GetDefaultGatewayIP(route.Interface)
+	}
+
+	if route.Gateway != "" && (route.Gateway == defaultGw || route.Gateway == "default") {
+		route.Gateway = "default"
 	}
 
 	existing, err := s.repo.GetRouteByID(route.ID)

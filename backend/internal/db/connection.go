@@ -62,7 +62,7 @@ func migrate(db *sql.DB) error {
 	var sqlCreate string
 	err := db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='static_routes'").Scan(&sqlCreate)
 	if err == nil {
-		if !strings.Contains(sqlCreate, "'defaultgateway'") || !strings.Contains(sqlCreate, "scope") {
+		if !strings.Contains(sqlCreate, "'customgateway'") || !strings.Contains(sqlCreate, "scope") {
 			migrationQueries := []string{
 				"PRAGMA foreign_keys=OFF;",
 				`CREATE TABLE static_routes_new (
@@ -73,7 +73,7 @@ func migrate(db *sql.DB) error {
 					metric INTEGER DEFAULT 0,
 					description TEXT,
 					status INTEGER DEFAULT 1 CHECK(status IN (0, 1)),
-					type TEXT NOT NULL CHECK(type IN ('system', 'custom', 'defaultgateway')),
+					type TEXT NOT NULL CHECK(type IN ('system', 'custom', 'defaultgateway', 'customgateway')),
 					scope TEXT DEFAULT 'global',
 					src TEXT DEFAULT '',
 					proto TEXT DEFAULT 'static'
@@ -236,7 +236,7 @@ func migrate(db *sql.DB) error {
 			metric INTEGER DEFAULT 0,
 			description TEXT,
 			status INTEGER DEFAULT 1 CHECK(status IN (0, 1)),
-			type TEXT NOT NULL CHECK(type IN ('system', 'custom', 'defaultgateway')),
+			type TEXT NOT NULL CHECK(type IN ('system', 'custom', 'defaultgateway', 'customgateway')),
 			scope TEXT DEFAULT 'global',
 			src TEXT DEFAULT '',
 			proto TEXT DEFAULT 'static'
@@ -478,7 +478,7 @@ func seed(db *sql.DB, dsn string, mockMode bool) error {
 		}
 	}
 
-	// 7. Seed Default Static Routes
+	// 7. Seed Default Static Routes (Only custom or customgateway)
 	if mockMode {
 		var routeCount int
 		if err := db.QueryRow("SELECT COUNT(*) FROM static_routes").Scan(&routeCount); err != nil {
@@ -486,9 +486,7 @@ func seed(db *sql.DB, dsn string, mockMode bool) error {
 		}
 		if routeCount == 0 {
 			_, err := db.Exec(`INSERT INTO static_routes (id, destination, gateway, interface, metric, description, status, type, scope, src, proto) VALUES 
-				('route-1', '0.0.0.0/0', '10.0.0.1', 'wlan0', 100, 'Default gateway route (WAN)', 1, 'system', 'global', '', 'boot'),
-				('route-2', '192.168.1.0/24', '', 'eth0', 0, 'Direct subnet route for LAN', 1, 'system', 'link', '', 'kernel'),
-				('route-3', '10.0.0.0/24', '', 'wlan0', 0, 'Direct subnet route for WAN', 1, 'system', 'link', '', 'kernel')`)
+				('route-custom-seed', '8.8.8.8/32', '10.0.0.1', 'wlan0', 100, 'Google DNS Route', 1, 'customgateway', 'global', '', 'static')`)
 			if err != nil {
 				return err
 			}

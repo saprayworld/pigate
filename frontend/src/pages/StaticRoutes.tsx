@@ -8,7 +8,6 @@ import {
   AlertCircle,
   Network,
   RefreshCw,
-  Check,
   CheckCircle2,
   SlidersHorizontal,
   Info,
@@ -51,6 +50,7 @@ export default function StaticRoutes() {
   const [interfaces, setInterfaces] = useState<NetworkInterface[]>([])
   const [allowEditSystemRoutes, setAllowEditSystemRoutes] = useState(false)
   const [enableEditSystemRoute, setEnableEditSystemRoute] = useState(false)
+  const [uiEditSystemRouteActive, setUiEditSystemRouteActive] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<"all" | "system" | "custom">("all")
@@ -77,10 +77,6 @@ export default function StaticRoutes() {
   const [formSrc, setFormSrc] = useState("")
   const [formProto, setFormProto] = useState("static")
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false)
-
-  // Simulation Status
-  const [isApplying, setIsApplying] = useState(false)
-  const [isApplied, setIsApplied] = useState(true) // Start with true, turn false when changes occur
 
   const dialogContentRef = useRef<HTMLDivElement | null>(null)
 
@@ -109,12 +105,28 @@ export default function StaticRoutes() {
     loadRoutes()
   }, [])
 
+  const handleToggleEditSystemMode = async (checked: boolean) => {
+    if (checked) {
+      const confirmed = await confirm(
+        "คำเตือนความปลอดภัย",
+        "คุณแน่ใจหรือไม่ที่จะเปิดโหมดแก้ไขเส้นทางระบบปฏิบัติการ (System Route)? การกระทำนี้จำเป็นต้องทำด้วยความระมัดระวังอย่างยิ่ง เนื่องจากอาจส่งผลกระทบต่อการเชื่อมต่ออินเทอร์เน็ตและบริการเครือข่ายทั้งหมดของระบบ"
+      )
+      if (confirmed) {
+        setUiEditSystemRouteActive(true)
+      } else {
+        setUiEditSystemRouteActive(false)
+      }
+    } else {
+      setUiEditSystemRouteActive(false)
+    }
+  }
+
   // --- Statistics ---
   const stats = useMemo(() => {
     const total = routes.length
     const active = routes.filter(r => r.status).length
     const system = routes.filter(r => r.type === "system" || r.type === "defaultgateway").length
-    const custom = routes.filter(r => r.type === "custom").length
+    const custom = routes.filter(r => r.type === "custom" || r.type === "customgateway").length
     return { total, active, system, custom }
   }, [routes])
 
@@ -130,7 +142,8 @@ export default function StaticRoutes() {
       const matchType =
         selectedTypeFilter === "all" ||
         route.type === selectedTypeFilter ||
-        (selectedTypeFilter === "system" && route.type === "defaultgateway")
+        (selectedTypeFilter === "system" && route.type === "defaultgateway") ||
+        (selectedTypeFilter === "custom" && route.type === "customgateway")
 
       const matchStatus =
         selectedStatusFilter === "all" ||
@@ -142,14 +155,14 @@ export default function StaticRoutes() {
   }, [routes, searchQuery, selectedTypeFilter, selectedStatusFilter])
 
   const isRouteActionDisabled = (route: StaticRoute) => {
-    if (enableEditSystemRoute) return false
+    if (uiEditSystemRouteActive) return false
     if (route.kernelOnly) return true
     if (route.type === "system" && !allowEditSystemRoutes) return true
     return false
   }
 
   const getEditTitle = (route: StaticRoute) => {
-    if (enableEditSystemRoute) {
+    if (uiEditSystemRouteActive) {
       if (route.kernelOnly || route.type === "system") {
         return "แก้ไขเส้นทางระบบ (แก้ไขในเคอร์เนลโดยตรง)"
       }
@@ -161,7 +174,7 @@ export default function StaticRoutes() {
   }
 
   const getDeleteTitle = (route: StaticRoute) => {
-    if (enableEditSystemRoute) {
+    if (uiEditSystemRouteActive) {
       if (route.kernelOnly || route.type === "system") {
         return "ลบเส้นทางระบบ (ลบออกจากเคอร์เนลโดยตรง)"
       }
@@ -175,7 +188,7 @@ export default function StaticRoutes() {
   // --- Checkbox Actions (Only Custom / Default Gateway Routes or all routes if system route editing is allowed) ---
   const selectableRoutes = useMemo(() => {
     return filteredRoutes.filter(r => !isRouteActionDisabled(r))
-  }, [filteredRoutes, allowEditSystemRoutes, enableEditSystemRoute])
+  }, [filteredRoutes, allowEditSystemRoutes, uiEditSystemRouteActive])
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
@@ -203,7 +216,6 @@ export default function StaticRoutes() {
     try {
       await staticRouteService.toggleStatus(id)
       await loadRoutes(false)
-      setIsApplied(false)
     } catch (err: any) {
       await alert("ข้อผิดพลาด", "ไม่สามารถเปลี่ยนสถานะเส้นทางได้: " + (err.message || err))
     }
@@ -221,13 +233,13 @@ export default function StaticRoutes() {
     setFormError("")
     setFormScope("global")
     setFormSrc("")
-    setFormProto("static")
+    setFormProto("120")
     setIsAdvancedOpen(false)
     setIsModalOpen(true)
   }
 
   const openEditModal = (route: StaticRoute) => {
-    if (route.type === "defaultgateway") {
+    if (route.type === "defaultgateway" && !uiEditSystemRouteActive) {
       alert(
         "แก้ไขเกตเวย์หลัก",
         "เส้นทางเกตเวย์หลัก (Default Gateway) ถูกจัดการโดยอัตโนมัติผ่านการตั้งค่าการ์ดเครือข่าย กรุณาไปแก้ไขที่หน้าตั้งค่าพอร์ตเชื่อมต่อ (Interfaces) แทน"
@@ -244,7 +256,7 @@ export default function StaticRoutes() {
     setFormError("")
     setFormScope(route.scope || "global")
     setFormSrc(route.src || "")
-    setFormProto(route.proto || "static")
+    setFormProto(route.proto || "120")
     setIsAdvancedOpen(!!(
       (route.scope && route.scope !== "global") ||
       route.src ||
@@ -265,7 +277,6 @@ export default function StaticRoutes() {
         await staticRouteService.delete(id)
         setSelectedIds(prev => prev.filter(item => item !== id))
         await loadRoutes(false)
-        setIsApplied(false)
       } catch (err: any) {
         await alert("ข้อผิดพลาด", "ไม่สามารถลบเส้นทางได้: " + (err.message || err))
       }
@@ -278,7 +289,6 @@ export default function StaticRoutes() {
         await staticRouteService.deleteMultiple(selectedIds)
         setSelectedIds([])
         await loadRoutes(false)
-        setIsApplied(false)
       } catch (err: any) {
         await alert("ข้อผิดพลาด", "ไม่สามารถลบเส้นทางได้: " + (err.message || err))
       }
@@ -361,22 +371,8 @@ export default function StaticRoutes() {
       }
       await loadRoutes(false)
       setIsModalOpen(false)
-      setIsApplied(false)
     } catch (err: any) {
       setFormError(err.message || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
-    }
-  }
-
-  // --- Apply Settings Simulation ---
-  const handleApplySettings = async () => {
-    setIsApplying(true)
-    try {
-      await staticRouteService.apply()
-      setIsApplying(false)
-      setIsApplied(true)
-    } catch (err: any) {
-      setIsApplying(false)
-      await alert("ข้อผิดพลาด", "ไม่สามารถบันทึกการตั้งค่าเส้นทางเข้า Kernel ได้: " + (err.message || err))
     }
   }
 
@@ -389,38 +385,36 @@ export default function StaticRoutes() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
             <Route className="h-7 w-7 text-primary fill-primary/10" />
-            Static Routes (ตารางเส้นทาง)
+            Static Routes
           </h1>
           <p className="text-muted-foreground mt-1">
-            กำหนดค่าตารางการกำหนดเส้นทาง (Routing Table) เพื่อนำส่งข้อมูลออกสู่เครือข่ายย่อยต่าง ๆ
+            กำหนดค่าตารางการกำหนดเส้นทางเพื่อนำส่งข้อมูลออกสู่เครือข่ายย่อยต่าง ๆ
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {!isApplied && (
-            <Button
-              onClick={handleApplySettings}
-              disabled={isApplying}
-              className="cursor-pointer bg-amber-500 text-neutral-950 hover:bg-amber-400 font-bold gap-1.5 h-10 px-4 animate-pulse"
-            >
-              {isApplying ? (
-                <>
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                  Applying Routes...
-                </>
-              ) : (
-                <>
-                  <Check className="h-4.5 w-4.5" />
-                  Apply Routing Config
-                </>
-              )}
-            </Button>
-          )}
-          {isApplied && (
-            <div className="hidden sm:flex items-center gap-1.5 text-xs text-primary bg-primary/10 border border-primary/20 px-3 py-2 rounded-lg font-semibold">
-              <CheckCircle2 className="h-4 w-4" />
-              Kernel Routes Synced
+          {enableEditSystemRoute && (
+            <div className="flex items-center gap-2 bg-rose-500/10 border border-rose-500/20 px-3 h-10 rounded-lg text-xs font-semibold select-none">
+              <span className="text-rose-400">แก้ไขเส้นทางระบบ</span>
+              <Switch
+                checked={uiEditSystemRouteActive}
+                onCheckedChange={handleToggleEditSystemMode}
+                size="sm"
+              />
             </div>
           )}
+          <Button
+            onClick={() => loadRoutes(true)}
+            disabled={isLoading}
+            variant="outline"
+            className="cursor-pointer border-border hover:bg-muted text-foreground font-bold gap-1.5 h-10 px-4"
+          >
+            {isLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4.5 w-4.5" />
+            )}
+            Refresh
+          </Button>
           <Button onClick={openCreateModal} className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 font-bold gap-1.5 h-10">
             <Plus className="h-4.5 w-4.5" />
             Create Static Route
@@ -610,6 +604,10 @@ export default function StaticRoutes() {
                         ) : route.type === "defaultgateway" ? (
                           <Badge variant="outline" className="bg-purple-500/10 text-purple-400 border-purple-500/20 text-[9px] px-1.5 py-0.2 rounded font-mono font-medium">
                             Default Gateway
+                          </Badge>
+                        ) : route.type === "customgateway" ? (
+                          <Badge variant="outline" className="bg-amber-500/10 text-amber-400 border-amber-500/20 text-[9px] px-1.5 py-0.2 rounded font-mono font-medium">
+                            Custom Gateway
                           </Badge>
                         ) : (
                           <Badge variant="outline" className="bg-amber-500/10 text-amber-400 border-amber-500/20 text-[9px] px-1.5 py-0.2 rounded font-mono font-medium">
@@ -877,10 +875,16 @@ export default function StaticRoutes() {
                         onChange={(e) => setFormProto(e.target.value)}
                         className="w-full bg-background border border-border rounded-lg h-8 px-2 text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
                       >
-                        <option value="static">static (Static Route)</option>
-                        <option value="kernel">kernel (OS Kernel Auto)</option>
-                        <option value="boot">boot (System Startup)</option>
                         <option value="120">120 (PiGate Custom)</option>
+                        {
+                          uiEditSystemRouteActive && (
+                            <>
+                              <option value="static">static (Static Route)</option>
+                              <option value="kernel">kernel (OS Kernel Auto)</option>
+                              <option value="boot">boot (System Startup)</option>
+                            </>
+                          )
+                        }
                       </select>
                     </div>
                   </div>

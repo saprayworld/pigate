@@ -354,7 +354,7 @@ export interface StaticRoute {
   metric: number          // priority (default 0 or 100)
   description: string
   status: boolean         // true = Active, false = Disabled
-  type: "system" | "custom" | "defaultgateway"
+  type: "system" | "custom" | "defaultgateway" | "customgateway"
   scope: string
   src: string
   proto: string

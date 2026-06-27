@@ -1746,11 +1746,12 @@ components:
           example: true
         type:
           type: string
-          enum: [system, custom, defaultgateway]
+          enum: [system, custom, defaultgateway, customgateway]
           description: |
             - `system`: directly connected route (no gateway), read-only unless -allow-edit-system-routes is set
             - `defaultgateway`: route to 0.0.0.0/0, always editable and toggleable
             - `custom`: user-defined route, always editable and toggleable
+            - `customgateway`: user-defined route with gateway, always editable and toggleable
           example: defaultgateway
         scope:
           type: string
