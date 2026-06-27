@@ -116,6 +116,7 @@ func (s *RoutingService) GetRouting() ([]model.StaticRoute, error) {
 				kr.Interface,
 			)
 			kr.ID = routeID
+			kr.KernelOnly = true
 			result = append(result, kr)
 		}
 	}

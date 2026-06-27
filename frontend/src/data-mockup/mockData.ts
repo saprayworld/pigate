@@ -358,6 +358,7 @@ export interface StaticRoute {
   scope: string
   src: string
   proto: string
+  kernelOnly?: boolean
 }
 
 // Initial mockup data for Static Routes

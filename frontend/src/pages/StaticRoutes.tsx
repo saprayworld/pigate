@@ -576,6 +576,11 @@ export default function StaticRoutes() {
                             Custom
                           </Badge>
                         )}
+                        {route.kernelOnly && (
+                          <Badge variant="outline" className="bg-rose-500/10 text-rose-400 border-rose-500/20 text-[9px] px-1.5 py-0.2 rounded font-mono font-medium">
+                            Kernel Only
+                          </Badge>
+                        )}
                         {route.destination === "0.0.0.0/0" && route.type !== "defaultgateway" && (
                           <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[9px] px-1.5 py-0.2 rounded font-mono">
                             Default Gateway
@@ -633,20 +638,20 @@ export default function StaticRoutes() {
                       <Button
                         variant="ghost"
                         size="icon-xs"
-                        disabled={route.type === "system" && !allowEditSystemRoutes}
+                        disabled={(route.type === "system" && !allowEditSystemRoutes) || route.kernelOnly}
                         onClick={() => openEditModal(route)}
                         className="cursor-pointer text-muted-foreground hover:text-foreground hover:bg-muted/50 disabled:opacity-25 disabled:cursor-not-allowed"
-                        title={route.type === "system" && !allowEditSystemRoutes ? "ไม่สามารถแก้ไขข้อมูลระบบได้" : "แก้ไขเส้นทาง"}
+                        title={route.kernelOnly ? "เส้นทางระดับระบบปฏิบัติการเท่านั้น ไม่สามารถแก้ไขได้" : (route.type === "system" && !allowEditSystemRoutes ? "ไม่สามารถแก้ไขข้อมูลระบบได้" : "แก้ไขเส้นทาง")}
                       >
                         <Edit className="h-3.5 w-3.5" />
                       </Button>
                       <Button
                         variant="ghost"
                         size="icon-xs"
-                        disabled={route.type === "system" && !allowEditSystemRoutes}
+                        disabled={(route.type === "system" && !allowEditSystemRoutes) || route.kernelOnly}
                         onClick={() => handleDelete(route.id, route.destination)}
                         className="cursor-pointer text-muted-foreground hover:text-red-500 hover:bg-red-500/10 disabled:opacity-25 disabled:cursor-not-allowed"
-                        title={route.type === "system" && !allowEditSystemRoutes ? "ไม่สามารถลบข้อมูลระบบได้" : "ลบเส้นทาง"}
+                        title={route.kernelOnly ? "เส้นทางระดับระบบปฏิบัติการเท่านั้น ไม่สามารถลบได้" : (route.type === "system" && !allowEditSystemRoutes ? "ไม่สามารถลบข้อมูลระบบได้" : "ลบเส้นทาง")}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>

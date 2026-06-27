@@ -160,6 +160,7 @@ type StaticRoute struct {
 	Scope       string `json:"scope"`  // "global", "link", "host", "site", etc.
 	Src         string `json:"src"`    // preferred source IP
 	Proto       string `json:"proto"`  // "kernel", "boot", "static", "120", etc.
+	KernelOnly  bool   `json:"kernelOnly"`
 }
 
 // StaticRouteInput represents inputs to create or update a StaticRoute
