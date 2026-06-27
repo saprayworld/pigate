@@ -1,200 +1,104 @@
 # PiGate Project Status & Roadmap
 
-เอกสารฉบับนี้เป็นรายงานสรุปสถานะล่าสุดของโปรเจกต์ **PiGate** (ระบบควบคุม Raspberry Pi Firewall/Gateway) ทั้งความคืบหน้า ปัญหาที่พบ และแผนการทำงานในระยะถัดไป สำหรับผู้พัฒนาและผู้ดูแลระบบ
+เอกสารฉบับนี้เป็นรายงานสรุปสถานะล่าสุดของโปรเจกต์ **PiGate** (ระบบควบคุม Raspberry Pi Firewall/Gateway) ทั้งความคืบหน้า โครงสร้างระบบล่าสุด ปัญหาที่พบ และแผนงานในอนาคต
 
 ---
 
 ## 1. สิ่งที่ได้ดำเนินการเสร็จสิ้นแล้ว (Completed Work)
 
-* **วิเคราะห์สถาปัตยกรรมและการเชื่อมโยงข้อมูล (`docs/`)**:
-  * วิเคราะห์เอกสารระบบ [`tech_stack_design.md`](file:///home/sapray/dev/pigate/docs/tech_stack_design.md) เพื่อทำความเข้าใจรูปแบบสถาปัตยกรรม (Go Backend ทำหน้าที่เป็น API & Single Binary Server ทำงานร่วมกับ React SPA Frontend ผ่าน `go:embed`)
-  * ตรวจสอบไฟล์แบบร่างโครงลวดหน้าเว็บ (Wireframe Sketches) ทั้งหมด 10 หน้าในโฟลเดอร์ [`docs/sketchs/frontend/`](file:///home/sapray/dev/pigate/docs/sketchs/frontend/)
-  * วิเคราะห์ API Endpoints ใน [`docs/sketchs/api-endpoint/01-api-endpoints.html`](file:///home/sapray/dev/pigate/docs/sketchs/api-endpoint/01-api-endpoints.html) เพื่อกำหนดโครงสร้างโมเดลข้อมูลและการเชื่อมโยงผ่าน HTTP REST API และระบบ Real-time (Server-Sent Events)
+ส่วนนี้สรุปงานที่พัฒนาเสร็จสมบูรณ์และพร้อมใช้งานแล้ว โดยแบ่งตามส่วนประกอบหลักของระบบ:
 
-* **ตรวจสอบความถูกต้องของระบบหน้าบ้าน (`frontend/`)**:
-  * ตรวจสอบการเซ็ตอัปเทคโนโลยีหลัก (React 19, Vite, TypeScript, Tailwind CSS v4, และ `components.json` สำหรับ shadcn/ui)
-  * ตั้งค่าและแมปโฟลเดอร์ด้วย Alias `@/` สำเร็จเรียบร้อย สามารถอ้างอิงนำเข้า components/lib ได้โดยไม่มีปัญหาทางเทคนิค
+### 1.1 หน้าต่างผู้ใช้งาน (Frontend SPA - React 19)
+* **Shell Layout & Responsive Design [สำเร็จ]:**
+  * พัฒนาโครงหน้าจอหลัก ([ShellLayout.tsx](file:///home/sapray/dev/pigate/frontend/src/components/layout/ShellLayout.tsx)) สไตล์ Dark Mode ระดับพรีเมียม สนับสนุนทั้งระบบ Dark/Light Theme (บันทึกลง LocalStorage)
+  * ออกแบบตารางข้อมูลกฎความปลอดภัย (Firewall Policies) และพอร์ตเชื่อมต่อ (Interfaces) เป็นแบบ Responsive โดยใช้ `<div className="overflow-x-auto w-full">` ป้องกันการล้นบนจอโทรศัพท์มือถือ
+* **Interactive Pages (9 หน้าหลัก) [สำเร็จ]:** พัฒนาหน้าจอและการทำงานจำลอง (Mock API/SSE) ครบถ้วน ได้แก่ Dashboard, Interfaces, Static Routes, DHCP, Firewall Policy, Addresses, Services, Settings, Login
+* **Dashboard & Charts [สำเร็จ]:**
+  * พัฒนากราฟข้อมูลทราฟฟิกเครือข่ายเรียลไทม์ (WAN Bandwidth) แบบ Dynamic Line Chart ด้วย Recharts (โทนสี Cyan & Indigo)
+  * แสดง Badges สถานะตัวบอร์ดบอร์ด (CPU, RAM, Temp, Power) และตารางแสดงประวัติความปลอดภัย (Firewall Logs) ที่กรองและค้นหาได้
+* **Firewall Policies UI [สำเร็จ]:**
+  * ระบบจัดลำดับความสำคัญของกฎแบบลากวาง (Drag & Drop) ด้วย `@dnd-kit/core` ล็อคแกนแนวตั้ง
+  * ฟอร์มเพิ่ม/แก้ไขกฎที่มี Multiple Selection Combobox แบบ Chips ดึงข้อมูล Address/Service objects และ Interface ขาเข้า-ออก ไดนามิก
+  * แก้ไขปัญหาคลิกดรอปดาวน์ภายใน Dialog โดน Radix Blocker โดยตั้งค่า `modal={false}` บน `<Dialog>`
+* **Network Objects & CRUD Manager [สำเร็จ]:**
+  * พัฒนาหน้า Addresses และ Services รองรับการทำงาน CRUD
+  * มีการล็อคสิทธิ์แก้ไข/ลบวัตถุระบบ (🔒 Predefined System Objects) และตรวจเช็คความปลอดภัยบล็อกการลบวัตถุที่ถูกนำไปใช้ในกฎ (mockSync.ts) พร้อมระบบเปลี่ยนชื่อลามเปลี่ยนในกฎทั้งหมด (Rename Propagation)
+* **Custom UI Alerts [สำเร็จ]:** พัฒนาและติดตั้ง Custom AlertDialog ([AlertDialogProvider.tsx](file:///home/sapray/dev/pigate/frontend/src/components/AlertDialogProvider.tsx)) แทนการใช้ `alert()` และ `confirm()` ดั้งเดิมของเบราว์เซอร์
+* **Strict Input Validation [สำเร็จ]:** ติดตั้งระบบตรวจสอบรูปแบบ IPv4, CIDR Subnet และ IP Range อย่างรัดกุม (ตรวจสอบ Octet ละเอียด 0-255) ในทุกหน้าอินพุต
 
-* **พัฒนาโครงหน้าจอหลักและระบบนำทาง (Shell Layout & Routing) [สำเร็จ]**:
-  * ติดตั้งไลบรารีที่จำเป็น ได้แก่ `react-router-dom` สำหรับระบบนำทาง, `recharts` สำหรับวาดกราฟ และ `@dnd-kit` สำหรับระบบ Drag & Drop เรียบร้อย
-  * พัฒนา [ShellLayout.tsx](file:///home/sapray/dev/pigate/frontend/src/components/layout/ShellLayout.tsx) เป็นโครงเลย์เอาต์หลักสไตล์ Dark Mode ระดับพรีเมียม ประกอบด้วย:
-    * **Sidebar:** แสดงแบรนด์ 🛡️ PiGate และลิงก์เมนูแบ่งตามกลุ่ม Network, Policy, System
-    * **Topbar:** แสดงสถานะทรัพยากรตัวบอร์ดสด (CPU: 15%, RAM: 42%, Temp: 48°C, Power: OK) ในรูปแบบ Badges และเมนูผู้ใช้งาน (Admin Dropdown)
-  * ตั้งค่าระบบนำทางและ Route Guard ป้องกันสิทธิ์การเข้าใช้งาน ([App.tsx](file:///home/sapray/dev/pigate/frontend/src/App.tsx)) หากยังไม่ยืนยันตัวตนจะถูกส่งกลับหน้าล็อกอิน
-  * พัฒนาหน้าจอจำลอง (Mock Pages) ครบถ้วนทั้ง 9 หน้า (Dashboard, Interfaces, Static Routes, DHCP, Firewall Policy, Addresses, Services, Settings, Login) รองรับการเปลี่ยนหน้าแบบ Single Page Application (SPA) สมบูรณ์
-  * ทดสอบเรียกคำสั่งคอมไพล์ระบบจริงด้วย `yarn build` บิวด์ผ่านสำเร็จ 100% ปราศจากข้อผิดพลาด
+### 1.2 สถาปัตยกรรมและหลังบ้าน (Backend API & Database - Go v1.26.4)
+* **Single Binary Embedded Server [สำเร็จ]:** เชื่อมฝังเว็บ React SPA (`dist/` folder) เข้าใน Go binary ด้วย `go:embed` ใน [embed.go](file:///home/sapray/dev/pigate/backend/internal/api/embed.go) รองรับ Client-side routing fallback (SPA fallback)
+* **SQLite Database Layer [สำเร็จ]:** ออกแบบฐานข้อมูล SQLite ด้วย pure-Go client (`modernc.org/sqlite` แบบไม่มี CGO dependency) เพื่อเก็บข้อมูล Interfaces, Routes, DNS, DHCP, Addresses, Services, และ Policies
+* **Service Layer Refactoring [สำเร็จ]:** แยกโครงสร้างตรรกะ DB และ Kernel พัฒนาเป็น Service Layer ได้แก่ [InterfaceService](file:///home/sapray/dev/pigate/backend/internal/service/interface.go) และ [RoutingService](file:///home/sapray/dev/pigate/backend/internal/service/routing.go) เพื่อไม่ให้ API handlers เรียกใช้ชั้นข้อมูลโดยตรง
+* **CORS, Rate Limiting & Auth Middleware [สำเร็จ]:**
+  * CORS Middleware ปรับสิทธิ์เฉพาะ Origin ที่ปลอดภัย (ป้องกัน CORS Credentials Mismatch)
+  * ติดตั้งระบบรักษาความปลอดภัยจำกัดอัตราการขอเข้าถึง (Rate Limiting) ในหน้าล็อกอิน และ Middleware ตรวจสอบ Bearer Token
+  * ระบบยืนยันสิทธิ์เซสชันย้อนกลับ `/api/auth/session` พร้อมระบบบังคับเปลี่ยนรหัสผ่านครั้งแรก (IsInitial check) บล็อกการเข้าถึง endpoint อื่นและบังคับนำไปสู่หน้า `/change-password`
+* **Automated Testing Suite [สำเร็จ]:** พัฒนาชุดทดสอบ Unit test (จำลอง SQLite) และ Integration test (จำลอง http client) บิวด์และทดสอบผ่านสำเร็จ 100%
 
-* **พัฒนาและติดตั้งระบบการจัดการธีม (Theme Management - Dark/Light Mode) [สำเร็จ]**:
-  * ออกแบบและสร้าง `ThemeProvider` เพื่อจัดการสถานะการสลับธีม และบันทึกข้อมูลลงใน `localStorage` (โดยเริ่มต้นที่ Dark Mode เพื่อรักษาความปลอดภัยทางสายตา)
-  * ปรับโครงสร้างสีของเลย์เอาต์หลัก คาร์ดข้อมูล และคอนเทนเนอร์ในหน้าจอหลักทั้งหมด (Dashboard, Login, Interfaces ฯลฯ) ให้เปลี่ยนสีสอดคล้องตามธีมโดยอัตโนมัติ
-  * ติดตั้งเมนูสลับ Dark Mode / Light Mode พร้อมไอคอน Sun/Moon และตัวเลือก Appearance เข้ากับ Dropdown เมนูผู้ใช้งานตรงหน้า Topbar สำเร็จ
-
-* **พัฒนาหน้า Dashboard และการแสดงผลทรัพยากรระบบ [สำเร็จ]**:
-  * พัฒนาหน้า [Dashboard.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/Dashboard.tsx) สไตล์ Dark Mode ระดับพรีเมียม
-  * ติดตั้งกราฟเครือข่ายเรียลไทม์ (WAN Bandwidth) แบบขยับแอนิเมชันโดยใช้ `recharts` ด้วยโทนสี Cyan & Indigo
-  * ออกแบบการจำลองดึงค่า CPU / RAM / Temp และเวลาการทำงานระบบ (Uptime) แบบเรียลไทม์ และตารางสรุปประวัติล่าสุด (Firewall Logs) ที่ค้นหาและกรองได้ พร้อมตัวจำลองสถานะ SSE
-
-* **พัฒนาหน้าจอและระบบจัดการกฎไฟร์วอลล์ (Firewall Policies) [สำเร็จ]**:
-  * พัฒนาหน้า [FirewallPolicy.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/FirewallPolicy.tsx) โดยใช้ UI components ของ shadcn/ui เป็นพื้นฐาน
-  * ติดตั้งระบบการลากสลับลำดับความสำคัญของกฎความปลอดภัย (Drag & Drop ด้วย `@dnd-kit/core` และ `@dnd-kit/sortable` ล็อคแกนการลากแนวตั้ง)
-  * พัฒนาและเพิ่มประสิทธิภาพโมดอลสำหรับการเพิ่ม (Create) และแก้ไข (Edit) กฎความปลอดภัย:
-    * ปรับเพิ่มความกว้างการแสดงผลและปรับปรุงเลย์เอาต์จัดวางคอมโพเนนต์ให้มีความสวยงามและเป็นระเบียบมากยิ่งขึ้น (3 แถวหลัก)
-    * เพิ่มฟิลด์เลือก **การ์ดขาเข้า (In Interface)** และ **การ์ดขาออก (Out Interface)** ดึงรายชื่อการ์ดเครือข่ายที่มีในระบบแบบไดนามิกผ่าน `interfaceService` พร้อมทั้งแสดงผลคอลัมน์ In/Out, Badges และแสดงชื่อ **Alias** ของการ์ดเครือข่ายใต้ Badge ในตารางนโยบายอย่างชัดเจนและสวยงาม
-    * ปรับปรุงฟิลด์กรอกข้อมูล **ต้นทาง (Source)**, **ปลายทาง (Destination)** และ **บริการ/พอร์ต (Service/Port)** ให้ใช้งาน Multiple Selection Combobox แบบ Chips ดึงข้อมูลตัวเลือกจาก Addresses และ Services Mock Database จริงที่ผู้ใช้บันทึก
-    * ปรับปรุงวิธีการใช้งาน Combobox API ให้ถูกต้องตามคู่มืออ้างอิงของ shadcn (การใช้งาน `items` prop, `<ComboboxValue>` ด้วย render prop และ `<ComboboxList>` ด้วย children function)
-    * แก้ไขและบันทึกแนวทางปัญหาคลิกเลือกตัวเลือก Combobox dropdown ภายใน Dialog โดนบล็อกอันเกิดจากกลไก Focus/Pointer Blocker ของ Radix UI Dialog โดยการกำหนด `modal={false}` บน Dialog
-  * ออกแบบระบบ Switch inline เพื่อเปิด/ปิด หรือสตรีมล็อกบนแถว และการจำลองนำไปปรับใช้จริงผ่านปุ่ม "Apply Settings" เข้าเคอร์เนล `nftables`
-
-* **พัฒนาหน้าจอการจัดการวัตถุเครือข่ายและพอร์ต (Addresses & Services Objects) [สำเร็จ]**:
-  * พัฒนาหน้า [Addresses.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/Addresses.tsx) สำหรับสร้างและควบคุม IP/Subnet, IP Range, หรือชื่อโดเมน FQDN
-  * พัฒนาหน้า [Services.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/Services.tsx) สำหรับควบคุมรายชื่อพอร์ต TCP/UDP/ICMP
-  * ทั้งสองหน้ารองรับการทำ CRUD ในตัว (เพิ่ม, แก้ไข, ลบ) และมีระบบความปลอดภัยล็อกไม่ให้ลบหรือแก้ไขวัตถุของระบบ (Predefined System Objects เช่น `ALL` หรือ `HTTP`) พร้อมทั้งแสดงไอคอน Lock 🔒 ในแถวนั้น ๆ
-  * หน้า Addresses รองรับการเลือกกล่องเครื่องหมายเพื่อลบทีละหลายวัตถุพร้อมกัน (Bulk Delete) และหน้า Services มีกล่อง Preview คำสั่ง Named Set ที่จำลองการส่งไปประมวลผลบน Linux Kernel `nftables` จริงแบบเรียลไทม์
-  * พัฒนาระบบเชื่อมโยงความสัมพันธ์และส่งต่อข้อมูลจำลอง (Mock Data Synchronization - [mockSync.ts](file:///home/sapray/dev/pigate/frontend/src/services/mockSync.ts)):
-    * คำนวณหาค่า `refPolicies` สำหรับแสดงรายการกฎไฟร์วอลล์ที่อ้างอิงถึงวัตถุที่อยู่หรือวัตถุบริการนั้น ๆ สดแบบเรียลไทม์
-    * บล็อกความสามารถในการลบ Address หรือ Service ใด ๆ ตราบใดที่ยังถูกกฎ Firewall อ้างอิงการใช้งานอยู่
-    * รองรับการส่งต่อการแก้ไขชื่อ (Rename Propagation): เมื่อเปลี่ยนชื่อวัตถุ เช่น `LAN_Network` -> `LAN_Internal` ระบบจะตามไปค้นหาและเปลี่ยนชื่อในกฎ Firewall Policy ทุกกฎที่ใช้วัตถุนั้นให้อัตโนมัติใน Mock LocalStorage Database
-
-* **พัฒนาหน้าจอการตั้งค่าการ์ดเครือข่ายและระบบสุ่ม MAC Address (Network Interfaces) [สำเร็จ]**:
-  * พัฒนาหน้า [Interfaces.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/Interfaces.tsx) ครอบคลุมการแสดงผล eth0 (Ethernet) และ wlan0 (Wireless)
-  * เพิ่มการสลับประเภท/หน้าที่พอร์ต (**Port Role**) ได้แก่ **LAN** และ **WAN** ในหน้าแก้ไข และแสดงผลเป็นสัญลักษณ์สีแยกแยะชัดเจนในตารางการ์ดเครือข่าย
-  * ติดตั้งเครื่องมือสแกนหาคลื่น Wi-Fi (SSID Scanner) ที่มีระบบพรีวิวสัญญาณตามระดับความแรงช่องสัญญาณและความปลอดภัยของเครือข่าย
-  * เพิ่มฟีเจอร์ความปลอดภัย ได้แก่ **Native MAC Address Randomization** ของ `wpa_supplicant` สำหรับการสุ่ม MAC Address เพื่อความปลอดภัยระดับชั้นสื่อสาร (Link Layer) และแสดงที่อยู่ MAC จริง (Active/Effective MAC) ที่สุ่มได้ในตารางแสดงผลสด
-  * พัฒนาการปรับแต่งความปลอดภัยระดับ Wi-Fi (Open, WPA2, WPA3, WPA2/WPA3) ทั้ง SSID หลักและ SSID สำรอง (Failover Backup) และเพิ่มความปลอดภัยในการซ่อนรหัสผ่านไม่ส่งค่า Wi-Fi password ใดๆ กลับมายังหน้าบ้านใน JSON response โดยใช้การ Masking เป็น `"••••••••"` ใน API ขาออกทั้งหมด
-  * ปรับแต่งฟรอนต์เอนด์ไม่ให้ส่งรหัสผ่านทับข้อมูลเดิมหากไม่มีการกรอกข้อมูลรหัสผ่านใหม่ (ผ่าน Method PATCH ใหม่) หรือหากส่งรหัสผ่านแบบ Masked เข้ามา ระบบหลังบ้านจะละเว้นการเขียนทับเพื่อให้คงรหัสผ่านเดิมไว้ได้อย่างปลอดภัย
-  * ปรับปรุงเส้น API `/api/interfaces/{id}/wifi-status` ให้ประมวลผลข้อมูลสัญญาณแบบเรียลไทม์ครบถ้วน ได้แก่ ความถี่ (MHz), ประเภทความปลอดภัย (KeyMgmt), และมาตรฐานการเชื่อมต่อ (เช่น WiFi 6/5/4) พร้อมนำค่าจริงแสดงผลบนตารางการ์ดเครือข่ายหน้าบ้านโดยอัตโนมัติ
-
-* **พัฒนาหน้าจอและระบบจัดการเส้นทางแบบคงที่ (Static Routes) [สำเร็จ]**:
-  * พัฒนาหน้า [StaticRoutes.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/StaticRoutes.tsx) สำหรับควบคุมตารางการกำหนดเส้นทางเครือข่ายย่อยต่าง ๆ
-  * รองรับระบบ CRUD เต็มรูปแบบในการเพิ่ม แก้ไข และลบเส้นทาง (ยกเว้นเส้นทางของระบบปฏิบัติการ / System Routes ที่จะถูกล็อกเพื่อความปลอดภัย)
-  * ออกแบบ statistics cards แสดงรายละเอียดเส้นทางทั้งหมด, เส้นทางที่เปิดใช้งาน, เส้นทางระบบ และเส้นทางที่กำหนดเอง
-  * เพิ่มตัวเลือก Filter ในการค้นหาตามประเภทการจัดเส้นทาง (System/Custom), ค้นหาตามสถานะการใช้งาน (Active/Inactive) และกล่องค้นหาตามชื่อ/ข้อมูลเส้นทาง
-  * มีระบบตรวจสอบความถูกต้องข้อมูล เช่น ตรวจสอบ CIDR format สำหรับเครือข่ายปลายทาง, ตรวจสอบรูปแบบ IP Gateway และค่า Metric
-  * มีปุ่มจำลองการนำการเปลี่ยนแปลงไปปรับใช้จริงผ่าน "Apply Routing Config" สตรีมตรงเข้า Kernel ตารางเส้นทาง
-
-* **พัฒนาหน้าจอและระบบจัดการ DHCP Server [สำเร็จ]**:
-  * พัฒนาหน้าจัดการ DHCP Server ครอบคลุมการเปิด/ปิดบริการ ตั้งค่า IP Pool, Gateway, DNS, IP Range และ Lease Time
-  * รองรับการทำ IP Reservations (จองไอพีตาม MAC) และมีตารางแสดงรายการ Active Leases ปัจจุบัน
-
-* **พัฒนาหน้าจอการตั้งค่ารวมถึงการดูแลรักษา (Settings & Maintenance) [สำเร็จ]**:
-  * พัฒนาหน้า [SettingsMaintenance.tsx](file:///home/sapray/dev/pigate/frontend/src/pages/SettingsMaintenance.tsx) สไตล์ Premium Design (รองรับ Dark/Light Mode) แบ่งออกเป็นแท็บ Setup Settings และ Maintenance
-  * แท็บ Setup Settings: รองรับฟอร์มเปลี่ยนรหัสผ่านแอดมิน, ตั้งค่า Time Zone, และการตั้งค่าซิงค์เวลาอัตโนมัติ (NTP Server)
-  * แท็บ Maintenance: จัดการปุ่มรีบูต (Reboot) พร้อม Overlay นับถอยหลังจำลอง, ปุ่มปิดระบบ (Shutdown) พร้อม Overlay หน้าจอระบบปิดที่กด Power On กลับมาได้, ฟังก์ชันดาวน์โหลดสำรองข้อมูลเป็นไฟล์ JSON และนำเข้าฟื้นคืนข้อมูล รวมถึงตารางสั่ง Restart บริการย่อย (`nftables`, `isc-dhcp-server`, `NetworkManager`)
-
-* **พัฒนาโครงสร้าง Service API Layer และเชื่อมต่อครบทุกหน้าจอ (Service Layer & Pages Integration) [สำเร็จ]**:
-  * ออกแบบระบบสวิตช์ควบคุม `IS_MOCK_MODE` ป้องกันสเตตหายเมื่อรีเฟรชหน้าเว็บด้วยระบบ LocalStorage Mocking ผ่าน [config.ts](file:///home/sapray/dev/pigate/frontend/src/services/config.ts)
-  * พัฒนารายการ Service ครบทั้ง 9 บริการหลัก ได้แก่ `addressService`, `serviceObjectService`, `policyService`, `staticRouteService`, `dhcpService`, `interfaceService`, `systemService`, `dashboardService`, และ `authService`
-  * ปรับแก้หน้าจอ UI ทุกหน้า (`Addresses`, `Services`, `FirewallPolicy`, `StaticRoutes`, `DhcpServer`, `Interfaces`, `SettingsMaintenance`, `Dashboard`, `Login`) ให้ดึงข้อมูลและทำรายการแบบ Asynchronous ผ่าน Service API Layer ทั้งหมด
-  * ตรวจสอบโค้ดบิวด์ระดับ Production ด้วย `yarn build` ผ่าน 100% ไม่มีข้อผิดพลาดของ TypeScript หรือ Syntax Warnings
-
-* **พัฒนา Go API Backend & ระบบทดสอบอัตโนมัติ (Go Backend & Automated Testing) [สำเร็จ]**:
-  * พัฒนาโครงสร้างตัวควบคุมหลังบ้านหลัก (Go v1.26.4) สื่อสารกับฐานข้อมูล SQLite (`modernc.org/sqlite` แบบไม่มี CGO) และจำลองคำสั่งจัดการไฟร์วอลล์/การเชื่อมต่อระดับ Kernel
-  * ติดตั้งระบบรักษาความปลอดภัยระดับตัวรับส่ง API ได้แก่ CORS (อนุญาตหน้าจอพอร์ต 5173), Middleware ตรวจสอบโทเค็น (Bearer token auth) และ Rate Limiting ป้องกันการสุ่มล็อกอิน
-  * เชื่อมต่อหน้าจอ React Frontend เข้ากับ Go API จริงที่พอร์ต `8081` สำเร็จลุล่วง ข้อมูลสามารถรับส่งได้จริงและจัดเก็บลงฐานข้อมูล `pigate.db`
-  * พัฒนาและติดตั้งชุดทดสอบอัตโนมัติ (Automated Testing) ครบถ้วนทั้ง Unit tests (ทดสอบคิวรีฐานข้อมูลจำลอง) และ Integration tests (จำลองยิง HTTP ตรวจสอบ JSON payload และ Auth validation) ซึ่งผ่านการรันคอมไพล์และทดสอบสำเร็จ 100%
-  
-* **สเตปที่ 6: Kernel Integration ระยะที่ 2 — Real Firewall & Routing (กำลังดำเนินการ)**:
-  * **[สำเร็จ]** พัฒนา `RealRouting` ใน [internal/kernel/real_routing.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_routing.go) โดยใช้ `netlink.RouteAdd/Del/Replace` ในการเชื่อมกับ Linux Routing Table โดยตรง ไม่ผ่าน shell command พร้อมรองรับรายละเอียด Scope, Metric, Protocol, Src IP และระบบจัดเรียงความสำคัญของ Kernel Route
-  * **[สำเร็จ]** สร้าง `RealFirewall` ใช้ `github.com/google/nftables` ในการจัดการกฎไฟร์วอลล์จริง (รวมถึงการแปล Address Objects และ Service Objects ลง Netlink nftables rules)
-  * **[สำเร็จ]** พัฒนาระบบ NAT (Network Address Translation / IP Masquerade): สำหรับแชร์อินเทอร์เน็ตให้วง LAN โดยทำการตรวจหาการ์ดเครือข่ายขาออกที่มีบทบาทเป็น WAN (`Role = WAN`) จากฐานข้อมูลอัตโนมัติ และแมปกฎ Masquerade ลงในตาราง `pigate_nat` (`postrouting` hook) ในเคอร์เนล
-  * **[สำเร็จ]** ปรับปรุงความปลอดภัยจำกัดสิทธิ์ (Security Isolation): แยกส่วนกฎนโยบายผู้ใช้ให้ทำงานบน `forward` chain เท่านั้น ป้องกันการเปิดช่องโหว่การเข้าถึงบริการเว็บควบคุมและ SSH ของตัว Firewall โดยไม่ได้เจตนา
-  * **[กำลังดำเนินการ]** พัฒนาระบบความเข้ากันได้กับ Docker (Docker Compatibility):
-    * **[สำเร็จ]** เพิ่ม CLI flag `-docker-compat` (เปิด/ปิด อัตโนมัติ) เพื่อให้ใส่กฎเว้นการบล็อก (Bypass) อินเทอร์เฟซ `docker0` และบริดจ์เน็ตเวิร์กจำลอง `br-*`
-    * **[TODO]** ระยะถัดไป: พัฒนา API และระบบตั้งค่า (Settings Toggle) บนหน้า Web UI ของแอดมิน เพื่อควบคุมสถานะผ่านตารางการตั้งค่าระบบใน SQLite
-  * **[TODO]** พัฒนาระบบรักษาความปลอดภัยสำหรับการทำงานพลาด (Fail-Safe Rollback / Test & Rollback): เพื่อป้องกันปัญหากรณีแอดมินบล็อกพอร์ตเว็บควบคุมหรือ SSH จนล็อกตัวเองออก (Admin Lockout) โดยถ้า Apply กฎใหม่แล้วไม่มีการยืนยัน Confirm จากเบราว์เซอร์ภายใน 30 วินาที ระบบจะดึงกฎเก่าขึ้นมารีสโตร์ใช้งานแทนทันที
-  * **[TODO]** ติดตั้งระบบสถิติกฎไฟร์วอลล์ (Rule Counters): ใช้ `counter` ของ nftables ในการนับจำนวน Hit (packets) และขนาดปริมาณทราฟฟิก (bytes) บนกฎแต่ละข้อ โดยสืบค้นสดผ่าน Netlink (`GetRules`) แล้วส่งเป็น Live telemetry ไปหน้าบ้านแทนการเขียนลง SQLite ตลอดเวลาเพื่อถนอมอายุของ SD Card
-  * **[TODO]** พัฒนาระบบประมวลผลล็อกความปลอดภัยสด (Firewall Logs Ring-Buffer Stream): ดึงข้อมูลบันทึก Kernel messages จาก `/dev/kmsg` หรือ Journald ที่มีการพ่นข้อความ Prefix `[PiGate]` ขึ้นมาเก็บพักใน In-Memory Ring Buffer บนแรมของบอร์ดเพื่อส่งไปสตรีมสดแสดงผลบนหน้า Dashboard
-  * **[TODO]** ทดสอบระบบไฟร์วอลล์และการจัดเส้นทางบนบอร์ด Raspberry Pi 5 จริงร่วมกับสิทธิ์ความสามารถ Linux capabilities (`sudo setcap cap_net_admin,cap_net_raw+ep ./pigate`) เพื่อเปิดใช้งานโหมดอ่านอย่างเดียว (Read-Only) ในฝั่งหลังบ้าน ป้องกันการทำ CRUD เพื่อความปลอดภัยในบางสภาวะแวดล้อม
-    * **ระบบสแกนคลื่นไร้สายที่รัดกุม (Wireless Scan Validation) [สำเร็จ]:** เพิ่มการกรองและยืนยันประเภทของการ์ดเชื่อมต่อเครือข่ายก่อนทำการค้นหาสัญญาณ Wi-Fi (Wi-Fi Scan) เพื่อบังคับให้ทำรายการเฉพาะการ์ดที่ระบุประเภทเป็น `wireless` เท่านั้น
-    * **ระบบจัดการ DNS เชิงลึกแบบรวมศูนย์ (Centralized DNS Management) [สำเร็จ]:** เพิ่มการรองรับ API การตั้งค่าเซิร์ฟเวอร์ DNS ทั้งแบบคงที่และแบบรับไดนามิก พร้อมทั้งการเชื่อมโยงระบบ Local Domain Name
-    * **การฝังหน้าจอ React Frontend เข้ากับ Go Backend (Frontend Embedding) [สำเร็จ]:** พัฒนาการฝังไฟล์หน้าบ้าน (`dist/`) เข้าไปใน Go backend binary ผ่าน `go:embed` ใน [internal/api/embed.go](file:///home/sapray/dev/pigate/backend/internal/api/embed.go) ส่งผลให้ตัวแอปพลิเคชันทำงานเป็น Single Binary ที่สามารถเสิร์ฟหน้าจอผู้ใช้งานได้ด้วยตัวเองและยังคงรองรับ Routing แบบ Client-side (SPA fallback)
-    * **ระบบจัดการและลบอินเตอร์เฟสจำลอง (Interface CRUD & DB Order Fix) [สำเร็จ]:** เพิ่มระบบ API สำหรับ Delete/Reset การตั้งค่าการ์ดเครือข่ายจำลอง เพื่อความยืดหยุ่นในการทดสอบ และปรับแก้อันดับอาร์กิวเมนต์คิวรีในการซิงค์ข้อมูลลงฐานข้อมูลให้ถูกต้อง
-    * **การตั้งค่ารายละเอียดอินเตอร์เฟสเครือข่ายจริงผ่าน Netlink (Netlink IP Configuration) [สำเร็จ]:** พัฒนา `ConfigureInterface` ใน [internal/kernel/real_network.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_network.go) ให้ทำการล้างค่า IP/DHCP เก่า (ยกเลิก dhclient/dhcpcd) และลงทะเบียนการตั้งค่า static IP, netmask, default gateway บนการ์ดเครือข่ายลินุกซ์ด้วย Netlink
-    * **ระบบตั้งค่า Wi-Fi Client และการสื่อสารผ่าน UNIX Domain Socket [สำเร็จ]:** พัฒนา REST API และระบบเขียนคอนฟิก `wpa_supplicant` แบบอะตอมมิก พร้อมติดตั้งระบบสื่อสารผ่าน Control Socket (UNIX Domain Socket) ในรูปแบบ Datagram (`unixgram`) เพื่อเชื่อมต่อและดูสถานะจริงแบบเรียลไทม์ (SSID, State, BSSID, Active MAC)
-    * **ระบบสุ่ม MAC Address แบบดั้งเดิม (Native MAC Randomization) [สำเร็จ]:** รองรับการสุ่ม MAC Address ด้วยฟังก์ชันในตัวของ `wpa_supplicant` (`preassoc_mac_addr=1` และ `mac_addr=1`) โดยส่งผลทั้งขั้นตอนสแกนและเชื่อมต่อ และอัปเดตหน้า UI ในการสลับโหมดและแสดงผล MAC จริงที่ใช้งานอยู่
-    * **การทำความสะอาดโครงสร้างเครือข่ายล้าสมัย (Network Struct Cleanup) [สำเร็จ]:** ทำการถอนฟิลด์ `dns1` และ `dns2` ที่ไม่ใช้งานออกจากการตั้งค่าการ์ดเครือข่าย เพื่อไปใช้ระบบจัดส่ง DNS แบบรวมศูนย์อย่างสมบูรณ์
-    * **การสร้างเอกสารอ้างอิงสำหรับผู้พัฒนา (Developer Portal generation) [สำเร็จ]:** สร้างเอกสารอ้างอิงสำหรับผู้พัฒนาทั้งรูปแบบ HTML และ Markdown ในโฟลเดอร์ `docs/` เพื่อสรุปแนวทางความปลอดภัย กฎไฟร์วอลล์ และตาราง DHCP/Routing
-    * **ระบบยืนยันสิทธิ์เซสชันและการบังคับเปลี่ยนรหัสผ่านครั้งแรก (Active Session Verification & Force Password Change Enforcement) [สำเร็จ]:**
-      * ฝั่งหลังบ้าน: เพิ่ม API Endpoint `/api/auth/session` สำหรับยืนยันความมีอยู่และหมดอายุของเซสชันที่เชื่อมต่อ และใน `AuthMiddleware` มีการตรวจสอบสิทธิ์รหัสผ่านแรกเริ่ม (`IsInitial` ใน DB) เพื่อจำกัดสิทธิ์ (ส่งกลับ StatusForbidden 403 พร้อม payload `mustChangePassword`) ทุก Endpoint ยกเว้นเปลี่ยนรหัสผ่าน ออกจากระบบ และตรวจสอบเซสชัน โดยผู้ใช้หลักเปลี่ยนชื่ออ้างอิงจาก "admin" เป็น "pigate"
-      * ฝั่งหน้าบ้าน: พัฒนาการตรวจสอบเซสชันบน Backend ทุกครั้งที่เริ่มดาวน์โหลด/เมานต์หน้าเว็บเพื่อป้องกัน Session Bypass พร้อมระบบ Route Guard และจัดทำหน้าจอเตือนเปลี่ยนรหัสผ่านบังคับ `/change-password` (ForceChangePassword.tsx)
-    * **การคัดแยกการ Seeding ข้อมูล Mock/Real (Database Seeding Isolation & Frontend Proxy Config) [สำเร็จ]:**
-      * เพิ่มแฟล็ก `mockOS` จากหน้าหลักส่งเข้าฟังก์ชัน `InitDB` เพื่อป้องกันการ Seed ข้อมูลพอร์ตแลน/Wi-Fi จำลอง (eth0, wlan0) ลงฐานข้อมูล SQLite ในโหมด Production (`-mock=false`) ทำให้ระบบรวบรวมข้อมูลจากการ์ดจริงบนบอร์ดเท่านั้น
-      * กำหนดสิทธิ์ตั้งค่าการทำ Proxy พาร์ท `/api` ไปยัง `http://localhost:2479` ใน `vite.config.ts` ของหน้าบ้าน ทำให้การพัฒนาเชื่อมต่อ API บน React dev server ทำได้สะดวก
-    * **การป้องกันความปลอดภัยฐานข้อมูลและย้ายตำแหน่งไบนารีระบบ (Gitignore database bypass & Binary root placement) [สำเร็จ]:**
-      * เพิ่มการละเว้นไฟล์ข้อมูล SQLite (`*.db`, `*.db-shm`, `*.db-wal`) และไบนารีรัน `pigate` เข้าไปใน `.gitignore` เพื่อความมั่นคงปลอดภัย
-      * ปรับแต่งสคริปต์คอมไพล์ระบบ `build.sh` ให้คัดลอกไฟล์รันไบนารีมาที่ตำแหน่งรูทโฟลเดอร์ในชื่อ `pigate` เพื่อรันงานได้ง่ายขึ้น
-
-
-* **แก้ไขข้อเสนอแนะความสำคัญสูง (Priority High Recommendations) จากผลการรีวิวหน้าบ้าน [สำเร็จ]**:
-  * **แทนที่ Native Dialogs:** พัฒนาและติดตั้ง [AlertDialogProvider.tsx](file:///home/sapray/dev/pigate/frontend/src/components/AlertDialogProvider.tsx) เพื่อใช้ Custom AlertDialog ของ shadcn/ui ครอบคลุมการเตือนและการยืนยันคำสั่งทั้งหมด แทนการเรียกใช้ `alert()` และ `confirm()` ดั้งเดิมของเบราว์เซอร์
-  * **ระบบตรวจสอบค่า IP Address (Strict Validation):** อัปเดตและติดตั้ง Regex/Logic ตรวจสอบความถูกต้องของ IPv4, CIDR, และ IP Range โดยเช็กค่า Octet ละเอียด 0-255 ใน [utils.ts](file:///home/sapray/dev/pigate/frontend/src/lib/utils.ts) และนำไปใช้ตรวจสอบความมั่นคงปลอดภัยของอินพุตในทุกหน้ารวมถึง Static Routes, DHCP Server, Addresses และ Interfaces
-  * **ตารางแบบ Responsive:** ครอบตารางแสดงข้อมูลกฎความปลอดภัย (Firewall Policies) และตารางพอร์ตเชื่อมต่อ (Interfaces) ด้วย `<div className="overflow-x-auto w-full">` ป้องกันเนื้อหาล้น (overflow) เมื่อแสดงผลบนหน้าจอขนาดเล็ก/สมาร์ทโฟน
+### 1.3 การทำงานเชื่อมต่อระบบปฏิบัติการ (Kernel Integration)
+* **Real Network Interface Control (Netlink & wpa_supplicant) [สำเร็จ]:**
+  * จัดการเปิด/ปิดอินเตอร์เฟส (`ToggleInterface`) ด้วย `github.com/vishvananda/netlink` สื่อสารผ่าน Netlink Socket โดยตรง ป้องกัน Command Injection
+  * พัฒนา `ConfigureInterface` ใน [real_network.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_network.go) ล้างการตั้งค่าเก่า และลงทะเบียน IP, Netmask, Gateway บน Linux Interface
+  * การบันทึกและเขียนไฟล์การเชื่อมต่อ `wpa_supplicant` แบบอะตอมมิก (Atomic writes) เพื่อความปลอดภัย
+  * พัฒนาการค้นหาคลื่น Wi-Fi ด้วย Netlink (nl80211) สแกนผ่านไลบรารี `github.com/mdlayher/wifi` โดยตรง พร้อมระบบจัดลำดับเครือข่ายตามระดับความแรงสัญญาณ และกรองเฉพาะการ์ดแบบ wireless
+  * ระบบตรวจสอบและแสดงผลข้อมูลสถานะเชื่อมต่อไร้สายจริง (SSID, State, BSSID, Active MAC, frequency, KeyMgmt, WiFi Gen) ผ่าน UNIX domain control socket ของ `wpa_supplicant` (`unixgram` socket)
+  * รองรับระบบสุ่ม MAC Address (MAC Address Randomization) ผ่านกลไกตัวสุ่มดั้งเดิมของ `wpa_supplicant` (`preassoc_mac_addr=1` และ `mac_addr=1`)
+* **Real Routing Table Control (Netlink) [สำเร็จ]:**
+  * พัฒนา `RealRouting` ใน [real_routing.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_routing.go) เพิ่ม ลบ และปรับปรุงเส้นทางเครือข่ายบนตาราง Routing ของ Linux โดยตรงผ่าน Netlink
+  * ปรับระดับการประมวลผลให้รับรอง Scope, Metrics, Protocol, IP แหล่งต้นทาง และระบบคัดแยก/ล็อกการแก้ไขเส้นทางของระบบ (System Routes)
+* **Netlink Event Monitor & Routing Self-Healing [สำเร็จ]:**
+  * พัฒนา `NetlinkMonitor` ใน [netlink_monitor.go](file:///home/sapray/dev/pigate/backend/internal/service/netlink_monitor.go) คอยดักฟังการแจ้งเตือนการเปลี่ยนแปลง Network Link, IP Address และ Route จาก Kernel
+  * ติดตั้งระบบ Debouncer (500ms) เพื่อรวมกลุ่มเหตุการณ์ และสั่งกระตุ้นการประสานงาน (Reconcile) นำเอาคอนฟิก Static Route จาก SQLite ไปเขียนทับลง Kernel อัตโนมัติ ป้องกันการดริฟต์เครือข่ายภายนอก
+* **Real Firewall Rules Integration (nftables via Netlink) [สำเร็จ]:**
+  * พัฒนา `RealFirewall` ใน [real_firewall.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_firewall.go) โดยใช้ `github.com/google/nftables` ในการคุยกับเคอร์เนลผ่าน Netlink Socket
+  * สร้างตาราง `pigate` (inet family) ควบคุมกฎ Dynamic Rules ใน `forward` chain
+  * สร้างโครงสร้างห่วงโซ่ตรวจเช็คความปลอดภัยขั้นพื้นฐาน (established/related accepts, invalid drops, broadcast drops, default drops)
+  * ออกแบบและติดตั้งระบบแชร์อินเทอร์เน็ต NAT (Postrouting/Masquerading) บนการ์ดขาออกที่ถูกระบุว่าเป็น `WAN` (`Role = WAN`) โดยอัตโนมัติลงในตาราง `pigate_nat`
+  * ออกแบบระบบป้องกัน IP Spoofing ผ่าน `pigate-not-local` พร้อมระบุขอบเขตความปลอดภัยจำกัดสิทธิ์ (Security Isolation) ของกฎผู้ใช้ให้ทำงานเฉพาะใน `forward` เท่านั้น (ป้องกันการบล็อกเว็บควบคุมหรือ SSH)
+  * ระบบแอดมินจำกัดสิทธิ์เข้าถึง (Admin Access Rules) สำหรับจัดการสิทธิ์ PING, HTTP (80/2479), HTTPS (443), และ SSH (22) รายอินเตอร์เฟส
+  * สนับสนุนโหมดหลบเลี่ยงความขัดแย้งของ Docker (Docker Compatibility bypass) ด้วย CLI flag `-docker-compat` เพื่อข้ามการบล็อกการ์ด `docker0` และบริดจ์เสมือน `br-*` อัตโนมัติ
 
 ---
 
 ## 2. ปัญหาและประเด็นที่ต้องพิจารณาในปัจจุบัน (Current Issues & Limitations)
 
 > [!NOTE]
-> ### 🟢 ประเด็นความมั่นคงปลอดภัยได้รับการแก้ไขแล้ว (Security Hardening - Resolved)
-> จุดอ่อนทางความปลอดภัยได้รับการแก้ไขเรียบร้อยแล้ว:
-> 
-> 1. **Auth Bypass Backdoor (CWE-259 & CWE-287 - Resolved)**: โค้ดตรวจสอบสิทธิ์การล็อกอินในฟังก์ชัน `HandleLogin` และ `HandleChangePassword` ใน [handlers.go](file:///home/sapray/dev/pigate/backend/internal/api/handlers.go) ถูกนำเอาโค้ดข้ามการเช็ก Bcrypt ออกไปทั้งหมดแล้ว ระบบใช้การยืนยันรหัสผ่านแบบจริงเท่านั้น
-> 2. **CORS Mismatch with Credentials (CWE-346 - Resolved)**: ได้แก้ไขใน [middleware.go](file:///home/sapray/dev/pigate/backend/internal/api/middleware.go) ให้ทำการตั้งค่า `Access-Control-Allow-Credentials: true` เฉพาะ origin ที่ได้รับอนุญาตเท่านั้น (หลีกเลี่ยงการใช้ wildcard `*`)
+> **ความปลอดภัยของระบบหลังบ้าน (Backend Security Hardening):**
+> * ได้ทำการแก้ปัญหาความปลอดภัยร้ายแรงเรียบร้อยแล้ว เช่น การปิด backdoor การตรวจสอบสิทธิ์ Bcrypt ใน `HandleLogin` และแก้ไขสิทธิ์ CORS Credentials Origin เพื่อรักษาสมดุลความมั่นคงปลอดภัยตามมาตรฐาน Web API
+> * ปิดบังการส่งรหัสผ่าน Wi-Fi ทุกรูปแบบกลับมาที่ API Response โดยใช้การ Masking เป็น `"••••••••"` ใน API ขาออก และกำหนดให้ข้ามการบันทึกทับรหัสผ่านหากฝั่งหน้าบ้านส่งค่า Masked เข้ามา (PATCH Method)
 
-> [!NOTE]
-> **สถานะปัจจุบันพร้อมทดสอบจำลองแล้ว (Mock OS Interface Verified):**
-> ระบบฐานข้อมูล SQLite, ส่วนควบคุม REST API และสิทธิ์โทเค็นได้รับการทดสอบร่วมกันกับหน้าจอ UI จริงบนเบราว์เซอร์เรียบร้อยแล้ว ปัจจุบันยังไม่พบปัญหาขัดข้องในฝั่งการทำงานจำลอง (Mock OS Mode) ส่วนแผนงานระยะถัดไปคือการเริ่มเตรียมระบบการรันงานระดับ Kernel จริงบน Linux Host (บอร์ด Raspberry Pi 5) เมื่ออุปกรณ์และสิทธิ์ Cap_Net_Admin พร้อมใช้งาน
+> [!IMPORTANT]
+> **ข้อจำกัดในการทดสอบระดับ Kernel Integration (Kernel Mode Limitations):**
+> * การเข้าถึงเพื่อจัดการ IP Address, Routing Table, และ nftables ผ่าน Netlink จะต้องใช้สิทธิ์ของระบบปฏิบัติการระดับสูง (`root` หรือการตั้งค่า Linux Capabilities ในแบบ `cap_net_admin,cap_net_raw+ep`)
+> * ในระหว่างการพัฒนาบนเครื่องคอมพิวเตอร์ทั่วไป (Development PC) จะเปิดใช้งานโหมดจำลอง (`-mock=true`) เพื่อเก็บสเตตทำงานทั้งหมดไว้บน SQLite และ Memory เสมอ โดยข้อมูลแลน/Wi-Fi (eth0, wlan0) จะไม่ถูก Seeding ในโหมดจริงเพื่อป้องกันการทับซ้อนกับการ์ดจริงของเครื่องเซิร์ฟเวอร์
+> * ฟีเจอร์ DNS Server, DHCP Server, Counter และ Log Streaming ปัจจุบันได้รับการจำลองพฤติกรรมบน UI และจัดเก็บข้อมูลลง SQLite เรียบร้อย แต่รอการพัฒนาตัวเชื่อมแกนหลักระบบปฏิบัติการ (Real OS integration write) ในอนาคต
 
 ---
 
 ## 3. แผนการดำเนินงานระยะถัดไป (Roadmap & Next Steps)
 
-* **สเตปที่ 1: ติดตั้งไลบรารีเพื่อเริ่มระบบนำทางและข้อมูลจำลอง** `[เสร็จสิ้น]`
-* **สเตปที่ 2: พัฒนาเลย์เอาต์หลักของแอดมินพอร์ทัล (Shell Layout)** `[เสร็จสิ้น]`
-* **สเตปที่ 3: พัฒนาหน้า Dashboard (`01-dashboard.html`)** `[เสร็จสิ้น]`
-* **สเตปที่ 4: พัฒนาหน้าจอการตั้งค่าเครือข่ายและความปลอดภัย**:
-  * จัดสร้างหน้า Firewall Policies พร้อมติดตั้งความสามารถในการลากจัดเรียงลำดับความสำคัญ (Drag & Drop ด้วย `@dnd-kit`) และปรับปรุงฟอร์มโมดอลให้ใช้งาน Multiple Selection Combobox แบบถูกต้องตามคู่มืออ้างอิงของ shadcn `[เสร็จสิ้น]`
-  * พัฒนาหน้าจอการจัดการ Physical & Virtual Interfaces (eth0, wlan0) และระบบจำลองสำหรับคลิกแสกนหาคลื่น Wi-Fi (SSID Scanner) พร้อมระบบสุ่ม MAC Address ด้วย wpa_supplicant (Native MAC Randomization) และเชื่อมต่อ Wi-Fi WPA Client จริง `[เสร็จสิ้น]`
-  * พัฒนาหน้าจอจัดการที่อยู่ไอพี (Address Objects) และบริการพอร์ต (Service Objects) พร้อมระบบจำลองพรีวิว `nftables` `[เสร็จสิ้น]`
-  * พัฒนาหน้าจอและระบบ Static Route สำเร็จเรียบร้อย `[เสร็จสิ้น]`
-  * พัฒนาหน้าจอและระบบ DHCP Server สำเร็จเรียบร้อย `[เสร็จสิ้น]`
-  * พัฒนาหน้าจอและระบบ Settings & Maintenance สำเร็จเรียบร้อย `[เสร็จสิ้น]`
-  * ทยอยพัฒนาส่วนหน้าจออื่น ๆ ได้แก่ หน้าล็อกอินจริง `[เสร็จสิ้น]`
-* **สเตปที่ 5: จัดระเบียบการเรียกใช้ API และความปลอดภัย**:
-  * พัฒนาโครงสร้าง Service API Layer รองรับ LocalStorage Mocking และ Go API Swappable `[เสร็จสิ้น]`
-  * แก้ไขข้อเสนอแนะความสำคัญสูง (Priority High) จากผลการรีวิวหน้าบ้าน (ระบบ Custom Alert/Confirm, Strict IP Validation 0-255, Responsive Tables) `[เสร็จสิ้น]`
-  * ทดสอบการทำงานของปุ่ม ฟังก์ชัน CRUD และ UI ต่างๆ บนเบราว์เซอร์จริง (Runtime Manual Verification & UI Validation) `[เสร็จสิ้น]`
-  * ตรวจสอบความปลอดภัยระดับเบื้องต้น เช่น การรับมือเมื่อเซสชันหมดอายุ, การกรองฟิลด์ข้อมูลนำเข้า (Sanitization) และการเข้ารหัสการสื่อสาร `[เสร็จสิ้น]`
-  * เชื่อมต่อ API จริงกับฝั่ง Go Backend และระบบการอัปเดตแบบ Real-time ด้วย Server-Sent Events (SSE) เมื่อฝั่ง API พร้อมใช้งาน `[เสร็จสิ้น]`
-  * เพิ่มเติมฟีเจอร์รันระบบหลังบ้านโดยดึงข้อมูลจริงจาก Kernel แต่อัปเดตลงเฉพาะฐานข้อมูล (-mock-from-real) พร้อมระบบจำกัดสิทธิ์อ่านอย่างเดียว (-disable-edit), ระบบ DNS และการตรวจสอบ Wifi Scan พร้อมปรับปรุง API Specs `[เสร็จสิ้น]`
-  * พัฒนาระบบตรวจสอบความถูกต้องของเซสชัน (Active Session Verification) และระบบบังคับเปลี่ยนรหัสผ่านแรกเริ่มเพื่อความปลอดภัย (Forced Password Change Enforcement) ทั้งฝั่งหลังบ้านและหน้าบ้าน `[เสร็จสิ้น]`
-  * คัดแยกการ Seed ข้อมูลเครือข่ายจำลองตามโหมดใช้งาน และตั้งค่า Proxy การพัฒนาฝั่งหน้าบ้าน `[เสร็จสิ้น]`
-  * ปรับแต่งสคริปต์คอมไพล์ build.sh และการละเว้นไฟล์ข้อมูลสำคัญลง Gitignore `[เสร็จสิ้น]`
+เพื่อให้โปรเจกต์บรรลุเป้าหมายการทำงานระดับ Kernel สมบูรณ์แบบ รายการและแผนการทำงานถัดไปถูกระบุไว้ดังนี้:
 
-* **พัฒนา Kernel Integration ระยะที่ 1 — Real NetworkManager ผ่าน Netlink Socket [สำเร็จ]**:
-  * สร้างไฟล์ [internal/kernel/real_network.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_network.go) implement `RealNetwork struct` ตาม `NetworkManager` interface สำหรับรันบน Linux production จริง
-  * `ToggleInterface` ใช้ `github.com/vishvananda/netlink` — `netlink.LinkSetUp/Down()` สื่อสารกับ kernel ผ่าน Netlink Socket โดยตรง ไม่ผ่าน shell command (ป้องกัน Command Injection ตามข้อ 4.1 ใน tech_stack_design.md)
-  * `ScanWifi` ใช้ `iw dev scan` (primary) และ `nmcli` (fallback) โดยไม่ต้องการ root
-  * อัปเดต [cmd/pigate/main.go](file:///home/sapray/dev/pigate/backend/cmd/pigate/main.go) ให้ production path (`--mock=false`) ใช้ `kernel.NewRealNetwork()` แทน MockNetwork
-  * เพิ่มเติมระบบตรวจจับ Netlink Subtypes (เช่น loopback, bridge, vlan ฯลฯ) เพื่อแสดงผลใน UI หน้าบ้าน
-  * เพิ่มปุ่ม Refresh ในหน้า Interfaces และระบบคงการตั้งค่า (Config retention) ของการ์ดเครือข่ายไว้แม้ว่าจะ offline/sync
-  * ทดสอบ compile ผ่าน 100% ด้วย `go build ./...`
-  * ทดสอบรันจริงด้วย `./pigate-backend -port=8081 -mock=false` ผ่านสำเร็จ (ต้องการ `cap_net_admin` บน RPi5)
+### 3.1 งานเชื่อมโยงระดับเคอร์เนลและระบบเครือข่ายเพิ่มเติม (Pending Kernel Integration Tasks)
+* [ ] **พัฒนาระบบรักษาความปลอดภัยป้องกันการล็อกตัวเองออก (Fail-Safe Rollback / Test & Rollback):**
+  * พัฒนากลไกรักษาความปลอดภัยในกรณีผู้ดูแลระบบตั้งกฎไฟร์วอลล์ผิดพลาดจนบล็อกพอร์ตเว็บควบคุมหรือ SSH ของตัว PiGate เอง
+  * เมื่อสั่งยืนยัน Apply กฎใหม่ ระบบหลังบ้านจะตั้งเวลาถอยหลัง 30 วินาที หากเบราว์เซอร์ของผู้ใช้ไม่มีการส่งสัญญาณยอมรับ (Confirm/Keepalive) กลับมา ระบบจะดึงข้อมูลคอนฟิกชุดเก่าขึ้นมาบังคับรีสโตร์ทันที
+* [ ] **พัฒนาระบบและหน้าจอสลับ Docker Compatibility บน Web UI:**
+  * พัฒนา API และปุ่มสลับสถานะ (Settings Toggle) บนหน้าเว็บของแอดมิน เพื่อควบคุมสถานะการเปิด/ปิด Docker Compatibility (`-docker-compat`) โดยตรงผ่านฐานข้อมูล SQLite แทนการระบุผ่าน CLI flag ตอนสตาร์ทโปรแกรม
+* [ ] **เชื่อมโยงการประยุกต์ใช้คอนฟิกตอนบูตระบบ (Startup Apply Integration):**
+  * ยกเลิกการคอมเมนต์ในไฟล์ `main.go` เพื่อเปิดใช้งานกระบวนการนำเอาค่าคอนฟิกของ Firewall (nftables), DHCP Server และ DNS Settings ล่าสุดจากฐานข้อมูล SQLite ไปลงทะเบียนติดตั้งบนเคอร์เนลโดยอัตโนมัติขณะตัวเซิร์ฟเวอร์หลังบ้านกำลังบูตสตาร์ท
+* [ ] **พัฒนาระบบ DHCP Server (Real DHCP Manager):**
+  * พัฒนาระดับชั้นเขียนคอนฟิก (Real Config Writer) เพื่อจัดส่งไฟล์และคำสั่งสตาร์ทบริการให้กับ `dnsmasq` หรือ `isc-dhcp-server` บน Linux Host
+* [ ] **พัฒนาระบบ DNS Server (Real DNS Manager):**
+  * พัฒนาระดับชั้นจัดการแก้ไขไฟล์ `/etc/resolv.conf` หรือระบบจัดการ Local DNS Resolution บนเซิร์ฟเวอร์จริง
+* [ ] **ติดตั้งระบบสถิติกฎไฟร์วอลล์จริง (Live Rule Counters Telemetry):**
+  * เรียกใช้ข้อมูล Hit packet และ byte counters จาก `expr.Counter` บน nftables rules นำเสนอเป็นข้อมูล Telemetry เรียลไทม์ผ่าน API ไปแสดงผลในตารางกฎหน้าเว็บโดยไม่ต้องสั่งเขียนบันทึกลง SD card ของบอร์ด
+* [ ] **พัฒนาระบบล็อกความปลอดภัยสตรีมสด (Firewall Logs Stream):**
+  * พัฒนาตัวอ่านข้อมูล Kernel Logs (`/dev/kmsg` หรือ Journald) ที่มีข้อความ Prefix เป็น `[PiGate]` นำเข้าสู่ In-Memory Ring Buffer และจัดส่งเป็นสตรีมข้อมูลสด (Server-Sent Events) ไปแสดงบนหน้า Dashboard ของแอดมิน
 
-* **สเตปที่ 6: Kernel Integration ระยะที่ 2 — Real Firewall & Routing (TODO)**:
-  * **[สำเร็จ]** พัฒนา `RealRouting` ใน [internal/kernel/real_routing.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_routing.go) โดยใช้ `netlink.RouteAdd/Del/Replace` ในการเชื่อมกับ Linux Routing Table โดยตรง ไม่ผ่าน shell command พร้อมรองรับรายละเอียด Scope, Metric, Protocol, Src IP และระบบจัดเรียงความสำคัญของ Kernel Route
-  * **[กำลังดำเนินการ]** สร้าง `RealFirewall` ใช้ `github.com/google/nftables` ในการจัดการกฎไฟร์วอลล์จริง (ปัจจุบันวางโครงสร้างพื้นฐานและเชื่อมต่ออินเทอร์เฟซเพื่อรับรายการ Network Interface เพื่อคัดกรองพอร์ตและสิทธิ์เข้าถึงแล้ว)
-  * **[TODO]** พัฒนาระบบ NAT (Network Address Translation / IP Masquerade): สำหรับแชร์อินเทอร์เน็ตให้วง LAN โดยทำการตรวจหาการ์ดเครือข่ายขาออกที่มีบทบาทเป็น WAN (`Role = WAN`) จากฐานข้อมูลอัตโนมัติ และแมปกฎ Masquerade ลงในตาราง `pigate_nat` (`postrouting` hook) ในเคอร์เนล
-  * **[กำลังดำเนินการ]** พัฒนาระบบความเข้ากันได้กับ Docker (Docker Compatibility):
-    * **[สำเร็จ]** เพิ่ม CLI flag `-docker-compat` (เปิด/ปิด อัตโนมัติ) เพื่อให้ใส่กฎเว้นการบล็อก (Bypass) อินเทอร์เฟซ `docker0` และบริดจ์เน็ตเวิร์กจำลอง `br-*`
-    * **[TODO]** ระยะถัดไป: พัฒนา API และระบบตั้งค่า (Settings Toggle) บนหน้า Web UI ของแอดมิน เพื่อควบคุมสถานะผ่านตารางการตั้งค่าระบบใน SQLite
-  * **[TODO]** พัฒนาระบบรักษาความปลอดภัยสำหรับการทำงานพลาด (Fail-Safe Rollback / Test & Rollback): เพื่อป้องกันปัญหากรณีแอดมินบล็อกพอร์ตเว็บควบคุมหรือ SSH จนล็อกตัวเองออก (Admin Lockout) โดยถ้า Apply กฎใหม่แล้วไม่มีการยืนยัน Confirm จากเบราว์เซอร์ภายใน 30 วินาที ระบบจะดึงกฎเก่าขึ้นมารีสโตร์ใช้งานแทนทันที
-  * **[TODO]** ติดตั้งระบบสถิติกฎไฟร์วอลล์ (Rule Counters): ใช้ `counter` ของ nftables ในการนับจำนวน Hit (packets) และขนาดปริมาณทราฟฟิก (bytes) บนกฎแต่ละข้อ โดยสืบค้นสดผ่าน Netlink (`GetRules`) แล้วส่งเป็น Live telemetry ไปหน้าบ้านแทนการเขียนลง SQLite ตลอดเวลาเพื่อถนอมอายุของ SD Card
-  * **[TODO]** พัฒนาระบบประมวลผลล็อกความปลอดภัยสด (Firewall Logs Ring-Buffer Stream): ดึงข้อมูลบันทึก Kernel messages จาก `/dev/kmsg` หรือ Journald ที่มีการพ่นข้อความ Prefix `[PiGate]` ขึ้นมาเก็บพักใน In-Memory Ring Buffer บนแรมของบอร์ดเพื่อส่งไปสตรีมสดแสดงผลบนหน้า Dashboard
-  * **[TODO]** ทดสอบระบบไฟร์วอลล์และการจัดเส้นทางบนบอร์ด Raspberry Pi 5 จริงร่วมกับสิทธิ์ความสามารถ Linux capabilities (`sudo setcap cap_net_admin,cap_net_raw+ep ./pigate`)
-
-* **สเตปที่ 7: การแก้ไขและลดระดับช่องโหว่ทางความปลอดภัย (Security Hardening - MUST FIX)**:
-  * **[สำเร็จ]** ลบหรือปิดกั้นช่องโหว่การข้าม Bcrypt (HandleLogin Backdoor) ในไฟล์ `handlers.go`
-  * **[สำเร็จ]** ปรับปรุงโครงสร้างของ CORS Origin ใน `middleware.go` ไม่ให้ตั้งค่า Wildcard `*` ปะปนกับ Credentials `true` เพื่อรักษาระเบียบความถูกต้องตามมาตรฐาน Web API
-
-
+### 3.2 งานตรวจสอบคุณภาพและการทดสอบบนฮาร์ดแวร์จริง (QA & Hardware Testing)
+* [ ] **ทดสอบบนบอร์ด Raspberry Pi 5 จริง:**
+  * ติดตั้งและทดสอบโปรแกรมภายใต้ระบบปฏิบัติการ Linux ของ Raspberry Pi 5
+  * กำหนดสิทธิ์และความปลอดภัยระดับไฟล์รันไบนารี (`sudo setcap cap_net_admin,cap_net_raw+ep ./pigate`) เพื่อทดสอบการจัดการ Netlink/nftables ในโหมดไร้สิทธิ์ root (Non-root security verification)
+* [ ] **ทำการจำลองโหลดเครือข่ายและสตรีมมิ่ง:** เพื่อวัดระดับความหน่วงของการประมวลผล (Latency) และปริมาณอัตราความเร็วข้อมูล (Throughput) เมื่อมีการใช้ Masquerading และกฎไฟร์วอลล์ระดับร้อยข้อ
