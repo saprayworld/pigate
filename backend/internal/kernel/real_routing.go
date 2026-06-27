@@ -169,6 +169,9 @@ func (r *RealRouting) ApplyRoutes(routes []model.StaticRoute) error {
 
 		targetScope := parseScope(route.Scope)
 		targetProto := netlink.RouteProtocol(parseProtocol(route.Proto))
+		if route.Type == "custom" && (route.Proto == "static" || route.Proto == "") {
+			targetProto = 120
+		}
 		var srcIP net.IP
 		if route.Src != "" {
 			srcIP = net.ParseIP(route.Src)

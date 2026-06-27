@@ -194,6 +194,13 @@ export default function StaticRoutes() {
   }
 
   const openEditModal = (route: StaticRoute) => {
+    if (route.type === "defaultgateway") {
+      alert(
+        "แก้ไขเกตเวย์หลัก",
+        "เส้นทางเกตเวย์หลัก (Default Gateway) ถูกจัดการโดยอัตโนมัติผ่านการตั้งค่าการ์ดเครือข่าย กรุณาไปแก้ไขที่หน้าตั้งค่าพอร์ตเชื่อมต่อ (Interfaces) แทน"
+      )
+      return
+    }
     setEditingRoute(route)
     setFormDestination(route.destination)
     setFormGateway(route.gateway)
