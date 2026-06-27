@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="th" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PiGate - Routing System Design</title>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Outfit:wght@300;400;500;600;700&family=Sarabun:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CSS CDN for styling -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Mermaid JS for diagrams -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+  
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Outfit', 'Sarabun', 'sans-serif'],
+            mono: ['Fira Code', 'monospace'],
+          },
+          colors: {
+            border: 'hsl(215.4 16.3% 18.5%)',
+            background: 'hsl(224 71.4% 4.1%)',
+            foreground: 'hsl(210 20% 98%)',
+            primary: {
+              DEFAULT: 'hsl(263.4 70% 50.4%)',
+              foreground: 'hsl(210 20% 98%)',
+              hover: 'hsl(263.4 70% 45%)'
+            },
+            card: {
+              DEFAULT: 'hsl(224 71.4% 6.4%)',
+              foreground: 'hsl(210 20% 98%)'
+            },
+            muted: {
+              DEFAULT: 'hsl(215.4 16.3% 56.9%)',
+              foreground: 'hsl(215.4 16.3% 56.9%)'
+            }
+          }
+        }
+      }
+    }
+    
+    // Initialize Mermaid
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      themeVariables: {
+        background: '#0a0f1d',
+        primaryColor: '#6366f1',
+        primaryTextColor: '#f8fafc',
+        lineColor: '#334155',
+        fontSize: '14px'
+      }
+    });
+  </script>
+
+  <style>
+    body {
+      background-color: #030712;
+      color: #f3f4f6;
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.05) 0px, transparent 50%),
+        radial-gradient(at 100% 0%, rgba(244, 63, 94, 0.03) 0px, transparent 50%);
+      background-attachment: fixed;
+    }
+    .custom-scroll::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 9999px;
+    }
+    .glass-card {
+      background: rgba(17, 24, 39, 0.7);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+  </style>
+</head>
+<body class="font-sans antialiased selection:bg-indigo-500/30 selection:text-indigo-200">
+
+  <div class="max-w-4xl mx-auto px-4 py-12 md:py-20">
+    
+    <!-- Header -->
+    <header class="mb-12 border-b border-slate-800/80 pb-8">
+      <div class="flex items-center gap-3 text-indigo-400 font-semibold tracking-wider uppercase text-xs mb-3">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+        </svg>
+        PiGate System Documentation
+      </div>
+      <h1 class="text-4xl md:text-5xl font-bold tracking-tight text-white font-sans bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400">
+        ดีไซน์ระบบจัดการ Routing ของ PiGate
+      </h1>
+      <p class="text-slate-400 mt-3 text-base md:text-lg max-w-2xl font-light">
+        คู่มืออธิบายการจัดหมวดหมู่ระบบนำร่องแพ็กเกจ (Routing), สถาปัตยกรรมระดับตัวเชื่อมประสาน (Service Layer) และระบบตรวจจับเหตุการณ์ผ่านระบบปฏิบัติการ Linux
+      </p>
+    </header>
+
+    <!-- Main Content -->
+    <main class="space-y-12">
+
+      <!-- Section 1: Types of Routing -->
+      <section class="space-y-6">
+        <h2 class="text-2xl font-bold text-white tracking-tight flex items-center gap-2.5">
+          <span class="inline-block w-1.5 h-6 bg-indigo-500 rounded-full"></span>
+          ประเภทของ Routing (Routing Classification)
+        </h2>
+        <p class="text-slate-300">
+          การจำแนกประเภทของแต่ละเส้นทางเพื่อนำมาแสดงผลและประมวลผลบนระบบ แบ่งออกเป็น 4 รูปแบบหลัก ดังนี้:
+        </p>
+
+        <div class="grid gap-4 sm:grid-cols-2">
+          
+          <!-- Custom -->
+          <div class="glass-card p-5 rounded-2xl flex flex-col justify-between">
+            <div>
+              <div class="flex items-center gap-2 mb-3">
+                <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 uppercase">Custom</span>
+                <h3 class="text-base font-semibold text-white">Custom Static Route</h3>
+              </div>
+              <p class="text-slate-400 text-xs leading-relaxed">
+                เส้นทางที่ผู้ใช้งานระบุขึ้นเองและ<strong>ไม่มีการเชื่อมโยงกับเกตเวย์</strong> (<code class="font-mono text-pink-400 text-[11px]">Gateway == ""</code>) สำหรับชี้เครือข่าย Subnet ไปยังอินเตอร์เฟซโดยตรง
+              </p>
+            </div>
+            <div class="text-[11px] text-slate-500 mt-4 border-t border-slate-800/60 pt-2 font-mono">
+              💾 จัดเก็บลงในฐานข้อมูล SQLite
+            </div>
+          </div>
+
+          <!-- Custom Gateway -->
+          <div class="glass-card p-5 rounded-2xl flex flex-col justify-between">
+            <div>
+              <div class="flex items-center gap-2 mb-3">
+                <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 uppercase">Custom Gateway</span>
+                <h3 class="text-base font-semibold text-white">Custom Gateway Route</h3>
+              </div>
+              <p class="text-slate-400 text-xs leading-relaxed">
+                เส้นทางที่ผู้ใช้งานกำหนดและ<strong>ระบุ IP ของเกตเวย์</strong>ปลายทาง หาก IP นี้ตรงกับ Default Gateway หลัก ระบบจะแปลงไปจัดเก็บเป็นคำเฉพาะ <code class="font-mono text-pink-400 text-[11px]">"default"</code> เพื่อเปลี่ยนทิศทางแบบไดนามิก
+              </p>
+            </div>
+            <div class="text-[11px] text-slate-500 mt-4 border-t border-slate-800/60 pt-2 font-mono">
+              💾 จัดเก็บลงในฐานข้อมูล SQLite
+            </div>
+          </div>
+
+          <!-- System -->
+          <div class="glass-card p-5 rounded-2xl flex flex-col justify-between">
+            <div>
+              <div class="flex items-center gap-2 mb-3">
+                <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 uppercase">System</span>
+                <h3 class="text-base font-semibold text-white">System-defined Route</h3>
+              </div>
+              <p class="text-slate-400 text-xs leading-relaxed">
+                เส้นทางที่ถูกสร้างขึ้นโดยอัตโนมัติจาก Linux Kernel เมื่อตรวจพบการเปิดใช้งานการ์ดเครือข่าย (เช่น local link/local subnet) ผู้ใช้งานทั่วไปไม่สามารถจัดการได้เป็นค่าเริ่มต้น
+              </p>
+            </div>
+            <div class="text-[11px] text-slate-500 mt-4 border-t border-slate-800/60 pt-2 font-mono">
+              🔍 ดึงสดแบบไดนามิกจาก Kernel
+            </div>
+          </div>
+
+          <!-- Default Gateway -->
+          <div class="glass-card p-5 rounded-2xl flex flex-col justify-between">
+            <div>
+              <div class="flex items-center gap-2 mb-3">
+                <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20 uppercase">Default Gateway</span>
+                <h3 class="text-base font-semibold text-white">Default Gateway Route</h3>
+              </div>
+              <p class="text-slate-400 text-xs leading-relaxed">
+                เส้นทางออกสู่เครือข่ายภายนอกทั้งหมดปลายทาง <code class="font-mono text-slate-300 text-[11px]">0.0.0.0/0</code> ถูกควบคุมจากการตั้งค่า Interfaces หลักโดยตรง
+              </p>
+            </div>
+            <div class="text-[11px] text-slate-500 mt-4 border-t border-slate-800/60 pt-2 font-mono">
+              ⚠️ จัดการผ่านพอร์ตเชื่อมต่อ (Interfaces)
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- Section 2: Management Pipeline -->
+      <section class="space-y-6">
+        <h2 class="text-2xl font-bold text-white tracking-tight flex items-center gap-2.5">
+          <span class="inline-block w-1.5 h-6 bg-indigo-500 rounded-full"></span>
+          ระบบจัดการ Routing
+        </h2>
+        <p class="text-slate-300">
+          การควบคุมจัดการตารางเส้นทางภายในหน่วยประมวลผลถูกออกแบบและแบ่งแยกตามสิทธิ์สถาปัตยกรรมออกเป็น 2 ส่วน:
+        </p>
+
+        <!-- Warning Alert -->
+        <div class="bg-rose-950/20 border border-rose-900/50 rounded-xl p-4 flex gap-3 text-rose-200 text-xs leading-relaxed">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-rose-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <div>
+            <strong class="font-semibold text-rose-400 block mb-1">ความปลอดภัยระดับวิกฤต (Critical System Security)</strong>
+            การจัดการ System Route จะต้องเปิดผ่าน CLI Flag เริ่มต้นของตัวแอปพลิเคชันหลังบ้าน และต้องเปิดรับรองความยินยอมยืนยันความปลอดภัยบน UI ก่อนเสมอเพื่อป้องกันความล้มเหลวเครือข่ายหลักขาดการติดต่อ
+          </div>
+        </div>
+
+        <div class="glass-card p-6 rounded-2xl space-y-4">
+          <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider font-mono">โครงสร้างสถาปัตยกรรมการรับ-ส่งข้อมูล</h3>
+          <div class="mermaid flex justify-center py-2">
+            graph TD
+                User([ผู้ใช้ระบบ]) -->|ทำรายการ CRUD| UserRoute[User Route]
+                User -->|ใช้ CLI Flags / UI Switch| SystemRoute[System Route]
+                
+                subgraph Service Layer (RouteService)
+                    UserRoute -->|บันทึกข้อมูล| DB[(SQLite Database)]
+                    DB -->|กู้คืน/เปรียบเทียบ| Reconcile[Reconcile/Apply Kernel]
+                    SystemRoute -->|บายพาสตรง| Direct[Direct Netlink Command]
+                end
+                
+                Reconcile -->|ผ่าน Netlink API| Kernel{Linux Kernel}
+                Direct -->|ผ่าน Netlink API| Kernel
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 3: Service Layer -->
+      <section class="space-y-6">
+        <h2 class="text-2xl font-bold text-white tracking-tight flex items-center gap-2.5">
+          <span class="inline-block w-1.5 h-6 bg-indigo-500 rounded-full"></span>
+          บริการระดับตัวกลาง (Service Layer)
+        </h2>
+        <p class="text-slate-300 text-sm">
+          เลเยอร์การสื่อสารที่ผูกโครงสร้างโค้ดส่วนควบคุมหลักที่ไฟล์ <code class="font-mono text-pink-400 text-xs">backend/internal/service/routing.go</code> ประกอบด้วย API ย่อย:
+        </p>
+
+        <!-- User Section API list -->
+        <div class="space-y-4">
+          <h3 class="text-base font-semibold text-white border-b border-slate-800 pb-2 flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-amber-500"></span> User Section (การจัดการทั่วไป)
+          </h3>
+          
+          <div class="space-y-3 font-sans text-xs">
+            <div class="flex flex-col sm:flex-row sm:items-start gap-1.5 bg-slate-950/40 p-3 rounded-lg border border-slate-800/60">
+              <span class="font-mono font-bold text-indigo-400 min-w-[160px]">InitApplyConfig()</span>
+              <span class="text-slate-400 leading-relaxed">
+                ทำหน้าที่กู้คืนข้อมูลเส้นทางทั้งหมดที่ผู้ใช้เปิดไว้มาเขียนลง Kernel ตอนเริ่มโปรแกรม โดยต้องทำการตรวจสอบความมีอยู่จริงของการ์ดเชื่อมต่อใน Kernel ปัจจุบันก่อนสั่งเขียนจริงเสมอ
+              </span>
+            </div>
+            <div class="flex flex-col sm:flex-row sm:items-start gap-1.5 bg-slate-950/40 p-3 rounded-lg border border-slate-800/60">
+              <span class="font-mono font-bold text-indigo-400 min-w-[160px]">GetDatabaseRoutes()</span>
+              <span class="text-slate-400 leading-relaxed">
+                เรียกดูรายการเส้นทางทั้งหมดที่ถูกสร้างจากผู้ใช้และมีข้อมูลจัดเก็บอยู่ในตาราง SQLite
+              </span>
+            </div>
+            <div class="flex flex-col sm:flex-row sm:items-start gap-1.5 bg-slate-950/40 p-3 rounded-lg border border-slate-800/60">
+              <span class="font-mono font-bold text-indigo-400 min-w-[160px]">GetRouting()</span>
+              <span class="text-slate-400 leading-relaxed">
+                ประมวลผลดึงค่าเส้นทางจริงใน Kernel แล้วนำค่าจาก SQLite มาทับสถานะ/เกตเวย์แบบเรียลไทม์ พร้อมตรวจเช็คความสัมพันธ์เป็นประเภท <code class="font-mono text-slate-300">defaultgateway</code> หรือ <code class="font-mono text-slate-300">customgateway</code>
+              </span>
+            </div>
+            <div class="flex flex-col sm:flex-row sm:items-start gap-1.5 bg-slate-950/40 p-3 rounded-lg border border-slate-800/60">
+              <span class="font-mono font-bold text-indigo-400 min-w-[160px]">ApplyConfigRoute()</span>
+              <span class="text-slate-400 leading-relaxed">
+                ทำหน้าที่บันทึก/อัปเดตเส้นทาง (ทั้งสร้างใหม่และแก้ไข) ลงในฐานข้อมูลของระบบ พร้อมสั่งใช้งานเขียนทับระดับ Kernel เพื่ออัปเดตผลทันที
+              </span>
+            </div>
+            <div class="flex flex-col sm:flex-row sm:items-start gap-1.5 bg-slate-950/40 p-3 rounded-lg border border-slate-800/60">
+              <span class="font-mono font-bold text-indigo-400 min-w-[160px]">RemoveConfigRoute()</span>
+              <span class="text-slate-400 leading-relaxed">
+                ลบเส้นทางที่ถูกระบุออกจากฐานข้อมูล SQLite และส่งคำสั่งลบเส้นทางออกจาก Kernel โดยอัตโนมัติ
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- System Section API list -->
+        <div class="space-y-4">
+          <h3 class="text-base font-semibold text-white border-b border-slate-800 pb-2 flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-cyan-500"></span> System Section (การจัดการระบบปฏิบัติการ)
+          </h3>
+          
+          <div class="space-y-3 font-sans text-xs">
+            <div class="flex flex-col sm:flex-row sm:items-start gap-1.5 bg-slate-950/40 p-3 rounded-lg border border-slate-800/60">
+              <span class="font-mono font-bold text-cyan-400 min-w-[160px]">AddSystemRouteDirectly()</span>
+              <span class="text-slate-400 leading-relaxed">ข้ามฐานข้อมูลและส่งคำสั่งระดับต่ำสั่งเขียนเส้นทางระดับเคอร์เนลลงเครื่องโดยตรง</span>
+            </div>
+            <div class="flex flex-col sm:flex-row sm:items-start gap-1.5 bg-slate-950/40 p-3 rounded-lg border border-slate-800/60">
+              <span class="font-mono font-bold text-cyan-400 min-w-[160px]">EditSystemRouteDirectly()</span>
+              <span class="text-slate-400 leading-relaxed">สั่งแก้ไขหรือทดสอบ Metric ของเส้นทางใน Linux Kernel โดยตรง</span>
+            </div>
+            <div class="flex flex-col sm:flex-row sm:items-start gap-1.5 bg-slate-950/40 p-3 rounded-lg border border-slate-800/60">
+              <span class="font-mono font-bold text-cyan-400 min-w-[160px]">RemoveSystemRouteDirectly()</span>
+              <span class="text-slate-400 leading-relaxed">สั่งลบเส้นทางระบบเครือข่ายออกจากเคอร์เนลของ Linux ทันที</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Common Section API list -->
+        <div class="space-y-4">
+          <h3 class="text-base font-semibold text-white border-b border-slate-800 pb-2 flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-slate-500"></span> Common Section (ส่วนแกนกลางหลัก)
+          </h3>
+          
+          <div class="space-y-3 font-sans text-xs">
+            <div class="flex flex-col sm:flex-row sm:items-start gap-1.5 bg-slate-950/40 p-3 rounded-lg border border-slate-800/60">
+              <span class="font-mono font-bold text-slate-300 min-w-[160px]">GetKernelRoutes()</span>
+              <span class="text-slate-400 leading-relaxed">
+                ทำหน้าที่อ่านข้อมูลตารางเส้นทาง (Routing Table) สดๆ โดยตรงจาก Linux kernel เพื่อความถูกต้อง ใช้เป็นข้อมูลอ้างอิงหลักในระบบ
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 4: Monitor Section -->
+      <section class="space-y-6">
+        <h2 class="text-2xl font-bold text-white tracking-tight flex items-center gap-2.5">
+          <span class="inline-block w-1.5 h-6 bg-indigo-500 rounded-full"></span>
+          ระบบเฝ้าระวังการเปลี่ยนแปลง (Monitor Section)
+        </h2>
+        <p class="text-slate-300 text-sm">
+          ควบคุมและตรวจจับเหตุการณ์ผ่านโครงข่ายเน็ตเวิร์กของระบบปฏิบัติการ [netlink_monitor.go](file:///home/sapray/Dev/pigate/backend/internal/service/netlink_monitor.go)
+        </p>
+
+        <div class="glass-card p-6 rounded-2xl space-y-4">
+          <h4 class="text-sm font-semibold text-indigo-300 font-mono">การดักจับของ Netlink Monitor</h4>
+          <p class="text-slate-400 text-xs leading-relaxed">
+            ระบบจะเฝ้าดักฟังข้อมูล Link (สถานะพอร์ตการ์ดเชื่อมต่อ), Address (ข้อมูลไอพี) และ Route (เส้นทางเน็ตเวิร์ก) ของเครื่อง Linux หากมีเหตุการณ์เปลี่ยนหรือสูญหายไป แอปพลิเคชันจะรันการจัดสมานตาราง (Reconcile) กู้คืนค่าคอนฟิกจากฐานข้อมูลให้อยู่ในสถานะเดิมแบบเรียลไทม์
+          </p>
+
+          <div class="border-l-2 border-indigo-500 pl-4 space-y-4 mt-4">
+            <!-- Scenario 1 -->
+            <div>
+              <span class="text-xs font-semibold text-white block mb-1">💡 สถานการณ์จำลอง 1: อินเตอร์เฟซพร้อมแต่ไอพีล่าช้า (เช่น Wi-Fi Connect)</span>
+              <p class="text-slate-400 text-[11px] leading-relaxed">
+                ในตอนแรกการ์ดจะ Link Up ทันที แต่จะยังไม่ได้รับ IP (รอ DHCP เจรจา) ซึ่งส่งผลให้ Static Route ยังใส่ลงเคอร์เนลไม่ได้ในจังหวะแรก Netlink Monitor จะตรวจพบความคืบหน้าเมื่อการ์ดนั้นได้รับไอพีสำเร็จ (Address Event) แล้วจึงสั่งรัน Apply Route เพื่อปรับปรุงเขียนเส้นทางตามในคอนฟิกูเรชันย้อนหลังให้อย่างสมบูรณ์
+              </p>
+            </div>
+            <!-- Scenario 2 -->
+            <div>
+              <span class="text-xs font-semibold text-white block mb-1">💡 สถานการณ์จำลอง 2: อุปกรณ์ต่อพ่วงสูญหายและเชื่อมต่อกลับเข้ามาใหม่</span>
+              <p class="text-slate-400 text-[11px] leading-relaxed">
+                ในกรณีอุปกรณ์เครือข่ายต่อพ่วงผ่าน USB (เช่น USB Ethernet หรือ USB Wi-Fi) ถูกถอดออก ตัวเคอร์เนลจะลบเส้นทางออกอัตโนมัติ เมื่ออุปกรณ์นั้นถูกเสียบกลับคืนและเคอร์เนลสร้าง Link ขึ้นมาอีกรอบ Netlink Monitor จะทำการอ่านค่าจากฐานข้อมูลแล้วนำไปเซ็ตค่ากู้คืนระบบกลับสู่สถานะพร้อมใช้โดยอัตโนมัติ
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 5: Additional Info -->
+      <section class="space-y-6">
+        <h2 class="text-2xl font-bold text-white tracking-tight flex items-center gap-2.5">
+          <span class="inline-block w-1.5 h-6 bg-indigo-500 rounded-full"></span>
+          ข้อมูลเพิ่มเติม (Special Design Notes)
+        </h2>
+
+        <div class="space-y-4">
+          <div class="bg-indigo-950/20 border border-indigo-900/50 rounded-xl p-5 flex gap-4 text-slate-300">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-indigo-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div class="space-y-3 text-xs">
+              <div>
+                <strong class="text-white font-semibold text-sm block mb-1">การนำส่งเส้นทางด้วยโปรโตคอล 120 (PiGate Custom Protocol)</strong>
+                ทุกๆ เส้นทางที่มีการเขียนและดูแลจากผู้ใช้งานจะถูกฝังค่าโปรโตคอลของเคอร์เนลเป็นหมายเลข <code class="font-mono text-pink-400 bg-slate-900 px-1 py-0.5 rounded text-[11px]">120</code> เพื่อให้ตัวประมวลผลรู้และสั่งลบเส้นทางเก่าทิ้งจากตารางระบบปฏิบัติการได้อย่างถูกต้องเมื่อมีการยกเลิกคอนฟิกูเรชันในโปรแกรม
+              </div>
+              <div>
+                <strong class="text-white font-semibold text-sm block mb-1">การก้าวผ่านข้อจำกัดระบบ (Direct System Manipulation)</strong>
+                หากมีการประเมินผลผ่าน CLI Flag ในขั้นตอนเริ่มต้นรันโปรแกรมระบบจะยินยอมให้ผู้ใช้งานสามารถสั่งแอด เปลี่ยนค่าโปรโตคอลระดับ Kernel เป็น <code class="font-mono text-pink-400 bg-slate-900 px-1 py-0.5 rounded text-[11px]">static</code>, <code class="font-mono text-pink-400 bg-slate-900 px-1 py-0.5 rounded text-[11px]">kernel</code>, หรือ <code class="font-mono text-pink-400 bg-slate-900 px-1 py-0.5 rounded text-[11px]">boot</code> ได้โดยตรงผ่านคำสั่ง Netlink API
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="mt-20 border-t border-slate-900 pt-8 text-center text-xs text-slate-600">
+      &copy; 2026 PiGate Gateway Engineering System. Confidential Documentation.
+    </footer>
+
+  </div>
+
+</body>
+</html>

@@ -25,6 +25,10 @@
   * มีการล็อคสิทธิ์แก้ไข/ลบวัตถุระบบ (🔒 Predefined System Objects) และตรวจเช็คความปลอดภัยบล็อกการลบวัตถุที่ถูกนำไปใช้ในกฎ (mockSync.ts) พร้อมระบบเปลี่ยนชื่อลามเปลี่ยนในกฎทั้งหมด (Rename Propagation)
 * **Custom UI Alerts [สำเร็จ]:** พัฒนาและติดตั้ง Custom AlertDialog ([AlertDialogProvider.tsx](file:///home/sapray/dev/pigate/frontend/src/components/AlertDialogProvider.tsx)) แทนการใช้ `alert()` และ `confirm()` ดั้งเดิมของเบราว์เซอร์
 * **Strict Input Validation [สำเร็จ]:** ติดตั้งระบบตรวจสอบรูปแบบ IPv4, CIDR Subnet และ IP Range อย่างรัดกุม (ตรวจสอบ Octet ละเอียด 0-255) ในทุกหน้าอินพุต
+* **ระบบสวิตช์ความปลอดภัยการแก้ไขเส้นทางระบบปฏิบัติการ (System Route Safety Switch) [สำเร็จ]:**
+  * เพิ่มสวิตช์ความปลอดภัยควบคุมการแก้ไขเส้นทางระดับระบบ (`uiEditSystemRouteActive`) โดยแสดงผลเมื่อหลังบ้านอนุญาตสิทธิ์เท่านั้น
+  * มีการเชื่อมหน้าต่างแจ้งเตือนยืนยัน (Confirm Dialog) ก่อนสลับโหมด พร้อมกู้คืนค่าสถานะเดิมหากผู้ใช้ยกเลิก
+  * ปรับเปลี่ยนปุ่มยื่นยันเส้นทางดั้งเดิม (Apply Config) เป็นปุ่มโหลดข้อมูลซ้ำ (Refresh) เนื่องจากหลังบ้านทำการอัปเดตปรับใช้อัตโนมัติทันทีที่มีการแก้ไข
 
 ### 1.2 สถาปัตยกรรมและหลังบ้าน (Backend API & Database - Go v1.26.4)
 * **Single Binary Embedded Server [สำเร็จ]:** เชื่อมฝังเว็บ React SPA (`dist/` folder) เข้าใน Go binary ด้วย `go:embed` ใน [embed.go](file:///home/sapray/dev/pigate/backend/internal/api/embed.go) รองรับ Client-side routing fallback (SPA fallback)
@@ -35,6 +39,10 @@
   * ติดตั้งระบบรักษาความปลอดภัยจำกัดอัตราการขอเข้าถึง (Rate Limiting) ในหน้าล็อกอิน และ Middleware ตรวจสอบ Bearer Token
   * ระบบยืนยันสิทธิ์เซสชันย้อนกลับ `/api/auth/session` พร้อมระบบบังคับเปลี่ยนรหัสผ่านครั้งแรก (IsInitial check) บล็อกการเข้าถึง endpoint อื่นและบังคับนำไปสู่หน้า `/change-password`
 * **Automated Testing Suite [สำเร็จ]:** พัฒนาชุดทดสอบ Unit test (จำลอง SQLite) และ Integration test (จำลอง http client) บิวด์และทดสอบผ่านสำเร็จ 100%
+* **การจำแนกประเภทและอัปเดตสคีมา Static Routing ใหม่ [สำเร็จ]:**
+  * แยกประเภทความชัดเจนของ Static Route เป็น `custom` และ `customgateway`
+  * อัปเดต SQLite CHECK constraint ให้ยอมรับประเภทเส้นทางแบบใหม่ และรัน Database Migration อัตโนมัติ
+  * พัฒนาระบบคลี่คลายค่าและติดตาม Default Gateway โดยแปลง IP เกตเวย์ปัจจุบันเป็นคำเฉพาะ `"default"` ลงฐานข้อมูล SQLite และสลับกลับมาเป็นไอพีจริงแบบไดนามิกขณะอ่านค่าหรือใช้งาน
 
 ### 1.3 การทำงานเชื่อมต่อระบบปฏิบัติการ (Kernel Integration)
 * **Real Network Interface Control (Netlink & wpa_supplicant) [สำเร็จ]:**
@@ -50,6 +58,8 @@
 * **Netlink Event Monitor & Routing Self-Healing [สำเร็จ]:**
   * พัฒนา `NetlinkMonitor` ใน [netlink_monitor.go](file:///home/sapray/dev/pigate/backend/internal/service/netlink_monitor.go) คอยดักฟังการแจ้งเตือนการเปลี่ยนแปลง Network Link, IP Address และ Route จาก Kernel
   * ติดตั้งระบบ Debouncer (500ms) เพื่อรวมกลุ่มเหตุการณ์ และสั่งกระตุ้นการประสานงาน (Reconcile) นำเอาคอนฟิก Static Route จาก SQLite ไปเขียนทับลง Kernel อัตโนมัติ ป้องกันการดริฟต์เครือข่ายภายนอก
+  * ปรับปรุงสิทธิ์การใช้ Protocol ID `120` ใน [real_routing.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_routing.go) ให้ครอบคลุมประเภท `customgateway` ป้องกันการตรวจเช็คผิดพลาด
+  * แก้ไขปัญหาลูปสัญญาณย้อนกลับ (Netlink Reconciliation loop) ในกรณีเปลี่ยน Metric (Priority) โดยตรวจสอบและลบเส้นทางเก่าออกก่อนผ่าน `RouteDel` จากนั้นจึงสั่งสร้างใหม่ด้วย `RouteAdd` แทนการสั่งเปลี่ยนทับค่าเดิม
 * **Real Firewall Rules Integration (nftables via Netlink) [สำเร็จ]:**
   * พัฒนา `RealFirewall` ใน [real_firewall.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_firewall.go) โดยใช้ `github.com/google/nftables` ในการคุยกับเคอร์เนลผ่าน Netlink Socket
   * สร้างตาราง `pigate` (inet family) ควบคุมกฎ Dynamic Rules ใน `forward` chain
