@@ -28,6 +28,7 @@ type Server struct {
 	interfaceService *service.InterfaceService
 	routingService   *service.RoutingService
 	firewallService  *service.FirewallService
+	dnsService       *service.DNSService
 }
 
 func NewServer(
@@ -41,6 +42,7 @@ func NewServer(
 	ifaceService *service.InterfaceService,
 	routingService *service.RoutingService,
 	fwService *service.FirewallService,
+	dnsService *service.DNSService,
 ) *Server {
 	return &Server{
 		repo:             repo,
@@ -53,6 +55,7 @@ func NewServer(
 		interfaceService: ifaceService,
 		routingService:   routingService,
 		firewallService:  fwService,
+		dnsService:       dnsService,
 	}
 }
 
@@ -1250,7 +1253,7 @@ func (s *Server) HandleUpdateSystemTime(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) HandleGetDNSConfig(w http.ResponseWriter, r *http.Request) {
-	cfg, err := s.repo.GetDNSConfig()
+	cfg, err := s.dnsService.GetDNSConfig()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1269,7 +1272,7 @@ func (s *Server) HandleUpdateDNSConfig(w http.ResponseWriter, r *http.Request) {
 		input.LocalDomain = "pigate.local"
 	}
 
-	if err := s.repo.UpdateDNSConfig(input); err != nil {
+	if err := s.dnsService.UpdateDNSConfig(input); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

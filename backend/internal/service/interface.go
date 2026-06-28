@@ -99,6 +99,7 @@ func (s *InterfaceService) InitApplyConfigurationAtStartup() error {
 			log.Printf("[Startup] Warning: Failed to toggle interface %s state: %v", iface.Name, err)
 		}
 	}
+	log.Printf("[Startup] Successfully applied interface configuration at startup.")
 	return nil
 }
 

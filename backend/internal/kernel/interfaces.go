@@ -34,3 +34,12 @@ type DhcpManager interface {
 	ApplyConfig(cfg model.DhcpConfig) error
 	GetActiveLeases() ([]model.ActiveDhcpLease, error)
 }
+
+// DNSManager abstracts systemd-resolved modifications and status checks
+type DNSManager interface {
+	GetLinkDNS(ifaceName string) ([]string, error)
+	SetLinkDNS(ifaceName string, servers []string) error
+	RevertLinkDNS(ifaceName string) error
+	SetGlobalDNS(servers []string, searchDomain string) error
+}
+

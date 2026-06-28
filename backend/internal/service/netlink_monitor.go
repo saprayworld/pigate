@@ -39,14 +39,16 @@ func (d *debouncer) debounce(action func()) {
 type NetlinkMonitor struct {
 	repo           *db.Repository
 	routingService *RoutingService
+	dnsService     *DNSService
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
 }
 
-func NewNetlinkMonitor(repo *db.Repository, routingService *RoutingService) *NetlinkMonitor {
+func NewNetlinkMonitor(repo *db.Repository, routingService *RoutingService, dnsService *DNSService) *NetlinkMonitor {
 	return &NetlinkMonitor{
 		repo:           repo,
 		routingService: routingService,
+		dnsService:     dnsService,
 	}
 }
 
@@ -137,11 +139,18 @@ func (m *NetlinkMonitor) Start(ctx context.Context) {
 }
 
 func (m *NetlinkMonitor) reconcile() {
-	log.Printf("[NetlinkMonitor] Network change/drift detected. Reconciling kernel routing table...")
+	log.Printf("[NetlinkMonitor] Network change/drift detected. Reconciling network routing...")
 	if err := m.routingService.reconcileKernelRoutingTable(); err != nil {
 		log.Printf("[NetlinkMonitor] Error reconciling routing table: %v", err)
 	} else {
 		log.Printf("[NetlinkMonitor] Routing table reconciliation completed successfully")
+	}
+
+	log.Printf("[NetlinkMonitor] Network change/drift detected. Reapplying DNS configurations...")
+	if err := m.dnsService.ApplyDNSConfig(); err != nil {
+		log.Printf("[NetlinkMonitor] Error applying DNS configurations: %v", err)
+	} else {
+		log.Printf("[NetlinkMonitor] DNS reconciliation completed successfully")
 	}
 }
 

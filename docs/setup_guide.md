@@ -26,8 +26,14 @@ sudo chown -R pigate:netdev /var/lib/pigate
 sudo chown -R pigate:pigate /run/pigate
 sudo chmod 775 /var/lib/pigate
 
+# สำหรับระบบ DNS Config
+sudo mkdir -p /etc/systemd/resolved.conf.d
+sudo setfacl -m u:pigate:rwx /etc/systemd/resolved.conf.d
+sudo setfacl -d -m u:pigate:rwx /etc/systemd/resolved.conf.d
+
+# คำสั่ง sudo ที่จำเป็นต้องใช้
 sudo nano /etc/sudoers.d/pigate
-# pigate ALL=(ALL) NOPASSWD: /usr/sbin/dhclient, /usr/sbin/dhcpcd, /usr/bin/systemctl
+# pigate ALL=(ALL) NOPASSWD: /usr/sbin/dhclient, /usr/sbin/dhcpcd, /usr/bin/systemctl, /bin/resolvectl
 
 sudo setcap cap_net_admin,cap_net_raw+ep ./pigate
 

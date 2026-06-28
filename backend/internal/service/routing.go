@@ -202,7 +202,7 @@ func (s *RoutingService) ApplyConfigRoute(route model.StaticRoute) error {
 
 	if s.enableEditSystemRoute && (route.KernelOnly || strings.HasPrefix(route.ID, "route-sys-") || route.Type == "system") {
 		log.Printf("[RoutingService] Bypassing database. Applying system route directly to kernel: %+v", route)
-		
+
 		// If it's an update, the destination/gateway/interface might have changed, meaning we need to delete the old route
 		var oldRoute *model.StaticRoute
 		routes, err := s.GetKernelRouting()
@@ -390,7 +390,7 @@ func (s *RoutingService) InitApplyConfig() error {
 		return fmt.Errorf("failed to load static routes from DB: %w", err)
 	}
 
-	log.Printf("Database routes: %v", dbRoutes)
+	log.Printf("[Startup] Database routes: %v", dbRoutes)
 
 	// We apply them by passing the list to kernel RoutingManager.
 	// We call ApplyRoutes, which reconciles all configured DB routes with the kernel.

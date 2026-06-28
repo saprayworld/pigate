@@ -5,6 +5,7 @@ go 1.26.4
 require (
 	github.com/BurntSushi/toml v0.4.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/nftables v0.1.0 // indirect
 	github.com/google/uuid v1.3.0 // indirect

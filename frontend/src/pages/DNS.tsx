@@ -23,7 +23,7 @@ export default function DNS() {
   const [primaryDns, setPrimaryDns] = useState("1.1.1.1");
   const [secondaryDns, setSecondaryDns] = useState("8.8.8.8");
   const [localDomain, setLocalDomain] = useState("pigate.local");
-  
+
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
@@ -150,15 +150,14 @@ export default function DNS() {
                   <button
                     type="button"
                     onClick={() => setMode("static")}
-                    className={`px-4 py-1.5 text-xs font-bold rounded-md transition cursor-pointer ${
-                      mode === "static"
+                    className={`px-4 py-1.5 text-xs font-bold rounded-md transition cursor-pointer ${mode === "static"
                         ? "bg-primary text-primary-foreground"
                         : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
-                    }`}
+                      }`}
                   >
                     Global Static DNS
                   </button>
-                  <button
+                  {/* <button
                     type="button"
                     onClick={() => setMode("wan")}
                     className={`px-4 py-1.5 text-xs font-bold rounded-md transition cursor-pointer ${
@@ -168,7 +167,7 @@ export default function DNS() {
                     }`}
                   >
                     Use WAN DHCP DNS
-                  </button>
+                  </button> */}
                 </div>
               </div>
 

@@ -67,6 +67,7 @@ func main() {
 	var net kernel.NetworkManager
 	var rt kernel.RoutingManager
 	var dhcp kernel.DhcpManager
+	dns := kernel.NewDNSManager(*mockOS)
 
 	if *mockOS || *mockFromReal {
 		fw = kernel.NewMockFirewall(*dockerCompat)
@@ -91,7 +92,8 @@ func main() {
 	routingService := service.NewRoutingService(repo, rt)
 	routingService.SetEnableEditSystemRoute(*enableEditSystemRoute)
 	firewallService := service.NewFirewallService(repo, fw, ifaceService)
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService)
+	dnsService := service.NewDNSService(repo, dns)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService)
 
 	// Apply config form database to kernel
 
@@ -109,14 +111,17 @@ func main() {
 
 	// 6.2.1 Start Netlink Monitor to dynamically handle network and routing events
 	log.Printf("[Main] Initializing Netlink event monitor...")
-	netlinkMonitor := service.NewNetlinkMonitor(repo, routingService)
+	netlinkMonitor := service.NewNetlinkMonitor(repo, routingService, dnsService)
 	monitorCtx, cancelMonitor := context.WithCancel(context.Background())
 	defer cancelMonitor()
 	netlinkMonitor.Start(monitorCtx)
 
 	log.Printf("[Main] [Not Implemented] Applying database-configured DHCP settings to kernel at startup...")
 
-	log.Printf("[Main] [Not Implemented] Applying database-configured DNS settings to kernel at startup...")
+	log.Printf("[Main] Applying database-configured DNS settings to kernel at startup...")
+	if err := dnsService.ApplyDNSConfig(); err != nil {
+		log.Printf("[Main] Warning: Failed to apply DNS configurations to kernel at startup: %v", err)
+	}
 
 	// 6.3 Apply Firewall Rules at startup
 	log.Printf("[Main] Applying database-configured firewall rules to kernel at startup...")
