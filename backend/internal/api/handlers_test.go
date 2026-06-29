@@ -32,8 +32,10 @@ func setupTestServer(t *testing.T) (http.Handler, *db.Repository) {
 	fwService := service.NewFirewallService(repo, fw, ifaceService)
 	dns := kernel.NewDNSManager(true)
 	dnsService := service.NewDNSService(repo, dns)
+	qos := kernel.NewMockQos()
+	qosService := service.NewQosService(repo, qos)
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService)
 	handler := RegisterRoutes(server)
 
 	// Add test session token to activeSessions since IsSessionValid no longer allows mock_session_id_* bypass
@@ -279,9 +281,11 @@ func TestDisableEditMode(t *testing.T) {
 	fwService := service.NewFirewallService(repo, fw, ifaceService)
 	dns := kernel.NewDNSManager(true)
 	dnsService := service.NewDNSService(repo, dns)
+	qos := kernel.NewMockQos()
+	qosService := service.NewQosService(repo, qos)
 
 	// Server initialized with disableEdit = true
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, true, ifaceService, routingService, fwService, dnsService)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, true, ifaceService, routingService, fwService, dnsService, qosService)
 	handler := RegisterRoutes(server)
 
 	// Add test session token to activeSessions since IsSessionValid no longer allows mock_session_id_* bypass
@@ -414,8 +418,10 @@ func TestForcePasswordChangeFlow(t *testing.T) {
 	fwService := service.NewFirewallService(repo, fw, ifaceService)
 	dns := kernel.NewDNSManager(true)
 	dnsService := service.NewDNSService(repo, dns)
+	qos := kernel.NewMockQos()
+	qosService := service.NewQosService(repo, qos)
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService)
 	handler := RegisterRoutes(server)
 
 	// 1. Login with correct password
@@ -488,8 +494,10 @@ func TestCheckSessionAPI(t *testing.T) {
 	fwService := service.NewFirewallService(repo, fw, ifaceService)
 	dns := kernel.NewDNSManager(true)
 	dnsService := service.NewDNSService(repo, dns)
+	qos := kernel.NewMockQos()
+	qosService := service.NewQosService(repo, qos)
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService)
 	handler := RegisterRoutes(server)
 
 	// 1. Check session without token (should fail with 401)
@@ -566,8 +574,10 @@ func setupTestServerWithFirewall(t *testing.T) (http.Handler, *db.Repository, *k
 	fwService := service.NewFirewallService(repo, fw, ifaceService)
 	dns := kernel.NewDNSManager(true)
 	dnsService := service.NewDNSService(repo, dns)
+	qos := kernel.NewMockQos()
+	qosService := service.NewQosService(repo, qos)
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService)
 	handler := RegisterRoutes(server)
 
 	AddSession("mock_session_id_test_token", "pigate")

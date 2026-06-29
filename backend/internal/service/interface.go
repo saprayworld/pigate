@@ -213,8 +213,8 @@ func (s *InterfaceService) GetKernelInterfaces() ([]model.NetworkInterface, erro
 
 	var list []model.NetworkInterface
 	for _, netIface := range netIfaces {
-		// Skip loopback interfaces
-		if netIface.Flags&net.FlagLoopback != 0 || strings.HasPrefix(netIface.Name, "lo") {
+		// Skip loopback and ifb QoS virtual interfaces
+		if netIface.Flags&net.FlagLoopback != 0 || strings.HasPrefix(netIface.Name, "lo") || strings.HasPrefix(netIface.Name, "ifb") {
 			continue
 		}
 

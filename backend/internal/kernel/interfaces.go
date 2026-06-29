@@ -43,3 +43,22 @@ type DNSManager interface {
 	SetGlobalDNS(servers []string, searchDomain string) error
 }
 
+// QosManager abstracts Linux Traffic Control (tc) via netlink for bandwidth shaping.
+// Phase 1: Egress (Client Download) shaping via HTB Qdisc.
+// Phase 2: Ingress (Client Upload) shaping via IFB device redirect (not yet implemented).
+type QosManager interface {
+	// ApplyQosRules rebuilds HTB qdisc + classes + filters on all affected interfaces.
+	// It is idempotent: it clears existing rules before re-applying.
+	// Only rules with Status=true are applied to the kernel.
+	ApplyQosRules(rules []model.QosRule) error
+
+	// ClearQosRules removes the root qdisc from a specific interface,
+	// which cascades and removes all classes and filters underneath.
+	ClearQosRules(ifaceName string) error
+
+	// GetIfaceQosStatus returns the live qdisc and class state from the kernel
+	// for a given interface. Does not read from the database.
+	GetIfaceQosStatus(ifaceName string) (*model.QosIfaceStatus, error)
+}
+
+

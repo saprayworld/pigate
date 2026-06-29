@@ -19,7 +19,8 @@ import {
   Menu,
   Moon,
   Sun,
-  Globe
+  Globe,
+  Activity
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -74,6 +75,8 @@ export default function ShellLayout() {
         return "Static Routes"
       case "/network/dhcp":
         return "DHCP Server"
+      case "/network/qos":
+        return "QoS Bandwidth Limiting"
       case "/policy/firewall":
         return "Firewall Policy"
       case "/policy/addresses":
@@ -104,7 +107,8 @@ export default function ShellLayout() {
         { path: "/network/interfaces", label: "Interfaces", icon: Network },
         { path: "/network/dns", label: "DNS Settings", icon: Globe },
         { path: "/network/routes", label: "Static Routes", icon: Route },
-        { path: "/network/dhcp", label: "DHCP Server", icon: Radio }
+        { path: "/network/dhcp", label: "DHCP Server", icon: Radio },
+        { path: "/network/qos", label: "QoS Limiting", icon: Activity }
       ]
     },
     {

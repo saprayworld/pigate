@@ -309,6 +309,22 @@ func migrate(db *sql.DB) error {
 			secondary_dns TEXT NOT NULL,
 			local_domain TEXT NOT NULL DEFAULT 'pigate.local'
 		);`,
+
+		`CREATE TABLE IF NOT EXISTS qos_rules (
+			id                TEXT PRIMARY KEY,
+			name              TEXT NOT NULL,
+			interface         TEXT NOT NULL,
+			match_src_ip      TEXT NOT NULL DEFAULT '',
+			match_dst_ip      TEXT NOT NULL DEFAULT '',
+			egress_rate_mbps  INTEGER NOT NULL DEFAULT 0,
+			egress_ceil_mbps  INTEGER NOT NULL DEFAULT 0,
+			ingress_rate_mbps INTEGER NOT NULL DEFAULT 0,
+			ingress_ceil_mbps INTEGER NOT NULL DEFAULT 0,
+			priority          INTEGER NOT NULL DEFAULT 10,
+			status            INTEGER NOT NULL DEFAULT 1 CHECK(status IN (0, 1)),
+			description       TEXT NOT NULL DEFAULT '',
+			created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
 	}
 
 	for _, query := range queries {

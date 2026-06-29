@@ -91,6 +91,17 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("GET /api/system/config/export", s.HandleExportConfig)
 	authRoute("POST /api/system/config/import", s.HandleImportConfig)
 
+	// 10. QoS Bandwidth Rules
+	authRoute("GET /api/qos/rules", s.HandleGetQosRules)
+	authRoute("POST /api/qos/rules", s.HandleCreateQosRule)
+	authRoute("GET /api/qos/rules/{id}", s.HandleGetQosRule)
+	authRoute("PUT /api/qos/rules/{id}", s.HandleUpdateQosRule)
+	authRoute("DELETE /api/qos/rules/{id}", s.HandleDeleteQosRule)
+	authRoute("POST /api/qos/rules/{id}/toggle", s.HandleToggleQosRule)
+	authRoute("POST /api/qos/sync", s.HandleSyncQosRules)
+	authRoute("GET /api/qos/status/{iface}", s.HandleGetQosIfaceStatus)
+	authRoute("DELETE /api/qos/iface/{iface}", s.HandleClearQosIface)
+
 	// Serve embedded static frontend files
 	serveStatic(mux)
 
@@ -101,3 +112,4 @@ func RegisterRoutes(s *Server) http.Handler {
 	// Global CORS Wrapper must be outermost to ensure CORS headers are set on all responses (including 403 Forbidden)
 	return CORSMiddleware(handler)
 }
+

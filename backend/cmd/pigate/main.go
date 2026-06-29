@@ -67,12 +67,14 @@ func main() {
 	var net kernel.NetworkManager
 	var rt kernel.RoutingManager
 	var dhcp kernel.DhcpManager
+	var qos kernel.QosManager
 	dns := kernel.NewDNSManager(*mockOS)
 
 	if *mockOS || *mockFromReal {
 		fw = kernel.NewMockFirewall(*dockerCompat)
 		net = kernel.NewMockNetwork()
 		rt = kernel.NewMockRouting()
+		qos = kernel.NewMockQos()
 		mDhcp := kernel.NewMockDhcp()
 		mDhcp.MockFromReal = *mockFromReal
 		dhcp = mDhcp
@@ -82,6 +84,7 @@ func main() {
 		fw = kernel.NewRealFirewall(*dockerCompat)
 		net = kernel.NewRealNetwork()
 		rt = kernel.NewRealRouting(*allowEditSystemRoutes)
+		qos = kernel.NewRealQos()
 		mDhcp := kernel.NewMockDhcp()
 		mDhcp.MockFromReal = false
 		dhcp = mDhcp
@@ -94,7 +97,8 @@ func main() {
 	routingService.SetEnableEditSystemRoute(*enableEditSystemRoute)
 	firewallService := service.NewFirewallService(repo, fw, ifaceService)
 	dnsService := service.NewDNSService(repo, dns)
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService)
+	qosService := service.NewQosService(repo, qos)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService)
 
 	// Apply config form database to kernel
 
@@ -131,6 +135,12 @@ func main() {
 	log.Printf("[Main] Applying database-configured firewall rules to kernel at startup...")
 	if err := firewallService.InitApplyConfig(); err != nil {
 		log.Printf("[Main] Warning: Failed to apply firewall rules to kernel at startup: %v", err)
+	}
+
+	// 6.4 Apply QoS Rules at startup
+	log.Printf("[Main] Applying database-configured QoS rules to kernel at startup...")
+	if err := qosService.InitApplyConfig(); err != nil {
+		log.Printf("[Main] Warning: Failed to apply QoS rules to kernel at startup: %v", err)
 	}
 
 	handler := api.RegisterRoutes(server)

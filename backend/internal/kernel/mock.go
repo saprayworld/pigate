@@ -238,3 +238,44 @@ func (m *MockDhcp) GetActiveLeases() ([]model.ActiveDhcpLease, error) {
 		{ID: "lease-3", IPAddress: "192.168.1.105", MacAddress: "B4:F1:DA:C8:E2:10", Hostname: "iPad-Pro", ExpiresIn: "2 hours, 15 mins"},
 	}, nil
 }
+
+// MockQos implements QosManager for local development and testing.
+// All operations are no-ops but log their parameters for visibility.
+type MockQos struct{}
+
+func NewMockQos() *MockQos {
+	return &MockQos{}
+}
+
+func (m *MockQos) ApplyQosRules(rules []model.QosRule) error {
+	log.Printf("[MockQos] ApplyQosRules called with %d rule(s):", len(rules))
+	for _, r := range rules {
+		statusStr := "DISABLED"
+		if r.Status {
+			statusStr = "ENABLED"
+		}
+		log.Printf("  [%s] %s — iface=%s src=%s dst=%s egress=%d/%dMbps ingress=%d/%dMbps prio=%d",
+			statusStr, r.Name, r.Interface,
+			r.MatchSrcIP, r.MatchDstIP,
+			r.EgressRateMbps, r.EgressCeilMbps,
+			r.IngressRateMbps, r.IngressCeilMbps,
+			r.Priority,
+		)
+	}
+	return nil
+}
+
+func (m *MockQos) ClearQosRules(ifaceName string) error {
+	log.Printf("[MockQos] ClearQosRules called for interface: %s", ifaceName)
+	return nil
+}
+
+func (m *MockQos) GetIfaceQosStatus(ifaceName string) (*model.QosIfaceStatus, error) {
+	log.Printf("[MockQos] GetIfaceQosStatus called for interface: %s", ifaceName)
+	return &model.QosIfaceStatus{
+		Interface: ifaceName,
+		HasQdisc:  false,
+		Classes:   []model.QosClass{},
+	}, nil
+}
+

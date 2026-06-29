@@ -29,6 +29,7 @@ type Server struct {
 	routingService   *service.RoutingService
 	firewallService  *service.FirewallService
 	dnsService       *service.DNSService
+	qosService       *service.QosService
 }
 
 func NewServer(
@@ -43,6 +44,7 @@ func NewServer(
 	routingService *service.RoutingService,
 	fwService *service.FirewallService,
 	dnsService *service.DNSService,
+	qosService *service.QosService,
 ) *Server {
 	return &Server{
 		repo:             repo,
@@ -56,6 +58,7 @@ func NewServer(
 		routingService:   routingService,
 		firewallService:  fwService,
 		dnsService:       dnsService,
+		qosService:       qosService,
 	}
 }
 
@@ -1473,4 +1476,118 @@ func (s *Server) HandleLogStream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// =============================================================================
+// QoS Handlers
+// =============================================================================
+
+// HandleGetQosRules returns all QoS bandwidth rules.
+func (s *Server) HandleGetQosRules(w http.ResponseWriter, r *http.Request) {
+	rules, err := s.qosService.GetRules()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "failed to retrieve QoS rules")
+		return
+	}
+	if rules == nil {
+		rules = []model.QosRule{}
+	}
+	s.writeJSON(w, http.StatusOK, rules)
+}
+
+// HandleGetQosRule returns a single QoS rule by ID.
+func (s *Server) HandleGetQosRule(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	rule, err := s.qosService.GetRuleByID(id)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, "QoS rule not found")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, rule)
+}
+
+// HandleCreateQosRule creates a new QoS rule and applies it to the kernel.
+func (s *Server) HandleCreateQosRule(w http.ResponseWriter, r *http.Request) {
+	var input model.QosRuleInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if input.Name == "" || input.Interface == "" {
+		s.writeError(w, http.StatusBadRequest, "name and interface are required")
+		return
+	}
+	rule, err := s.qosService.CreateRule(input)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "failed to create QoS rule")
+		return
+	}
+	s.writeJSON(w, http.StatusCreated, rule)
+}
+
+// HandleUpdateQosRule updates an existing QoS rule and re-syncs the kernel.
+func (s *Server) HandleUpdateQosRule(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var input model.QosRuleInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	rule, err := s.qosService.UpdateRule(id, input)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "failed to update QoS rule")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, rule)
+}
+
+// HandleDeleteQosRule removes a QoS rule and re-syncs the kernel.
+func (s *Server) HandleDeleteQosRule(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.qosService.DeleteRule(id); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "failed to delete QoS rule")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]string{"message": "QoS rule deleted"})
+}
+
+// HandleToggleQosRule toggles the enabled/disabled status of a QoS rule.
+func (s *Server) HandleToggleQosRule(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	rule, err := s.qosService.ToggleRuleStatus(id)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "failed to toggle QoS rule status")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, rule)
+}
+
+// HandleSyncQosRules forces a full re-sync of all QoS rules from DB to kernel.
+func (s *Server) HandleSyncQosRules(w http.ResponseWriter, r *http.Request) {
+	if err := s.qosService.SyncToKernel(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "failed to sync QoS rules to kernel")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]string{"message": "QoS rules synced to kernel"})
+}
+
+// HandleGetQosIfaceStatus returns the live kernel qdisc/class state for an interface.
+func (s *Server) HandleGetQosIfaceStatus(w http.ResponseWriter, r *http.Request) {
+	iface := r.PathValue("iface")
+	status, err := s.qosService.GetIfaceStatus(iface)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "failed to get QoS status for interface")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, status)
+}
+
+// HandleClearQosIface disables all DB rules for an interface and clears the kernel qdisc.
+func (s *Server) HandleClearQosIface(w http.ResponseWriter, r *http.Request) {
+	iface := r.PathValue("iface")
+	if err := s.qosService.ClearIface(iface); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "failed to clear QoS for interface")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]string{"message": "QoS cleared for interface " + iface})
 }

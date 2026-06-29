@@ -17,6 +17,7 @@ import Login from "@/pages/Login"
 import ApiDocs from "./pages/ApiDocs"
 import DNS from "@/pages/DNS"
 import ForceChangePassword from "@/pages/ForceChangePassword"
+import QoS from "@/pages/QoS"
 
 // A simple authentication route guard
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -126,6 +127,7 @@ export default function App() {
                 <Route path="dns" element={<DNS />} />
                 <Route path="routes" element={<StaticRoutes />} />
                 <Route path="dhcp" element={<DhcpServer />} />
+                <Route path="qos" element={<QoS />} />
               </Route>
 
               {/* Policy & Objects Routes */}

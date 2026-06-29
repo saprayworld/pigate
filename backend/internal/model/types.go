@@ -280,3 +280,56 @@ type DynamicDNSServer struct {
 	InterfaceAlias string   `json:"interfaceAlias"`
 	DNSServers     []string `json:"dnsServers"`
 }
+
+// =============================================================================
+// QoS Types
+// =============================================================================
+
+// QosRule represents a bandwidth shaping rule per network interface.
+// Phase 1: EgressRateMbps/EgressCeilMbps (Client Download) via HTB Qdisc.
+// Phase 2: IngressRateMbps/IngressCeilMbps (Client Upload) via IFB device.
+// A value of 0 for Rate/Ceil means unlimited (no shaping applied).
+type QosRule struct {
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	Interface        string `json:"interface"`        // e.g. "eth0"
+	MatchSrcIP       string `json:"matchSrcIp"`       // CIDR e.g. "172.24.25.0/24", empty = match all
+	MatchDstIP       string `json:"matchDstIp"`       // CIDR e.g. "0.0.0.0/0", empty = match all
+	EgressRateMbps   int    `json:"egressRateMbps"`   // Client Download guaranteed rate, 0 = unlimited
+	EgressCeilMbps   int    `json:"egressCeilMbps"`   // Client Download burst ceiling, 0 = unlimited
+	IngressRateMbps  int    `json:"ingressRateMbps"`  // Client Upload rate via IFB (Phase 2), 0 = unlimited
+	IngressCeilMbps  int    `json:"ingressCeilMbps"`  // Client Upload burst ceiling via IFB (Phase 2)
+	Priority         int    `json:"priority"`         // Filter priority (lower = matched first)
+	Status           bool   `json:"status"`           // true = enabled, false = disabled
+	Description      string `json:"description"`
+}
+
+// QosRuleInput is the create/update payload for QosRule.
+type QosRuleInput struct {
+	Name            string `json:"name"`
+	Interface       string `json:"interface"`
+	MatchSrcIP      string `json:"matchSrcIp"`
+	MatchDstIP      string `json:"matchDstIp"`
+	EgressRateMbps  int    `json:"egressRateMbps"`
+	EgressCeilMbps  int    `json:"egressCeilMbps"`
+	IngressRateMbps int    `json:"ingressRateMbps"`
+	IngressCeilMbps int    `json:"ingressCeilMbps"`
+	Priority        int    `json:"priority"`
+	Status          bool   `json:"status"`
+	Description     string `json:"description"`
+}
+
+// QosIfaceStatus represents live kernel qdisc/class state for a network interface.
+type QosIfaceStatus struct {
+	Interface string     `json:"interface"`
+	HasQdisc  bool       `json:"hasQdisc"`
+	Classes   []QosClass `json:"classes"`
+}
+
+// QosClass represents a single active HTB class on an interface.
+type QosClass struct {
+	ClassID  string `json:"classId"`  // e.g. "1:10"
+	Rate     string `json:"rate"`     // human-readable e.g. "50Mbit"
+	Ceil     string `json:"ceil"`     // human-readable e.g. "100Mbit"
+	RuleName string `json:"ruleName"` // matched rule name from DB (may be empty)
+}
