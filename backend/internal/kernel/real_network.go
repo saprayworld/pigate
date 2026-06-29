@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"pigate/internal/model"
 
@@ -67,25 +66,6 @@ func (r *RealNetwork) ToggleInterface(name string, up bool) error {
 			} else {
 				log.Printf("[RealNetwork] Service %s is already active", serviceName)
 			}
-
-			// Clean up old DHCP client instances first
-			_ = execCommand("sudo", "dhclient", "-r", name).Run()
-			_ = execCommand("sudo", "dhcpcd", "-k", name).Run()
-
-			// Launch DHCP client in background to request an IP address on association
-			go func() {
-				time.Sleep(1 * time.Second)
-				log.Printf("[RealNetwork] Launching DHCP client for %s...", name)
-				if err := execCommand("sudo", "dhclient", name).Start(); err == nil {
-					log.Printf("[RealNetwork] dhclient started for %s via ToggleInterface", name)
-					return
-				}
-				if err := execCommand("sudo", "dhcpcd", name).Start(); err == nil {
-					log.Printf("[RealNetwork] dhcpcd started for %s via ToggleInterface", name)
-					return
-				}
-				log.Printf("[RealNetwork] Failed to start dhclient or dhcpcd on %s via ToggleInterface", name)
-			}()
 		}
 		return nil
 	}
@@ -94,11 +74,6 @@ func (r *RealNetwork) ToggleInterface(name string, up bool) error {
 		serviceName := fmt.Sprintf("wpa_supplicant@%s", name)
 		log.Printf("[RealNetwork] Interface %s is wireless. Stopping wpa_supplicant service: %s", name, serviceName)
 		_ = execCommand("sudo", "systemctl", "stop", serviceName).Run()
-
-		// Release DHCP lease when bringing interface DOWN
-		log.Printf("[RealNetwork] Releasing DHCP client for %s...", name)
-		_ = execCommand("sudo", "dhclient", "-r", name).Run()
-		_ = execCommand("sudo", "dhcpcd", "-k", name).Run()
 	}
 
 	log.Printf("[RealNetwork] Bringing interface %s DOWN via netlink link...", name)
@@ -201,11 +176,6 @@ func (r *RealNetwork) ConfigureInterface(name string, mode string, ip string, ne
 		}
 	}
 
-	// Always release DHCP client and clean up first to prevent conflicts/duplicates
-	_ = execCommand("sudo", "dhclient", "-r", name).Run()
-	_ = execCommand("sudo", "dhcpcd", "-k", name).Run()
-	log.Printf("[RealNetwork] dhclient released for %s", name)
-
 	// Always clear existing IPv4 addresses from the interface
 	addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
 	if err == nil {
@@ -215,19 +185,7 @@ func (r *RealNetwork) ConfigureInterface(name string, mode string, ip string, ne
 	}
 
 	if mode == "dhcp" {
-		// Try starting dhclient in background
-		if err := execCommand("sudo", "dhclient", name).Start(); err == nil {
-			log.Printf("[RealNetwork] dhclient started for %s", name)
-			return nil
-		}
-		// Try fallback to dhcpcd
-		if err := execCommand("sudo", "dhcpcd", name).Start(); err == nil {
-			log.Printf("[RealNetwork] dhcpcd started for %s", name)
-			return nil
-		}
-		log.Printf("[RealNetwork] failed to start dhclient or dhcpcd for DHCP mode on %s", name)
-		// If neither dhclient nor dhcpcd exists or starts, we return error
-		return fmt.Errorf("failed to start dhclient or dhcpcd for DHCP mode on %s", name)
+		return nil
 	}
 
 	// Static mode configuration

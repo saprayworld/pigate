@@ -89,6 +89,7 @@ func main() {
 
 	// 5. Instantiate Server & Router
 	ifaceService := service.NewInterfaceService(repo, net)
+	dhcpcdService := service.NewDhcpcdService(repo, ifaceService)
 	routingService := service.NewRoutingService(repo, rt)
 	routingService.SetEnableEditSystemRoute(*enableEditSystemRoute)
 	firewallService := service.NewFirewallService(repo, fw, ifaceService)
@@ -111,10 +112,13 @@ func main() {
 
 	// 6.2.1 Start Netlink Monitor to dynamically handle network and routing events
 	log.Printf("[Main] Initializing Netlink event monitor...")
-	netlinkMonitor := service.NewNetlinkMonitor(repo, routingService, dnsService)
+	netlinkMonitor := service.NewNetlinkMonitor(repo, routingService, dnsService, dhcpcdService)
 	monitorCtx, cancelMonitor := context.WithCancel(context.Background())
 	defer cancelMonitor()
 	netlinkMonitor.Start(monitorCtx)
+
+	log.Printf("[Main] Synchronizing active DHCP interfaces status...")
+	dhcpcdService.SyncActiveInterfaces()
 
 	log.Printf("[Main] [Not Implemented] Applying database-configured DHCP settings to kernel at startup...")
 

@@ -40,15 +40,17 @@ type NetlinkMonitor struct {
 	repo           *db.Repository
 	routingService *RoutingService
 	dnsService     *DNSService
+	dhcpcdService  *DhcpcdService
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
 }
 
-func NewNetlinkMonitor(repo *db.Repository, routingService *RoutingService, dnsService *DNSService) *NetlinkMonitor {
+func NewNetlinkMonitor(repo *db.Repository, routingService *RoutingService, dnsService *DNSService, dhcpcdService *DhcpcdService) *NetlinkMonitor {
 	return &NetlinkMonitor{
 		repo:           repo,
 		routingService: routingService,
 		dnsService:     dnsService,
+		dhcpcdService:  dhcpcdService,
 	}
 }
 
@@ -104,6 +106,9 @@ func (m *NetlinkMonitor) Start(ctx context.Context) {
 				}
 				log.Printf("[NetlinkMonitor] Received Link event: Index=%d, Name=%s, Flags=%v",
 					linkUpdate.Index, linkUpdate.Attrs().Name, linkUpdate.Attrs().Flags)
+				if m.dhcpcdService != nil {
+					m.dhcpcdService.HandleLinkUpdate(linkUpdate)
+				}
 				d.debounce(m.reconcile)
 
 			case addrUpdate, ok := <-addrChan:

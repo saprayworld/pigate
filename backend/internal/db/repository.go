@@ -1399,12 +1399,12 @@ func (r *Repository) UpdateInterface(iface model.NetworkInterface) error {
 	}
 
 	res, err := r.db.Exec(`UPDATE network_interfaces SET 
-		alias = ?, role = ?, addressing_mode = ?, ip = ?, netmask = ?, gateway = ?, mac_address = ?, admin_access = ?, 
+		alias = ?, role = ?, addressing_mode = ?, ip = ?, netmask = ?, gateway = ?, mac_address = ?, admin_access = ?, status = ?,
 		mac_mode = ?, real_mac_address = ?, randomized_mac = ?, laa_mac_address = ?, randomize_on_reconnect = ?,
 		connected_ssid = ?, wifi_password = ?, wifi_security = ?, failover_enabled = ?, backup_ssid = ?, backup_wifi_password = ?, backup_wifi_security = ?,
 		ip_check_timeout = ?, primary_max_retries = ?, failover_cooldown = ?
 		WHERE id = ?`,
-		iface.Alias, iface.Role, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.MacAddress, adminAccessStr,
+		iface.Alias, iface.Role, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.MacAddress, adminAccessStr, iface.Status,
 		iface.MacMode, iface.RealMacAddress, iface.RandomizedMac, iface.LaaMacAddress, reconInt,
 		iface.WifiSSID, iface.WifiPassword, iface.WifiSecurity, foInt, iface.BackupSSID, iface.BackupWifiPassword, iface.BackupWifiSecurity,
 		iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown, iface.ID)
