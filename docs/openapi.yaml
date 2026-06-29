@@ -49,7 +49,11 @@ paths:
                 properties:
                   token:
                     type: string
-                    example: mock_session_id_xyz123
+                    example: session_id_abc123xyz
+                  mustChangePassword:
+                    type: boolean
+                    description: If true, user must change password before using other API endpoints
+                    example: false
         '401':
           description: Invalid username or password
           content:
@@ -61,11 +65,41 @@ paths:
                     type: string
                     example: Invalid username or password
 
+  /auth/session:
+    get:
+      tags:
+        - Authentication
+      summary: Check current session validity and user context
+      description: |
+        Verifies that the current bearer token/session cookie is still valid on the backend.
+        Also returns whether the user must change their password (IsInitial check).
+        If mustChangePassword is true, all other API endpoints (except /system/password) will return 403 Forbidden.
+      responses:
+        '200':
+          description: Session is valid
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                    example: true
+                  username:
+                    type: string
+                    example: pigate
+                  mustChangePassword:
+                    type: boolean
+                    example: false
+        '401':
+          description: Session invalid or expired
+
   /auth/logout:
     post:
       tags:
         - Authentication
       summary: Log out from the system
+      description: Invalidates the current session token and clears the session cookie.
       responses:
         '200':
           description: Logout successful
@@ -170,7 +204,45 @@ paths:
     put:
       tags:
         - Network Interfaces
-      summary: Update configuration of a network interface
+      summary: Full update of a network interface configuration
+      description: |
+        Replaces the full configuration of an interface. For password fields (wifiPassword, backupWifiPassword),
+        if the masked placeholder "••••••••" is sent, the existing stored password is preserved.
+        Wi-Fi passwords are only updated if non-empty and not masked, or if security is explicitly "Open".
+        If adminAccess changes, firewall rules are automatically re-synced.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NetworkInterface'
+      responses:
+        '200':
+          description: Interface updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NetworkInterface'
+        '404':
+          description: Interface not found
+        '500':
+          description: Internal server error or OS firewall sync failed
+    patch:
+      tags:
+        - Network Interfaces
+      summary: Partial update of a network interface configuration
+      description: |
+        Applies partial (PATCH) updates to an interface. Only fields explicitly present in the request body
+        are updated; omitted fields are left unchanged. Useful for changing a single property without
+        sending the full interface payload.
+        Password masking rules are identical to PUT.
+        If adminAccess changes, firewall rules are automatically re-synced.
       parameters:
         - name: id
           in: path
@@ -198,12 +270,16 @@ paths:
                   type: string
                 gateway:
                   type: string
+                macAddress:
+                  type: string
+                status:
+                  type: string
+                  enum: [up, down]
                 adminAccess:
                   type: array
                   items:
                     type: string
                     enum: [HTTPS, HTTP, PING, SSH]
-                # Wireless specific
                 wifiSSID:
                   type: string
                 wifiPassword:
@@ -223,6 +299,8 @@ paths:
                   type: string
                 backupWifiPassword:
                   type: string
+                backupWifiSecurity:
+                  type: string
                 ipCheckTimeout:
                   type: integer
                 primaryMaxRetries:
@@ -231,11 +309,15 @@ paths:
                   type: integer
       responses:
         '200':
-          description: Interface updated successfully
+          description: Interface partially updated successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/NetworkInterface'
+        '404':
+          description: Interface not found
+        '500':
+          description: Internal server error or OS firewall sync failed
     delete:
       tags:
         - Network Interfaces
@@ -1181,6 +1263,10 @@ paths:
       tags:
         - System & Maintenance
       summary: Export full configuration JSON payload (all settings & object databases backup)
+      description: |
+        Returns a complete JSON backup of all system configuration including interfaces,
+        static routes, firewall policies, address objects, service objects, DHCP config,
+        DHCP reservations, and system time settings.
       responses:
         '200':
           description: Settings backup export payload
@@ -1188,21 +1274,75 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  device:
+                    type: string
+                    example: PiGate Firewall Gateway
+                  version:
+                    type: string
+                    example: v1.0.0-Release
+                  exportedAt:
+                    type: string
+                    format: date-time
+                    example: "2025-01-01T00:00:00Z"
+                  systemSettings:
+                    $ref: '#/components/schemas/SystemTimeSettings'
+                  config:
+                    type: object
+                    properties:
+                      addresses:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/AddressObject'
+                      serviceObjects:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ServiceObject'
+                      policies:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/PolicyRule'
+                      routes:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/StaticRoute'
+                      interfaces:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/NetworkInterface'
+                      dhcp:
+                        type: object
+                        properties:
+                          config:
+                            $ref: '#/components/schemas/DhcpConfig'
+                          reservations:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/DhcpReservation'
 
   /system/config/import:
     post:
       tags:
         - System & Maintenance
       summary: Import configuration JSON payload (overwrites current tables and restores configs)
+      description: |
+        Restores a configuration from a previously exported backup JSON.
+        System-predefined objects (system addresses, service objects, system routes, defaultgateway routes)
+        are skipped to prevent duplication.
+        All other records (custom routes, policies, custom addresses, custom services, DHCP config/reservations,
+        interfaces, and system time settings) are restored.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              description: Same structure as the export payload
       responses:
         '200':
           description: Import completed successfully and configs restored
+        '400':
+          description: Invalid JSON structure in import payload
 
 # =========================================================================
 # COMPONENTS & SCHEMAS
@@ -1313,6 +1453,7 @@ components:
         - alias
         - role
         - type
+        - subtype
         - addressingMode
         - ip
         - netmask
@@ -1327,9 +1468,11 @@ components:
           example: iface-1
         name:
           type: string
+          description: OS-level interface name (e.g. eth0, wlan0)
           example: eth0
         alias:
           type: string
+          description: Human-readable label for the interface
           example: LAN_Internal
         role:
           type: string
@@ -1339,6 +1482,12 @@ components:
           type: string
           enum: [ethernet, wireless]
           example: ethernet
+        subtype:
+          type: string
+          description: |
+            More specific interface subtype. Examples: 'device' (physical NIC), 'veth' (virtual ethernet),
+            'bridge' (software bridge), 'vlan' (VLAN sub-interface).
+          example: device
         addressingMode:
           type: string
           enum: [dhcp, static]
@@ -1348,6 +1497,7 @@ components:
           example: 192.168.1.1
         netmask:
           type: string
+          description: CIDR prefix length as string (e.g. "24")
           example: "24"
         gateway:
           type: string
@@ -1357,6 +1507,7 @@ components:
           example: "DC:A6:32:AA:BB:C1"
         adminAccess:
           type: array
+          description: List of management protocols allowed on this interface
           items:
             type: string
             enum: [HTTPS, HTTP, PING, SSH]
@@ -1367,50 +1518,70 @@ components:
           example: up
         speed:
           type: string
+          description: Link speed string from kernel (e.g. "1000 Mbps")
           example: "1000 Mbps"
-        # Optional Wireless Fields
+        # Optional Wireless-only Fields (present when type=wireless)
         wifiSSID:
           type: string
           example: MyHome_5G
         wifiPassword:
           type: string
+          description: Masked as "••••••••" in API responses for security. Send masked value to preserve existing password.
           example: "••••••••"
         wifiSecurity:
           type: string
+          description: Wi-Fi security protocol (Open, WPA2-PSK, WPA3-SAE, etc.)
           example: WPA2-PSK
         macMode:
           type: string
           enum: [hardware, randomized, laa]
+          description: |
+            MAC address mode for the wireless interface.
+            - hardware: use the real burned-in MAC address
+            - randomized: let wpa_supplicant randomize MAC per-connection (preassoc_mac_addr=1, mac_addr=1)
+            - laa: use a locally administered address (LAA) specified in laaMacAddress
           example: hardware
         realMacAddress:
           type: string
+          description: The actual hardware MAC burned into the NIC
           example: "DC:A6:32:AA:BB:C1"
         randomizedMac:
           type: string
+          description: Last randomized MAC address used by wpa_supplicant
           example: "4E:88:2F:BC:A1:90"
         laaMacAddress:
           type: string
+          description: Custom locally administered MAC address when macMode=laa
           example: "9A:11:22:33:44:55"
         randomizeOnReconnect:
           type: boolean
+          description: If true, wpa_supplicant generates a new random MAC on each reconnect
           example: true
         failoverEnabled:
           type: boolean
+          description: If true, automatic failover to backupSsid is enabled when primary SSID is unreachable
           example: false
         backupSsid:
           type: string
           example: MyHome_2G
         backupWifiPassword:
           type: string
-          example: backupPassword123
+          description: Backup SSID password (masked as "••••••••" in responses)
+          example: "••••••••"
+        backupWifiSecurity:
+          type: string
+          example: WPA2-PSK
         ipCheckTimeout:
           type: integer
+          description: Seconds to wait before declaring primary connection failed (failover check)
           example: 15
         primaryMaxRetries:
           type: integer
+          description: Number of retries before switching to backup SSID
           example: 3
         failoverCooldown:
           type: integer
+          description: Seconds to wait before attempting to reconnect to primary SSID after failover
           example: 60
 
     WifiScanResult:
@@ -1446,24 +1617,39 @@ components:
         - state
         - ssid
         - bssid
+        - activeMac
       properties:
         state:
           type: string
+          description: |
+            wpa_supplicant connection state string. Common values:
+            COMPLETED (connected), DISCONNECTED, SCANNING, ASSOCIATING, AUTHENTICATING,
+            ASSOCIATED, 4WAY_HANDSHAKE, GROUP_HANDSHAKE, INACTIVE, INTERFACE_DISABLED.
+            Mapped to user-friendly strings by the backend (e.g. COMPLETED → "Connected").
           example: COMPLETED
         ssid:
           type: string
+          description: Name of the currently connected Wi-Fi network
           example: MyHome_5G
         bssid:
           type: string
+          description: MAC address of the connected Access Point
           example: "00:11:22:33:44:55"
+        activeMac:
+          type: string
+          description: The currently effective MAC address of the interface (may differ from hardware MAC if randomization is active)
+          example: "4E:88:2F:BC:A1:90"
         freq:
           type: integer
+          description: Connection frequency in MHz (e.g. 5180, 2412)
           example: 5745
         keyMgmt:
           type: string
+          description: Security protocol in use (e.g. WPA3, WPA2, Open)
           example: WPA3
         wifiGen:
           type: string
+          description: Wi-Fi generation string (e.g. WiFi 6, WiFi 5, WiFi 4)
           example: WiFi 6
 
     # --- Firewall Policy Schemas ---
@@ -1683,6 +1869,7 @@ components:
       required:
         - allowEditSystemRoutes
         - prioritizeKernelRoutes
+        - enableEditSystemRoute
       properties:
         allowEditSystemRoutes:
           type: boolean
@@ -1698,6 +1885,13 @@ components:
             Routes NOT in kernel (system/defaultgateway types) are automatically marked inactive.
             User-toggled status in DB is preserved and not overridden by kernel state.
             Controlled by the `-prioritize-kernel-routes` CLI flag. (Default: false)
+          example: false
+        enableEditSystemRoute:
+          type: boolean
+          description: |
+            Runtime active state of system route editing. Reflects whether the user has currently
+            toggled the system route edit mode on. This is the live state used by the RoutingService,
+            and may be false even when allowEditSystemRoutes is true.
           example: false
 
     StaticRoute:

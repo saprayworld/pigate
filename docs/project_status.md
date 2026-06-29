@@ -38,6 +38,16 @@
   * CORS Middleware ปรับสิทธิ์เฉพาะ Origin ที่ปลอดภัย (ป้องกัน CORS Credentials Mismatch)
   * ติดตั้งระบบรักษาความปลอดภัยจำกัดอัตราการขอเข้าถึง (Rate Limiting) ในหน้าล็อกอิน และ Middleware ตรวจสอบ Bearer Token
   * ระบบยืนยันสิทธิ์เซสชันย้อนกลับ `/api/auth/session` พร้อมระบบบังคับเปลี่ยนรหัสผ่านครั้งแรก (IsInitial check) บล็อกการเข้าถึง endpoint อื่นและบังคับนำไปสู่หน้า `/change-password`
+* **REST API Endpoints ทั้งหมด (9 กลุ่ม) [สำเร็จ]:**
+  * **Authentication:** POST /auth/login, POST /auth/logout, GET /auth/session
+  * **Dashboard:** GET /dashboard/stats, GET /dashboard/performance, GET /dashboard/logs, POST /dashboard/logs/clear, GET /dashboard/logs/stream (SSE)
+  * **Network Interfaces:** GET, PUT, PATCH, DELETE /interfaces, POST /interfaces/{id}/toggle, POST /interfaces/{id}/reset, GET /interfaces/{id}/scan, GET /interfaces/{id}/wifi-status
+  * **Firewall Policies:** GET, POST /policies, PUT, DELETE /policies/{id}, PUT /policies/reorder, POST /policies/{id}/toggle-log, POST /policies/{id}/toggle-status, POST /policies/apply
+  * **Address Objects:** GET, POST /addresses, PUT, DELETE /addresses/{id}, POST /addresses/bulk-delete
+  * **Service Objects:** GET, POST /services, PUT, DELETE /services/{id}
+  * **Static Routes:** GET, POST /routes, PUT, DELETE /routes/{id}, GET /routes/config, POST /routes/bulk-delete, POST /routes/{id}/toggle, POST /routes/apply
+  * **DHCP Server:** GET, PUT /dhcp/config, GET, POST /dhcp/reservations, PUT, DELETE /dhcp/reservations/{id}, GET /dhcp/leases, POST /dhcp/apply
+  * **System & Maintenance:** GET, PUT /system/time, GET, PUT /system/dns, PUT /system/password, GET /system/services, POST /system/services/{id}/restart, POST /system/reboot, POST /system/shutdown, GET /system/config/export, POST /system/config/import
 * **Automated Testing Suite [สำเร็จ]:** พัฒนาชุดทดสอบ Unit test (จำลอง SQLite) และ Integration test (จำลอง http client) บิวด์และทดสอบผ่านสำเร็จ 100%
 * **การจำแนกประเภทและอัปเดตสคีมา Static Routing ใหม่ [สำเร็จ]:**
   * แยกประเภทความชัดเจนของ Static Route เป็น `custom` และ `customgateway`
