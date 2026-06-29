@@ -125,6 +125,53 @@ export const dashboardService = {
     }
   },
 
+  /**
+   * Connect to Server-Sent Events stream for live firewall logs.
+   * Returns an EventSource instance (for non-mock mode).
+   * In mock mode, returns null and calls `onLog` via a simulated interval.
+   *
+   * @param onLog  - Callback fired each time a new log entry arrives
+   * @param onError - Callback fired on connection error
+   * @returns A cleanup function to stop the stream
+   */
+  connectSSELogs: (
+    onLog: (log: FirewallLog) => void,
+    onError?: (err: Event) => void
+  ): (() => void) => {
+    if (IS_MOCK_MODE) {
+      // In mock mode, simulate SSE with interval-based generation
+      const intervalId = setInterval(() => {
+        const newLog = dashboardService.generateMockLog();
+        onLog(newLog);
+      }, 4500);
+      return () => clearInterval(intervalId);
+    }
+
+    // Real SSE connection
+    const token = localStorage.getItem("pigate_session");
+    // EventSource does not support custom headers, use URL param or cookies
+    // Backend should accept token via Authorization header or query string
+    const url = `${API_BASE_URL}/dashboard/logs/stream${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+    const es = new EventSource(url);
+
+    es.onmessage = (event) => {
+      try {
+        const log: FirewallLog = JSON.parse(event.data);
+        onLog(log);
+      } catch (e) {
+        console.warn("[SSE] Failed to parse log event:", e);
+      }
+    };
+
+    if (onError) {
+      es.onerror = onError;
+    }
+
+    return () => {
+      es.close();
+    };
+  },
+
   // Generate a mock log entry and save it (to simulate live SSE log appending in mock mode)
   generateMockLog: (): FirewallLog => {
     const randomSrc = mockSources[Math.floor(Math.random() * mockSources.length)];

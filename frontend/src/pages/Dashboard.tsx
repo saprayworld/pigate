@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import {
   Activity,
   Shield,
@@ -16,7 +16,9 @@ import {
   Layers,
   ArrowUpRight,
   ArrowDownLeft,
-  Wifi
+  Wifi,
+  Network,
+  Zap,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -24,7 +26,10 @@ import { Button } from "@/components/ui/button"
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts"
 import { type FirewallLog } from "@/data-mockup/mockData"
 import { dashboardService, type DashboardStats } from "@/services/dashboardService"
+import { interfaceService } from "@/services/interfaceService"
+import { type NetworkInterface } from "@/data-mockup/mockData"
 import { useAlert } from "@/components/AlertDialogProvider"
+import { useTheme } from "@/components/ThemeProvider"
 
 // Structure for Recharts data
 interface TrafficData {
@@ -33,17 +38,19 @@ interface TrafficData {
   outbound: number
 }
 
-
+// SSE connection status
+type SSEStatus = "connecting" | "connected" | "disconnected" | "mock"
 
 export default function Dashboard() {
   const { alert } = useAlert()
+  const { theme } = useTheme()
+
   // --- 1. Real-time Uptime & Live Time ---
   const [systemTime, setSystemTime] = useState<string>("")
-  const [uptimeSeconds, setUptimeSeconds] = useState<number>(2 * 24 * 3600 + 14 * 3600 + 32 * 60 + 15) // Init at 2d 14h 32m 15s
+  const [uptimeSeconds, setUptimeSeconds] = useState<number>(0)
 
   useEffect(() => {
     const timer = setInterval(() => {
-      // Tick system time
       const now = new Date()
       setSystemTime(
         now.getFullYear() +
@@ -58,7 +65,6 @@ export default function Dashboard() {
         ":" +
         String(now.getSeconds()).padStart(2, "0")
       )
-      // Tick uptime
       setUptimeSeconds((prev) => prev + 1)
     }, 1000)
 
@@ -66,25 +72,30 @@ export default function Dashboard() {
   }, [])
 
   const formattedUptime = useMemo(() => {
+    if (uptimeSeconds === 0) return "กำลังโหลด..."
     const d = Math.floor(uptimeSeconds / (24 * 3600))
     const h = Math.floor((uptimeSeconds % (24 * 3600)) / 3600)
     const m = Math.floor((uptimeSeconds % 3600) / 60)
     const s = uptimeSeconds % 60
-    return `${String(d).padStart(2, "0")} วัน ${String(h).padStart(2, "0")} ชั่วโมง ${String(m).padStart(2, "0")} นาที ${String(s).padStart(2, "0")} วินาที`
+    if (d > 0) {
+      return `${d} วัน ${String(h).padStart(2, "0")} ชั่วโมง ${String(m).padStart(2, "0")} นาที`
+    }
+    return `${String(h).padStart(2, "0")} ชั่วโมง ${String(m).padStart(2, "0")} นาที ${String(s).padStart(2, "0")} วินาที`
   }, [uptimeSeconds])
 
   // --- 2. Live Performance Metrics & Stats ---
-  const [cpuUsage, setCpuUsage] = useState<number>(14)
-  const [memUsage, setMemUsage] = useState<number>(15)
-  const [boardTemp, setBoardTemp] = useState<number>(48.5)
+  const [cpuUsage, setCpuUsage] = useState<number>(0)
+  const [memUsage, setMemUsage] = useState<number>(0)
+  const [boardTemp, setBoardTemp] = useState<number>(0)
+  const [isLoadingPerf, setIsLoadingPerf] = useState(true)
 
   const [stats, setStats] = useState<DashboardStats>({
-    firewallStatus: "Active",
-    totalTrafficIn: "8.7 GB",
-    totalTrafficOut: "3.7 GB",
-    dhcpLeasesCount: 18,
-    wifiStatus: "wlan0 Master",
-    wifiSSID: "PiGate-Secure",
+    firewallStatus: "Loading...",
+    totalTrafficIn: "—",
+    totalTrafficOut: "—",
+    dhcpLeasesCount: 0,
+    wifiStatus: "—",
+    wifiSSID: "—",
   })
 
   const fetchStats = async () => {
@@ -107,7 +118,10 @@ export default function Dashboard() {
         setCpuUsage(perf.cpu)
         setMemUsage(perf.memory)
         setBoardTemp(perf.temp)
-      } catch (err) { }
+        setIsLoadingPerf(false)
+      } catch (err) {
+        setIsLoadingPerf(false)
+      }
     }
 
     fetchPerf() // initial fetch
@@ -115,9 +129,35 @@ export default function Dashboard() {
     return () => clearInterval(perfInterval)
   }, [])
 
-  // --- 3. Bandwidth Chart Simulation ---
+  // --- 3. Network Interfaces from API ---
+  const [interfaces, setInterfaces] = useState<NetworkInterface[]>([])
+  const [isLoadingInterfaces, setIsLoadingInterfaces] = useState(true)
+
+  useEffect(() => {
+    const loadInterfaces = async () => {
+      try {
+        const data = await interfaceService.getAll()
+        setInterfaces(data)
+      } catch (err) {
+        console.error("Failed to load interfaces:", err)
+      } finally {
+        setIsLoadingInterfaces(false)
+      }
+    }
+    loadInterfaces()
+  }, [])
+
+  const handleRefreshInterfaces = async () => {
+    setIsLoadingInterfaces(true)
+    try {
+      const data = await interfaceService.getAll()
+      setInterfaces(data)
+    } catch (err) { }
+    setIsLoadingInterfaces(false)
+  }
+
+  // --- 4. Bandwidth Chart Simulation ---
   const [trafficData, setTrafficData] = useState<TrafficData[]>(() => {
-    // Generate initial historical points
     const base = []
     const now = new Date()
     for (let i = 14; i >= 0; i--) {
@@ -142,11 +182,8 @@ export default function Dashboard() {
           String(t.getMinutes()).padStart(2, "0") + ":" +
           String(t.getSeconds()).padStart(2, "0")
 
-        // New speeds
         const lastIn = prev[prev.length - 1].inbound
         const lastOut = prev[prev.length - 1].outbound
-
-        // Random walk
         const nextIn = Math.max(1.5, Math.min(45, lastIn + (Math.random() - 0.5) * 1.5))
         const nextOut = Math.max(0.4, Math.min(18, lastOut + (Math.random() - 0.5) * 0.6))
 
@@ -156,19 +193,20 @@ export default function Dashboard() {
           outbound: Math.round(nextOut * 10) / 10
         }
 
-        const sliced = prev.slice(1)
-        return [...sliced, newPoint]
+        return [...prev.slice(1), newPoint]
       })
     }, 2000)
 
     return () => clearInterval(trafficInterval)
   }, [])
 
-  // --- 4. Firewall Logs Streaming ---
+  // --- 5. Firewall Logs via SSE ---
   const [logs, setLogs] = useState<FirewallLog[]>([])
   const [isLiveStreaming, setIsLiveStreaming] = useState<boolean>(true)
+  const [sseStatus, setSseStatus] = useState<SSEStatus>("connecting")
   const [searchQuery, setSearchQuery] = useState<string>("")
   const [actionFilter, setActionFilter] = useState<"ALL" | "PASS" | "DROP">("ALL")
+  const cleanupSSERef = useRef<(() => void) | null>(null)
 
   // Load initial logs
   useEffect(() => {
@@ -181,32 +219,53 @@ export default function Dashboard() {
     loadLogs()
   }, [])
 
-  // Simulator for SSE / Log Append
+  // SSE stream connection
   useEffect(() => {
-    if (!isLiveStreaming) return
+    if (!isLiveStreaming) {
+      // Disconnect SSE
+      if (cleanupSSERef.current) {
+        cleanupSSERef.current()
+        cleanupSSERef.current = null
+      }
+      setSseStatus("disconnected")
+      return
+    }
 
-    const logGenerator = setInterval(() => {
-      const newLog = dashboardService.generateMockLog()
-      setLogs((prev) => {
-        const combined = [newLog, ...prev]
-        return combined.slice(0, 50) // Keep at most 50 elements
-      })
-    }, 4500)
+    setSseStatus("connecting")
 
-    return () => clearInterval(logGenerator)
+    const cleanup = dashboardService.connectSSELogs(
+      (newLog) => {
+        setSseStatus(import.meta.env.DEV ? "mock" : "connected")
+        setLogs((prev) => {
+          const combined = [newLog, ...prev]
+          return combined.slice(0, 50)
+        })
+      },
+      (_err) => {
+        setSseStatus("disconnected")
+      }
+    )
+
+    // For mock mode: set status after a short delay
+    const statusTimer = setTimeout(() => {
+      setSseStatus((prev) => prev === "connecting" ? "mock" : prev)
+    }, 600)
+
+    cleanupSSERef.current = cleanup
+
+    return () => {
+      clearTimeout(statusTimer)
+      cleanup()
+      cleanupSSERef.current = null
+    }
   }, [isLiveStreaming])
 
   // Memoized filtered logs
   const filteredLogs = useMemo(() => {
     return logs.filter((log) => {
-      // 1. Action Filter
-      if (actionFilter !== "ALL" && log.action !== actionFilter) {
-        return false
-      }
-      // 2. Text Search
+      if (actionFilter !== "ALL" && log.action !== actionFilter) return false
       const query = searchQuery.trim().toLowerCase()
       if (!query) return true
-
       return (
         log.src.toLowerCase().includes(query) ||
         log.dest.toLowerCase().includes(query) ||
@@ -217,8 +276,9 @@ export default function Dashboard() {
     })
   }, [logs, actionFilter, searchQuery])
 
-  // --- Helpers for color representation ---
+  // --- Helpers ---
   const getTempColor = (temp: number) => {
+    if (temp === 0) return "text-muted-foreground bg-muted/30 border-border/40"
     if (temp < 50) return "text-primary bg-primary/10 border-primary/20"
     if (temp < 70) return "text-amber-500 bg-amber-500/10 border-amber-500/20"
     return "text-red-500 bg-red-500/10 border-red-500/20"
@@ -230,6 +290,25 @@ export default function Dashboard() {
     return "bg-red-500"
   }
 
+  const getInterfaceIcon = (iface: NetworkInterface) => {
+    if (iface.type === "wireless") return <Radio className="h-4 w-4 text-amber-500" />
+    return <Activity className="h-4 w-4 text-cyan-400" />
+  }
+
+  const getInterfaceRoleColor = (role: string) => {
+    if (role === "WAN") return "text-amber-500"
+    return "text-cyan-400"
+  }
+
+  const chartTooltipStyle = {
+    backgroundColor: theme === "dark" ? "rgba(23, 23, 23, 0.95)" : "rgba(255, 255, 255, 0.97)",
+    borderColor: theme === "dark" ? "rgba(255, 255, 255, 0.1)" : "rgba(0,0,0,0.1)",
+    borderRadius: "8px",
+    color: theme === "dark" ? "#ffffff" : "#111111",
+  }
+
+  const gridStroke = theme === "dark" ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.06)"
+
   const handleRefresh = async () => {
     fetchStats()
     try {
@@ -238,6 +317,7 @@ export default function Dashboard() {
       setMemUsage(perf.memory)
       setBoardTemp(perf.temp)
     } catch (err) { }
+    handleRefreshInterfaces()
   }
 
   const handleClearLogs = async () => {
@@ -249,24 +329,48 @@ export default function Dashboard() {
     }
   }
 
+  // SSE status badge config
+  const sseStatusConfig: Record<SSEStatus, { label: string; className: string }> = {
+    connected: {
+      label: "SSE Connected",
+      className: "bg-primary/5 text-primary border-primary/20",
+    },
+    mock: {
+      label: "Live (Simulated)",
+      className: "bg-cyan-500/5 text-cyan-500 border-cyan-500/20",
+    },
+    connecting: {
+      label: "Connecting...",
+      className: "bg-amber-500/5 text-amber-500 border-amber-500/20",
+    },
+    disconnected: {
+      label: "Stream Paused",
+      className: "bg-muted/40 text-muted-foreground border-border/40",
+    },
+  }
+
+  const currentSseConfig = sseStatusConfig[sseStatus]
+
   return (
     <div className="space-y-6">
       {/* 1. Header Overview */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">Dashboard Overview</h1>
-          <p className="text-muted-foreground mt-1">Real-time status of your PiGate Firewall & Gateway.</p>
+          <p className="text-muted-foreground mt-1">Real-time status of your PiGate Firewall &amp; Gateway.</p>
         </div>
         <div className="flex items-center gap-3">
           <Badge
             variant="outline"
-            className="flex items-center gap-1.5 px-3 py-1 bg-primary/5 text-primary border-primary/20 animate-fade-in"
+            className={`flex items-center gap-1.5 px-3 py-1 animate-fade-in ${currentSseConfig.className}`}
           >
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
-            </span>
-            SSE Connected
+            {isLiveStreaming && (
+              <span className="relative flex h-2 w-2">
+                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${sseStatus === "connected" ? "bg-primary" : sseStatus === "mock" ? "bg-cyan-500" : "bg-amber-500"}`}></span>
+                <span className={`relative inline-flex rounded-full h-2 w-2 ${sseStatus === "connected" ? "bg-primary" : sseStatus === "mock" ? "bg-cyan-500" : "bg-amber-500"}`}></span>
+              </span>
+            )}
+            {currentSseConfig.label}
           </Badge>
 
           <Button
@@ -294,7 +398,9 @@ export default function Dashboard() {
           <CardContent className="space-y-1">
             <div className="flex items-center gap-2">
               <span className="text-2xl font-bold text-foreground">{stats.firewallStatus}</span>
-              <span className="flex h-2.5 w-2.5 rounded-full bg-primary animate-pulse"></span>
+              {stats.firewallStatus === "Active" && (
+                <span className="flex h-2.5 w-2.5 rounded-full bg-primary animate-pulse"></span>
+              )}
             </div>
             <CardDescription className="text-xs text-muted-foreground">nftables kernel module active</CardDescription>
           </CardContent>
@@ -309,7 +415,14 @@ export default function Dashboard() {
             </div>
           </CardHeader>
           <CardContent className="space-y-1">
-            <span className="text-2xl font-bold text-foreground">12.4 GB</span>
+            <span className="text-2xl font-bold text-foreground">
+              {stats.totalTrafficIn !== "—" ? (
+                <>
+                  {/* Sum if both available, else show individual */}
+                  {stats.totalTrafficIn}
+                </>
+              ) : "—"}
+            </span>
             <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
               <span className="flex items-center text-cyan-500"><ArrowUpRight className="h-3 w-3 mr-0.5" /> {stats.totalTrafficIn} In</span>
               <span className="mx-1">•</span>
@@ -328,7 +441,7 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent className="space-y-1">
             <span className="text-2xl font-bold text-foreground">{stats.dhcpLeasesCount} Clients</span>
-            <CardDescription className="text-xs text-muted-foreground">Active IP allocations (Pool: {stats.dhcpLeasesCount}/50)</CardDescription>
+            <CardDescription className="text-xs text-muted-foreground">Active IP allocations</CardDescription>
           </CardContent>
         </Card>
 
@@ -346,6 +459,8 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* 3. Traffic Chart + Firewall Logs */}
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Recharts Area Chart */}
         <Card className="lg:col-span-2 bg-card/25 border border-border/50 overflow-hidden">
@@ -353,7 +468,7 @@ export default function Dashboard() {
             <div>
               <CardTitle className="text-lg font-bold text-foreground flex items-center gap-2">
                 <Activity className="h-5 w-5 text-cyan-500" />
-                WAN Real-time Traffic (ความเร็วอินเทอร์เน็ต)
+                WAN Real-time Traffic
               </CardTitle>
               <CardDescription className="text-xs text-muted-foreground">WAN load (Inbound / Outbound interface rates)</CardDescription>
             </div>
@@ -385,7 +500,7 @@ export default function Dashboard() {
                       <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.05)" />
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridStroke} />
                   <XAxis
                     dataKey="time"
                     stroke="#888888"
@@ -401,13 +516,8 @@ export default function Dashboard() {
                     tickFormatter={(val) => `${val}M`}
                   />
                   <Tooltip
-                    contentStyle={{
-                      backgroundColor: "rgba(23, 23, 23, 0.95)",
-                      borderColor: "rgba(255, 255, 255, 0.1)",
-                      borderRadius: "8px",
-                      color: "#ffffff"
-                    }}
-                    labelStyle={{ fontSize: "11px", fontWeight: "bold", color: "#a3a3a3" }}
+                    contentStyle={chartTooltipStyle}
+                    labelStyle={{ fontSize: "11px", fontWeight: "bold", color: theme === "dark" ? "#a3a3a3" : "#666" }}
                   />
                   <Area
                     type="monotone"
@@ -435,25 +545,25 @@ export default function Dashboard() {
             <div className="mt-4 flex items-center justify-between border-t border-border/40 pt-4 text-xs text-muted-foreground">
               <span className="flex items-center gap-1.5">
                 <ArrowUpRight className="h-4 w-4 text-cyan-400" />
-                Inbound Current: <span className="font-semibold text-foreground">{trafficData[trafficData.length - 1]?.inbound} Mbps</span>
+                Inbound: <span className="font-semibold text-foreground">{trafficData[trafficData.length - 1]?.inbound} Mbps</span>
               </span>
               <span className="flex items-center gap-1.5">
                 <ArrowDownLeft className="h-4 w-4 text-indigo-400" />
-                Outbound Current: <span className="font-semibold text-foreground">{trafficData[trafficData.length - 1]?.outbound} Mbps</span>
+                Outbound: <span className="font-semibold text-foreground">{trafficData[trafficData.length - 1]?.outbound} Mbps</span>
               </span>
             </div>
           </CardContent>
         </Card>
 
-        {/* 4. Live Firewall Logs */}
+        {/* Live Firewall Logs */}
         <Card className="bg-card/25 border border-border/50 flex flex-col h-full overflow-hidden">
           <CardHeader className="border-b border-border/40 pb-4 flex flex-row items-center justify-between">
             <div>
               <CardTitle className="text-lg font-bold text-foreground flex items-center gap-2">
                 <Layers className="h-5 w-5 text-indigo-400" />
-                Recent Firewall Logs
+                Firewall Logs
               </CardTitle>
-              <CardDescription className="text-xs text-muted-foreground">Live nftables packet filter logs</CardDescription>
+              <CardDescription className="text-xs text-muted-foreground">Live nftables packet filter events</CardDescription>
             </div>
             <div className="flex items-center gap-2">
               <Button
@@ -477,9 +587,8 @@ export default function Dashboard() {
             </div>
           </CardHeader>
 
-          {/* Interactive Filters inside Card */}
+          {/* Filters */}
           <div className="p-4 border-b border-border/30 bg-muted/20 space-y-2.5">
-            {/* Search */}
             <div className="relative">
               <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
               <input
@@ -490,7 +599,6 @@ export default function Dashboard() {
                 className="h-8.5 w-full rounded-lg border border-border bg-background/50 pl-8 pr-3 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
               />
             </div>
-            {/* Action Segment Filter */}
             <div className="flex rounded-md border border-border bg-background/30 p-0.5 text-xs">
               {(["ALL", "PASS", "DROP"] as const).map((filter) => (
                 <button
@@ -513,10 +621,7 @@ export default function Dashboard() {
                 <span>ไม่พบข้อมูล Log ในฟิลเตอร์นี้</span>
                 {logs.length > 0 && (
                   <button
-                    onClick={() => {
-                      setSearchQuery("")
-                      setActionFilter("ALL")
-                    }}
+                    onClick={() => { setSearchQuery(""); setActionFilter("ALL") }}
                     className="text-primary mt-1 hover:underline cursor-pointer"
                   >
                     ล้างการค้นหา
@@ -557,14 +662,14 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* 5. Lower Row: Details (System Info, System Performance, Interfaces) */}
+      {/* 4. Lower Row: System Info, Performance, Interfaces */}
       <div className="grid gap-6 md:grid-cols-3">
         {/* Widget 1: System Information */}
         <Card className="bg-card/25 border border-border/50">
           <CardHeader className="border-b border-border/40 pb-4">
             <CardTitle className="text-md font-bold text-foreground flex items-center gap-2">
               <Clock className="h-5 w-5 text-muted-foreground" />
-              📌 System Information
+              System Information
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-4">
@@ -574,12 +679,15 @@ export default function Dashboard() {
                 <span className="font-semibold text-foreground">PiGate-RPI5</span>
               </div>
               <div className="flex justify-between items-center py-1.5 border-b border-border/30">
-                <span className="text-muted-foreground">Firmware Version:</span>
-                <span className="font-semibold text-foreground">v1.0.0 (เฟสแรก)</span>
+                <span className="text-muted-foreground">Firmware:</span>
+                <span className="font-semibold text-foreground flex items-center gap-1.5">
+                  <Zap className="h-3.5 w-3.5 text-primary" />
+                  v1.0.0
+                </span>
               </div>
               <div className="flex justify-between items-center py-1.5 border-b border-border/30">
                 <span className="text-muted-foreground">OS Base:</span>
-                <span className="font-semibold text-foreground">Raspberry Pi OS (64-bit)</span>
+                <span className="font-semibold text-foreground text-right text-xs">Raspberry Pi OS (64-bit)</span>
               </div>
               <div className="flex flex-col py-1 border-b border-border/30 space-y-1">
                 <span className="text-muted-foreground text-xs">System Uptime:</span>
@@ -598,7 +706,7 @@ export default function Dashboard() {
           <CardHeader className="border-b border-border/40 pb-4">
             <CardTitle className="text-md font-bold text-foreground flex items-center gap-2">
               <Cpu className="h-5 w-5 text-muted-foreground" />
-              📈 System Performance
+              System Performance
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-4 space-y-4">
@@ -606,12 +714,14 @@ export default function Dashboard() {
             <div className="space-y-1.5">
               <div className="flex justify-between items-center text-xs">
                 <span className="text-muted-foreground font-medium">CPU Usage:</span>
-                <span className="font-semibold text-foreground">{cpuUsage}% (4 Cores)</span>
+                <span className="font-semibold text-foreground">
+                  {isLoadingPerf ? "—" : `${cpuUsage}%`}
+                </span>
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
                 <div
                   className={`h-full transition-all duration-500 ease-out ${getCpuColor(cpuUsage)}`}
-                  style={{ width: `${cpuUsage}%` }}
+                  style={{ width: isLoadingPerf ? "0%" : `${cpuUsage}%` }}
                 />
               </div>
             </div>
@@ -620,12 +730,14 @@ export default function Dashboard() {
             <div className="space-y-1.5">
               <div className="flex justify-between items-center text-xs">
                 <span className="text-muted-foreground font-medium">Memory Usage:</span>
-                <span className="font-semibold text-foreground">1.2 GB / 7.6 GB ({memUsage}%)</span>
+                <span className="font-semibold text-foreground">
+                  {isLoadingPerf ? "—" : `${memUsage}%`}
+                </span>
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
                 <div
                   className="h-full bg-cyan-500 transition-all duration-500 ease-out"
-                  style={{ width: `${memUsage}%` }}
+                  style={{ width: isLoadingPerf ? "0%" : `${memUsage}%` }}
                 />
               </div>
             </div>
@@ -636,119 +748,111 @@ export default function Dashboard() {
                 <Thermometer className="h-4 w-4" /> CPU Temperature:
               </span>
               <Badge variant="outline" className={`font-semibold text-xs ${getTempColor(boardTemp)}`}>
-                {boardTemp} °C
+                {isLoadingPerf ? "—" : `${boardTemp} °C`}
               </Badge>
             </div>
 
-            {/* Storage */}
+            {/* Storage (static label — Backend doesn't expose disk yet) */}
             <div className="space-y-1.5">
               <div className="flex justify-between items-center text-xs">
                 <span className="text-muted-foreground font-medium flex items-center gap-1">
                   <HardDrive className="h-3.5 w-3.5" /> Storage (/):
                 </span>
-                <span className="font-semibold text-foreground">24 GB / 58 GB (41%)</span>
+                <span className="font-semibold text-foreground text-muted-foreground text-xs italic">N/A</span>
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full bg-indigo-500 transition-all duration-500 ease-out"
-                  style={{ width: "41%" }}
-                />
+                <div className="h-full bg-indigo-500/30 transition-all duration-500 ease-out" style={{ width: "0%" }} />
               </div>
+              <p className="text-[10px] text-muted-foreground/60">Disk telemetry coming soon</p>
             </div>
           </CardContent>
         </Card>
 
-        {/* Widget 3: Interface Status */}
+        {/* Widget 3: Interface Status (from API) */}
         <Card className="bg-card/25 border border-border/50">
-          <CardHeader className="border-b border-border/40 pb-4">
+          <CardHeader className="border-b border-border/40 pb-4 flex flex-row items-center justify-between">
             <CardTitle className="text-md font-bold text-foreground flex items-center gap-2">
-              <Wifi className="h-5 w-5 text-muted-foreground" />
-              🌐 Interface Status
+              <Network className="h-5 w-5 text-muted-foreground" />
+              Interface Status
             </CardTitle>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={handleRefreshInterfaces}
+              title="Refresh Interfaces"
+              className="text-muted-foreground hover:text-foreground cursor-pointer"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isLoadingInterfaces ? "animate-spin" : ""}`} />
+            </Button>
           </CardHeader>
-          <CardContent className="pt-4 space-y-4">
-            {/* Interface 1: wlan0 */}
-            <div className="rounded-lg border border-border/40 bg-card/20 p-3 space-y-2">
-              <div className="flex justify-between items-center">
-                <span className="font-bold text-foreground flex items-center gap-1.5">
-                  <Radio className="h-4 w-4 text-amber-500" />
-                  wlan0 (WAN)
-                </span>
-                {
-                  stats.wifiStatus === "Connected" ? (
-                    <Badge className="bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
-                      Connected
+          <CardContent className="pt-4 space-y-3 overflow-y-auto max-h-[300px]">
+            {isLoadingInterfaces ? (
+              <div className="space-y-3">
+                {[1, 2].map((i) => (
+                  <div key={i} className="rounded-lg border border-border/30 bg-card/20 p-3 space-y-2 animate-pulse">
+                    <div className="h-4 bg-muted rounded w-3/4" />
+                    <div className="h-3 bg-muted rounded w-1/2" />
+                  </div>
+                ))}
+              </div>
+            ) : interfaces.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8 text-muted-foreground text-xs">
+                <Wifi className="h-8 w-8 mb-2 opacity-30" />
+                <span>ไม่พบ Interface</span>
+              </div>
+            ) : (
+              interfaces.map((iface) => (
+                <div
+                  key={iface.id}
+                  className="rounded-lg border border-border/40 bg-card/20 p-3 space-y-2"
+                >
+                  <div className="flex justify-between items-center">
+                    <span className={`font-bold text-foreground flex items-center gap-1.5 text-sm`}>
+                      {getInterfaceIcon(iface)}
+                      <span>{iface.name}</span>
+                      <span className={`text-xs font-normal ${getInterfaceRoleColor(iface.role)}`}>({iface.role})</span>
+                    </span>
+                    <Badge
+                      className={`px-1.5 h-4.5 rounded text-[9px] font-bold ${
+                        iface.status === "up"
+                          ? "bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20"
+                          : "bg-red-500/10 text-red-500 border-red-500/20 hover:bg-red-500/20"
+                      }`}
+                    >
+                      {iface.status === "up" ? "UP" : "DOWN"}
                     </Badge>
-                  ) : (
-                    <Badge className="bg-red-500/10 text-red-500 border-red-500/20 hover:bg-red-500/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
-                      Disconnected
-                    </Badge>
-                  )
-                }
-
-              </div>
-              <div className="text-xs space-y-1.5 font-mono text-muted-foreground">
-                <div className="flex justify-between">
-                  <span>IP Address:</span>
-                  <span className="text-foreground font-medium">10.0.0.45</span>
+                  </div>
+                  <div className="text-xs space-y-1 font-mono text-muted-foreground">
+                    <div className="flex justify-between">
+                      <span>IP:</span>
+                      <span className="text-foreground font-medium">
+                        {iface.ip || <span className="italic text-muted-foreground/60">DHCP</span>}
+                      </span>
+                    </div>
+                    {iface.type === "wireless" && iface.wifiSSID && (
+                      <div className="flex justify-between">
+                        <span>SSID:</span>
+                        <span className="text-foreground font-medium italic">{iface.wifiSSID}</span>
+                      </div>
+                    )}
+                    {iface.alias && iface.alias !== iface.name && (
+                      <div className="flex justify-between">
+                        <span>Alias:</span>
+                        <span className="text-foreground/80 font-sans">{iface.alias}</span>
+                      </div>
+                    )}
+                    {iface.type === "ethernet" && iface.speed && (
+                      <div className="flex justify-between">
+                        <span>Speed:</span>
+                        <span className="text-foreground font-medium">{iface.speed}</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="flex justify-between">
-                  <span>SSID:</span>
-                  <span className="text-foreground font-medium italic">{stats.wifiSSID}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Signal:</span>
-                  <span className="text-primary font-semibold">84% (-58 dBm)</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Interface 2: eth0 */}
-            <div className="rounded-lg border border-border/40 bg-card/20 p-3 space-y-2">
-              <div className="flex justify-between items-center">
-                <span className="font-bold text-foreground flex items-center gap-1.5">
-                  <Activity className="h-4 w-4 text-cyan-400" />
-                  eth0 (LAN)
-                </span>
-                <Badge className="bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
-                  Link Up
-                </Badge>
-              </div>
-              <div className="text-xs space-y-1.5 font-mono text-muted-foreground">
-                <div className="flex justify-between">
-                  <span>IP Address:</span>
-                  <span className="text-foreground font-medium">192.168.1.1</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Speed:</span>
-                  <span className="text-foreground font-medium">1000 Mbps</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Mode:</span>
-                  <span className="text-foreground font-medium">Full Duplex</span>
-                </div>
-              </div>
-            </div>
+              ))
+            )}
           </CardContent>
         </Card>
-      </div>
-
-      {/* 6. Integration Guide Footer */}
-      <div className="rounded-xl border border-dashed border-amber-500/30 bg-amber-500/5 p-4.5 text-xs leading-relaxed space-y-2.5">
-        <h4 className="font-bold text-amber-500 flex items-center gap-1.5">
-          🧠 Backend Integration สําหรับ หน้า Dashboard (กลไกการดึงข้อมูล Real-time)
-        </h4>
-        <p className="text-muted-foreground">
-          เพื่อให้หน้า Dashboard แสดงผลแบบขยับได้สดๆ บนหน้าเว็บ แนะนำให้เขียนฝั่ง Frontend ยิงคำสั่งดึงข้อมูล (Polling API) มาอัปเดตทุกๆ 3-5 วินาที โดย Backend (Go) จะใช้ช่องทางของคอร์ระบบในการไปแกะข้อมูลมาจัดฟอร์แมต JSON หรือสื่อสารผ่าน Server-Sent Events (SSE):
-        </p>
-        <pre className="overflow-x-auto rounded-lg bg-neutral-900 dark:bg-black p-3.5 font-mono text-[11px] text-neutral-300 border border-neutral-800">
-          {"// 1. การดึงค่า CPU / RAM / Temp (ใช้ `/sys/class/` หรือ `gopsutil` ใน Go Backend)\n" +
-            "// ดึงความร้อนบอร์ด RPI5:\n" +
-            "// Reading /sys/class/thermal/thermal_zone0/temp -> Divide by 1000\n\n" +
-            "// 2. การดึงประวัติการบล็อกคัดกรองแพ็กเก็ตจาก nftables มาแสดงในตาราง Log\n" +
-            "// ต้องเปิดการทำ log ในกฎ nftables ก่อน (เช่น nft add rule ip filter FORWARD log prefix \"PiGate_Drop: \" drop)\n" +
-            "// จากนั้นอ่าน log สดผ่าน D-Bus หรือ tail dmesg / journald logs"}
-        </pre>
       </div>
     </div>
   )
