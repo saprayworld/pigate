@@ -16,8 +16,8 @@ import (
 
 // RealQos implements QosManager using vishvananda/netlink for direct kernel interaction.
 // Requires cap_net_admin capability on the binary.
-// Phase 1: Egress (Client Download) HTB shaping only.
-// Phase 2: Ingress (Client Upload) via IFB redirect — not yet implemented.
+// Phase 1: Egress (Client Download) HTB shaping.
+// Phase 2: Ingress (Client Upload) via IFB redirect.
 type RealQos struct{}
 
 func NewRealQos() *RealQos {
@@ -34,21 +34,28 @@ func (q *RealQos) ApplyQosRules(rules []model.QosRule) error {
 	for ifaceName, ifaceRules := range byIface {
 		log.Printf("[RealQos] Applying %d rule(s) to interface %s", len(ifaceRules), ifaceName)
 
-		// 1. Clear existing qdisc (idempotent)
+		// 1. Clear existing qdiscs (idempotent)
 		if err := q.ClearQosRules(ifaceName); err != nil {
 			// Log but continue — interface may not have had a qdisc yet
 			log.Printf("[RealQos] Clear qdisc on %s (may be clean): %v", ifaceName, err)
 		}
 
 		// Count enabled egress rules for this interface
-		enabledCount := 0
+		var enabledEgressRules []model.QosRule
+		var enabledIngressRules []model.QosRule
 		for _, r := range ifaceRules {
-			if r.Status && r.EgressRateMbps > 0 {
-				enabledCount++
+			if r.Status {
+				if r.EgressRateMbps > 0 {
+					enabledEgressRules = append(enabledEgressRules, r)
+				}
+				if r.IngressRateMbps > 0 {
+					enabledIngressRules = append(enabledIngressRules, r)
+				}
 			}
 		}
-		if enabledCount == 0 {
-			log.Printf("[RealQos] No enabled egress rules for %s, skipping qdisc setup", ifaceName)
+
+		if len(enabledEgressRules) == 0 && len(enabledIngressRules) == 0 {
+			log.Printf("[RealQos] No enabled rules for %s, skipping setup", ifaceName)
 			continue
 		}
 
@@ -58,62 +65,161 @@ func (q *RealQos) ApplyQosRules(rules []model.QosRule) error {
 			return fmt.Errorf("[RealQos] interface %q not found: %w", ifaceName, err)
 		}
 
-		// 3. Add root HTB qdisc (handle 1:0), default class 1:10
-		htb := netlink.NewHtb(netlink.QdiscAttrs{
-			LinkIndex: link.Attrs().Index,
-			Handle:    netlink.MakeHandle(1, 0),
-			Parent:    netlink.HANDLE_ROOT,
-		})
-		htb.Defcls = 10
-		if err := netlink.QdiscAdd(htb); err != nil {
-			return fmt.Errorf("[RealQos] add HTB root qdisc on %s: %w", ifaceName, err)
+		// 3. Setup Egress (Client Download) Shaping
+		if len(enabledEgressRules) > 0 {
+			// Add root HTB qdisc (handle 1:0), default class 1:10
+			htb := netlink.NewHtb(netlink.QdiscAttrs{
+				LinkIndex: link.Attrs().Index,
+				Handle:    netlink.MakeHandle(1, 0),
+				Parent:    netlink.HANDLE_ROOT,
+			})
+			htb.Defcls = 10
+			if err := netlink.QdiscAdd(htb); err != nil {
+				return fmt.Errorf("[RealQos] add HTB root qdisc on %s: %w", ifaceName, err)
+			}
+			log.Printf("[RealQos] Added root HTB qdisc on %s", ifaceName)
+
+			// Add HTB classes and U32 filters
+			minorID := uint16(10)
+			for _, rule := range enabledEgressRules {
+				classHandle := netlink.MakeHandle(1, minorID)
+				rateBits := uint64(rule.EgressRateMbps) * 1_000_000
+				ceilBits := uint64(rule.EgressCeilMbps) * 1_000_000
+				if ceilBits <= 0 {
+					ceilBits = rateBits
+				}
+
+				class := netlink.NewHtbClass(
+					netlink.ClassAttrs{
+						LinkIndex: link.Attrs().Index,
+						Handle:    classHandle,
+						Parent:    netlink.MakeHandle(1, 0),
+					},
+					netlink.HtbClassAttrs{
+						Rate: rateBits,
+						Ceil: ceilBits,
+					},
+				)
+				if err := netlink.ClassAdd(class); err != nil {
+					return fmt.Errorf("[RealQos] add HTB class 1:%d for rule %q: %w", minorID, rule.Name, err)
+				}
+				log.Printf("[RealQos] Added class 1:%d — rate=%dMbps ceil=%dMbps for rule %q",
+					minorID, rule.EgressRateMbps, rule.EgressCeilMbps, rule.Name)
+
+				if err := addQosU32Filters(link, classHandle, rule, uint16(rule.Priority)); err != nil {
+					return fmt.Errorf("[RealQos] add filter for rule %q: %w", rule.Name, err)
+				}
+
+				minorID++
+			}
 		}
-		log.Printf("[RealQos] Added root HTB qdisc on %s", ifaceName)
 
-		// 4. Add an HTB class and U32 filter for each enabled egress rule
-		minorID := uint16(10)
-		for _, rule := range ifaceRules {
-			if !rule.Status || rule.EgressRateMbps <= 0 {
-				continue
+		// 4. Setup Ingress (Client Upload) Shaping via IFB redirect
+		if len(enabledIngressRules) > 0 {
+			// Ensure IFB kernel module is loaded
+			if err := execCommand("modprobe", "ifb").Run(); err != nil {
+				log.Printf("[RealQos] Warning: modprobe ifb failed (ifb may be compiled-in): %v", err)
 			}
 
-			classHandle := netlink.MakeHandle(1, minorID)
-			rateBits := uint64(rule.EgressRateMbps) * 1_000_000
-			ceilBits := uint64(rule.EgressCeilMbps) * 1_000_000
-			if ceilBits <= 0 {
-				ceilBits = rateBits
+			ifbName := "ifb-" + ifaceName
+
+			// Attempt to add IFB link dynamically
+			la := netlink.NewLinkAttrs()
+			la.Name = ifbName
+			ifbLink := &netlink.Ifb{LinkAttrs: la}
+			if err := netlink.LinkAdd(ifbLink); err != nil {
+				// Log but continue (link might already exist)
+				log.Printf("[RealQos] LinkAdd %s info: %v", ifbName, err)
 			}
 
-			class := netlink.NewHtbClass(
-				netlink.ClassAttrs{
+			// Look up link to get dynamic attributes/index
+			ifb, err := netlink.LinkByName(ifbName)
+			if err != nil {
+				return fmt.Errorf("[RealQos] failed to find IFB link %s: %w", ifbName, err)
+			}
+
+			// Bring IFB link UP
+			if err := netlink.LinkSetUp(ifb); err != nil {
+				return fmt.Errorf("[RealQos] failed to bring IFB link %s UP: %w", ifbName, err)
+			}
+
+			// Add Ingress Qdisc on physical interface
+			ingress := &netlink.Ingress{
+				QdiscAttrs: netlink.QdiscAttrs{
 					LinkIndex: link.Attrs().Index,
-					Handle:    classHandle,
-					Parent:    netlink.MakeHandle(1, 0),
+					Parent:    netlink.HANDLE_INGRESS,
 				},
-				netlink.HtbClassAttrs{
-					Rate: rateBits,
-					Ceil: ceilBits,
-				},
-			)
-			if err := netlink.ClassAdd(class); err != nil {
-				return fmt.Errorf("[RealQos] add HTB class 1:%d for rule %q: %w", minorID, rule.Name, err)
 			}
-			log.Printf("[RealQos] Added class 1:%d — rate=%dMbps ceil=%dMbps for rule %q",
-				minorID, rule.EgressRateMbps, rule.EgressCeilMbps, rule.Name)
-
-			// 5. Add U32 filters (src IP and/or dst IP)
-			if err := addQosU32Filters(link, classHandle, rule, uint16(rule.Priority)); err != nil {
-				return fmt.Errorf("[RealQos] add filter for rule %q: %w", rule.Name, err)
+			if err := netlink.QdiscAdd(ingress); err != nil {
+				return fmt.Errorf("[RealQos] add Ingress qdisc on %s: %w", ifaceName, err)
 			}
 
-			minorID++
+			// Add Redirect Filter (redirect all ingress physical traffic to IFB egress)
+			redirectFilter := &netlink.U32{
+				FilterAttrs: netlink.FilterAttrs{
+					LinkIndex: link.Attrs().Index,
+					Parent:    netlink.HANDLE_INGRESS,
+					Priority:  1,
+					Protocol:  unix.ETH_P_IP,
+				},
+				RedirIndex: ifb.Attrs().Index,
+			}
+			if err := netlink.FilterAdd(redirectFilter); err != nil {
+				return fmt.Errorf("[RealQos] add redirect filter on %s: %w", ifaceName, err)
+			}
+			log.Printf("[RealQos] Redirected ingress traffic of %s to %s", ifaceName, ifbName)
+
+			// Add root HTB Qdisc on IFB link (handle 1:0), default class 10
+			ifbHtb := netlink.NewHtb(netlink.QdiscAttrs{
+				LinkIndex: ifb.Attrs().Index,
+				Handle:    netlink.MakeHandle(1, 0),
+				Parent:    netlink.HANDLE_ROOT,
+			})
+			ifbHtb.Defcls = 10
+			if err := netlink.QdiscAdd(ifbHtb); err != nil {
+				return fmt.Errorf("[RealQos] add HTB root qdisc on %s: %w", ifbName, err)
+			}
+
+			// Create classes and filters on IFB link
+			minorID := uint16(10)
+			for _, rule := range enabledIngressRules {
+				classHandle := netlink.MakeHandle(1, minorID)
+				rateBits := uint64(rule.IngressRateMbps) * 1_000_000
+				ceilBits := uint64(rule.IngressCeilMbps) * 1_000_000
+				if ceilBits <= 0 {
+					ceilBits = rateBits
+				}
+
+				class := netlink.NewHtbClass(
+					netlink.ClassAttrs{
+						LinkIndex: ifb.Attrs().Index,
+						Handle:    classHandle,
+						Parent:    netlink.MakeHandle(1, 0),
+					},
+					netlink.HtbClassAttrs{
+						Rate: rateBits,
+						Ceil: ceilBits,
+					},
+				)
+				if err := netlink.ClassAdd(class); err != nil {
+					return fmt.Errorf("[RealQos] add HTB class 1:%d on %s: %w", minorID, ifbName, err)
+				}
+				log.Printf("[RealQos] Added Ingress class 1:%d on %s — rate=%dMbps ceil=%dMbps for rule %q",
+					minorID, ifbName, rule.IngressRateMbps, rule.IngressCeilMbps, rule.Name)
+
+				if err := addQosU32Filters(ifb, classHandle, rule, uint16(rule.Priority)); err != nil {
+					return fmt.Errorf("[RealQos] add filter on %s for rule %q: %w", ifbName, rule.Name, err)
+				}
+
+				minorID++
+			}
 		}
 	}
 
 	return nil
 }
 
-// ClearQosRules removes the root qdisc from an interface, cascading all classes/filters.
+// ClearQosRules removes the root and ingress qdiscs from the interface, and deletes the IFB link.
 func (q *RealQos) ClearQosRules(ifaceName string) error {
 	link, err := netlink.LinkByName(ifaceName)
 	if err != nil {
@@ -121,23 +227,32 @@ func (q *RealQos) ClearQosRules(ifaceName string) error {
 	}
 
 	qdiscs, err := netlink.QdiscList(link)
-	if err != nil {
-		return fmt.Errorf("list qdiscs on %s: %w", ifaceName, err)
-	}
-
-	for _, qd := range qdiscs {
-		if qd.Attrs().Parent == netlink.HANDLE_ROOT {
-			if err := netlink.QdiscDel(qd); err != nil {
-				log.Printf("[RealQos] Failed to delete root qdisc on %s: %v", ifaceName, err)
-				return err
+	if err == nil {
+		for _, qd := range qdiscs {
+			parent := qd.Attrs().Parent
+			if parent == netlink.HANDLE_ROOT || parent == netlink.HANDLE_INGRESS {
+				if err := netlink.QdiscDel(qd); err != nil {
+					log.Printf("[RealQos] Failed to delete qdisc (%x) on %s: %v", parent, ifaceName, err)
+				}
 			}
-			log.Printf("[RealQos] Deleted root qdisc on %s", ifaceName)
 		}
 	}
+
+	// Delete IFB link
+	ifbName := "ifb-" + ifaceName
+	ifbLink, err := netlink.LinkByName(ifbName)
+	if err == nil {
+		if err := netlink.LinkDel(ifbLink); err != nil {
+			log.Printf("[RealQos] Failed to delete IFB link %s: %v", ifbName, err)
+		} else {
+			log.Printf("[RealQos] Deleted IFB link %s", ifbName)
+		}
+	}
+
 	return nil
 }
 
-// GetIfaceQosStatus returns the live qdisc and HTB class state from the kernel.
+// GetIfaceQosStatus returns the combined live qdisc and class state from physical and IFB interface.
 func (q *RealQos) GetIfaceQosStatus(ifaceName string) (*model.QosIfaceStatus, error) {
 	link, err := netlink.LinkByName(ifaceName)
 	if err != nil {
@@ -149,42 +264,64 @@ func (q *RealQos) GetIfaceQosStatus(ifaceName string) (*model.QosIfaceStatus, er
 		Classes:   []model.QosClass{},
 	}
 
+	// 1. Fetch Egress qdiscs/classes
 	qdiscs, err := netlink.QdiscList(link)
-	if err != nil {
-		return nil, fmt.Errorf("list qdiscs on %s: %w", ifaceName, err)
-	}
-	for _, qd := range qdiscs {
-		if qd.Attrs().Parent == netlink.HANDLE_ROOT {
-			status.HasQdisc = true
-			break
+	if err == nil {
+		for _, qd := range qdiscs {
+			if qd.Attrs().Parent == netlink.HANDLE_ROOT {
+				status.HasQdisc = true
+				break
+			}
 		}
 	}
 
-	if !status.HasQdisc {
-		return status, nil
-	}
-
-	classes, err := netlink.ClassList(link, netlink.MakeHandle(1, 0))
-	if err != nil {
-		return nil, fmt.Errorf("list classes on %s: %w", ifaceName, err)
-	}
-
-	for _, cls := range classes {
-		htbCls, ok := cls.(*netlink.HtbClass)
-		if !ok {
-			continue
+	if status.HasQdisc {
+		classes, err := netlink.ClassList(link, netlink.MakeHandle(1, 0))
+		if err == nil {
+			for _, cls := range classes {
+				htbCls, ok := cls.(*netlink.HtbClass)
+				if !ok {
+					continue
+				}
+				handle := htbCls.Attrs().Handle
+				major := handle >> 16
+				minor := handle & 0xffff
+				rateMbit := htbCls.Rate * 8 / 1_000_000
+				ceilMbit := htbCls.Ceil * 8 / 1_000_000
+				status.Classes = append(status.Classes, model.QosClass{
+					ClassID: fmt.Sprintf("Egress %d:%d", major, minor),
+					Rate:    fmt.Sprintf("%dMbit", rateMbit),
+					Ceil:    fmt.Sprintf("%dMbit", ceilMbit),
+				})
+			}
 		}
-		handle := htbCls.Attrs().Handle
-		major := handle >> 16
-		minor := handle & 0xffff
-		// Convert bytes/sec back to Mbit/s for display
-		rateMbit := htbCls.Rate * 8 / 1_000_000
-		ceilMbit := htbCls.Ceil * 8 / 1_000_000
-		status.Classes = append(status.Classes, model.QosClass{
-			ClassID: fmt.Sprintf("%d:%d", major, minor),
-			Rate:    fmt.Sprintf("%dMbit", rateMbit),
-			Ceil:    fmt.Sprintf("%dMbit", ceilMbit),
-		})
+	}
+
+	// 2. Fetch Ingress qdiscs/classes via IFB link
+	ifbName := "ifb-" + ifaceName
+	ifbLink, err := netlink.LinkByName(ifbName)
+	if err == nil {
+		status.HasQdisc = true // If IFB link is active, QoS is active
+
+		classes, err := netlink.ClassList(ifbLink, netlink.MakeHandle(1, 0))
+		if err == nil {
+			for _, cls := range classes {
+				htbCls, ok := cls.(*netlink.HtbClass)
+				if !ok {
+					continue
+				}
+				handle := htbCls.Attrs().Handle
+				major := handle >> 16
+				minor := handle & 0xffff
+				rateMbit := htbCls.Rate * 8 / 1_000_000
+				ceilMbit := htbCls.Ceil * 8 / 1_000_000
+				status.Classes = append(status.Classes, model.QosClass{
+					ClassID: fmt.Sprintf("Ingress %d:%d", major, minor),
+					Rate:    fmt.Sprintf("%dMbit", rateMbit),
+					Ceil:    fmt.Sprintf("%dMbit", ceilMbit),
+				})
+			}
+		}
 	}
 
 	return status, nil
