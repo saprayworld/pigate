@@ -179,17 +179,31 @@ export const qosService = {
   getIfaceStatus: async (iface: string): Promise<QosIfaceStatus> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 300));
-      // Return dummy live status based on mock data
       const rules = getLocalQosRules().filter((r) => r.interface === iface && r.status);
+      const classes: QosClass[] = [];
+      rules.forEach((r, i) => {
+        if (r.egressRateMbps > 0) {
+          classes.push({
+            classId: `Egress 1:${10 + i}`,
+            rate: `${r.egressRateMbps}Mbit`,
+            ceil: `${r.egressCeilMbps}Mbit`,
+            ruleName: r.name
+          });
+        }
+        if (r.ingressRateMbps > 0) {
+          classes.push({
+            classId: `Ingress 1:${10 + i}`,
+            rate: `${r.ingressRateMbps}Mbit`,
+            ceil: `${r.ingressCeilMbps}Mbit`,
+            ruleName: r.name
+          });
+        }
+      });
+
       return {
         interface: iface,
-        hasQdisc: rules.length > 0,
-        classes: rules.map((r, i) => ({
-          classId: `1:${10 + i}`,
-          rate: `${r.egressRateMbps}Mbit`,
-          ceil: `${r.egressCeilMbps}Mbit`,
-          ruleName: r.name
-        }))
+        hasQdisc: classes.length > 0,
+        classes: classes
       };
     }
 

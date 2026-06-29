@@ -69,7 +69,7 @@ export default function QoS() {
   const [formPriority, setFormPriority] = useState("10")
   const [formStatus, setFormStatus] = useState(true)
   const [formDescription, setFormDescription] = useState("")
-  
+
   const [formError, setFormError] = useState("")
 
   // --- Load Data ---
@@ -353,11 +353,10 @@ export default function QoS() {
                   </CardDescription>
                 </div>
                 <Badge
-                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide border ${
-                    isQosActive
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide border ${isQosActive
                       ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
                       : "bg-muted text-muted-foreground border-border/40"
-                  }`}
+                    }`}
                 >
                   {isQosActive ? "QoS Active" : "No Shaping"}
                 </Badge>
@@ -370,25 +369,28 @@ export default function QoS() {
                       Active Kernel Classes
                     </span>
                     <div className="space-y-1 text-xs">
-                      {status.classes.map((cls) => (
-                        <div
-                          key={cls.classId}
-                          className="flex items-center justify-between bg-accent/30 rounded px-2.5 py-1.5 border border-border/30"
-                        >
-                          <div className="font-semibold text-foreground flex items-center gap-1">
-                            <span className="text-[10px] text-muted-foreground bg-accent px-1 rounded">
-                              {cls.classId}
-                            </span>
-                            <span className="truncate max-w-[100px]">{cls.ruleName || "Shared Limit"}</span>
+                      {status.classes.map((cls) => {
+                        const isIngress = cls.classId.toLowerCase().includes("ingress");
+                        return (
+                          <div
+                            key={cls.classId}
+                            className="flex items-center justify-between bg-accent/30 rounded px-2.5 py-1.5 border border-border/30"
+                          >
+                            <div className="font-semibold text-foreground flex items-center gap-1">
+                              <span className="text-[10px] text-muted-foreground bg-accent px-1 rounded">
+                                {cls.classId}
+                              </span>
+                              <span className="truncate max-w-[100px]">{cls.ruleName || "Shared Limit"}</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-muted-foreground">
+                              <span className={`flex items-center gap-0.5 font-semibold text-xs ${isIngress ? "text-amber-500 animate-pulse" : "text-emerald-500"}`}>
+                                {isIngress ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
+                                {cls.ceil}
+                              </span>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2 text-muted-foreground">
-                            <span className="flex items-center gap-0.5 text-primary">
-                              <ArrowDown className="h-3 w-3" />
-                              {cls.ceil}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 ) : (
@@ -486,9 +488,8 @@ export default function QoS() {
                   filteredRules.map((rule) => (
                     <TableRow
                       key={rule.id}
-                      className={`border-border/40 hover:bg-muted/10 transition-colors ${
-                        !rule.status ? "opacity-60 bg-muted/5" : ""
-                      }`}
+                      className={`border-border/40 hover:bg-muted/10 transition-colors ${!rule.status ? "opacity-60 bg-muted/5" : ""
+                        }`}
                     >
                       <TableCell className="align-middle">
                         <Switch
@@ -523,7 +524,7 @@ export default function QoS() {
                       <TableCell className="align-middle">
                         {rule.egressRateMbps > 0 ? (
                           <div className="flex items-center gap-1.5 text-xs text-emerald-500 font-semibold">
-                            <ArrowDown className="h-3.5 w-3.5" />
+                            <ArrowUp className="h-3.5 w-3.5" />
                             <span>{rule.egressRateMbps} Mbps</span>
                             {rule.egressCeilMbps > rule.egressRateMbps && (
                               <span className="text-[10px] text-muted-foreground font-normal">
@@ -541,7 +542,7 @@ export default function QoS() {
                       <TableCell className="align-middle">
                         {rule.ingressRateMbps > 0 ? (
                           <div className="flex items-center gap-1.5 text-xs text-amber-500 font-semibold">
-                            <ArrowUp className="h-3.5 w-3.5" />
+                            <ArrowDown className="h-3.5 w-3.5" />
                             <span>{rule.ingressRateMbps} Mbps</span>
                             {rule.ingressCeilMbps > rule.ingressRateMbps && (
                               <span className="text-[10px] text-muted-foreground font-normal">
@@ -705,7 +706,7 @@ export default function QoS() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <Label className="text-[11px] text-muted-foreground flex items-center gap-1 font-semibold">
-                    <ArrowDown className="h-3 w-3 text-emerald-500" />
+                    <ArrowUp className="h-3 w-3 text-emerald-500" />
                     Egress Rate (Mbps)
                   </Label>
                   <Input
@@ -736,7 +737,7 @@ export default function QoS() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <Label className="text-[11px] text-muted-foreground flex items-center gap-1 font-semibold">
-                    <ArrowUp className="h-3 w-3 text-amber-500" />
+                    <ArrowDown className="h-3 w-3 text-amber-500" />
                     Ingress Rate (Mbps)
                   </Label>
                   <Input
