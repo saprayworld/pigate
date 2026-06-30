@@ -38,7 +38,7 @@
   * CORS Middleware ปรับสิทธิ์เฉพาะ Origin ที่ปลอดภัย (ป้องกัน CORS Credentials Mismatch)
   * ติดตั้งระบบรักษาความปลอดภัยจำกัดอัตราการขอเข้าถึง (Rate Limiting) ในหน้าล็อกอิน และ Middleware ตรวจสอบ Bearer Token
   * ระบบยืนยันสิทธิ์เซสชันย้อนกลับ `/api/auth/session` พร้อมระบบบังคับเปลี่ยนรหัสผ่านครั้งแรก (IsInitial check) บล็อกการเข้าถึง endpoint อื่นและบังคับนำไปสู่หน้า `/change-password`
-* **REST API Endpoints ทั้งหมด (9 กลุ่ม) [สำเร็จ]:**
+* **REST API Endpoints ทั้งหมด (10 กลุ่ม) [สำเร็จ]:**
   * **Authentication:** POST /auth/login, POST /auth/logout, GET /auth/session
   * **Dashboard:** GET /dashboard/stats, GET /dashboard/performance, GET /dashboard/logs, POST /dashboard/logs/clear, GET /dashboard/logs/stream (SSE)
   * **Network Interfaces:** GET, PUT, PATCH, DELETE /interfaces, POST /interfaces/{id}/toggle, POST /interfaces/{id}/reset, GET /interfaces/{id}/scan, GET /interfaces/{id}/wifi-status
@@ -48,6 +48,7 @@
   * **Static Routes:** GET, POST /routes, PUT, DELETE /routes/{id}, GET /routes/config, POST /routes/bulk-delete, POST /routes/{id}/toggle, POST /routes/apply
   * **DHCP Server:** GET, PUT /dhcp/config, GET, POST /dhcp/reservations, PUT, DELETE /dhcp/reservations/{id}, GET /dhcp/leases, POST /dhcp/apply
   * **System & Maintenance:** GET, PUT /system/time, GET, PUT /system/dns, PUT /system/password, GET /system/services, POST /system/services/{id}/restart, POST /system/reboot, POST /system/shutdown, GET /system/config/export, POST /system/config/import
+  * **QoS Bandwidth Control:** GET, POST /qos/rules, GET, PUT, DELETE /qos/rules/{id}, POST /qos/rules/{id}/toggle, POST /qos/sync, GET /qos/status/{iface}, DELETE /qos/iface/{iface}
 * **Automated Testing Suite [สำเร็จ]:** พัฒนาชุดทดสอบ Unit test (จำลอง SQLite) และ Integration test (จำลอง http client) บิวด์และทดสอบผ่านสำเร็จ 100%
 * **การจำแนกประเภทและอัปเดตสคีมา Static Routing ใหม่ [สำเร็จ]:**
   * แยกประเภทความชัดเจนของ Static Route เป็น `custom` และ `customgateway`
@@ -70,6 +71,18 @@
   * ติดตั้งระบบ Debouncer (500ms) เพื่อรวมกลุ่มเหตุการณ์ และสั่งกระตุ้นการประสานงาน (Reconcile) นำเอาคอนฟิก Static Route จาก SQLite ไปเขียนทับลง Kernel อัตโนมัติ ป้องกันการดริฟต์เครือข่ายภายนอก
   * ปรับปรุงสิทธิ์การใช้ Protocol ID `120` ใน [real_routing.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_routing.go) ให้ครอบคลุมประเภท `customgateway` ป้องกันการตรวจเช็คผิดพลาด
   * แก้ไขปัญหาลูปสัญญาณย้อนกลับ (Netlink Reconciliation loop) ในกรณีเปลี่ยน Metric (Priority) โดยตรวจสอบและลบเส้นทางเก่าออกก่อนผ่าน `RouteDel` จากนั้นจึงสั่งสร้างใหม่ด้วย `RouteAdd` แทนการสั่งเปลี่ยนทับค่าเดิม
+* **QoS Bandwidth Control (HTB + IFB via tc Netlink) [สำเร็จ]:**
+  * พัฒนา `QosService` และ `RealQosManager` สำหรับการควบคุมแบนด์วิดธ์ทั้ง Egress และ Ingress
+  * ใช้ HTB (Hierarchical Token Bucket) สำหรับ Egress Shaping และ IFB (Intermediate Functional Block) สำหรับ Ingress Shaping
+  * รองรับการจับคู่ตาม Source/Destination IP (CIDR)
+  * REST API ครบ: GET/POST/PUT/DELETE /qos/rules, toggle, sync, status, clear
+  * `SyncToKernel()` ทำงานแบบ idempotent (ล้างแล้วสร้างใหม่)
+  * ดู kernel status ได้แบบ real-time ผ่าน `GET /api/qos/status/{iface}`
+* **D-Bus Service Management [สำเร็จ]:**
+  * เปลี่ยนจากการรัน `sudo systemctl` ผ่าน exec.Command ไปใช้ D-Bus (`github.com/godbus/dbus/v5`) โดยตรง
+  * ฟังก์ชัน `IsServiceActiveViaDBus`, `StartServiceViaDBus`, `StopServiceViaDBus`, `RestartServiceViaDBus`
+  * ใช้ใน: จัดการ `wpa_supplicant@<iface>` และ `systemd-resolved.service`
+  * ลดความจำเป็นของ sudo ลงเหลือเพียง `dhcpcd` เท่านั้น
 * **Real Firewall Rules Integration (nftables via Netlink) [สำเร็จ]:**
   * พัฒนา `RealFirewall` ใน [real_firewall.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_firewall.go) โดยใช้ `github.com/google/nftables` ในการคุยกับเคอร์เนลผ่าน Netlink Socket
   * สร้างตาราง `pigate` (inet family) ควบคุมกฎ Dynamic Rules ใน `forward` chain
@@ -112,6 +125,7 @@
   * พัฒนาระดับชั้นเขียนคอนฟิก (Real Config Writer) เพื่อจัดส่งไฟล์และคำสั่งสตาร์ทบริการให้กับ `dnsmasq` หรือ `isc-dhcp-server` บน Linux Host
 * [ ] **พัฒนาระบบ DNS Server (Real DNS Manager):**
   * พัฒนาระดับชั้นจัดการแก้ไขไฟล์ `/etc/resolv.conf` หรือระบบจัดการ Local DNS Resolution บนเซิร์ฟเวอร์จริง
+  * **หมายเหตุ:** `systemd-resolved` ถูก integrate ผ่าน D-Bus แล้ว (จัดการ service start/stop/restart) แต่ยังขาดระบบ Local DNS Resolution / FQDN resolution สำหรับ client ภายในเครือข่าย
 * [ ] **ติดตั้งระบบสถิติกฎไฟร์วอลล์จริง (Live Rule Counters Telemetry):**
   * เรียกใช้ข้อมูล Hit packet และ byte counters จาก `expr.Counter` บน nftables rules นำเสนอเป็นข้อมูล Telemetry เรียลไทม์ผ่าน API ไปแสดงผลในตารางกฎหน้าเว็บโดยไม่ต้องสั่งเขียนบันทึกลง SD card ของบอร์ด
 * [ ] **พัฒนาระบบล็อกความปลอดภัยสตรีมสด (Firewall Logs Stream):**
@@ -122,3 +136,12 @@
   * ติดตั้งและทดสอบโปรแกรมภายใต้ระบบปฏิบัติการ Linux ของ Raspberry Pi 5
   * กำหนดสิทธิ์และความปลอดภัยระดับไฟล์รันไบนารี (`sudo setcap cap_net_admin,cap_net_raw+ep ./pigate`) เพื่อทดสอบการจัดการ Netlink/nftables ในโหมดไร้สิทธิ์ root (Non-root security verification)
 * [ ] **ทำการจำลองโหลดเครือข่ายและสตรีมมิ่ง:** เพื่อวัดระดับความหน่วงของการประมวลผล (Latency) และปริมาณอัตราความเร็วข้อมูล (Throughput) เมื่อมีการใช้ Masquerading และกฎไฟร์วอลล์ระดับร้อยข้อ
+
+### 3.3 ระบบติดตั้งและความปลอดภัย (Installation & Security)
+* [x] **install.sh — Script ติดตั้งอัตโนมัติ [สำเร็จ]:**
+  * สร้าง system user `pigate` (non-root) + กลุ่ม `netdev`
+  * ตั้งค่า ACL สำหรับ `/etc/wpa_supplicant` และ `/etc/systemd/resolved.conf.d`
+  * สร้าง polkit rule `/etc/polkit-1/rules.d/10-pigate-wpa.rules` — อนุญาต pigate จัดการ `wpa_supplicant@*` และ `systemd-resolved.service` ผ่าน D-Bus
+  * sudoers เฉพาะ `/usr/sbin/dhcpcd` เท่านั้น
+  * ตั้งค่า `setcap cap_net_admin,cap_net_raw+ep` บน binary
+  * สร้าง systemd service พร้อม `AmbientCapabilities` และ `CapabilityBoundingSet`

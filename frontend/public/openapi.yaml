@@ -4,10 +4,10 @@ info:
   description: API endpoints for PiGate - Raspberry Pi 5 Firewall & Gateway Controller. This spec is synchronized with the React frontend service layer.
   version: 1.0.0
 servers:
-  - url: http://localhost:8081/api
-    description: Default base path for PiGate Go Backend
   - url: http://localhost:2479/api
+    description: Development server (default port)
   - url: /api
+    description: Production (same-origin)
 
 security:
   - BearerAuth: []
@@ -1344,6 +1344,241 @@ paths:
         '400':
           description: Invalid JSON structure in import payload
 
+  # =========================================================================
+  # QoS BANDWIDTH CONTROL
+  # =========================================================================
+  /qos/rules:
+    get:
+      tags:
+        - QoS
+      summary: List all QoS rules
+      operationId: getQosRules
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of QoS rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/QosRule'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags:
+        - QoS
+      summary: Create a new QoS rule
+      operationId: createQosRule
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QosRuleInput'
+      responses:
+        '201':
+          description: QoS rule created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QosRule'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /qos/rules/{id}:
+    get:
+      tags:
+        - QoS
+      summary: Get a QoS rule by ID
+      operationId: getQosRuleById
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: QoS rule details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QosRule'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags:
+        - QoS
+      summary: Update a QoS rule
+      operationId: updateQosRule
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QosRuleInput'
+      responses:
+        '200':
+          description: Updated QoS rule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QosRule'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags:
+        - QoS
+      summary: Delete a QoS rule
+      operationId: deleteQosRule
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Rule deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: QoS rule deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /qos/rules/{id}/toggle:
+    post:
+      tags:
+        - QoS
+      summary: Toggle QoS rule enabled/disabled
+      operationId: toggleQosRule
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Updated QoS rule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QosRule'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /qos/sync:
+    post:
+      tags:
+        - QoS
+      summary: Sync all QoS rules to kernel (tc)
+      operationId: syncQosRules
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: QoS rules synced to kernel
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /qos/status/{iface}:
+    get:
+      tags:
+        - QoS
+      summary: Get live kernel QoS status for an interface
+      operationId: getQosIfaceStatus
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: iface
+          in: path
+          required: true
+          schema:
+            type: string
+          example: eth0
+      responses:
+        '200':
+          description: Interface QoS status from kernel
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QosIfaceStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /qos/iface/{iface}:
+    delete:
+      tags:
+        - QoS
+      summary: Clear all QoS qdiscs/classes from an interface
+      operationId: clearQosIface
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: iface
+          in: path
+          required: true
+          schema:
+            type: string
+          example: eth0
+      responses:
+        '200':
+          description: QoS cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: QoS cleared for interface eth0
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
 # =========================================================================
 # COMPONENTS & SCHEMAS
 # =========================================================================
@@ -1354,6 +1589,40 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: Enter the Bearer session token generated during login.
+
+  responses:
+    Unauthorized:
+      description: Authentication required or token is invalid/expired
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+                example: Unauthorized
+
+    BadRequest:
+      description: Invalid request body or parameters
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+                example: Bad Request
+
+    NotFound:
+      description: The requested resource was not found
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+                example: Not Found
 
   schemas:
     # --- Dashboard Schemas ---
@@ -2217,3 +2486,121 @@ components:
           items:
             type: string
           example: [192.168.0.1, 8.8.4.4]
+
+    QosRule:
+      type: object
+      properties:
+        id:
+          type: string
+          example: qos-001
+        name:
+          type: string
+          example: Limit Guest WiFi
+        interface:
+          type: string
+          example: eth1
+        matchSrcIp:
+          type: string
+          description: Source IP CIDR to match (empty = all)
+          example: 192.168.10.0/24
+        matchDstIp:
+          type: string
+          description: Destination IP CIDR to match (empty = all)
+          example: ""
+        egressRateMbps:
+          type: integer
+          description: Guaranteed egress (download) rate in Mbps. 0 = unlimited.
+          example: 10
+        egressCeilMbps:
+          type: integer
+          description: Burst ceiling for egress in Mbps.
+          example: 20
+        ingressRateMbps:
+          type: integer
+          description: Guaranteed ingress (upload) rate in Mbps via IFB. 0 = unlimited.
+          example: 5
+        ingressCeilMbps:
+          type: integer
+          description: Burst ceiling for ingress in Mbps.
+          example: 10
+        priority:
+          type: integer
+          description: Rule priority (lower = matched first).
+          example: 10
+        status:
+          type: boolean
+          description: Whether the rule is active.
+          example: true
+        description:
+          type: string
+          example: Bandwidth limit for guest network
+
+    QosRuleInput:
+      type: object
+      required:
+        - name
+        - interface
+      properties:
+        name:
+          type: string
+          example: Limit Guest WiFi
+        interface:
+          type: string
+          example: eth1
+        matchSrcIp:
+          type: string
+          example: 192.168.10.0/24
+        matchDstIp:
+          type: string
+          example: ""
+        egressRateMbps:
+          type: integer
+          example: 10
+        egressCeilMbps:
+          type: integer
+          example: 20
+        ingressRateMbps:
+          type: integer
+          example: 5
+        ingressCeilMbps:
+          type: integer
+          example: 10
+        priority:
+          type: integer
+          example: 10
+        status:
+          type: boolean
+          example: true
+        description:
+          type: string
+          example: Bandwidth limit for guest network
+
+    QosIfaceStatus:
+      type: object
+      properties:
+        interface:
+          type: string
+          example: eth0
+        hasQdisc:
+          type: boolean
+          example: true
+        classes:
+          type: array
+          items:
+            $ref: '#/components/schemas/QosClass'
+
+    QosClass:
+      type: object
+      properties:
+        classId:
+          type: string
+          example: "1:10"
+        rate:
+          type: string
+          example: 10Mbit
+        ceil:
+          type: string
+          example: 20Mbit
+        ruleName:
+          type: string
+          example: Limit Guest WiFi

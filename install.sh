@@ -41,6 +41,64 @@ echo -e "${BLUE}=============================================${NC}"
 echo ""
 
 # =============================================================================
+# ตรวจสอบว่าเป็นการ Update/Reinstall หรือติดตั้งใหม่
+# =============================================================================
+IS_UPDATE=false
+BINARY_INSTALLED="/usr/local/bin/pigate"
+SERVICE_NAME="pigate.service"
+SERVICE_WAS_RUNNING=false
+
+if [[ -f "${BINARY_INSTALLED}" ]] || systemctl list-unit-files "${SERVICE_NAME}" &>/dev/null && systemctl is-enabled "${SERVICE_NAME}" &>/dev/null 2>&1; then
+    IS_UPDATE=true
+fi
+
+if [[ "${IS_UPDATE}" == true ]]; then
+    echo -e "${YELLOW}=============================================${NC}"
+    echo -e "${YELLOW}  ⚠  พบการติดตั้ง PiGate อยู่แล้วในระบบ!  ${NC}"
+    echo -e "${YELLOW}=============================================${NC}"
+    echo ""
+
+    # แสดงสถานะปัจจุบัน
+    if [[ -f "${BINARY_INSTALLED}" ]]; then
+        log_info "Binary:  ${BINARY_INSTALLED} (พบไฟล์)"
+    fi
+
+    if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
+        log_warn "Service: ${SERVICE_NAME} กำลังทำงานอยู่ (active)"
+        SERVICE_WAS_RUNNING=true
+    elif systemctl is-enabled --quiet "${SERVICE_NAME}" 2>/dev/null; then
+        log_info "Service: ${SERVICE_NAME} ถูก enable แต่ไม่ได้ทำงาน"
+    fi
+
+    echo ""
+    echo -e "${YELLOW}Script จะดำเนินการดังนี้:${NC}"
+    echo -e "  1. หยุด service pigate (ถ้ากำลังรันอยู่)"
+    echo -e "  2. อัปเดต binary และไฟล์ config ทั้งหมด"
+    echo -e "  3. เริ่ม service ใหม่ (ถ้าเคยรันอยู่ก่อน)"
+    echo ""
+    read -r -p "$(echo -e "${YELLOW}ต้องการดำเนิน Update/Reinstall ต่อหรือไม่? [y/N]: ${NC}")" CONFIRM
+
+    if [[ ! "${CONFIRM}" =~ ^[Yy]$ ]]; then
+        log_warn "ยกเลิกการติดตั้ง"
+        exit 0
+    fi
+
+    echo ""
+    log_info "เริ่มต้น Update/Reinstall PiGate..."
+
+    # หยุด service ก่อนอัปเดต
+    if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
+        log_info "กำลังหยุด ${SERVICE_NAME}..."
+        systemctl stop "${SERVICE_NAME}"
+        log_ok "หยุด ${SERVICE_NAME} สำเร็จ"
+    fi
+else
+    log_info "ไม่พบการติดตั้งเดิม — เริ่มติดตั้งใหม่..."
+fi
+
+echo ""
+
+# =============================================================================
 # STEP 1: สร้าง system user สำหรับ pigate
 # =============================================================================
 log_info "STEP 1: สร้าง system user 'pigate'..."
@@ -197,19 +255,39 @@ systemctl enable pigate.service
 log_ok "เปิดใช้งาน pigate.service สำเร็จ"
 
 # =============================================================================
+# เริ่ม service อีกครั้งถ้าเคยรันอยู่ก่อน Update
+# =============================================================================
+if [[ "${IS_UPDATE}" == true ]] && [[ "${SERVICE_WAS_RUNNING}" == true ]]; then
+    log_info "กำลังเริ่ม ${SERVICE_NAME} อีกครั้ง..."
+    systemctl start "${SERVICE_NAME}"
+    log_ok "เริ่ม ${SERVICE_NAME} สำเร็จ"
+fi
+
+# =============================================================================
 # สรุปผล
 # =============================================================================
 echo ""
-echo -e "${GREEN}=============================================${NC}"
-echo -e "${GREEN}       ติดตั้ง PiGate สำเร็จ! 🎉           ${NC}"
-echo -e "${GREEN}=============================================${NC}"
+if [[ "${IS_UPDATE}" == true ]]; then
+    echo -e "${GREEN}=============================================${NC}"
+    echo -e "${GREEN}    อัปเดต PiGate สำเร็จ! 🔄              ${NC}"
+    echo -e "${GREEN}=============================================${NC}"
+else
+    echo -e "${GREEN}=============================================${NC}"
+    echo -e "${GREEN}       ติดตั้ง PiGate สำเร็จ! 🎉           ${NC}"
+    echo -e "${GREEN}=============================================${NC}"
+fi
 echo ""
 echo -e "  Binary:   ${BLUE}/usr/local/bin/pigate${NC}"
 echo -e "  Database: ${BLUE}/var/lib/pigate/pigate.db${NC}"
 echo -e "  Service:  ${BLUE}/etc/systemd/system/pigate.service${NC}"
 echo ""
 echo -e "${YELLOW}คำสั่งถัดไป:${NC}"
-echo -e "  เริ่มต้น service:  sudo systemctl start pigate"
-echo -e "  ดู status:         sudo systemctl status pigate"
-echo -e "  ดู logs:           sudo journalctl -u pigate -f"
+if [[ "${IS_UPDATE}" == true ]] && [[ "${SERVICE_WAS_RUNNING}" == true ]]; then
+    echo -e "  ดู status:         sudo systemctl status pigate"
+    echo -e "  ดู logs:           sudo journalctl -u pigate -f"
+else
+    echo -e "  เริ่มต้น service:  sudo systemctl start pigate"
+    echo -e "  ดู status:         sudo systemctl status pigate"
+    echo -e "  ดู logs:           sudo journalctl -u pigate -f"
+fi
 echo ""
