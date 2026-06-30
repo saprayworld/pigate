@@ -5,9 +5,9 @@ package kernel
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"net"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/godbus/dbus/v5"
@@ -160,8 +160,19 @@ func (r *RealDNSManager) RevertLinkDNS(ifaceName string) error {
 func (r *RealDNSManager) SetGlobalDNS(servers []string, searchDomain string) error {
 	if len(servers) == 0 && searchDomain == "" {
 		// Clean up drop-in config to revert to defaults
-		_ = exec.Command("sudo", "rm", "-f", "/etc/systemd/resolved.conf.d/pigate.conf").Run()
-		_ = exec.Command("sudo", "systemctl", "restart", "systemd-resolved").Run()
+		targetPath := "/etc/systemd/resolved.conf.d/pigate.conf"
+
+		// 1. ลบไฟล์ด้วยคำสั่งของ Go โดยตรง (ใช้ os.Remove)
+		// เช็ก os.IsNotExist ด้วย เผื่อกรณีที่ไฟล์ไม่มีอยู่แล้ว จะได้ไม่แจ้ง Error
+		if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove resolved config: %w", err)
+		}
+
+		// 2. สั่ง Restart Service ผ่าน D-Bus (ฟังก์ชันที่เราสร้างไว้)
+		if err := RestartServiceViaDBus("systemd-resolved.service"); err != nil {
+			return fmt.Errorf("failed to restart systemd-resolved: %w", err)
+		}
+
 		return nil
 	}
 
@@ -193,8 +204,14 @@ func (r *RealDNSManager) SetGlobalDNS(servers []string, searchDomain string) err
 		return fmt.Errorf("failed to rename resolved config to target path: %w", err)
 	}
 
-	if err := exec.Command("sudo", "systemctl", "restart", "systemd-resolved").Run(); err != nil {
-		return fmt.Errorf("failed to restart systemd-resolved: %w", err)
+	// ใช้ command
+	// if err := exec.Command("sudo", "systemctl", "restart", "systemd-resolved").Run(); err != nil {
+	// 	return fmt.Errorf("failed to restart systemd-resolved: %w", err)
+	// }
+
+	// ใช้ D-Bus แทนการเรียก sudo systemctl restart
+	if err := RestartServiceViaDBus("systemd-resolved.service"); err != nil {
+		return fmt.Errorf("failed to restart systemd-resolved via D-Bus: %w", err)
 	}
 
 	return nil
@@ -232,5 +249,36 @@ func (m *MockDNSManager) RevertLinkDNS(ifaceName string) error {
 func (m *MockDNSManager) SetGlobalDNS(servers []string, searchDomain string) error {
 	m.globalDNS = servers
 	m.globalDom = searchDomain
+	return nil
+}
+
+// RestartServiceViaDBus สั่งรีสตาร์ท systemd service ผ่าน D-Bus โดยไม่ต้องใช้ sudo
+func RestartServiceViaDBus(serviceName string) error {
+	log.Printf("[D-Bus] Attempting to restart service: %s", serviceName)
+
+	// 1. เชื่อมต่อกับ D-Bus System Bus
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return fmt.Errorf("failed to connect to D-Bus system bus: %w", err)
+	}
+	// ไม่ต้อง defer conn.Close() ก็ได้หากเป็น SystemBus ที่แชร์กันในแอป
+	// แต่ถ้าเปิดใหม่ทุกครั้งควร Close ครับ
+
+	// 2. สร้าง Object อ้างอิงไปยังตัวจัดการของ systemd (Manager)
+	// - Service Name: org.freedesktop.systemd1
+	// - Object Path: /org/freedesktop/systemd1
+	obj := conn.Object("org.freedesktop.systemd1", "/org/freedesktop/systemd1")
+
+	// 3. เรียก Method "RestartUnit"
+	// Arguments ที่ต้องส่งมี 2 ตัว:
+	//   - ตัวที่ 1 (string): ชื่อเต็มของ Service เช่น "systemd-resolved.service"
+	//   - ตัวที่ 2 (string): โหมดการทำงาน ปกติใช้ "replace" (เพื่อล้าง Job เก่าของ Service นี้ที่อาจค้างอยู่)
+	var jobPath dbus.ObjectPath
+	err = obj.Call("org.freedesktop.systemd1.Manager.RestartUnit", 0, serviceName, "replace").Store(&jobPath)
+	if err != nil {
+		return fmt.Errorf("D-Bus call RestartUnit failed for %s: %w", serviceName, err)
+	}
+
+	log.Printf("[D-Bus] Restart job queued successfully. Job Path: %s", jobPath)
 	return nil
 }

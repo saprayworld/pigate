@@ -16,6 +16,7 @@ import (
 
 	"pigate/internal/model"
 
+	"github.com/godbus/dbus/v5"
 	"github.com/mdlayher/wifi"
 	"github.com/vishvananda/netlink"
 )
@@ -54,18 +55,31 @@ func (r *RealNetwork) ToggleInterface(name string, up bool) error {
 		if isWireless {
 			serviceName := fmt.Sprintf("wpa_supplicant@%s", name)
 			log.Printf("[RealNetwork] Interface is wireless. Verifying service state: %s", serviceName)
-			if execCommand("sudo", "systemctl", "is-active", "--quiet", serviceName).Run() != nil {
-				// Clean up stale socket file before starting the service
-				socketPath := filepath.Join(wpaSocketDir, name)
-				log.Printf("[RealNetwork] Cleaning up stale wpa_supplicant socket if exists: %s", socketPath)
-				_ = os.Remove(socketPath)
-				// _ = execCommand("sudo", "rm", "-f", socketPath).Run()
+			// if execCommand("sudo", "systemctl", "is-active", "--quiet", serviceName).Run() != nil {
+			// 	// Clean up stale socket file before starting the service
+			// 	socketPath := filepath.Join(wpaSocketDir, name)
+			// 	log.Printf("[RealNetwork] Cleaning up stale wpa_supplicant socket if exists: %s", socketPath)
+			// 	_ = os.Remove(socketPath)
+			// 	// _ = execCommand("sudo", "rm", "-f", socketPath).Run()
 
-				log.Printf("[RealNetwork] Service %s is not active, starting it...", serviceName)
-				_ = execCommand("sudo", "systemctl", "start", serviceName).Run()
+			// 	log.Printf("[RealNetwork] Service %s is not active, starting it...", serviceName)
+			// 	_ = execCommand("sudo", "systemctl", "start", serviceName).Run()
+			// } else {
+			// 	log.Printf("[RealNetwork] Service %s is already active", serviceName)
+			// }
+
+			// 🛠️ เปลี่ยนมาใช้ D-Bus เช็กสถานะ
+			if !IsServiceActiveViaDBus(serviceName) {
+				socketPath := filepath.Join(wpaSocketDir, name)
+				_ = os.Remove(socketPath)
+
+				log.Printf("[RealNetwork] Service %s is not active, starting it via D-Bus...", serviceName)
+				// 🛠️ เปลี่ยนมาใช้ D-Bus Start
+				_ = StartServiceViaDBus(serviceName)
 			} else {
 				log.Printf("[RealNetwork] Service %s is already active", serviceName)
 			}
+
 		}
 		return nil
 	}
@@ -73,7 +87,8 @@ func (r *RealNetwork) ToggleInterface(name string, up bool) error {
 	if isWireless {
 		serviceName := fmt.Sprintf("wpa_supplicant@%s", name)
 		log.Printf("[RealNetwork] Interface %s is wireless. Stopping wpa_supplicant service: %s", name, serviceName)
-		_ = execCommand("sudo", "systemctl", "stop", serviceName).Run()
+		// _ = execCommand("sudo", "systemctl", "stop", serviceName).Run()
+		_ = StopServiceViaDBus(serviceName)
 	}
 
 	log.Printf("[RealNetwork] Bringing interface %s DOWN via netlink link...", name)
@@ -130,7 +145,8 @@ func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, s
 
 	// Systemd service management
 	serviceName := fmt.Sprintf("wpa_supplicant@%s", name)
-	isActive := execCommand("sudo", "systemctl", "is-active", "--quiet", serviceName).Run() == nil
+	// isActive := execCommand("sudo", "systemctl", "is-active", "--quiet", serviceName).Run() == nil
+	isActive := IsServiceActiveViaDBus(serviceName)
 
 	if isActive {
 		// Send RECONFIGURE command via wpa_supplicant UNIX socket
@@ -150,10 +166,15 @@ func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, s
 		_ = os.Remove(socketPath)
 		// _ = execCommand("sudo", "rm", "-f", socketPath).Run()
 
-		if err := execCommand("sudo", "systemctl", "start", serviceName).Run(); err != nil {
-			log.Printf("[RealNetwork] systemd start %s failed: %v", serviceName, err)
+		// if err := execCommand("sudo", "systemctl", "start", serviceName).Run(); err != nil {
+		// 	log.Printf("[RealNetwork] systemd start %s failed: %v", serviceName, err)
+		// 	return fmt.Errorf("failed to start %s service: %w", serviceName, err)
+		// }
+		if err := StartServiceViaDBus(serviceName); err != nil {
+			log.Printf("[RealNetwork] D-Bus start %s failed: %v", serviceName, err)
 			return fmt.Errorf("failed to start %s service: %w", serviceName, err)
 		}
+
 		log.Printf("[RealNetwork] Service %s started successfully", serviceName)
 	}
 
@@ -303,7 +324,7 @@ func (r *RealNetwork) ScanWifi(name string) ([]model.WifiScanResult, error) {
 		security := "Open"
 		if b.RSN.IsInitialized() {
 			security = "WPA2-PSK" // default fallback
-			
+
 			// Check AKMs (Authentication and Key Management)
 			for _, akm := range b.RSN.AKMs {
 				akmStr := akm.String()
@@ -445,4 +466,76 @@ func (r *RealNetwork) GetWifiStatus(name string) (*model.WifiConnectionStatus, e
 	log.Printf("[RealNetwork] GetWifiStatus result: State=%s, SSID=%s, BSSID=%s, ActiveMac=%s, Freq=%d, KeyMgmt=%s, WifiGen=%s",
 		status.State, status.SSID, status.BSSID, status.ActiveMac, status.Freq, status.KeyMgmt, status.WifiGen)
 	return status, nil
+}
+
+// ========================================================================== //
+// D-Bus based management functions.
+// These interact with systemd-resolved via D-Bus.
+// ========================================================================== //
+
+// IsServiceActiveViaDBus เช็กว่า Service กำลังทำงานอยู่หรือไม่ (แทน systemctl is-active)
+func IsServiceActiveViaDBus(serviceName string) bool {
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		log.Printf("[RealNetwork-D-Bus] Failed to connect to system bus: %v", err)
+		return false
+	}
+
+	// 1. ถาม Manager เพื่อหา Object Path ของ Service นี้
+	obj := conn.Object("org.freedesktop.systemd1", "/org/freedesktop/systemd1")
+	var unitPath dbus.ObjectPath
+	err = obj.Call("org.freedesktop.systemd1.Manager.GetUnit", 0, serviceName).Store(&unitPath)
+	if err != nil {
+		// ถ้าไม่พบ Unit (อาจจะยังไม่เคยโหลด) ถือว่า inactive
+		return false
+	}
+
+	// 2. ดึงค่า Property 'ActiveState' จาก Object ของ Unit นั้น
+	unitObj := conn.Object("org.freedesktop.systemd1", unitPath)
+	variant, err := unitObj.GetProperty("org.freedesktop.systemd1.Unit.ActiveState")
+	if err != nil {
+		return false
+	}
+
+	state, ok := variant.Value().(string)
+	return ok && state == "active"
+}
+
+// StartServiceViaDBus สั่งรัน Service (แทน systemctl start)
+func StartServiceViaDBus(serviceName string) error {
+	log.Printf("[RealNetwork-D-Bus] Attempting to start service: %s", serviceName)
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return fmt.Errorf("failed to connect to D-Bus system bus: %w", err)
+	}
+
+	obj := conn.Object("org.freedesktop.systemd1", "/org/freedesktop/systemd1")
+	var jobPath dbus.ObjectPath
+	// โหมด "replace" จะเคลียร์คำสั่งที่อาจจะค้างอยู่ก่อนหน้า
+	err = obj.Call("org.freedesktop.systemd1.Manager.StartUnit", 0, serviceName, "replace").Store(&jobPath)
+	if err != nil {
+		return fmt.Errorf("D-Bus call StartUnit failed for %s: %w", serviceName, err)
+	}
+
+	log.Printf("[RealNetwork-D-Bus] Start job queued successfully. Job Path: %s", jobPath)
+	return nil
+}
+
+// StopServiceViaDBus สั่งหยุด Service (แทน systemctl stop)
+func StopServiceViaDBus(serviceName string) error {
+	log.Printf("[RealNetwork-D-Bus] Attempting to stop service: %s", serviceName)
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return fmt.Errorf("failed to connect to D-Bus system bus: %w", err)
+	}
+
+	obj := conn.Object("org.freedesktop.systemd1", "/org/freedesktop/systemd1")
+	var jobPath dbus.ObjectPath
+	err = obj.Call("org.freedesktop.systemd1.Manager.StopUnit", 0, serviceName, "replace").Store(&jobPath)
+	if err != nil {
+		return fmt.Errorf("D-Bus call StopUnit failed for %s: %w", serviceName, err)
+	}
+
+	log.Printf("[RealNetwork-D-Bus] Stop job queued successfully. Job Path: %s", jobPath)
+	return nil
 }
