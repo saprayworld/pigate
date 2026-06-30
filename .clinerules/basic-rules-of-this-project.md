@@ -1,7 +1,3 @@
----
-trigger: always_on
----
-
 # Basic Rules
 
 - ให้ทำความเข้าใจเอกสารใน docs/ ก่อนเริ่มดำเนินการทำงาน โดยเฉพาะ tech_stack_design.md
