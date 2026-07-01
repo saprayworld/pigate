@@ -160,7 +160,7 @@ type DhcpManager interface {
 }
 ```
 
-**ไฟล์ที่ต้องสร้างใหม่:** `backend/internal/kernel/dhcp.go` — `RealDhcpManager`
+**ไฟล์ที่ต้องสร้างใหม่:** `backend/internal/kernel/dhcp_server.go` — `RealDhcpManager`
 
 ```
 ApplyConfig:
@@ -463,7 +463,11 @@ dhcp-authoritative
 
 ---
 
-## ส่วนที่ 4 — Checklist สรุป
+## ส่วนที่ 4 — Checklist สรุป (ขั้นตอนทั้งหมดตั้งแต่ต้นจนจบ)
+
+### เตรียมการ
+- [ ] สำรองฐานข้อมูล SQLite ก่อนเริ่ม
+- [ ] ตรวจสอบเครื่อง (dnsmasq ติดตั้งหรือยัง, พอร์ต 53 ว่างไหม)
 
 ### 🗄️ Database
 - [ ] เพิ่มตาราง `dhcp_configs` + migration จาก `dhcp_config` เดิม
@@ -482,12 +486,14 @@ dhcp-authoritative
 
 ### ⚙️ Kernel/System Layer
 - [ ] อัปเดต `DhcpManager` interface ใน `interfaces.go`
-- [ ] สร้าง `dhcp.go` — `RealDhcpManager` (config writer + interface check + SIGHUP + WatchLeases)
+- [ ] สร้าง `dhcp_server.go` — `RealDhcpManager` (config writer + interface check + SIGHUP + WatchLeases)
 - [ ] อัปเดต `MockDhcp` ใน `mock.go`
 - [ ] เพิ่ม `DNSServerManager` interface ใน `interfaces.go`
 - [ ] สร้าง `dns_server.go` — `RealDNSServerManager` (zone config writer + ClearCache)
 - [ ] สร้าง `MockDNSServerManager` ใน `mock.go`
 - [ ] สร้าง `dnsmasq_base.go` — generate `pigate-base.conf`
+- [ ] เพิ่มเช็ค interface ชนกับ WAN ก่อน apply DHCP Server config
+- [ ] เพิ่ม validate config (`dnsmasq --test`) ก่อนสั่งรีสตาร์ท
 
 ### 🔧 Service Layer
 - [ ] สร้าง `service/dhcp_server.go` — `DhcpServerService` (**ใหม่ทั้งหมด, ไม่แตะ `dhcpcd.go`**)
@@ -506,6 +512,9 @@ dhcp-authoritative
 - [ ] อัปเดต `NewServer()` signature ให้รับ `dhcpServerService` และ `dnsServerService`
 - [ ] เพิ่ม `"dnsmasq"` ใน service list ของ `HandleGetSystemServices`
 
+### 🔥 Firewall
+- [ ] เปิดพอร์ต 53, 67, 68 บน interface ฝั่ง LAN
+
 ### 🖥️ Frontend
 - [ ] `mockData.ts`: อัปเดต `DhcpConfig`, `ActiveDhcpLease`, เพิ่ม DNS types
 - [ ] `dhcpService.ts`: อัปเดต methods (multi-config)
@@ -514,3 +523,214 @@ dhcp-authoritative
 - [ ] `DnsServer.tsx`: สร้างหน้าใหม่ (ไม่แก้ `DNS.tsx` เดิม)
 - [ ] เพิ่ม route navigation สำหรับ `DnsServer.tsx`
 
+### 🧪 ทดสอบ
+- [ ] ทดสอบ DHCP Server (IP range, lease คงอยู่, reservation, กัน WAN ชน)
+- [ ] ทดสอบ DNS Server (ping ชื่อที่ตั้ง, กันชื่อซ้ำ, forward zone, กัน config ผิด)
+- [ ] ทดสอบ Integration (รีสตาร์ทเครื่อง, จำลอง service ล่ม)
+---
+
+## ส่วนที่ 5 — Pre-check ก่อนเริ่มพัฒนา
+
+ก่อนเริ่มเขียนโค้ดจริง ต้องเช็คสภาพเครื่องก่อน เพราะแผนนี้สมมติว่ามี `dnsmasq` ติดตั้งอยู่แล้ว แต่ยังไม่มีขั้นตอนตรวจสอบ
+
+```bash
+# 1. เช็คว่าติดตั้ง dnsmasq หรือยัง
+dpkg -l | grep dnsmasq
+
+# 2. เช็คว่า port 53 (DNS) ถูกโปรแกรมอื่นจองอยู่หรือไม่
+sudo ss -tulnp | grep :53
+
+# 3. เช็คสถานะ service dnsmasq
+systemctl status dnsmasq
+```
+
+**ผลตรวจสอบจริงบนเครื่อง Pi ของโปรเจกต์นี้** (บันทึกไว้เป็นหลักฐานอ้างอิง):
+
+```
+udp   UNCONN 0      0                            127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=1422,fd=19))
+udp   UNCONN 0      0                         127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=1422,fd=17))
+tcp   LISTEN 0      4096                      127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=1422,fd=18))
+tcp   LISTEN 0      4096                         127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=1422,fd=20))
+```
+
+**สรุปผล**: `systemd-resolved` จองพอร์ต 53 อยู่จริง แต่จองเฉพาะที่ IP loopback สองตัวคือ `127.0.0.53` และ `127.0.0.54` เท่านั้น (สังเกตจาก `%lo` คือผูกกับ interface `lo` เพียงตัวเดียว ไม่ใช่ `0.0.0.0` ที่แปลว่าเปิดกว้างทุก interface)
+
+ผลนี้แปลว่า **ไม่ชนกัน** ตราบใดที่ dnsmasq ถูกตั้งค่าให้ฟังที่ IP ของวง LAN โดยตรง (เช่น `192.168.1.1:53`) ไม่ใช่ IP loopback
+
+> **กฎที่ต้องใส่ไว้ใน config เสมอ**: ระบุ `interface=` และ `bind-interfaces` ชี้ไปที่ IP วง LAN โดยตรง ห้ามปล่อยให้ dnsmasq ฟังแบบเปิดกว้างทุกที่อยู่ เพื่อป้องกันไม่ให้ไปชนกับ systemd-resolved ในอนาคต แม้ผลตรวจตอนนี้จะไม่ชนก็ตาม
+>
+> ```
+> # /etc/dnsmasq.d/pigate-base.conf
+> interface=eth0
+> bind-interfaces
+> ```
+
+---
+
+## ส่วนที่ 6 — ป้องกันความขัดแย้งระหว่าง DHCP Client (WAN) กับ DHCP Server (LAN)
+
+นี่คือความเสี่ยงที่สำคัญที่สุดของแผนนี้ ต้องมีการเช็คก่อน apply config ทุกครั้ง
+
+**กฎที่ต้องบังคับใช้ในโค้ด**: interface ที่จะตั้งเป็น DHCP Server ต้อง**ไม่ใช่** interface เดียวกับที่ `dhcpcd.go` (DHCP Client ฝั่ง WAN) กำลังทำงานอยู่
+
+```go
+// เพิ่มใน ApplyConfig() ของ RealDhcpManager
+// backend/internal/kernel/dhcp.go
+
+func (m *RealDhcpManager) ApplyConfig(cfgs []model.DhcpConfig, reservations []model.DhcpReservation) error {
+    activeWanIfaces := m.dhcpcdService.GetActiveInterfaces() // ต้อง expose method นี้จาก DhcpcdService
+
+    for _, cfg := range cfgs {
+        if contains(activeWanIfaces, cfg.Interface) {
+            return fmt.Errorf("interface %s ถูกใช้เป็น WAN (DHCP Client) อยู่ ไม่สามารถตั้งเป็น DHCP Server ได้", cfg.Interface)
+        }
+    }
+    // ... เขียน config ต่อ
+}
+```
+
+**สถานการณ์ที่ต้องป้องกัน**: ถ้าตั้งผิดให้ interface ฝั่ง WAN กลายเป็น DHCP Server ไปด้วย เครื่องจะกลายเป็นทั้งคนขอ IP และคนแจก IP บนสายเดียวกัน ทำให้เน็ตทั้งวงหลุดพร้อมกัน
+
+---
+
+## ส่วนที่ 7 — สำรองฐานข้อมูลก่อน Migration
+
+ตาราง `dhcp_config` เดิม (single-row) จะถูก migrate ไปตารางใหม่ `dhcp_configs` แล้ว drop ตารางเก่าทิ้ง ขั้นตอนนี้เสี่ยงเสียข้อมูล ต้องสำรองก่อนทุกครั้ง
+
+```go
+// backend/internal/db/connection.go
+// เพิ่มก่อนเรียก migrate()
+
+func backupDatabase(dbPath string) error {
+    timestamp := time.Now().Format("20060102-150405")
+    backupPath := fmt.Sprintf("%s.backup-%s", dbPath, timestamp)
+    return copyFile(dbPath, backupPath)
+}
+```
+
+**ขั้นตอนบังคับ**:
+1. `backupDatabase()` ก่อนรัน migration ทุกครั้ง
+2. รัน migration
+3. ถ้า migration fail → log error และหยุดทันที ห้ามลบตารางเก่าจนกว่าจะยืนยันว่าข้อมูลใหม่ถูกต้อง
+4. เก็บไฟล์ backup ไว้อย่างน้อย 7 วันก่อนลบทิ้ง
+
+---
+
+## ส่วนที่ 8 — ตรวจสอบ config ก่อนสั่งรีสตาร์ท (Validation)
+
+ก่อนเขียนทับไฟล์ config จริงที่ dnsmasq ใช้งานอยู่ ต้องทดสอบ syntax ก่อน เพื่อไม่ให้ dnsmasq ล่มทั้งระบบเพราะ config ผิดแค่จุดเดียว
+
+```go
+// backend/internal/kernel/dhcp.go และ dns_server.go
+// เพิ่มก่อนเรียก RestartServiceViaDBus()
+
+func validateDnsmasqConfig(tmpConfigPath string) error {
+    cmd := execCommand("dnsmasq", "--test", "--conf-file="+tmpConfigPath)
+    output, err := cmd.CombinedOutput()
+    if err != nil {
+        return fmt.Errorf("dnsmasq config ไม่ถูกต้อง: %s", string(output))
+    }
+    return nil
+}
+```
+
+**ขั้นตอน**:
+1. เขียน config ลงไฟล์ชั่วคราวก่อน (ไม่ใช่ไฟล์จริงใน `/etc/dnsmasq.d/`)
+2. รัน `validateDnsmasqConfig()` เช็ค syntax
+3. ผ่าน → ค่อยเขียนทับไฟล์จริงแล้วสั่งรีสตาร์ท
+4. ไม่ผ่าน → คืน error กลับไปหน้าเว็บ ไม่แตะไฟล์จริง
+
+---
+
+## ส่วนที่ 9 — Firewall Rules ที่ต้องเปิด
+
+ระบบมี Firewall (nftables) อยู่แล้ว ต้องเปิดพอร์ตต่อไปนี้บน interface ฝั่ง LAN ไม่งั้น dnsmasq ทำงานถูกต้องแต่ใช้งานจริงไม่ได้
+
+| Protocol | Port | ใช้สำหรับ |
+|---|---|---|
+| UDP/TCP | 53 | DNS query/response |
+| UDP | 67 | DHCP server (รับ request จาก client) |
+| UDP | 68 | DHCP client (ฝั่งอุปกรณ์ที่ขอ IP) |
+
+**Checklist เพิ่ม**:
+- [ ] เพิ่มกฎ firewall เปิดพอร์ต 53, 67, 68 เฉพาะ interface ฝั่ง LAN ที่เปิดใช้ DHCP/DNS Server
+- [ ] ตรวจสอบว่ากฎนี้ผูกกับ interface ที่ถูก enable จริงเท่านั้น ไม่เปิดทิ้งไว้ทุก interface
+
+---
+
+## ส่วนที่ 10 — แผนการทดสอบ (Testing Checklist)
+
+### ทดสอบ DHCP Server
+- [ ] ต่ออุปกรณ์ทดสอบเข้า LAN แล้วตรวจว่าได้ IP อยู่ใน range ที่ตั้งไว้
+- [ ] ปิด-เปิด config แล้วตรวจว่า lease เดิมยังอยู่ (ไม่หลุด)
+- [ ] ทดสอบ reservation (จอง IP ตาม MAC) ว่าได้ IP ตรงตามที่ตั้งจริง
+- [ ] ทดสอบตั้งค่า DHCP Server บน interface ที่เป็น WAN อยู่ → ต้อง reject พร้อม error message ชัดเจน
+
+### ทดสอบ DNS Server
+- [ ] ping ชื่อที่ตั้งไว้ (เช่น `camera.pigate.local`) จากเครื่องอื่นในวง LAN
+- [ ] ทดสอบตั้งชื่อซ้ำในโซนเดียวกัน → ต้องแจ้ง error ไม่ใช่บันทึกซ้ำ
+- [ ] ทดสอบ forward zone → ยิง query ไปยัง upstream DNS ที่ตั้งไว้ได้จริง
+- [ ] ใส่ config ผิดรูปแบบ (เช่น IP ผิด) แล้วตรวจว่าระบบ reject ก่อนเขียนทับไฟล์จริง (ตามส่วนที่ 8)
+
+### ทดสอบ Integration
+- [ ] รีสตาร์ทเครื่อง Pi ทั้งเครื่อง แล้วตรวจว่า DHCP Server และ DNS Server กลับมาทำงานเองอัตโนมัติ
+- [ ] จำลอง dnsmasq service ล่มกลางทาง แล้วตรวจว่าระบบแจ้งเตือนผ่านหน้า Dashboard
+
+---
+
+## ส่วนที่ 11 — Checklist สรุปเพิ่มเติม
+
+### ความปลอดภัยและการป้องกันข้อมูลสูญหาย
+- [ ] เพิ่ม `backupDatabase()` ก่อนรัน migration (ส่วนที่ 7)
+- [ ] เพิ่มการเช็ค interface ชนกับ WAN ก่อน apply DHCP Server config (ส่วนที่ 6)
+- [ ] เพิ่ม `validateDnsmasqConfig()` ก่อนเขียนทับไฟล์จริงทุกครั้ง (ส่วนที่ 8)
+
+### Firewall
+- [ ] เพิ่มกฎเปิดพอร์ต 53, 67, 68 บน interface ฝั่ง LAN (ส่วนที่ 9)
+
+### Pre-check
+- [ ] เขียนสคริปต์ตรวจสอบ dnsmasq ติดตั้งและพอร์ต 53 ว่างก่อนเริ่มใช้งานจริง (ส่วนที่ 5)
+
+### Testing
+- [ ] ทำตาม Testing Checklist ทั้งหมดในส่วนที่ 10 ก่อนปิดงาน
+
+---
+ 
+## ส่วนที่ 12 — รายชื่อไฟล์ทั้งหมด
+ 
+### ไฟล์ที่ต้องแก้ไขของเดิม
+ 
+| ไฟล์ | สิ่งที่ต้องทำ |
+|---|---|
+| `backend/internal/db/connection.go` | เพิ่มตาราง `dhcp_configs`, `dhcp_leases`, `dns_zones`, `dns_records` และเขียน migration ย้ายข้อมูลจากตารางเดิม |
+| `backend/internal/db/repository.go` | เพิ่มฟังก์ชันอ่าน/เขียนข้อมูลของทั้ง 4 ตารางใหม่ |
+| `backend/internal/model/*` | เพิ่ม field `ID` ใน `DhcpConfig` และ field `Interface` ใน `ActiveDhcpLease` |
+| `backend/internal/kernel/interfaces.go` | เพิ่มเมธอดใหม่ใน `DhcpManager` และเพิ่ม interface ใหม่ `DNSServerManager` |
+| `backend/internal/kernel/mock.go` | อัปเดต `MockDhcp` ให้รองรับหลาย config และเพิ่ม `MockDNSServerManager` ตัวใหม่ |
+| `backend/internal/api/router.go` | เพิ่ม route สำหรับ DHCP Server แบบหลาย interface และ DNS Server ทั้งหมด |
+| `backend/internal/api/handlers.go` | เพิ่มฟังก์ชันรับ-ส่งข้อมูลหน้าเว็บสำหรับทั้ง DHCP Server และ DNS Server |
+| `backend/cmd/pigate/main.go` | เพิ่มการเรียกใช้ service ใหม่ตอนเปิดโปรแกรม โดยไม่แตะของเดิม |
+| `frontend/src/data-mockup/mockData.ts` | เพิ่มข้อมูลตัวอย่างของ DHCP หลาย interface และ DNS |
+| `frontend/src/services/dhcpService.ts` | เพิ่มฟังก์ชันเรียก API ใหม่สำหรับจัดการหลาย config |
+| `frontend/src/pages/DhcpServer.tsx` | ปรับหน้าจอให้แสดงและจัดการได้หลาย interface พร้อมกัน |
+ 
+### ไฟล์ที่ต้องสร้างใหม่
+ 
+| ไฟล์ | สิ่งที่ต้องทำ |
+|---|---|
+| `backend/internal/model/dns_server.go` | โครงสร้างข้อมูล `DNSZone` และ `DNSRecord` |
+| `backend/internal/kernel/dhcp_server.go` | ตัวเขียน config ไฟล์ dnsmasq และสั่งรีสตาร์ทผ่าน D-Bus สำหรับ DHCP |
+| `backend/internal/kernel/dns_server.go` | ตัวเขียน config โซน DNS และสั่งรีสตาร์ทผ่าน D-Bus |
+| `backend/internal/kernel/dnsmasq_base.go` | สร้างไฟล์ config พื้นฐานที่ทั้ง DHCP และ DNS ใช้ร่วมกัน |
+| `backend/internal/service/dhcp_server.go` | เชื่อมฐานข้อมูลกับตัวจัดการ DHCP Server |
+| `backend/internal/service/dns_server.go` | เชื่อมฐานข้อมูลกับตัวจัดการ DNS Server |
+| `frontend/src/services/dnsServerService.ts` | ฟังก์ชันเรียก API ของ DNS Server จากหน้าเว็บ |
+| `frontend/src/pages/DnsServer.tsx` | หน้าจอใหม่สำหรับจัดการโซน DNS และรายการชื่อ |
+ 
+### ไฟล์ที่ห้ามแตะเด็ดขาด
+ 
+| ไฟล์ | เหตุผล |
+|---|---|
+| `backend/internal/service/dhcpcd.go` | ระบบขอ IP ฝั่ง WAN เดิม ถ้าแก้จะทำให้เน็ตหลุด |
+| `frontend/src/pages/DNS.tsx` | หน้าตั้งค่า DNS ต้นทางเดิม คนละหน้าที่กับ DNS Server ตัวใหม่ |
+ 
