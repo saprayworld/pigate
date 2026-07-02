@@ -68,6 +68,7 @@ func main() {
 	var rt kernel.RoutingManager
 	var dhcp kernel.DhcpManager
 	var qos kernel.QosManager
+	var dnsServer kernel.DNSServerManager
 	dns := kernel.NewDNSManager(*mockOS)
 
 	if *mockOS || *mockFromReal {
@@ -78,6 +79,7 @@ func main() {
 		mDhcp := kernel.NewMockDhcp()
 		mDhcp.MockFromReal = *mockFromReal
 		dhcp = mDhcp
+		dnsServer = kernel.NewMockDNSServerManager()
 	} else {
 		// Real kernel integrations via netlink — used on Raspberry Pi 5 production.
 		// Requires: sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
@@ -85,9 +87,8 @@ func main() {
 		net = kernel.NewRealNetwork()
 		rt = kernel.NewRealRouting(*allowEditSystemRoutes)
 		qos = kernel.NewRealQos()
-		mDhcp := kernel.NewMockDhcp()
-		mDhcp.MockFromReal = false
-		dhcp = mDhcp
+		dhcp = kernel.NewRealDhcpManager()
+		dnsServer = kernel.NewRealDNSServerManager()
 	}
 
 	// 5. Instantiate Server & Router
@@ -98,7 +99,9 @@ func main() {
 	firewallService := service.NewFirewallService(repo, fw, ifaceService)
 	dnsService := service.NewDNSService(repo, dns)
 	qosService := service.NewQosService(repo, qos)
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService)
+	dhcpServerService := service.NewDhcpServerService(repo, dhcp)
+	dnsServerService := service.NewDNSServerService(repo, dnsServer)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService)
 
 	// Apply config form database to kernel
 
@@ -124,7 +127,24 @@ func main() {
 	log.Printf("[Main] Synchronizing active DHCP interfaces status...")
 	dhcpcdService.SyncActiveInterfaces()
 
-	log.Printf("[Main] [Not Implemented] Applying database-configured DHCP settings to kernel at startup...")
+	log.Printf("[Main] Applying database-configured DHCP settings to kernel at startup...")
+	if err := dhcpServerService.InitApplyConfig(); err != nil {
+		log.Printf("[Main] Warning: Failed to apply DHCP configurations at startup: %v", err)
+	}
+
+	// Start D-Bus lease watcher in production mode (non-mock)
+	if !*mockOS {
+		go func() {
+			if err := dhcpServerService.StartLeaseWatcher(monitorCtx); err != nil {
+				log.Printf("[Main] Warning: DHCP lease watcher encountered error: %v", err)
+			}
+		}()
+	}
+
+	log.Printf("[Main] Applying database-configured DNS local zones to kernel at startup...")
+	if err := dnsServerService.InitApplyConfig(); err != nil {
+		log.Printf("[Main] Warning: Failed to apply DNS local zones at startup: %v", err)
+	}
 
 	log.Printf("[Main] Applying database-configured DNS settings to kernel at startup...")
 	if err := dnsService.ApplyDNSConfig(); err != nil {

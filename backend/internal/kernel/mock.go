@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -133,7 +134,17 @@ func NewMockDhcp() *MockDhcp {
 	return &MockDhcp{}
 }
 
-func (m *MockDhcp) ApplyConfig(cfg model.DhcpConfig) error {
+func (m *MockDhcp) ApplyConfig(cfgs []model.DhcpConfig, reservations []model.DhcpReservation) error {
+	return nil
+}
+
+func (m *MockDhcp) ReloadConfig() error {
+	return nil
+}
+
+func (m *MockDhcp) WatchLeases(ctx context.Context, callback func(event string, lease model.ActiveDhcpLease)) error {
+	// Mock no-op watcher
+	<-ctx.Done()
 	return nil
 }
 
@@ -277,5 +288,21 @@ func (m *MockQos) GetIfaceQosStatus(ifaceName string) (*model.QosIfaceStatus, er
 		HasQdisc:  false,
 		Classes:   []model.QosClass{},
 	}, nil
+}
+
+type MockDNSServerManager struct{}
+
+func NewMockDNSServerManager() *MockDNSServerManager {
+	return &MockDNSServerManager{}
+}
+
+func (m *MockDNSServerManager) ApplyZones(zones []model.DNSZone, interfaces []string) error {
+	log.Printf("[MockDNSServer] ApplyZones called with %d zones and interfaces: %v", len(zones), interfaces)
+	return nil
+}
+
+func (m *MockDNSServerManager) ClearCache() error {
+	log.Printf("[MockDNSServer] ClearCache called")
+	return nil
 }
 

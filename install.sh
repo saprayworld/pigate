@@ -130,11 +130,29 @@ setfacl -d -m u:pigate:rwx /etc/wpa_supplicant
 log_ok "ตั้งค่า ACL สำหรับ /etc/wpa_supplicant สำเร็จ"
 
 # =============================================================================
-# STEP 3: สร้าง polkit rule สำหรับ wpa_supplicant
+# STEP 2.1: ติดตั้งและตั้งค่า ACL สำหรับ dnsmasq
+# =============================================================================
+log_info "STEP 2.1: ติดตั้งและตั้งค่า ACL สำหรับ dnsmasq..."
+
+if ! command -v dnsmasq &>/dev/null; then
+    log_info "ไม่พบ dnsmasq — กำลังติดตั้ง dnsmasq..."
+    apt-get update && apt-get install -y dnsmasq
+fi
+
+# สร้าง directory สำหรับคอนฟิกของ dnsmasq (ถ้ายังไม่มี)
+mkdir -p /etc/dnsmasq.d
+
+# ตั้งค่า ACL เพื่ออนุญาตให้ user 'pigate' สามารถเขียนไฟล์คอนฟิกได้
+setfacl -m u:pigate:rwx /etc/dnsmasq.d
+setfacl -d -m u:pigate:rwx /etc/dnsmasq.d
+log_ok "ตั้งค่า ACL สำหรับ /etc/dnsmasq.d สำเร็จ"
+
+# =============================================================================
+# STEP 3: สร้าง polkit rule สำหรับ wpa_supplicant และ dnsmasq
 # =============================================================================
 log_info "STEP 3: สร้าง polkit rule..."
 
-POLKIT_RULE_FILE="/etc/polkit-1/rules.d/10-pigate-wpa.rules"
+POLKIT_RULE_FILE="/etc/polkit-1/rules.d/10-pigate-system.rules"
 mkdir -p /etc/polkit-1/rules.d
 
 cat > "${POLKIT_RULE_FILE}" << 'EOF'
@@ -146,6 +164,7 @@ polkit.addRule(function(action, subject) {
         // 1. ถ้าเป็น Service ที่อนุญาต -> ให้ผ่าน (YES)
         if (unit.indexOf("wpa_supplicant@") === 0 || 
             unit === "systemd-resolved.service" ||
+            unit === "dnsmasq.service" ||
             unit === "pigate.service") {
             return polkit.Result.YES;
         } 

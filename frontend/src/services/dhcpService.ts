@@ -3,31 +3,32 @@ import {
   type DhcpReservation,
   type ActiveDhcpLease,
   initialDhcpConfig,
+  initialDhcpConfigs,
   initialDhcpReservations,
   initialActiveDhcpLeases,
 } from "@/data-mockup/mockData"
 import { IS_MOCK_MODE, API_BASE_URL } from "./config"
 
-const CONFIG_STORAGE_KEY = "pigate_dhcp_config";
+const CONFIGS_STORAGE_KEY = "pigate_dhcp_configs";
 const RESERVATIONS_STORAGE_KEY = "pigate_dhcp_reservations";
 const LEASES_STORAGE_KEY = "pigate_dhcp_leases";
 
 // Config helpers
-function getLocalConfig(): DhcpConfig {
-  const stored = localStorage.getItem(CONFIG_STORAGE_KEY);
+function getLocalConfigs(): DhcpConfig[] {
+  const stored = localStorage.getItem(CONFIGS_STORAGE_KEY);
   if (!stored) {
-    localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(initialDhcpConfig));
-    return initialDhcpConfig;
+    localStorage.setItem(CONFIGS_STORAGE_KEY, JSON.stringify(initialDhcpConfigs));
+    return initialDhcpConfigs;
   }
   try {
     return JSON.parse(stored);
   } catch (e) {
-    return initialDhcpConfig;
+    return initialDhcpConfigs;
   }
 }
 
-function saveLocalConfig(config: DhcpConfig) {
-  localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(config));
+function saveLocalConfigs(configs: DhcpConfig[]) {
+  localStorage.setItem(CONFIGS_STORAGE_KEY, JSON.stringify(configs));
 }
 
 // Reservations helpers
@@ -67,11 +68,26 @@ function saveLocalLeases(leases: ActiveDhcpLease[]) {
 }
 
 export const dhcpService = {
-  // Get main configuration
+  // Get all DHCP configurations
+  getConfigs: async (): Promise<DhcpConfig[]> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return getLocalConfigs();
+    }
+
+    const response = await fetch(`${API_BASE_URL}/dhcp/configs`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch DHCP configs: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  // Get main configuration (for compatibility)
   getConfig: async (): Promise<DhcpConfig> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 200));
-      return getLocalConfig();
+      const list = getLocalConfigs();
+      return list[0] || initialDhcpConfig;
     }
 
     const response = await fetch(`${API_BASE_URL}/dhcp/config`);
@@ -81,15 +97,43 @@ export const dhcpService = {
     return response.json();
   },
 
-  // Save DHCP Configuration
-  updateConfig: async (config: DhcpConfig): Promise<DhcpConfig> => {
+  // Create a new DHCP Config
+  createConfig: async (config: Omit<DhcpConfig, "id">): Promise<DhcpConfig> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const current = getLocalConfigs();
+      const newCfg: DhcpConfig = {
+        ...config,
+        id: "dhcp-cfg-" + config.interface,
+      };
+      saveLocalConfigs([...current, newCfg]);
+      return newCfg;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/dhcp/configs`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(config),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to create DHCP config: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  // Update a DHCP Configuration
+  updateConfig: async (id: string, config: DhcpConfig): Promise<DhcpConfig> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 500));
-      saveLocalConfig(config);
+      const current = getLocalConfigs();
+      const updatedList = current.map((c) => (c.id === id ? config : c));
+      saveLocalConfigs(updatedList);
       return config;
     }
 
-    const response = await fetch(`${API_BASE_URL}/dhcp/config`, {
+    const response = await fetch(`${API_BASE_URL}/dhcp/configs/${id}`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -98,6 +142,61 @@ export const dhcpService = {
     });
     if (!response.ok) {
       throw new Error(`Failed to update DHCP config: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  // Delete a DHCP Configuration
+  deleteConfig: async (id: string): Promise<boolean> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const current = getLocalConfigs();
+      const updatedList = current.filter((c) => c.id !== id);
+      saveLocalConfigs(updatedList);
+      return true;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/dhcp/configs/${id}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to delete DHCP config: ${response.statusText}`);
+    }
+    return true;
+  },
+
+  // Toggle a DHCP Configuration
+  toggleConfig: async (id: string): Promise<boolean> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const current = getLocalConfigs();
+      const updatedList = current.map((c) => c.id === id ? { ...c, enabled: !c.enabled } : c);
+      saveLocalConfigs(updatedList);
+      return true;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/dhcp/configs/${id}/toggle`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to toggle DHCP config: ${response.statusText}`);
+    }
+    return true;
+  },
+
+  // Get available LAN interfaces that can be configured
+  getAvailableInterfaces: async (): Promise<string[]> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const configs = getLocalConfigs();
+      const configured = configs.map(c => c.interface);
+      const allIfaces = ["eth0", "eth1", "eth2"];
+      return allIfaces.filter(i => !configured.includes(i) && i !== "wlan0");
+    }
+
+    const response = await fetch(`${API_BASE_URL}/dhcp/interfaces`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch available DHCP interfaces: ${response.statusText}`);
     }
     return response.json();
   },
@@ -210,6 +309,7 @@ export const dhcpService = {
             ipAddress: "192.168.1.109",
             macAddress: "40:A3:CC:11:D3:55",
             hostname: "Smart-Thermostat",
+            interface: "eth0",
             expiresIn: "23 hours, 59 mins",
           },
         ];

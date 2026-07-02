@@ -20,7 +20,8 @@ import {
   Moon,
   Sun,
   Globe,
-  Activity
+  Activity,
+  Server
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -71,6 +72,8 @@ export default function ShellLayout() {
         return "Network Interfaces"
       case "/network/dns":
         return "DNS Settings"
+      case "/network/dns-server":
+        return "Local DNS Server"
       case "/network/routes":
         return "Static Routes"
       case "/network/dhcp":
@@ -106,6 +109,7 @@ export default function ShellLayout() {
       items: [
         { path: "/network/interfaces", label: "Interfaces", icon: Network },
         { path: "/network/dns", label: "DNS Settings", icon: Globe },
+        { path: "/network/dns-server", label: "DNS Server", icon: Server },
         { path: "/network/routes", label: "Static Routes", icon: Route },
         { path: "/network/dhcp", label: "DHCP Server", icon: Radio },
         { path: "/network/qos", label: "QoS Limiting", icon: Activity }

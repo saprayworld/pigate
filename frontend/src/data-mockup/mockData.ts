@@ -406,6 +406,7 @@ export const initialStaticRoutes: StaticRoute[] = [
 
 // Types for DHCP Server
 export interface DhcpConfig {
+  id?: string
   enabled: boolean
   interface: string
   startIp: string
@@ -429,21 +430,28 @@ export interface ActiveDhcpLease {
   ipAddress: string
   macAddress: string
   hostname: string
+  interface?: string
   expiresIn: string
+  expiresAt?: string
 }
 
 // Initial mockup data for DHCP Server
-export const initialDhcpConfig: DhcpConfig = {
-  enabled: true,
-  interface: "eth0",
-  startIp: "192.168.1.100",
-  endIp: "192.168.1.200",
-  gateway: "192.168.1.1",
-  netmask: "255.255.255.0",
-  dns1: "8.8.8.8",
-  dns2: "1.1.1.1",
-  leaseTime: 86400 // 24 hours
-}
+export const initialDhcpConfigs: DhcpConfig[] = [
+  {
+    id: "dhcp-cfg-default",
+    enabled: true,
+    interface: "eth0",
+    startIp: "192.168.1.100",
+    endIp: "192.168.1.200",
+    gateway: "192.168.1.1",
+    netmask: "255.255.255.0",
+    dns1: "8.8.8.8",
+    dns2: "1.1.1.1",
+    leaseTime: 86400 // 24 hours
+  }
+]
+
+export const initialDhcpConfig: DhcpConfig = initialDhcpConfigs[0]
 
 export const initialDhcpReservations: DhcpReservation[] = [
   {
@@ -466,6 +474,7 @@ export const initialActiveDhcpLeases: ActiveDhcpLease[] = [
     ipAddress: "192.168.1.101",
     macAddress: "99:88:77:66:55:44",
     hostname: "iPhone-13",
+    interface: "eth0",
     expiresIn: "11 hours, 45 mins"
   },
   {
@@ -473,6 +482,7 @@ export const initialActiveDhcpLeases: ActiveDhcpLease[] = [
     ipAddress: "192.168.1.102",
     macAddress: "AA:BB:CC:DD:EE:FF",
     hostname: "Android-SmartTV",
+    interface: "eth0",
     expiresIn: "23 hours, 10 mins"
   },
   {
@@ -480,6 +490,7 @@ export const initialActiveDhcpLeases: ActiveDhcpLease[] = [
     ipAddress: "192.168.1.105",
     macAddress: "B4:F1:DA:C8:E2:10",
     hostname: "iPad-Pro",
+    interface: "eth0",
     expiresIn: "2 hours, 15 mins"
   }
 ]
@@ -523,6 +534,63 @@ export const initialNetworkServices: NetworkServiceStatus[] = [
     name: "Network Core Manager",
     serviceName: "NetworkManager",
     status: "running"
+  }
+]
+
+export interface DNSRecord {
+  id: string
+  zoneId: string
+  name: string
+  type: string
+  value: string
+  ttl: number
+}
+
+export interface DNSZone {
+  id: string
+  zoneName: string
+  forwardTo: string
+  allowedIps: string
+  isAuthoritative: boolean
+  enabled: boolean
+  records: DNSRecord[]
+}
+
+export const initialDNSZones: DNSZone[] = [
+  {
+    id: "zone-default-1",
+    zoneName: "pigate.local",
+    forwardTo: "",
+    allowedIps: "any",
+    isAuthoritative: true,
+    enabled: true,
+    records: [
+      {
+        id: "rec-default-1",
+        zoneId: "zone-default-1",
+        name: "@",
+        type: "A",
+        value: "192.168.1.1",
+        ttl: 300
+      },
+      {
+        id: "rec-default-2",
+        zoneId: "zone-default-1",
+        name: "router",
+        type: "CNAME",
+        value: "pigate.local",
+        ttl: 300
+      }
+    ]
+  },
+  {
+    id: "zone-default-2",
+    zoneName: "home.sapray.net",
+    forwardTo: "8.8.8.8",
+    allowedIps: "any",
+    isAuthoritative: false,
+    enabled: true,
+    records: []
   }
 ]
 

@@ -1,6 +1,9 @@
 package kernel
 
-import "pigate/internal/model"
+import (
+	"context"
+	"pigate/internal/model"
+)
 
 // FirewallManager abstracts nftables kernel modifications
 type FirewallManager interface {
@@ -31,8 +34,10 @@ type RoutingManager interface {
 
 // DhcpManager abstracts DHCP configuration updates and active lease logs parsing
 type DhcpManager interface {
-	ApplyConfig(cfg model.DhcpConfig) error
+	ApplyConfig(cfgs []model.DhcpConfig, reservations []model.DhcpReservation) error
 	GetActiveLeases() ([]model.ActiveDhcpLease, error)
+	ReloadConfig() error
+	WatchLeases(ctx context.Context, callback func(event string, lease model.ActiveDhcpLease)) error
 }
 
 // DNSManager abstracts systemd-resolved modifications and status checks
@@ -61,4 +66,8 @@ type QosManager interface {
 	GetIfaceQosStatus(ifaceName string) (*model.QosIfaceStatus, error)
 }
 
-
+// DNSServerManager abstracts local DNS zone configurations and cache clearing
+type DNSServerManager interface {
+	ApplyZones(zones []model.DNSZone, interfaces []string) error
+	ClearCache() error
+}

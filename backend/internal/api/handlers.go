@@ -18,18 +18,20 @@ import (
 )
 
 type Server struct {
-	repo             *db.Repository
-	firewall         kernel.FirewallManager
-	network          kernel.NetworkManager
-	routing          kernel.RoutingManager
-	dhcp             kernel.DhcpManager
-	logs             *logs.RingBuffer
-	disableEdit      bool
-	interfaceService *service.InterfaceService
-	routingService   *service.RoutingService
-	firewallService  *service.FirewallService
-	dnsService       *service.DNSService
-	qosService       *service.QosService
+	repo              *db.Repository
+	firewall          kernel.FirewallManager
+	network           kernel.NetworkManager
+	routing           kernel.RoutingManager
+	dhcp              kernel.DhcpManager
+	logs              *logs.RingBuffer
+	disableEdit       bool
+	interfaceService  *service.InterfaceService
+	routingService    *service.RoutingService
+	firewallService   *service.FirewallService
+	dnsService        *service.DNSService
+	qosService        *service.QosService
+	dhcpServerService *service.DhcpServerService
+	dnsServerService  *service.DNSServerService
 }
 
 func NewServer(
@@ -45,20 +47,24 @@ func NewServer(
 	fwService *service.FirewallService,
 	dnsService *service.DNSService,
 	qosService *service.QosService,
+	dhcpServerService *service.DhcpServerService,
+	dnsServerService *service.DNSServerService,
 ) *Server {
 	return &Server{
-		repo:             repo,
-		firewall:         fw,
-		network:          net,
-		routing:          rt,
-		dhcp:             dhcp,
-		logs:             l,
-		disableEdit:      disableEdit,
-		interfaceService: ifaceService,
-		routingService:   routingService,
-		firewallService:  fwService,
-		dnsService:       dnsService,
-		qosService:       qosService,
+		repo:              repo,
+		firewall:          fw,
+		network:           net,
+		routing:           rt,
+		dhcp:              dhcp,
+		logs:              l,
+		disableEdit:       disableEdit,
+		interfaceService:  ifaceService,
+		routingService:    routingService,
+		firewallService:   fwService,
+		dnsService:        dnsService,
+		qosService:        qosService,
+		dhcpServerService: dhcpServerService,
+		dnsServerService:  dnsServerService,
 	}
 }
 
@@ -1205,27 +1211,113 @@ func (s *Server) HandleDeleteDHCPReservation(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) HandleGetDHCPLeases(w http.ResponseWriter, r *http.Request) {
-	leases, err := s.dhcp.GetActiveLeases()
+	leases, err := s.repo.GetDHCPLeases()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	// Fallback to active leases from system/kernel if DB is empty
+	if len(leases) == 0 {
+		leases, err = s.dhcp.GetActiveLeases()
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	s.writeJSON(w, http.StatusOK, leases)
 }
 
 func (s *Server) HandleApplyDHCP(w http.ResponseWriter, r *http.Request) {
-	cfg, err := s.repo.GetDHCPConfig()
+	if err := s.dhcpServerService.ApplyAll(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, true)
+}
+
+func (s *Server) HandleGetDHCPConfigs(w http.ResponseWriter, r *http.Request) {
+	cfgs, err := s.repo.GetDHCPConfigs()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, cfgs)
+}
+
+func (s *Server) HandleCreateDHCPConfig(w http.ResponseWriter, r *http.Request) {
+	var cfg model.DhcpConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	if err := s.repo.CreateDHCPConfig(cfg); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, cfg)
+}
+
+func (s *Server) HandleUpdateDHCPConfigByID(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var cfg model.DhcpConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+	cfg.ID = id
+
+	if err := s.repo.UpdateDHCPConfigByID(cfg); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, cfg)
+}
+
+func (s *Server) HandleDeleteDHCPConfig(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.repo.DeleteDHCPConfig(id); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, true)
+}
+
+func (s *Server) HandleToggleDHCPConfig(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.repo.ToggleDHCPConfig(id); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, true)
+}
+
+func (s *Server) HandleGetAvailableInterfaces(w http.ResponseWriter, r *http.Request) {
+	ifaces, err := s.repo.GetInterfaces()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	if err := s.dhcp.ApplyConfig(*cfg); err != nil {
-		s.writeError(w, http.StatusInternalServerError, "OS DHCP daemon apply failed")
+	cfgs, err := s.repo.GetDHCPConfigs()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, true)
+	configured := make(map[string]bool)
+	for _, c := range cfgs {
+		configured[c.Interface] = true
+	}
+
+	var available []string
+	for _, iface := range ifaces {
+		if iface.Role == "LAN" && !configured[iface.Name] {
+			available = append(available, iface.Name)
+		}
+	}
+
+	s.writeJSON(w, http.StatusOK, available)
 }
 
 // =========================================================================
@@ -1321,6 +1413,7 @@ func (s *Server) HandleGetSystemServices(w http.ResponseWriter, r *http.Request)
 		{ID: "srv-1", Name: "Firewall Engine", ServiceName: "nftables", Status: "running"},
 		{ID: "srv-2", Name: "DHCP Server", ServiceName: "isc-dhcp-server", Status: "running"},
 		{ID: "srv-3", Name: "Network Core Manager", ServiceName: "NetworkManager", Status: "running"},
+		{ID: "srv-4", Name: "dnsmasq Daemon", ServiceName: "dnsmasq", Status: "running"},
 	}
 	s.writeJSON(w, http.StatusOK, list)
 }
@@ -1590,4 +1683,184 @@ func (s *Server) HandleClearQosIface(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]string{"message": "QoS cleared for interface " + iface})
+}
+
+// =========================================================================
+// DNS SERVER (dnsmasq Local DNS) HANDLERS
+// =========================================================================
+
+func (s *Server) HandleGetDNSZones(w http.ResponseWriter, r *http.Request) {
+	zones, err := s.repo.GetDNSZones()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if zones == nil {
+		zones = []model.DNSZone{}
+	}
+	s.writeJSON(w, http.StatusOK, zones)
+}
+
+func (s *Server) HandleCreateDNSZone(w http.ResponseWriter, r *http.Request) {
+	var input model.DNSZoneInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	zone := model.DNSZone{
+		ID:              "zone-" + generateRandomToken()[:8],
+		ZoneName:        input.ZoneName,
+		ForwardTo:       input.ForwardTo,
+		AllowedIPs:      input.AllowedIPs,
+		IsAuthoritative: input.IsAuthoritative,
+		Enabled:         input.Enabled,
+		Records:         []model.DNSRecord{},
+	}
+
+	if err := s.repo.CreateDNSZone(zone); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, zone)
+}
+
+func (s *Server) HandleUpdateDNSZone(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	existing, err := s.repo.GetDNSZoneByID(id)
+	if err != nil || existing == nil {
+		s.writeError(w, http.StatusNotFound, "DNS Zone not found")
+		return
+	}
+
+	var input model.DNSZoneInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	zone := model.DNSZone{
+		ID:              id,
+		ZoneName:        input.ZoneName,
+		ForwardTo:       input.ForwardTo,
+		AllowedIPs:      input.AllowedIPs,
+		IsAuthoritative: input.IsAuthoritative,
+		Enabled:         input.Enabled,
+	}
+
+	if err := s.repo.UpdateDNSZone(zone); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, zone)
+}
+
+func (s *Server) HandleDeleteDNSZone(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.repo.DeleteDNSZone(id); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, true)
+}
+
+func (s *Server) HandleToggleDNSZone(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.repo.ToggleDNSZone(id); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, true)
+}
+
+func (s *Server) HandleGetDNSRecords(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	records, err := s.repo.GetDNSRecordsByZone(id)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if records == nil {
+		records = []model.DNSRecord{}
+	}
+	s.writeJSON(w, http.StatusOK, records)
+}
+
+func (s *Server) HandleCreateDNSRecord(w http.ResponseWriter, r *http.Request) {
+	zoneID := r.PathValue("id")
+	var input model.DNSRecordInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	record := model.DNSRecord{
+		ID:     "rec-" + generateRandomToken()[:8],
+		ZoneID: zoneID,
+		Name:   input.Name,
+		Type:   input.Type,
+		Value:  input.Value,
+		TTL:    input.TTL,
+	}
+
+	if err := s.repo.CreateDNSRecord(record); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) HandleUpdateDNSRecord(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	existing, err := s.repo.GetDNSRecordByID(id)
+	if err != nil || existing == nil {
+		s.writeError(w, http.StatusNotFound, "DNS Record not found")
+		return
+	}
+
+	var input model.DNSRecordInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	record := model.DNSRecord{
+		ID:     id,
+		ZoneID: existing.ZoneID,
+		Name:   input.Name,
+		Type:   input.Type,
+		Value:  input.Value,
+		TTL:    input.TTL,
+	}
+
+	if err := s.repo.UpdateDNSRecord(record); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) HandleDeleteDNSRecord(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.repo.DeleteDNSRecord(id); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, true)
+}
+
+func (s *Server) HandleApplyDNSServer(w http.ResponseWriter, r *http.Request) {
+	if err := s.dnsServerService.ApplyAll(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, true)
+}
+
+func (s *Server) HandleClearDNSCache(w http.ResponseWriter, r *http.Request) {
+	if err := s.dnsServerService.ClearCache(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, true)
 }

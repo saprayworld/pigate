@@ -178,6 +178,7 @@ type StaticRouteInput struct {
 
 // DhcpConfig represents DHCP server main settings
 type DhcpConfig struct {
+	ID        string `json:"id"`
 	Enabled   bool   `json:"enabled"`
 	Interface string `json:"interface"`
 	StartIP   string `json:"startIp"`
@@ -210,7 +211,9 @@ type ActiveDhcpLease struct {
 	IPAddress  string `json:"ipAddress"`
 	MacAddress string `json:"macAddress"`
 	Hostname   string `json:"hostname"`
+	Interface  string `json:"interface"`
 	ExpiresIn  string `json:"expiresIn"`
+	ExpiresAt  string `json:"expiresAt"`
 }
 
 // SystemTimeSettings represents NTP and timezone configurations

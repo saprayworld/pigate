@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
@@ -44,6 +45,10 @@ func InitDB(dsn string, isMock ...bool) (*sql.DB, error) {
 	}
 	if _, err := db.Exec("PRAGMA foreign_keys=ON;"); err != nil {
 		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
+	}
+
+	if err := backupDatabase(dsn); err != nil {
+		log.Printf("[Warning] Failed to backup database: %v", err)
 	}
 
 	if err := migrate(db); err != nil {
@@ -242,17 +247,48 @@ func migrate(db *sql.DB) error {
 			proto TEXT DEFAULT 'static'
 		);`,
 
-		`CREATE TABLE IF NOT EXISTS dhcp_config (
-			id INTEGER PRIMARY KEY CHECK(id = 1),
-			enabled INTEGER DEFAULT 1 CHECK(enabled IN (0, 1)),
-			interface TEXT NOT NULL,
-			start_ip TEXT NOT NULL,
-			end_ip TEXT NOT NULL,
-			gateway TEXT NOT NULL,
-			netmask TEXT NOT NULL,
-			dns1 TEXT NOT NULL,
-			dns2 TEXT NOT NULL,
-			lease_time INTEGER NOT NULL
+		`CREATE TABLE IF NOT EXISTS dhcp_configs (
+			id          TEXT PRIMARY KEY,
+			interface   TEXT NOT NULL UNIQUE,
+			enabled     INTEGER DEFAULT 1 CHECK(enabled IN (0, 1)),
+			start_ip    TEXT NOT NULL,
+			end_ip      TEXT NOT NULL,
+			gateway     TEXT NOT NULL,
+			netmask     TEXT NOT NULL,
+			dns1        TEXT NOT NULL DEFAULT '8.8.8.8',
+			dns2        TEXT NOT NULL DEFAULT '1.1.1.1',
+			lease_time  INTEGER NOT NULL DEFAULT 86400,
+			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
+
+		`CREATE TABLE IF NOT EXISTS dhcp_leases (
+			mac_address TEXT NOT NULL PRIMARY KEY,
+			ip_address  TEXT NOT NULL,
+			hostname    TEXT,
+			interface   TEXT,
+			expires_at  DATETIME
+		);`,
+
+		`CREATE TABLE IF NOT EXISTS dns_zones (
+			id               TEXT PRIMARY KEY,
+			zone_name        TEXT NOT NULL UNIQUE,
+			forward_to       TEXT,
+			allowed_ips      TEXT,
+			is_authoritative INTEGER DEFAULT 1 CHECK(is_authoritative IN (0, 1)),
+			enabled          INTEGER DEFAULT 1 CHECK(enabled IN (0, 1)),
+			created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
+
+		`CREATE TABLE IF NOT EXISTS dns_records (
+			id         TEXT PRIMARY KEY,
+			zone_id    TEXT NOT NULL,
+			name       TEXT NOT NULL,
+			type       TEXT NOT NULL CHECK(type IN ('A','AAAA','CNAME','MX','TXT','PTR')),
+			value      TEXT NOT NULL,
+			ttl        INTEGER DEFAULT 300,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (zone_id) REFERENCES dns_zones(id) ON DELETE CASCADE
 		);`,
 
 		`CREATE TABLE IF NOT EXISTS dhcp_reservations (
@@ -331,6 +367,37 @@ func migrate(db *sql.DB) error {
 		if _, err := db.Exec(query); err != nil {
 			return err
 		}
+	}
+
+	// Migrate data from old dhcp_config (if it exists) to new dhcp_configs
+	var sqlCreateOldDhcpConfig string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='dhcp_config'").Scan(&sqlCreateOldDhcpConfig)
+	if err == nil {
+		// Old table exists, check if new table has any records. If new table is empty, migrate the old record.
+		var newCount int
+		err = db.QueryRow("SELECT COUNT(*) FROM dhcp_configs").Scan(&newCount)
+		if err == nil && newCount == 0 {
+			row := db.QueryRow("SELECT enabled, interface, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time FROM dhcp_config WHERE id = 1")
+			var enabled, leaseTime int
+			var iface, startIP, endIP, gateway, netmask, dns1, dns2 string
+			errScan := row.Scan(&enabled, &iface, &startIP, &endIP, &gateway, &netmask, &dns1, &dns2, &leaseTime)
+			if errScan == nil {
+				_, errInsert := db.Exec(`INSERT INTO dhcp_configs 
+					(id, interface, enabled, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time) 
+					VALUES ('dhcp-cfg-default', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					iface, enabled, startIP, endIP, gateway, netmask, dns1, dns2, leaseTime)
+				if errInsert != nil {
+					return fmt.Errorf("failed to migrate data from dhcp_config to dhcp_configs: %w", errInsert)
+				}
+				log.Println("[Migration] Successfully migrated old DHCP config to dhcp_configs table")
+			}
+		}
+		// Drop old table
+		_, errDrop := db.Exec("DROP TABLE dhcp_config;")
+		if errDrop != nil {
+			return fmt.Errorf("failed to drop old dhcp_config table: %w", errDrop)
+		}
+		log.Println("[Migration] Successfully dropped old dhcp_config table")
 	}
 
 	// Add is_initial column to users table if it doesn't exist
@@ -443,12 +510,12 @@ func seed(db *sql.DB, dsn string, mockMode bool) error {
 
 	// 4. Seed Default DHCP Configuration
 	var dhcpCount int
-	if err := db.QueryRow("SELECT COUNT(*) FROM dhcp_config").Scan(&dhcpCount); err != nil {
+	if err := db.QueryRow("SELECT COUNT(*) FROM dhcp_configs").Scan(&dhcpCount); err != nil {
 		return err
 	}
 	if dhcpCount == 0 {
-		_, err := db.Exec(`INSERT INTO dhcp_config (id, enabled, interface, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time) VALUES 
-			(1, 0, 'eth0', '192.168.1.100', '192.168.1.200', '192.168.1.1', '255.255.255.0', '8.8.8.8', '1.1.1.1', 86400)`)
+		_, err := db.Exec(`INSERT INTO dhcp_configs (id, enabled, interface, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time) VALUES 
+			('dhcp-cfg-default', 0, 'eth0', '192.168.1.100', '192.168.1.200', '192.168.1.1', '255.255.255.0', '8.8.8.8', '1.1.1.1', 86400)`)
 		if err != nil {
 			return err
 		}
@@ -522,5 +589,32 @@ func seed(db *sql.DB, dsn string, mockMode bool) error {
 		}
 	}
 
+	return nil
+}
+
+func backupDatabase(dbPath string) error {
+	if dbPath == ":memory:" || dbPath == "" {
+		return nil
+	}
+	// Verify if db file exists
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		// Database doesn't exist yet, no need to backup
+		return nil
+	}
+
+	timestamp := time.Now().Format("20060102-150405")
+	backupPath := fmt.Sprintf("%s.backup-%s", dbPath, timestamp)
+
+	input, err := os.ReadFile(dbPath)
+	if err != nil {
+		return fmt.Errorf("failed to read database file for backup: %w", err)
+	}
+
+	err = os.WriteFile(backupPath, input, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write database backup file: %w", err)
+	}
+
+	log.Printf("[Backup] Database backed up successfully to %s", backupPath)
 	return nil
 }

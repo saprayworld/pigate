@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"pigate/internal/model"
 
@@ -1091,10 +1092,10 @@ func (r *Repository) ToggleRouteStatus(id string) error {
 // =========================================================================
 
 func (r *Repository) GetDHCPConfig() (*model.DhcpConfig, error) {
-	row := r.db.QueryRow("SELECT enabled, interface, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time FROM dhcp_config WHERE id = 1")
+	row := r.db.QueryRow("SELECT id, enabled, interface, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time FROM dhcp_configs LIMIT 1")
 	var cfg model.DhcpConfig
 	var enabledInt int
-	err := row.Scan(&enabledInt, &cfg.Interface, &cfg.StartIP, &cfg.EndIP, &cfg.Gateway, &cfg.Netmask, &cfg.DNS1, &cfg.DNS2, &cfg.LeaseTime)
+	err := row.Scan(&cfg.ID, &enabledInt, &cfg.Interface, &cfg.StartIP, &cfg.EndIP, &cfg.Gateway, &cfg.Netmask, &cfg.DNS1, &cfg.DNS2, &cfg.LeaseTime)
 	if err != nil {
 		return nil, err
 	}
@@ -1107,10 +1108,144 @@ func (r *Repository) UpdateDHCPConfig(cfg model.DhcpConfig) error {
 	if cfg.Enabled {
 		enabledVal = 1
 	}
-	_, err := r.db.Exec(`UPDATE dhcp_config SET 
+	_, err := r.db.Exec(`UPDATE dhcp_configs SET 
 		enabled = ?, interface = ?, start_ip = ?, end_ip = ?, gateway = ?, netmask = ?, dns1 = ?, dns2 = ?, lease_time = ? 
-		WHERE id = 1`,
-		enabledVal, cfg.Interface, cfg.StartIP, cfg.EndIP, cfg.Gateway, cfg.Netmask, cfg.DNS1, cfg.DNS2, cfg.LeaseTime)
+		WHERE id = 'dhcp-cfg-default' OR id = ?`,
+		enabledVal, cfg.Interface, cfg.StartIP, cfg.EndIP, cfg.Gateway, cfg.Netmask, cfg.DNS1, cfg.DNS2, cfg.LeaseTime, cfg.ID)
+	return err
+}
+
+func (r *Repository) GetDHCPConfigs() ([]model.DhcpConfig, error) {
+	rows, err := r.db.Query("SELECT id, enabled, interface, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time FROM dhcp_configs")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []model.DhcpConfig
+	for rows.Next() {
+		var cfg model.DhcpConfig
+		var enabledInt int
+		err := rows.Scan(&cfg.ID, &enabledInt, &cfg.Interface, &cfg.StartIP, &cfg.EndIP, &cfg.Gateway, &cfg.Netmask, &cfg.DNS1, &cfg.DNS2, &cfg.LeaseTime)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Enabled = enabledInt == 1
+		list = append(list, cfg)
+	}
+	return list, nil
+}
+
+func (r *Repository) GetDHCPConfigByInterface(iface string) (*model.DhcpConfig, error) {
+	row := r.db.QueryRow("SELECT id, enabled, interface, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time FROM dhcp_configs WHERE interface = ?", iface)
+	var cfg model.DhcpConfig
+	var enabledInt int
+	err := row.Scan(&cfg.ID, &enabledInt, &cfg.Interface, &cfg.StartIP, &cfg.EndIP, &cfg.Gateway, &cfg.Netmask, &cfg.DNS1, &cfg.DNS2, &cfg.LeaseTime)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	cfg.Enabled = enabledInt == 1
+	return &cfg, nil
+}
+
+func (r *Repository) CreateDHCPConfig(cfg model.DhcpConfig) error {
+	enabledVal := 0
+	if cfg.Enabled {
+		enabledVal = 1
+	}
+	if cfg.ID == "" {
+		cfg.ID = fmt.Sprintf("dhcp-cfg-%s", cfg.Interface)
+	}
+	_, err := r.db.Exec(`INSERT INTO dhcp_configs 
+		(id, interface, enabled, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		cfg.ID, cfg.Interface, enabledVal, cfg.StartIP, cfg.EndIP, cfg.Gateway, cfg.Netmask, cfg.DNS1, cfg.DNS2, cfg.LeaseTime)
+	return err
+}
+
+func (r *Repository) UpdateDHCPConfigByID(cfg model.DhcpConfig) error {
+	enabledVal := 0
+	if cfg.Enabled {
+		enabledVal = 1
+	}
+	_, err := r.db.Exec(`UPDATE dhcp_configs SET 
+		interface = ?, enabled = ?, start_ip = ?, end_ip = ?, gateway = ?, netmask = ?, dns1 = ?, dns2 = ?, lease_time = ?, updated_at = CURRENT_TIMESTAMP 
+		WHERE id = ?`,
+		cfg.Interface, enabledVal, cfg.StartIP, cfg.EndIP, cfg.Gateway, cfg.Netmask, cfg.DNS1, cfg.DNS2, cfg.LeaseTime, cfg.ID)
+	return err
+}
+
+func (r *Repository) DeleteDHCPConfig(id string) error {
+	_, err := r.db.Exec("DELETE FROM dhcp_configs WHERE id = ?", id)
+	return err
+}
+
+func (r *Repository) ToggleDHCPConfig(id string) error {
+	_, err := r.db.Exec("UPDATE dhcp_configs SET enabled = NOT enabled, updated_at = CURRENT_TIMESTAMP WHERE id = ?", id)
+	return err
+}
+
+// DHCP Leases DB methods
+func (r *Repository) UpsertDHCPLease(lease model.ActiveDhcpLease) error {
+	_, err := r.db.Exec(`INSERT INTO dhcp_leases (mac_address, ip_address, hostname, interface, expires_at) 
+		VALUES (?, ?, ?, ?, ?) 
+		ON CONFLICT(mac_address) DO UPDATE SET 
+		ip_address = excluded.ip_address, 
+		hostname = excluded.hostname, 
+		interface = excluded.interface, 
+		expires_at = excluded.expires_at`,
+		lease.MacAddress, lease.IPAddress, lease.Hostname, lease.Interface, lease.ExpiresAt)
+	return err
+}
+
+func (r *Repository) DeleteDHCPLease(macAddress string) error {
+	_, err := r.db.Exec("DELETE FROM dhcp_leases WHERE mac_address = ?", macAddress)
+	return err
+}
+
+func (r *Repository) GetDHCPLeases() ([]model.ActiveDhcpLease, error) {
+	rows, err := r.db.Query("SELECT mac_address, ip_address, hostname, interface, expires_at FROM dhcp_leases")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []model.ActiveDhcpLease
+	for rows.Next() {
+		var lease model.ActiveDhcpLease
+		var expiresAt sql.NullTime
+		var hostname, iface sql.NullString
+		err := rows.Scan(&lease.MacAddress, &lease.IPAddress, &hostname, &iface, &expiresAt)
+		if err != nil {
+			return nil, err
+		}
+		lease.Hostname = hostname.String
+		lease.Interface = iface.String
+		if expiresAt.Valid {
+			lease.ExpiresAt = expiresAt.Time.Format(time.RFC3339)
+			// Compute ExpiresIn for backward compatibility UI
+			duration := time.Until(expiresAt.Time)
+			if duration > 0 {
+				hours := int(duration.Hours())
+				mins := int(duration.Minutes()) % 60
+				lease.ExpiresIn = fmt.Sprintf("%d hours, %d mins", hours, mins)
+			} else {
+				lease.ExpiresIn = "Expired"
+			}
+		} else {
+			lease.ExpiresIn = "Infinite"
+		}
+		lease.ID = fmt.Sprintf("lease-%s", lease.MacAddress)
+		list = append(list, lease)
+	}
+	return list, nil
+}
+
+func (r *Repository) ClearDHCPLeases() error {
+	_, err := r.db.Exec("DELETE FROM dhcp_leases")
 	return err
 }
 
@@ -1848,4 +1983,150 @@ func (r *Repository) SyncDNSFromOS() error {
 	}
 
 	return nil
+}
+
+// =========================================================================
+// DNS SERVER (dnsmasq)
+// =========================================================================
+
+func (r *Repository) GetDNSZones() ([]model.DNSZone, error) {
+	rows, err := r.db.Query("SELECT id, zone_name, forward_to, allowed_ips, is_authoritative, enabled FROM dns_zones")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	zones := []model.DNSZone{}
+	for rows.Next() {
+		var z model.DNSZone
+		var isAuth, enabled int
+		err := rows.Scan(&z.ID, &z.ZoneName, &z.ForwardTo, &z.AllowedIPs, &isAuth, &enabled)
+		if err != nil {
+			return nil, err
+		}
+		z.IsAuthoritative = isAuth == 1
+		z.Enabled = enabled == 1
+		
+		// Load records for each zone
+		records, err := r.GetDNSRecordsByZone(z.ID)
+		if err == nil && records != nil {
+			z.Records = records
+		} else {
+			z.Records = []model.DNSRecord{}
+		}
+
+		zones = append(zones, z)
+	}
+	return zones, nil
+}
+
+func (r *Repository) GetDNSZoneByID(id string) (*model.DNSZone, error) {
+	row := r.db.QueryRow("SELECT id, zone_name, forward_to, allowed_ips, is_authoritative, enabled FROM dns_zones WHERE id = ?", id)
+	var z model.DNSZone
+	var isAuth, enabled int
+	err := row.Scan(&z.ID, &z.ZoneName, &z.ForwardTo, &z.AllowedIPs, &isAuth, &enabled)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	z.IsAuthoritative = isAuth == 1
+	z.Enabled = enabled == 1
+
+	records, err := r.GetDNSRecordsByZone(z.ID)
+	if err == nil && records != nil {
+		z.Records = records
+	} else {
+		z.Records = []model.DNSRecord{}
+	}
+
+	return &z, nil
+}
+
+func (r *Repository) CreateDNSZone(zone model.DNSZone) error {
+	isAuth := 0
+	if zone.IsAuthoritative {
+		isAuth = 1
+	}
+	enabled := 0
+	if zone.Enabled {
+		enabled = 1
+	}
+	_, err := r.db.Exec("INSERT INTO dns_zones (id, zone_name, forward_to, allowed_ips, is_authoritative, enabled) VALUES (?, ?, ?, ?, ?, ?)",
+		zone.ID, zone.ZoneName, zone.ForwardTo, zone.AllowedIPs, isAuth, enabled)
+	return err
+}
+
+func (r *Repository) UpdateDNSZone(zone model.DNSZone) error {
+	isAuth := 0
+	if zone.IsAuthoritative {
+		isAuth = 1
+	}
+	enabled := 0
+	if zone.Enabled {
+		enabled = 1
+	}
+	_, err := r.db.Exec("UPDATE dns_zones SET zone_name = ?, forward_to = ?, allowed_ips = ?, is_authoritative = ?, enabled = ? WHERE id = ?",
+		zone.ZoneName, zone.ForwardTo, zone.AllowedIPs, isAuth, enabled, zone.ID)
+	return err
+}
+
+func (r *Repository) DeleteDNSZone(id string) error {
+	_, err := r.db.Exec("DELETE FROM dns_zones WHERE id = ?", id)
+	return err
+}
+
+func (r *Repository) ToggleDNSZone(id string) error {
+	_, err := r.db.Exec("UPDATE dns_zones SET enabled = NOT enabled WHERE id = ?", id)
+	return err
+}
+
+func (r *Repository) GetDNSRecordsByZone(zoneID string) ([]model.DNSRecord, error) {
+	rows, err := r.db.Query("SELECT id, zone_id, name, type, value, ttl FROM dns_records WHERE zone_id = ?", zoneID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	records := []model.DNSRecord{}
+	for rows.Next() {
+		var rec model.DNSRecord
+		err := rows.Scan(&rec.ID, &rec.ZoneID, &rec.Name, &rec.Type, &rec.Value, &rec.TTL)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, rec)
+	}
+	return records, nil
+}
+
+func (r *Repository) GetDNSRecordByID(id string) (*model.DNSRecord, error) {
+	row := r.db.QueryRow("SELECT id, zone_id, name, type, value, ttl FROM dns_records WHERE id = ?", id)
+	var rec model.DNSRecord
+	err := row.Scan(&rec.ID, &rec.ZoneID, &rec.Name, &rec.Type, &rec.Value, &rec.TTL)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+func (r *Repository) CreateDNSRecord(record model.DNSRecord) error {
+	_, err := r.db.Exec("INSERT INTO dns_records (id, zone_id, name, type, value, ttl) VALUES (?, ?, ?, ?, ?, ?)",
+		record.ID, record.ZoneID, record.Name, record.Type, record.Value, record.TTL)
+	return err
+}
+
+func (r *Repository) UpdateDNSRecord(record model.DNSRecord) error {
+	_, err := r.db.Exec("UPDATE dns_records SET name = ?, type = ?, value = ?, ttl = ? WHERE id = ?",
+		record.Name, record.Type, record.Value, record.TTL, record.ID)
+	return err
+}
+
+func (r *Repository) DeleteDNSRecord(id string) error {
+	_, err := r.db.Exec("DELETE FROM dns_records WHERE id = ?", id)
+	return err
 }
