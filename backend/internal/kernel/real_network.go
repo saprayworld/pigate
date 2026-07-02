@@ -53,7 +53,7 @@ func (r *RealNetwork) ToggleInterface(name string, up bool) error {
 			return fmt.Errorf("failed to bring interface %q up: %w", name, err)
 		}
 		if isWireless {
-			serviceName := fmt.Sprintf("wpa_supplicant@%s", name)
+			serviceName := fmt.Sprintf("wpa_supplicant@%s.service", name)
 			log.Printf("[RealNetwork] Interface is wireless. Verifying service state: %s", serviceName)
 			// if execCommand("sudo", "systemctl", "is-active", "--quiet", serviceName).Run() != nil {
 			// 	// Clean up stale socket file before starting the service
@@ -85,7 +85,7 @@ func (r *RealNetwork) ToggleInterface(name string, up bool) error {
 	}
 
 	if isWireless {
-		serviceName := fmt.Sprintf("wpa_supplicant@%s", name)
+		serviceName := fmt.Sprintf("wpa_supplicant@%s.service", name)
 		log.Printf("[RealNetwork] Interface %s is wireless. Stopping wpa_supplicant service: %s", name, serviceName)
 		// _ = execCommand("sudo", "systemctl", "stop", serviceName).Run()
 		_ = StopServiceViaDBus(serviceName)
@@ -144,7 +144,7 @@ func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, s
 	}
 
 	// Systemd service management
-	serviceName := fmt.Sprintf("wpa_supplicant@%s", name)
+	serviceName := fmt.Sprintf("wpa_supplicant@%s.service", name)
 	// isActive := execCommand("sudo", "systemctl", "is-active", "--quiet", serviceName).Run() == nil
 	isActive := IsServiceActiveViaDBus(serviceName)
 
