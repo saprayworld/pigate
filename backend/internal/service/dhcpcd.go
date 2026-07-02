@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"log"
 	"net"
 	"os/exec"
@@ -32,12 +33,24 @@ func (s *DhcpcdService) startDhcpcd(ifaceName string) error {
 		log.Printf("[DhcpcdService] [Mock] Simulating starting dhcpcd for %s", ifaceName)
 		return nil
 	}
-	cmd := execCommand("sudo", "dhcpcd", ifaceName)
+	cmd := execCommand("dhcpcd", ifaceName)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		log.Printf("[DhcpcdService] Failed to start dhcpcd for %s: %v", ifaceName, err)
 		return err
 	}
-	log.Printf("[DhcpcdService] dhcpcd started successfully for %s", ifaceName)
+	// dhcpcd only forks to the background once it has a lease (or times out) when the
+	// interface has carrier, so wait for it off the calling goroutine (which is the single
+	// netlink event loop in netlink_monitor.go) instead of blocking it, and actually surface
+	// whether the command succeeded instead of assuming success once it merely launched.
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			log.Printf("[DhcpcdService] dhcpcd exited with error for %s: %v (stderr: %s)", ifaceName, err, strings.TrimSpace(stderr.String()))
+			return
+		}
+		log.Printf("[DhcpcdService] dhcpcd started successfully for %s", ifaceName)
+	}()
 	return nil
 }
 
@@ -47,7 +60,7 @@ func (s *DhcpcdService) stopDhcpcd(ifaceName string) error {
 		log.Printf("[DhcpcdService] [Mock] Simulating stopping/releasing dhcpcd for %s", ifaceName)
 		return nil
 	}
-	cmd := execCommand("sudo", "dhcpcd", "-k", ifaceName)
+	cmd := execCommand("dhcpcd", "-k", ifaceName)
 	if err := cmd.Run(); err != nil {
 		log.Printf("[DhcpcdService] Failed to stop/release dhcpcd for %s: %v", ifaceName, err)
 		return err

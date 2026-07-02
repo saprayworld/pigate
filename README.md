@@ -144,7 +144,7 @@ The script will perform the following actions:
 1. Create a system user named `pigate` and append it to the `netdev` system group.
 2. Configure Access Control Lists (ACLs) for `/etc/wpa_supplicant` and `/etc/systemd/resolved.conf.d`.
 3. Create Polkit rules at `/etc/polkit-1/rules.d/10-pigate-wpa.rules` to authorize the `pigate` user to interact with and control `wpa_supplicant` and `systemd-resolved` services via D-Bus.
-4. Establish specific sudoers rules allowing execution of `/usr/sbin/dhcpcd` and `/usr/sbin/dhclient`.
+4. Grant Linux capabilities directly to `/usr/sbin/dhcpcd` (no sudo/root required) and prepare `/var/lib/dhcpcd` for the `pigate` user.
 5. Deploy the binary to `/usr/local/bin/pigate` and assign the required Linux capabilities.
 6. Configure, register, and launch the Systemd service `pigate.service`.
 

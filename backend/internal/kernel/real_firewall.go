@@ -208,8 +208,38 @@ func (rf *RealFirewall) ApplyRules(
 		})
 	}
 
+	// udp dport 68 iifname <X> accept — DHCP Client replies (offers/acks) on interfaces
+	// configured with addressingMode "dhcp" (e.g. a DHCP-client WAN port). These replies are
+	// frequently sent to the broadcast address, so they don't reliably match the ct
+	// established/related entry created by the original DHCPDISCOVER and would otherwise be
+	// caught by the generic port-68 drop below, leaving the interface unable to obtain a lease.
+	for _, iface := range ifaces {
+		if iface.AddressingMode != "dhcp" {
+			continue
+		}
+		conn.AddRule(&nftables.Rule{
+			Table: table,
+			Chain: inputChain,
+			Exprs: []expr.Any{
+				&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName(iface.Name)},
+				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 9, Len: 1},
+				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{17}}, // UDP
+				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
+				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{byte(68 >> 8), byte(68 & 0xFF)}},
+				&expr.Log{
+					Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
+					Data: []byte("[PiGate] INP ACCEPT: "),
+				},
+				&expr.Verdict{Kind: expr.VerdictAccept},
+			},
+		})
+	}
+
 	// udp dport { 137, 138, 67, 68 } drop — 67 here still protects interfaces that are
 	// NOT running DHCP Server (rogue/unsolicited DHCP traffic); authorized interfaces
+	// were already accepted above. 68 here still protects interfaces that are NOT
+	// configured as a DHCP client (unsolicited DHCP reply traffic); DHCP-client interfaces
 	// were already accepted above.
 	for _, port := range []uint16{137, 138, 67, 68} {
 		conn.AddRule(&nftables.Rule{
