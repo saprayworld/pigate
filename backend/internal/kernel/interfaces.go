@@ -12,6 +12,8 @@ type FirewallManager interface {
 		ifaces []model.NetworkInterface,
 		addrs []model.AddressObject,
 		svcs []model.ServiceObject,
+		dhcpServerIfaces []string,
+		dnsServerIfaces []string,
 	) error
 }
 

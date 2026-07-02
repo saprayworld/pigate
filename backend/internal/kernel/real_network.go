@@ -506,6 +506,7 @@ func StartServiceViaDBus(serviceName string) error {
 	log.Printf("[RealNetwork-D-Bus] Attempting to start service: %s", serviceName)
 	conn, err := dbus.SystemBus()
 	if err != nil {
+		log.Printf("[RealNetwork-D-Bus] Failed to connect to system bus: %v", err)
 		return fmt.Errorf("failed to connect to D-Bus system bus: %w", err)
 	}
 
@@ -514,6 +515,7 @@ func StartServiceViaDBus(serviceName string) error {
 	// โหมด "replace" จะเคลียร์คำสั่งที่อาจจะค้างอยู่ก่อนหน้า
 	err = obj.Call("org.freedesktop.systemd1.Manager.StartUnit", 0, serviceName, "replace").Store(&jobPath)
 	if err != nil {
+		log.Printf("[RealNetwork-D-Bus] Failed to call StartUnit for %s: %v", serviceName, err)
 		return fmt.Errorf("D-Bus call StartUnit failed for %s: %w", serviceName, err)
 	}
 

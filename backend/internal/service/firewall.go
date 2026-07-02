@@ -99,7 +99,23 @@ func (s *FirewallService) SyncFirewallRules() error {
 		return fmt.Errorf("failed to load service objects: %w", err)
 	}
 
-	if err := s.firewall.ApplyRules(rules, ifaces, addrs, svcs); err != nil {
+	dhcpCfgs, err := s.repo.GetDHCPConfigs()
+	if err != nil {
+		return fmt.Errorf("failed to load DHCP configs: %w", err)
+	}
+	dhcpServerIfaces := []string{}
+	for _, cfg := range dhcpCfgs {
+		if cfg.Enabled {
+			dhcpServerIfaces = append(dhcpServerIfaces, cfg.Interface)
+		}
+	}
+
+	dnsServerIfaces, err := s.repo.GetDNSServerInterfaces()
+	if err != nil {
+		return fmt.Errorf("failed to load DNS Server interfaces: %w", err)
+	}
+
+	if err := s.firewall.ApplyRules(rules, ifaces, addrs, svcs, dhcpServerIfaces, dnsServerIfaces); err != nil {
 		return fmt.Errorf("failed to apply firewall rules: %w", err)
 	}
 	return nil

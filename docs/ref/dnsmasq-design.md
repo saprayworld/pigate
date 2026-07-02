@@ -520,7 +520,8 @@ dhcp-authoritative
 - [x] เพิ่ม `"dnsmasq"` ใน service list ของ `HandleGetSystemServices`
 
 ### 🔥 Firewall
-- [ ] ⚠️ **ยังไม่ได้ทำ** — เปิดพอร์ต 53, 67, 68 บน interface ฝั่ง LAN (ดูคำเตือนในส่วนที่ 13 — พบกฎ drop พอร์ต 67/68 แบบไม่มีเงื่อนไข interface ใน `real_firewall.go` ที่จะบล็อก DHCP Server)
+- [x] เปิดพอร์ต 53 (TCP/UDP) และ 67 (UDP) เฉพาะ interface ที่เปิดใช้ DNS Server / DHCP Server จริงเท่านั้น — ดูรายละเอียดในส่วนที่ 13
+- [x] แก้กฎ baseline drop พอร์ต 67 ใน `real_firewall.go` ที่เคย drop แบบไม่มีเงื่อนไข interface ให้เพิ่ม accept-per-interface นำหน้า (พอร์ต 68 ยังคง drop ทุก interface ตามเดิม — ไม่เกี่ยวกับ DHCP Server)
 
 ### 🖥️ Frontend
 - [x] `mockData.ts`: อัปเดต `DhcpConfig`, `ActiveDhcpLease`, เพิ่ม DNS types
@@ -661,8 +662,8 @@ func validateDnsmasqConfig(tmpConfigPath string) error {
 | UDP | 68 | DHCP client (ฝั่งอุปกรณ์ที่ขอ IP) |
 
 **Checklist เพิ่ม**:
-- [ ] เพิ่มกฎ firewall เปิดพอร์ต 53, 67, 68 เฉพาะ interface ฝั่ง LAN ที่เปิดใช้ DHCP/DNS Server
-- [ ] ตรวจสอบว่ากฎนี้ผูกกับ interface ที่ถูก enable จริงเท่านั้น ไม่เปิดทิ้งไว้ทุก interface
+- [x] เพิ่มกฎ firewall เปิดพอร์ต 53 (TCP/UDP) และ 67 (UDP) เฉพาะ interface ฝั่ง LAN ที่เปิดใช้ DHCP/DNS Server (พอร์ต 68 ไม่ต้องเปิด — DHCP Server เป็นฝั่ง server ไม่ใช่ client บน interface นั้น)
+- [x] ตรวจสอบว่ากฎนี้ผูกกับ interface ที่ถูก enable จริงเท่านั้น ไม่เปิดทิ้งไว้ทุก interface — ดูส่วนที่ 13
 
 ---
 
@@ -800,4 +801,17 @@ for _, port := range []uint16{137, 138, 67, 68} {
 **Testing (ส่วนที่ 10) — ยังไม่ได้ทดสอบบนฮาร์ดแวร์จริง**
 
 ทั้งหมดในส่วนที่ 10 ยังเป็น manual testing ที่ต้องทำบน Pi จริง (ต่ออุปกรณ์รับ IP, ping ชื่อ DNS, ทดสอบ interface ชน WAN, restart integration) — โค้ดผ่านแค่ build/test อัตโนมัติเท่านั้น
+
+### 🆕 Firewall (ส่วนที่ 9) — แก้ไขแล้ว (2026-07-02)
+
+แก้ปัญหาที่บันทึกไว้ข้างต้นแล้ว:
+
+- `kernel.FirewallManager.ApplyRules` (`interfaces.go`) เพิ่มพารามิเตอร์ `dhcpServerIfaces []string`, `dnsServerIfaces []string` — ทั้ง `RealFirewall` และ `MockFirewall` อัปเดตตาม
+- `real_firewall.go`: เพิ่มกฎ `udp dport 67 iifname <X> accept` ต่อ interface ใน `dhcpServerIfaces` **ก่อน** กฎ drop เดิม (`udp dport {137,138,67,68} drop`) เพราะ nftables ประมวลผลกฎจากบนลงล่างแบบ first-match-wins — กฎ accept ที่แทรกก่อนจะทำให้ traffic ของ interface ที่ได้รับอนุญาตหลุดออกจาก chain ก่อนไปโดนกฎ drop เดิม ส่วน interface อื่นที่ไม่ได้เปิด DHCP Server ยังโดน drop เหมือนเดิม (ป้องกัน rogue DHCP)
+- เพิ่มฟังก์ชันใหม่ `addDNSServerAccessRules()` เปิด TCP+UDP port 53 ต่อ interface ใน `dnsServerIfaces` (เดิมไม่มีกฎอะไรเลยสำหรับพอร์ต 53 — ตกไปโดน default DROP policy ท้าย chain)
+- `FirewallService.SyncFirewallRules()` (`service/firewall.go`) โหลด enabled DHCP configs (`repo.GetDHCPConfigs()` กรอง `Enabled`) และ `repo.GetDNSServerInterfaces()` มาส่งต่อให้ `ApplyRules`
+- **Runtime auto-resync**: `HandleApplyDHCP` และ `HandleApplyDNSServer` (`api/handlers.go`) เรียก `firewallService.SyncFirewallRules()` ต่อท้ายหลัง apply สำเร็จ — เดิมถ้า enable DHCP/DNS Server บน interface ใหม่ผ่านหน้าเว็บ จะไม่มีอะไรไปเปิด firewall ให้จนกว่าจะรีสตาร์ทเครื่อง (เพราะ `firewallService.InitApplyConfig()` รันแค่ตอน startup) ตอนนี้เปิดพอร์ตทันทีที่กด Apply
+- พอร์ต 68 **ยังคง** ถูก drop ทุก interface เหมือนเดิม — DHCP Server เป็นฝั่ง server บน LAN ไม่จำเป็นต้องรับพอร์ต 68 เข้ามา
+- **ยังไม่ได้แก้ (นอก scope ของรอบนี้)**: มีข้อสังเกตว่ากฎ drop พอร์ต 68 แบบไม่มีเงื่อนไขนี้อาจกระทบ DHCP **Client** ฝั่ง WAN (`dhcpcd`) ด้วย เพราะ conntrack ปกติไม่รู้จัก broadcast DHCP reply ว่าเป็น "related" กับ request เดิม แต่ประเด็นนี้อยู่นอกเอกสารฉบับนี้และแตะพื้นที่ที่ถูกกำหนดห้ามแตะ (`dhcpcd.go`) จึงพักไว้เป็น follow-up แยกที่ต้องทดสอบบนฮาร์ดแวร์จริงก่อนสรุป
+- Backend ผ่าน `go build ./...`, `go vet ./...`, `go test ./...` ทั้งหมด — ยังไม่ได้ทดสอบบนฮาร์ดแวร์จริง (เช่น `nft list ruleset` ยืนยันลำดับกฎ, ต่ออุปกรณ์รับ lease จริง, `dig` ไปยัง DNS Server)
 

@@ -9,10 +9,12 @@ import (
 )
 
 type trackingFirewallManager struct {
-	appliedRules  []model.PolicyRule
-	appliedIfaces []model.NetworkInterface
-	appliedAddrs  []model.AddressObject
-	appliedSvcs   []model.ServiceObject
+	appliedRules            []model.PolicyRule
+	appliedIfaces           []model.NetworkInterface
+	appliedAddrs            []model.AddressObject
+	appliedSvcs             []model.ServiceObject
+	appliedDhcpServerIfaces []string
+	appliedDnsServerIfaces  []string
 }
 
 func (t *trackingFirewallManager) ApplyRules(
@@ -20,11 +22,15 @@ func (t *trackingFirewallManager) ApplyRules(
 	ifaces []model.NetworkInterface,
 	addrs []model.AddressObject,
 	svcs []model.ServiceObject,
+	dhcpServerIfaces []string,
+	dnsServerIfaces []string,
 ) error {
 	t.appliedRules = rules
 	t.appliedIfaces = ifaces
 	t.appliedAddrs = addrs
 	t.appliedSvcs = svcs
+	t.appliedDhcpServerIfaces = dhcpServerIfaces
+	t.appliedDnsServerIfaces = dnsServerIfaces
 	return nil
 }
 

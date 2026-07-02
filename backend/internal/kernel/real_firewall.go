@@ -30,6 +30,8 @@ func (rf *RealFirewall) ApplyRules(
 	ifaces []model.NetworkInterface,
 	addrs []model.AddressObject,
 	svcs []model.ServiceObject,
+	dhcpServerIfaces []string,
+	dnsServerIfaces []string,
 ) error {
 	log.Printf("[RealFirewall] Applying %d rules to Linux kernel via Netlink (Docker Compatibility: %t, Addresses: %d, Services: %d)",
 		len(rules), rf.dockerCompat, len(addrs), len(svcs))
@@ -183,7 +185,32 @@ func (rf *RealFirewall) ApplyRules(
 		})
 	}
 
-	// udp dport { 137, 138, 67, 68 } drop
+	// udp dport 67 iifname <X> accept — DHCP Server (dnsmasq) on authorized LAN interfaces.
+	// Must precede the generic drop loop below: nftables evaluates rules top-down and an
+	// accept here terminates evaluation before the unconditional drop on port 67 is reached.
+	for _, ifaceName := range dhcpServerIfaces {
+		conn.AddRule(&nftables.Rule{
+			Table: table,
+			Chain: inputChain,
+			Exprs: []expr.Any{
+				&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName(ifaceName)},
+				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 9, Len: 1},
+				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{17}}, // UDP
+				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
+				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{byte(67 >> 8), byte(67 & 0xFF)}},
+				&expr.Log{
+					Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
+					Data: []byte("[PiGate] INP ACCEPT: "),
+				},
+				&expr.Verdict{Kind: expr.VerdictAccept},
+			},
+		})
+	}
+
+	// udp dport { 137, 138, 67, 68 } drop — 67 here still protects interfaces that are
+	// NOT running DHCP Server (rogue/unsolicited DHCP traffic); authorized interfaces
+	// were already accepted above.
 	for _, port := range []uint16{137, 138, 67, 68} {
 		conn.AddRule(&nftables.Rule{
 			Table: table,
@@ -318,6 +345,9 @@ func (rf *RealFirewall) ApplyRules(
 	for _, iface := range ifaces {
 		addAdminAccessRules(conn, table, inputChain, iface.Name, iface.AdminAccess)
 	}
+
+	// DNS Server (dnsmasq) access rules per interface in input
+	addDNSServerAccessRules(conn, table, inputChain, dnsServerIfaces)
 
 	// --- Section 4: Final Drop Log ---
 	conn.AddRule(&nftables.Rule{
@@ -900,6 +930,38 @@ func addAdminAccessRules(
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName(ifaceName)},
 					&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 9, Len: 1},
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{6}}, // TCP
+					&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
+					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: portBytes},
+					&expr.Log{
+						Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
+						Data: []byte("[PiGate] INP ACCEPT: "),
+					},
+					&expr.Verdict{Kind: expr.VerdictAccept},
+				},
+			})
+		}
+	}
+}
+
+// addDNSServerAccessRules opens TCP+UDP port 53 (DNS) on interfaces where the local
+// DNS Server (dnsmasq) is configured to listen, per dns_server_settings.
+func addDNSServerAccessRules(
+	conn *nftables.Conn,
+	table *nftables.Table,
+	chain *nftables.Chain,
+	dnsServerIfaces []string,
+) {
+	portBytes := []byte{byte(53 >> 8), byte(53 & 0xFF)}
+	for _, ifaceName := range dnsServerIfaces {
+		for _, protoVal := range []byte{6, 17} { // TCP, UDP
+			conn.AddRule(&nftables.Rule{
+				Table: table,
+				Chain: chain,
+				Exprs: []expr.Any{
+					&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName(ifaceName)},
+					&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 9, Len: 1},
+					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{protoVal}},
 					&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: portBytes},
 					&expr.Log{

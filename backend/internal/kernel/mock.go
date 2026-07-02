@@ -28,11 +28,19 @@ func (m *MockFirewall) ApplyRules(
 	ifaces []model.NetworkInterface,
 	addrs []model.AddressObject,
 	svcs []model.ServiceObject,
+	dhcpServerIfaces []string,
+	dnsServerIfaces []string,
 ) error {
 	m.ApplyCount++
 	log.Printf("[MockFirewall] Applying %d rules to mock kernel (Docker Compatibility: %t, Addresses: %d, Services: %d):", len(rules), m.dockerCompat, len(addrs), len(svcs))
 	if m.dockerCompat {
 		log.Printf("  [Docker Compat] Bypassing docker0 and br-* interfaces")
+	}
+	if len(dhcpServerIfaces) > 0 {
+		log.Printf("  [DHCP Server] Opening udp/67 on interfaces: %v", dhcpServerIfaces)
+	}
+	if len(dnsServerIfaces) > 0 {
+		log.Printf("  [DNS Server] Opening tcp+udp/53 on interfaces: %v", dnsServerIfaces)
 	}
 	for _, r := range rules {
 		statusStr := "DISABLED"

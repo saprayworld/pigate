@@ -1236,6 +1236,10 @@ func (s *Server) HandleApplyDHCP(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if err := s.firewallService.SyncFirewallRules(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -1859,6 +1863,10 @@ func (s *Server) HandleDeleteDNSRecord(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleApplyDNSServer(w http.ResponseWriter, r *http.Request) {
 	if err := s.dnsServerService.ApplyAll(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := s.firewallService.SyncFirewallRules(); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
