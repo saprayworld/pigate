@@ -33,3 +33,9 @@ type DNSRecordInput struct {
 	Value string `json:"value"`
 	TTL   int    `json:"ttl"`
 }
+
+// DNSServerSettings holds which real LAN interfaces the DNS Server should bind
+// (auth-server) to. Independent from DHCP Server configs.
+type DNSServerSettings struct {
+	Interfaces []string `json:"interfaces"`
+}

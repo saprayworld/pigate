@@ -96,6 +96,8 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("DELETE /api/dns/records/{id}", s.HandleDeleteDNSRecord)
 	authRoute("POST /api/dns/apply", s.HandleApplyDNSServer)
 	authRoute("POST /api/dns/clear-cache", s.HandleClearDNSCache)
+	authRoute("GET /api/dns/settings", s.HandleGetDNSServerSettings)
+	authRoute("PUT /api/dns/settings", s.HandleUpdateDNSServerSettings)
 
 	// 9. System Management & Backup
 	authRoute("GET /api/system/time", s.HandleGetSystemTime)

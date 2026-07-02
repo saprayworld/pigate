@@ -36,20 +36,9 @@ func (s *DNSServerService) ApplyAll() error {
 		}
 	}
 
-	dhcpConfigs, err := s.repo.GetDHCPConfigs()
+	interfaces, err := s.repo.GetDNSServerInterfaces()
 	if err != nil {
-		return fmt.Errorf("failed to retrieve DHCP configs from database: %w", err)
-	}
-
-	var interfaces []string
-	for _, cfg := range dhcpConfigs {
-		if cfg.Enabled {
-			interfaces = append(interfaces, cfg.Interface)
-		}
-	}
-
-	if len(interfaces) == 0 {
-		interfaces = []string{"eth0"}
+		return fmt.Errorf("failed to retrieve DNS server interfaces from database: %w", err)
 	}
 
 	if err := s.manager.ApplyZones(enabledZones, interfaces); err != nil {

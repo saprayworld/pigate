@@ -1,7 +1,8 @@
-import { type DNSZone, type DNSRecord, initialDNSZones } from "@/data-mockup/mockData"
+import { type DNSZone, type DNSRecord, type DNSServerSettings, initialDNSZones, initialDNSServerSettings } from "@/data-mockup/mockData"
 import { IS_MOCK_MODE, API_BASE_URL } from "./config"
 
 const ZONES_STORAGE_KEY = "pigate_dns_zones";
+const SETTINGS_STORAGE_KEY = "pigate_dns_server_settings";
 
 function getLocalZones(): DNSZone[] {
   const stored = localStorage.getItem(ZONES_STORAGE_KEY);
@@ -18,6 +19,23 @@ function getLocalZones(): DNSZone[] {
 
 function saveLocalZones(zones: DNSZone[]) {
   localStorage.setItem(ZONES_STORAGE_KEY, JSON.stringify(zones));
+}
+
+function getLocalSettings(): DNSServerSettings {
+  const stored = localStorage.getItem(SETTINGS_STORAGE_KEY);
+  if (!stored) {
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(initialDNSServerSettings));
+    return initialDNSServerSettings;
+  }
+  try {
+    return JSON.parse(stored);
+  } catch (e) {
+    return initialDNSServerSettings;
+  }
+}
+
+function saveLocalSettings(settings: DNSServerSettings) {
+  localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
 }
 
 export const dnsServerService = {
@@ -265,5 +283,38 @@ export const dnsServerService = {
       throw new Error(`Failed to clear DNS cache: ${response.statusText}`);
     }
     return true;
+  },
+
+  getSettings: async (): Promise<DNSServerSettings> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return getLocalSettings();
+    }
+
+    const response = await fetch(`${API_BASE_URL}/dns/settings`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch DNS server settings: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  updateSettings: async (settings: DNSServerSettings): Promise<DNSServerSettings> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      saveLocalSettings(settings);
+      return settings;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/dns/settings`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(settings),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to update DNS server settings: ${response.statusText}`);
+    }
+    return response.json();
   },
 };

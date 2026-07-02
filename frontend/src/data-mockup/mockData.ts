@@ -594,6 +594,16 @@ export const initialDNSZones: DNSZone[] = [
   }
 ]
 
+// DNS Server listen interfaces (which real LAN interfaces auth-server binds to).
+// Kept independent from DHCP Server configuration — sourced from the Interface Service.
+export interface DNSServerSettings {
+  interfaces: string[]
+}
+
+export const initialDNSServerSettings: DNSServerSettings = {
+  interfaces: ["eth0"]
+}
+
 
 
 

@@ -100,10 +100,10 @@ export default function DhcpServer() {
         dhcpService.getActiveLeases(),
         dhcpService.getAvailableInterfaces()
       ])
-      setConfigs(cfgs)
-      setReservations(res)
-      setActiveLeases(leases)
-      setAvailableInterfaces(avIface)
+      setConfigs(cfgs || [])
+      setReservations(res || [])
+      setActiveLeases(leases || [])
+      setAvailableInterfaces(avIface || [])
     } catch (err: any) {
       console.error(err)
       await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูล DHCP ได้: " + (err.message || err))
@@ -163,7 +163,7 @@ export default function DhcpServer() {
   // --- Config Form CRUD ---
   const openCreateConfigModal = async () => {
     try {
-      const avIface = await dhcpService.getAvailableInterfaces()
+      const avIface = await dhcpService.getAvailableInterfaces() || []
       setAvailableInterfaces(avIface)
       if (avIface.length === 0) {
         await alert("แจ้งเตือน", "ไม่เหลือ LAN Interface ว่างที่พร้อมสำหรับเปิด DHCP Server")

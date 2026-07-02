@@ -2,6 +2,8 @@
 
 เอกสารนี้อธิบายแผนการพัฒนาระบบ **DHCP Server** และ **DNS Server** โดยใช้ `dnsmasq` เป็น backend daemon สำหรับ PiGate โดยแมปงานทุกอย่างให้ตรงกับโครงสร้างโปรเจคปัจจุบัน
 
+> 📌 **อัปเดตสถานะล่าสุด**: ดู [ส่วนที่ 13 — Progress Update](#ส่วนที่-13--progress-update-2026-07-02) ท้ายเอกสารสำหรับสถานะการพัฒนาจริง เทียบกับแผนในเอกสารนี้ รวมถึงสิ่งที่ทำเพิ่มนอกแผนและช่องว่างที่ยังเหลืออยู่
+
 ---
 
 ## ⚠️ ข้อควรระวัง — DHCP Client vs DHCP Server
@@ -20,7 +22,9 @@
 
 ---
 
-## สถานะปัจจุบัน (As-Is)
+## สถานะปัจจุบัน (As-Is ณ ตอนเริ่มแผน)
+
+> หมายเหตุ: ตารางนี้คือภาพ **ก่อนเริ่มพัฒนา**. สำหรับสถานะล่าสุดหลังพัฒนาเสร็จ ดู [ส่วนที่ 13 — Progress Update](#ส่วนที่-13--progress-update-2026-07-02)
 
 | ส่วน | สถานะ | หมายเหตุ |
 |---|---|---|
@@ -466,67 +470,71 @@ dhcp-authoritative
 ## ส่วนที่ 4 — Checklist สรุป (ขั้นตอนทั้งหมดตั้งแต่ต้นจนจบ)
 
 ### เตรียมการ
-- [ ] สำรองฐานข้อมูล SQLite ก่อนเริ่ม
-- [ ] ตรวจสอบเครื่อง (dnsmasq ติดตั้งหรือยัง, พอร์ต 53 ว่างไหม)
+- [x] สำรองฐานข้อมูล SQLite ก่อนเริ่ม
+- [x] ตรวจสอบเครื่อง (dnsmasq ติดตั้งหรือยัง, พอร์ต 53 ว่างไหม) — ผลตรวจบันทึกไว้ในส่วนที่ 5
 
 ### 🗄️ Database
-- [ ] เพิ่มตาราง `dhcp_configs` + migration จาก `dhcp_config` เดิม
-- [ ] เพิ่มตาราง `dhcp_leases`
-- [ ] เพิ่ม repository methods: `GetDHCPConfigs`, `CreateDHCPConfig`, `UpdateDHCPConfigByID`, `DeleteDHCPConfig`, `ToggleDHCPConfig`
-- [ ] เพิ่ม repository methods: `UpsertDHCPLease`, `DeleteDHCPLease`, `GetDHCPLeases`, `ClearDHCPLeases`
-- [ ] เพิ่มตาราง `dns_zones`
-- [ ] เพิ่มตาราง `dns_records`
-- [ ] เพิ่ม repository methods: `GetDNSZones`, `CreateDNSZone`, `UpdateDNSZone`, `DeleteDNSZone`, `ToggleDNSZone`
-- [ ] เพิ่ม repository methods: `GetDNSRecordsByZone`, `CreateDNSRecord`, `UpdateDNSRecord`, `DeleteDNSRecord`
+- [x] เพิ่มตาราง `dhcp_configs` + migration จาก `dhcp_config` เดิม
+- [x] เพิ่มตาราง `dhcp_leases`
+- [x] เพิ่ม repository methods: `GetDHCPConfigs`, `CreateDHCPConfig`, `UpdateDHCPConfigByID`, `DeleteDHCPConfig`, `ToggleDHCPConfig`
+- [x] เพิ่ม repository methods: `UpsertDHCPLease`, `DeleteDHCPLease`, `GetDHCPLeases`, `ClearDHCPLeases`
+- [x] เพิ่มตาราง `dns_zones`
+- [x] เพิ่มตาราง `dns_records`
+- [x] เพิ่ม repository methods: `GetDNSZones`, `CreateDNSZone`, `UpdateDNSZone`, `DeleteDNSZone`, `ToggleDNSZone`
+- [x] เพิ่ม repository methods: `GetDNSRecordsByZone`, `CreateDNSRecord`, `UpdateDNSRecord`, `DeleteDNSRecord`
+- [x] *(เพิ่มเติมนอกแผน)* เพิ่มตาราง `dns_server_settings` + `GetDNSServerInterfaces`/`SetDNSServerInterfaces` — ดูส่วนที่ 13
 
 ### 🧠 Model
-- [ ] อัปเดต `DhcpConfig` struct เพิ่ม `ID` field
-- [ ] อัปเดต `ActiveDhcpLease` struct เพิ่ม `Interface` field
-- [ ] สร้างไฟล์ `dns_server.go`: `DNSZone`, `DNSRecord`, `DNSZoneInput`, `DNSRecordInput`
+- [x] อัปเดต `DhcpConfig` struct เพิ่ม `ID` field
+- [x] อัปเดต `ActiveDhcpLease` struct เพิ่ม `Interface` field
+- [x] สร้างไฟล์ `dns_server.go`: `DNSZone`, `DNSRecord`, `DNSZoneInput`, `DNSRecordInput`
+- [x] *(เพิ่มเติมนอกแผน)* `model.DNSServerSettings{Interfaces []string}`
 
 ### ⚙️ Kernel/System Layer
-- [ ] อัปเดต `DhcpManager` interface ใน `interfaces.go`
-- [ ] สร้าง `dhcp_server.go` — `RealDhcpManager` (config writer + interface check + SIGHUP + WatchLeases)
-- [ ] อัปเดต `MockDhcp` ใน `mock.go`
-- [ ] เพิ่ม `DNSServerManager` interface ใน `interfaces.go`
-- [ ] สร้าง `dns_server.go` — `RealDNSServerManager` (zone config writer + ClearCache)
-- [ ] สร้าง `MockDNSServerManager` ใน `mock.go`
-- [ ] สร้าง `dnsmasq_base.go` — generate `pigate-base.conf`
-- [ ] เพิ่มเช็ค interface ชนกับ WAN ก่อน apply DHCP Server config
-- [ ] เพิ่ม validate config (`dnsmasq --test`) ก่อนสั่งรีสตาร์ท
+- [x] อัปเดต `DhcpManager` interface ใน `interfaces.go`
+- [x] สร้าง `dhcp_server.go` — `RealDhcpManager` (config writer + interface check + SIGHUP + WatchLeases)
+- [x] อัปเดต `MockDhcp` ใน `mock.go`
+- [x] เพิ่ม `DNSServerManager` interface ใน `interfaces.go`
+- [x] สร้าง `dns_server.go` — `RealDNSServerManager` (zone config writer + ClearCache)
+- [x] สร้าง `MockDNSServerManager` ใน `mock.go`
+- [x] สร้าง base config generator (`ensureBaseConfig()` ใน `dhcp_server.go` แทนไฟล์แยก `dnsmasq_base.go`)
+- [x] เพิ่มเช็ค interface ชนกับ WAN ก่อน apply DHCP Server config (อยู่ใน `DhcpServerService.ApplyAll()`)
+- [x] เพิ่ม validate config (`dnsmasq --test`) ก่อนสั่งรีสตาร์ท (ทั้ง DHCP และ DNS Server)
 
 ### 🔧 Service Layer
-- [ ] สร้าง `service/dhcp_server.go` — `DhcpServerService` (**ใหม่ทั้งหมด, ไม่แตะ `dhcpcd.go`**)
-- [ ] สร้าง `service/dns_server.go` — `DNSServerService`
+- [x] สร้าง `service/dhcp_server.go` — `DhcpServerService` (**ใหม่ทั้งหมด, ไม่แตะ `dhcpcd.go`**)
+- [x] สร้าง `service/dns_server.go` — `DNSServerService`
 
 ### 🌐 API Layer
-- [ ] แก้ไข DHCP handlers ใน `handlers.go` (multi-interface)
-- [ ] เพิ่ม DNS Server handlers ใน `handlers.go`
-- [ ] อัปเดต DHCP routes ใน `router.go`
-- [ ] เพิ่ม DNS Server routes ใน `router.go`
+- [x] แก้ไข DHCP handlers ใน `handlers.go` (multi-interface)
+- [x] เพิ่ม DNS Server handlers ใน `handlers.go`
+- [x] อัปเดต DHCP routes ใน `router.go`
+- [x] เพิ่ม DNS Server routes ใน `router.go`
+- [x] *(เพิ่มเติมนอกแผน)* `GET/PUT /api/dns/settings` — ดูส่วนที่ 13
 
 ### 🚀 main.go
-- [ ] เพิ่ม `dhcpServerService` ใหม่ (ไม่แตะ `dhcpcdService` เดิม)
-- [ ] เพิ่ม `dnsServerService` + `InitApplyConfig()`
-- [ ] เพิ่ม `StartLeaseWatcher` goroutine (non-mock mode)
-- [ ] อัปเดต `NewServer()` signature ให้รับ `dhcpServerService` และ `dnsServerService`
-- [ ] เพิ่ม `"dnsmasq"` ใน service list ของ `HandleGetSystemServices`
+- [x] เพิ่ม `dhcpServerService` ใหม่ (ไม่แตะ `dhcpcdService` เดิม)
+- [x] เพิ่ม `dnsServerService` + `InitApplyConfig()`
+- [x] เพิ่ม `StartLeaseWatcher` goroutine (non-mock mode)
+- [x] อัปเดต `NewServer()` signature ให้รับ `dhcpServerService` และ `dnsServerService`
+- [x] เพิ่ม `"dnsmasq"` ใน service list ของ `HandleGetSystemServices`
 
 ### 🔥 Firewall
-- [ ] เปิดพอร์ต 53, 67, 68 บน interface ฝั่ง LAN
+- [ ] ⚠️ **ยังไม่ได้ทำ** — เปิดพอร์ต 53, 67, 68 บน interface ฝั่ง LAN (ดูคำเตือนในส่วนที่ 13 — พบกฎ drop พอร์ต 67/68 แบบไม่มีเงื่อนไข interface ใน `real_firewall.go` ที่จะบล็อก DHCP Server)
 
 ### 🖥️ Frontend
-- [ ] `mockData.ts`: อัปเดต `DhcpConfig`, `ActiveDhcpLease`, เพิ่ม DNS types
-- [ ] `dhcpService.ts`: อัปเดต methods (multi-config)
-- [ ] `DhcpServer.tsx`: อัปเดต UI (multi-interface cards)
-- [ ] `dnsServerService.ts`: สร้างใหม่
-- [ ] `DnsServer.tsx`: สร้างหน้าใหม่ (ไม่แก้ `DNS.tsx` เดิม)
-- [ ] เพิ่ม route navigation สำหรับ `DnsServer.tsx`
+- [x] `mockData.ts`: อัปเดต `DhcpConfig`, `ActiveDhcpLease`, เพิ่ม DNS types
+- [x] `dhcpService.ts`: อัปเดต methods (multi-config)
+- [x] `DhcpServer.tsx`: อัปเดต UI (multi-interface cards)
+- [x] `dnsServerService.ts`: สร้างใหม่
+- [x] `DnsServer.tsx`: สร้างหน้าใหม่ (ไม่แก้ `DNS.tsx` เดิม)
+- [x] เพิ่ม route navigation สำหรับ `DnsServer.tsx`
+- [x] *(เพิ่มเติมนอกแผน)* UI เลือก Listen Interfaces ของ DNS Server จาก Interface Service — ดูส่วนที่ 13
 
 ### 🧪 ทดสอบ
-- [ ] ทดสอบ DHCP Server (IP range, lease คงอยู่, reservation, กัน WAN ชน)
-- [ ] ทดสอบ DNS Server (ping ชื่อที่ตั้ง, กันชื่อซ้ำ, forward zone, กัน config ผิด)
-- [ ] ทดสอบ Integration (รีสตาร์ทเครื่อง, จำลอง service ล่ม)
+- [ ] ทดสอบ DHCP Server (IP range, lease คงอยู่, reservation, กัน WAN ชน) — ยังไม่ได้ทดสอบบนฮาร์ดแวร์จริง
+- [ ] ทดสอบ DNS Server (ping ชื่อที่ตั้ง, กันชื่อซ้ำ, forward zone, กัน config ผิด) — ยังไม่ได้ทดสอบบนฮาร์ดแวร์จริง
+- [ ] ทดสอบ Integration (รีสตาร์ทเครื่อง, จำลอง service ล่ม) — ยังไม่ได้ทดสอบบนฮาร์ดแวร์จริง
 ---
 
 ## ส่วนที่ 5 — Pre-check ก่อนเริ่มพัฒนา
@@ -733,4 +741,63 @@ func validateDnsmasqConfig(tmpConfigPath string) error {
 |---|---|
 | `backend/internal/service/dhcpcd.go` | ระบบขอ IP ฝั่ง WAN เดิม ถ้าแก้จะทำให้เน็ตหลุด |
 | `frontend/src/pages/DNS.tsx` | หน้าตั้งค่า DNS ต้นทางเดิม คนละหน้าที่กับ DNS Server ตัวใหม่ |
- 
+
+---
+
+## ส่วนที่ 13 — Progress Update (2026-07-02)
+
+สรุปสถานะการพัฒนาจริง เทียบกับแผนในเอกสารนี้ ตามการตรวจโค้ดล่าสุด
+
+### ✅ ทำครบตามแผนแล้ว
+Database / Model / Kernel / Service / API / main.go / Frontend ทั้งหมดตาม checklist ในส่วนที่ 4 — โค้ด backend คอมไพล์ผ่าน (`go build`, `go vet`, `go test ./...`) และ frontend ผ่าน `tsc --noEmit` + `yarn build` ทั้งหมด โดยไม่ได้แตะ `service/dhcpcd.go` หรือ `frontend/src/pages/DNS.tsx` เลยตามกฎที่กำหนดไว้
+
+### 🆕 สิ่งที่ทำเพิ่มนอกแผนเดิม
+
+**1. แยก DNS Server Listen Interface ออกจาก DHCP Server**
+
+แผนเดิม (ส่วนที่ 2.3/2.4) ให้ `DNSServerService.ApplyAll()` ดึงรายชื่อ interface สำหรับ `auth-server=` directive มาจาก DHCP configs ที่ enabled อยู่ ซึ่งทำให้ DNS Server ผูกติดกับสถานะของ DHCP Server โดยไม่จำเป็น จึงปรับให้เป็นค่าตั้งค่าอิสระของตัวเอง:
+
+- DB: เพิ่มตาราง `dns_server_settings` (single-row, `id=1`) เก็บรายชื่อ interface แบบ comma-separated
+- Repository: `GetDNSServerInterfaces()` / `SetDNSServerInterfaces()`
+- Model: `DNSServerSettings{Interfaces []string}`
+- API: `GET /api/dns/settings`, `PUT /api/dns/settings` — ฝั่ง `PUT` validate ชื่อ interface กับ `interfaceService.GetDataLayerInterface()` (Interface Service จริง) ก่อนบันทึกเสมอ
+- Service: `DNSServerService.ApplyAll()` อ่าน interfaces จาก `repo.GetDNSServerInterfaces()` แทนการ derive จาก `dhcp_configs` (ลบ fallback `eth0` แบบ hardcode ทิ้งด้วย)
+- Frontend: การ์ด "DNS Server Listen Interfaces" ใน `DnsServer.tsx` ให้ผู้ใช้ติ๊กเลือก interface จริง (role `LAN`) จาก `interfaceService.getAll()` — ไม่ผูกกับ DHCP Server อีกต่อไป
+
+**2. แก้บั๊ก: nil slice → JSON `null` ทำให้หน้า DHCP Server crash**
+
+พบว่า backend คืน Go slice ที่ไม่ได้ initialize (`nil`) ในหลายจุด ซึ่ง JSON-encode เป็น `null` แทนที่จะเป็น `[]` และฝั่ง frontend เรียก `.length`/`.filter` ต่อจากผลลัพธ์โดยไม่มีการเช็คป้องกัน — จุดที่ร้ายแรงที่สุดคือ `HandleGetAvailableInterfaces` ที่จะคืน `null` เมื่อไม่เหลือ LAN interface ว่าง (เช่น ตั้ง DHCP Server ครบทุก interface แล้ว) ทำให้หน้าเว็บทั้งหน้า crash ตอนโหลด เพราะ `availableInterfaces.length` ถูกอ่านตรง ๆ ใน JSX
+
+แก้โดย:
+- Backend: `HandleGetAvailableInterfaces`, `HandleGetDHCPConfigs`, `HandleGetDHCPLeases` คืน `[]` เสมอเมื่อไม่มีข้อมูล
+- Backend: `RealDhcpManager.GetActiveLeases()` (`kernel/dhcp_server.go`) initialize slice เป็น `[]model.ActiveDhcpLease{}` แทน `nil`
+- Frontend: `DhcpServer.tsx` เพิ่ม `|| []` กันไว้อีกชั้นตอนรับผลลัพธ์จาก API (`loadDhcpData`, `openCreateConfigModal`)
+
+**3. แก้บั๊ก: แก้ไข DNS Zone แล้ว DNS Records ฝั่งขวาหายไป ต้องโหลดหน้าใหม่**
+
+ต้นตออยู่ที่ `HandleUpdateDNSZone` (`api/handlers.go`) — ดึง `existing` (ซึ่งมี `Records` ครบ) มาเช็คว่า zone มีอยู่จริง แต่ตอนสร้าง struct `zone` เพื่อ save และส่งกลับเป็น response กลับไม่ได้ copy `existing.Records` มาด้วย ทำให้ response มี `"records": null` เสมอ (เพราะ field `Records` ใน model ไม่มี `omitempty`) ฝั่ง frontend ที่ `{ ...z, ...updated }` จึงเอา `null` ไปทับ records เดิมในหน้าจอทันที
+
+แก้โดย:
+- Backend: เพิ่ม `Records: existing.Records` ใน struct `zone` ก่อน save/ส่งกลับใน `HandleUpdateDNSZone`
+- Frontend: `handleSaveZone` ใน `DnsServer.tsx` merge แบบ `{ ...z, ...updated, records: z.records }` เพื่อไม่ให้พึ่งพา records จาก response ของ endpoint ที่แก้แค่ zone metadata
+
+### ⚠️ ช่องว่างที่ยังเหลืออยู่ (ยังไม่ได้แก้)
+
+**Firewall (ส่วนที่ 9) — ความเสี่ยงสำคัญที่สุดที่ยังไม่ได้แก้**
+
+ยังไม่มีการเพิ่มกฎเปิดพอร์ต 53/67/68 บน LAN interface ตามแผน และที่ร้ายแรงกว่านั้นคือใน `backend/internal/kernel/real_firewall.go:186-199` มี baseline rule เดิม:
+
+```go
+// udp dport { 137, 138, 67, 68 } drop
+for _, port := range []uint16{137, 138, 67, 68} {
+    ...
+    &expr.Verdict{Kind: expr.VerdictDrop},
+}
+```
+
+กฎนี้ drop พอร์ต UDP 67/68 แบบไม่มีเงื่อนไข interface ซึ่งจะบล็อก DHCP Server ตัวใหม่ไม่ให้ทำงานได้จริงถ้า apply firewall config นี้ทับ interface ที่เปิด DHCP Server ไว้ — **ต้องแก้ก่อนขึ้นใช้งานจริง** โดยอาจต้อง exclude LAN interface ที่ enable DHCP Server ออกจากกฎ drop นี้ หรือย้ายกฎนี้ไปอยู่หลัง accept rule ของ DHCP Server
+
+**Testing (ส่วนที่ 10) — ยังไม่ได้ทดสอบบนฮาร์ดแวร์จริง**
+
+ทั้งหมดในส่วนที่ 10 ยังเป็น manual testing ที่ต้องทำบน Pi จริง (ต่ออุปกรณ์รับ IP, ping ชื่อ DNS, ทดสอบ interface ชน WAN, restart integration) — โค้ดผ่านแค่ build/test อัตโนมัติเท่านั้น
+

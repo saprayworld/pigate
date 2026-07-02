@@ -157,7 +157,7 @@ func (m *RealDhcpManager) GetActiveLeases() ([]model.ActiveDhcpLease, error) {
 		return nil, fmt.Errorf("failed to read dnsmasq leases file: %w", err)
 	}
 
-	var leases []model.ActiveDhcpLease
+	leases := []model.ActiveDhcpLease{}
 	lines := strings.Split(string(data), "\n")
 	for idx, line := range lines {
 		line = strings.TrimSpace(line)

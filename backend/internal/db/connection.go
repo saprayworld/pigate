@@ -291,6 +291,13 @@ func migrate(db *sql.DB) error {
 			FOREIGN KEY (zone_id) REFERENCES dns_zones(id) ON DELETE CASCADE
 		);`,
 
+		// Listen interfaces for the DNS Server (auth-server binding). Kept independent
+		// from dhcp_configs so DNS Server interface selection doesn't depend on DHCP Server state.
+		`CREATE TABLE IF NOT EXISTS dns_server_settings (
+			id         INTEGER PRIMARY KEY CHECK(id = 1),
+			interfaces TEXT NOT NULL DEFAULT ''
+		);`,
+
 		`CREATE TABLE IF NOT EXISTS dhcp_reservations (
 			id TEXT PRIMARY KEY,
 			device_name TEXT NOT NULL,
@@ -582,9 +589,20 @@ func seed(db *sql.DB, dsn string, mockMode bool) error {
 		return err
 	}
 	if dnsCount == 0 {
-		_, err := db.Exec(`INSERT INTO system_dns_settings (id, mode, primary_dns, secondary_dns, local_domain) 
+		_, err := db.Exec(`INSERT INTO system_dns_settings (id, mode, primary_dns, secondary_dns, local_domain)
 			VALUES (1, 'static', '1.1.1.1', '8.8.8.8', 'pigate.local')`)
 		if err != nil {
+			return err
+		}
+	}
+
+	// 9. Seed Default DNS Server settings (no interfaces selected until user configures)
+	var dnsServerSettingsCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM dns_server_settings").Scan(&dnsServerSettingsCount); err != nil {
+		return err
+	}
+	if dnsServerSettingsCount == 0 {
+		if _, err := db.Exec(`INSERT INTO dns_server_settings (id, interfaces) VALUES (1, '')`); err != nil {
 			return err
 		}
 	}

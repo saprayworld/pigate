@@ -12,7 +12,8 @@ import {
   Info,
   Server,
   Database,
-  Loader2
+  Loader2,
+  Network
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -34,8 +35,9 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
-import { type DNSZone, type DNSRecord } from "@/data-mockup/mockData"
+import { type DNSZone, type DNSRecord, type NetworkInterface } from "@/data-mockup/mockData"
 import { dnsServerService } from "@/services/dnsServerService"
+import { interfaceService } from "@/services/interfaceService"
 import { useAlert } from "@/components/AlertDialogProvider"
 import { isValidIp } from "@/lib/utils"
 
@@ -78,15 +80,26 @@ export default function DnsServer() {
   const [isClearingCache, setIsClearingCache] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
 
+  // Listen Interfaces state — real interfaces from Interface Service, independent of DHCP Server
+  const [availableInterfaces, setAvailableInterfaces] = useState<NetworkInterface[]>([])
+  const [selectedInterfaces, setSelectedInterfaces] = useState<string[]>([])
+  const [isSavingInterfaces, setIsSavingInterfaces] = useState(false)
+
   // Load DNS Data
   const loadDnsData = async (showLoading = true) => {
     if (showLoading) setIsLoading(true)
     try {
-      const data = await dnsServerService.getZones() || []
-      setZones(data)
-      if (data.length > 0 && !selectedZoneId) {
+      const [data, ifaces, settings] = await Promise.all([
+        dnsServerService.getZones(),
+        interfaceService.getAll(),
+        dnsServerService.getSettings(),
+      ])
+      setZones(data || [])
+      if ((data || []).length > 0 && !selectedZoneId) {
         setSelectedZoneId(data[0].id)
       }
+      setAvailableInterfaces((ifaces || []).filter(i => i.role === "LAN"))
+      setSelectedInterfaces(settings.interfaces || [])
     } catch (err: any) {
       console.error(err)
       await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูล DNS Server ได้: " + (err.message || err))
@@ -98,6 +111,24 @@ export default function DnsServer() {
   useEffect(() => {
     loadDnsData()
   }, [])
+
+  // --- Handlers: Listen Interfaces ---
+  const handleToggleInterface = async (name: string, checked: boolean) => {
+    const next = checked
+      ? [...selectedInterfaces, name]
+      : selectedInterfaces.filter(n => n !== name)
+
+    setIsSavingInterfaces(true)
+    try {
+      await dnsServerService.updateSettings({ interfaces: next })
+      setSelectedInterfaces(next)
+      setIsApplied(false)
+    } catch (err: any) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถบันทึก Interface ของ DNS Server ได้: " + (err.message || err))
+    } finally {
+      setIsSavingInterfaces(false)
+    }
+  }
 
   // Selected Zone object
   const selectedZone = useMemo(() => {
@@ -207,7 +238,9 @@ export default function DnsServer() {
 
       if (editingZone) {
         const updated = await dnsServerService.updateZone(editingZone.id, payload)
-        setZones(prev => prev.map(z => z.id === editingZone.id ? { ...z, ...updated } : z))
+        // Zone update only touches zone metadata — always keep the records already held
+        // locally rather than trusting whatever (possibly empty) records the API echoes back.
+        setZones(prev => prev.map(z => z.id === editingZone.id ? { ...z, ...updated, records: z.records } : z))
       } else {
         const created = await dnsServerService.createZone(payload)
         setZones(prev => [...prev, created])
@@ -418,6 +451,53 @@ export default function DnsServer() {
           )}
         </div>
       </div>
+
+      {/* 1.1 Listen Interfaces — real interfaces from Interface Service, independent of DHCP Server */}
+      <Card className="bg-card/25 border border-border/50 p-4 space-y-3">
+        <div className="flex items-center justify-between pb-2 border-b border-border/40">
+          <h2 className="text-sm font-bold text-foreground flex items-center gap-1.5">
+            <Network className="h-4 w-4 text-primary" />
+            DNS Server Listen Interfaces
+          </h2>
+          {isSavingInterfaces && (
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          เลือก Interface จริงที่มีอยู่ในเครื่อง (ดึงจาก Interface Service) เพื่อใช้เป็น NS/auth-server ของ DNS Server — ค่านี้แยกอิสระจากการตั้งค่า DHCP Server
+        </p>
+        {availableInterfaces.length === 0 ? (
+          <p className="text-xs text-muted-foreground italic">ไม่พบ Interface ที่มี Role เป็น LAN ในระบบ</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {availableInterfaces.map(iface => {
+              const checked = selectedInterfaces.includes(iface.name)
+              return (
+                <label
+                  key={iface.id}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer text-xs font-mono transition-all ${
+                    checked
+                      ? "bg-primary/10 border-primary/40 text-foreground"
+                      : "bg-background/25 border-border/50 text-muted-foreground hover:bg-muted/15"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={isSavingInterfaces}
+                    onChange={(e) => handleToggleInterface(iface.name, e.target.checked)}
+                    className="cursor-pointer accent-primary"
+                  />
+                  {iface.name}
+                  {iface.alias && iface.alias !== iface.name && (
+                    <span className="text-muted-foreground/60">({iface.alias})</span>
+                  )}
+                </label>
+              )
+            })}
+          </div>
+        )}
+      </Card>
 
       {/* 2. Split Screen Zones / Records */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">

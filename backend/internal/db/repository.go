@@ -2130,3 +2130,23 @@ func (r *Repository) DeleteDNSRecord(id string) error {
 	_, err := r.db.Exec("DELETE FROM dns_records WHERE id = ?", id)
 	return err
 }
+
+// GetDNSServerInterfaces returns the real interfaces the DNS Server is configured
+// to bind to. Stored independently from dhcp_configs.
+func (r *Repository) GetDNSServerInterfaces() ([]string, error) {
+	var stored string
+	err := r.db.QueryRow("SELECT interfaces FROM dns_server_settings WHERE id = 1").Scan(&stored)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(stored) == "" {
+		return []string{}, nil
+	}
+	return strings.Split(stored, ","), nil
+}
+
+// SetDNSServerInterfaces replaces the set of interfaces the DNS Server binds to.
+func (r *Repository) SetDNSServerInterfaces(interfaces []string) error {
+	_, err := r.db.Exec("UPDATE dns_server_settings SET interfaces = ? WHERE id = 1", strings.Join(interfaces, ","))
+	return err
+}

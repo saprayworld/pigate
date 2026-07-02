@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -1224,6 +1225,9 @@ func (s *Server) HandleGetDHCPLeases(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if leases == nil {
+		leases = []model.ActiveDhcpLease{}
+	}
 	s.writeJSON(w, http.StatusOK, leases)
 }
 
@@ -1240,6 +1244,9 @@ func (s *Server) HandleGetDHCPConfigs(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if cfgs == nil {
+		cfgs = []model.DhcpConfig{}
 	}
 	s.writeJSON(w, http.StatusOK, cfgs)
 }
@@ -1310,7 +1317,7 @@ func (s *Server) HandleGetAvailableInterfaces(w http.ResponseWriter, r *http.Req
 		configured[c.Interface] = true
 	}
 
-	var available []string
+	available := []string{}
 	for _, iface := range ifaces {
 		if iface.Role == "LAN" && !configured[iface.Name] {
 			available = append(available, iface.Name)
@@ -1746,6 +1753,7 @@ func (s *Server) HandleUpdateDNSZone(w http.ResponseWriter, r *http.Request) {
 		AllowedIPs:      input.AllowedIPs,
 		IsAuthoritative: input.IsAuthoritative,
 		Enabled:         input.Enabled,
+		Records:         existing.Records,
 	}
 
 	if err := s.repo.UpdateDNSZone(zone); err != nil {
@@ -1863,4 +1871,46 @@ func (s *Server) HandleClearDNSCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, true)
+}
+
+// HandleGetDNSServerSettings returns the interfaces the DNS Server is currently bound to.
+func (s *Server) HandleGetDNSServerSettings(w http.ResponseWriter, r *http.Request) {
+	interfaces, err := s.repo.GetDNSServerInterfaces()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, model.DNSServerSettings{Interfaces: interfaces})
+}
+
+// HandleUpdateDNSServerSettings saves the set of real interfaces (from Interface Service)
+// the DNS Server should bind to. Kept independent from DHCP Server configuration.
+func (s *Server) HandleUpdateDNSServerSettings(w http.ResponseWriter, r *http.Request) {
+	var input model.DNSServerSettings
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	realIfaces, err := s.interfaceService.GetDataLayerInterface()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	valid := make(map[string]bool)
+	for _, iface := range realIfaces {
+		valid[iface.Name] = true
+	}
+	for _, name := range input.Interfaces {
+		if !valid[name] {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("interface %s does not exist", name))
+			return
+		}
+	}
+
+	if err := s.repo.SetDNSServerInterfaces(input.Interfaces); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, input)
 }
