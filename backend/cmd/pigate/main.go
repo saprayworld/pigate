@@ -69,6 +69,7 @@ func main() {
 	var dhcp kernel.DhcpManager
 	var qos kernel.QosManager
 	var dnsServer kernel.DNSServerManager
+	var dhcpcd kernel.DhcpcdManager
 	dns := kernel.NewDNSManager(*mockOS)
 
 	if *mockOS || *mockFromReal {
@@ -80,6 +81,7 @@ func main() {
 		mDhcp.MockFromReal = *mockFromReal
 		dhcp = mDhcp
 		dnsServer = kernel.NewMockDNSServerManager()
+		dhcpcd = kernel.NewMockDhcpcdManager()
 	} else {
 		// Real kernel integrations via netlink — used on Raspberry Pi 5 production.
 		// Requires: sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
@@ -89,11 +91,12 @@ func main() {
 		qos = kernel.NewRealQos()
 		dhcp = kernel.NewRealDhcpManager()
 		dnsServer = kernel.NewRealDNSServerManager()
+		dhcpcd = kernel.NewRealDhcpcdManager()
 	}
 
 	// 5. Instantiate Server & Router
 	ifaceService := service.NewInterfaceService(repo, net)
-	dhcpcdService := service.NewDhcpcdService(repo, ifaceService)
+	dhcpcdService := service.NewDhcpcdService(repo, ifaceService, dhcpcd)
 	routingService := service.NewRoutingService(repo, rt)
 	routingService.SetEnableEditSystemRoute(*enableEditSystemRoute)
 	firewallService := service.NewFirewallService(repo, fw, ifaceService)

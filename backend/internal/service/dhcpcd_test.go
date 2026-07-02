@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"pigate/internal/db"
+	"pigate/internal/kernel"
 	"pigate/internal/model"
 
 	"github.com/vishvananda/netlink"
@@ -59,7 +60,7 @@ func TestDhcpcdService_HandleLinkUpdate(t *testing.T) {
 		t.Fatalf("Failed to seed wlan0: %v", err)
 	}
 
-	dhcpcdService := NewDhcpcdService(repo, ifaceService)
+	dhcpcdService := NewDhcpcdService(repo, ifaceService, kernel.NewMockDhcpcdManager())
 
 	// Test 1: Ethernet interface up
 	updateEth0Up := netlink.LinkUpdate{

@@ -1,67 +1,44 @@
 package service
 
 import (
-	"bytes"
 	"log"
 	"net"
-	"os/exec"
 	"strings"
 
 	"pigate/internal/db"
+	"pigate/internal/kernel"
 	"pigate/internal/model"
 
 	"github.com/vishvananda/netlink"
 )
 
-var execCommand = exec.Command
-
 type DhcpcdService struct {
 	repo         *db.Repository
 	ifaceService *InterfaceService
+	manager      kernel.DhcpcdManager
 }
 
-func NewDhcpcdService(repo *db.Repository, ifaceService *InterfaceService) *DhcpcdService {
+func NewDhcpcdService(repo *db.Repository, ifaceService *InterfaceService, manager kernel.DhcpcdManager) *DhcpcdService {
 	return &DhcpcdService{
 		repo:         repo,
 		ifaceService: ifaceService,
+		manager:      manager,
 	}
 }
 
 func (s *DhcpcdService) startDhcpcd(ifaceName string) error {
 	log.Printf("[DhcpcdService] Starting dhcpcd for %s...", ifaceName)
-	if s.repo.IsMockMode() {
-		log.Printf("[DhcpcdService] [Mock] Simulating starting dhcpcd for %s", ifaceName)
-		return nil
-	}
-	cmd := execCommand("dhcpcd", ifaceName)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
+	if err := s.manager.StartDhcpcd(ifaceName); err != nil {
 		log.Printf("[DhcpcdService] Failed to start dhcpcd for %s: %v", ifaceName, err)
 		return err
 	}
-	// dhcpcd only forks to the background once it has a lease (or times out) when the
-	// interface has carrier, so wait for it off the calling goroutine (which is the single
-	// netlink event loop in netlink_monitor.go) instead of blocking it, and actually surface
-	// whether the command succeeded instead of assuming success once it merely launched.
-	go func() {
-		if err := cmd.Wait(); err != nil {
-			log.Printf("[DhcpcdService] dhcpcd exited with error for %s: %v (stderr: %s)", ifaceName, err, strings.TrimSpace(stderr.String()))
-			return
-		}
-		log.Printf("[DhcpcdService] dhcpcd started successfully for %s", ifaceName)
-	}()
+	log.Printf("[DhcpcdService] dhcpcd start requested for %s", ifaceName)
 	return nil
 }
 
 func (s *DhcpcdService) stopDhcpcd(ifaceName string) error {
 	log.Printf("[DhcpcdService] Stopping/Releasing dhcpcd for %s...", ifaceName)
-	if s.repo.IsMockMode() {
-		log.Printf("[DhcpcdService] [Mock] Simulating stopping/releasing dhcpcd for %s", ifaceName)
-		return nil
-	}
-	cmd := execCommand("dhcpcd", "-k", ifaceName)
-	if err := cmd.Run(); err != nil {
+	if err := s.manager.StopDhcpcd(ifaceName); err != nil {
 		log.Printf("[DhcpcdService] Failed to stop/release dhcpcd for %s: %v", ifaceName, err)
 		return err
 	}

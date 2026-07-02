@@ -73,3 +73,12 @@ type DNSServerManager interface {
 	ApplyZones(zones []model.DNSZone, interfaces []string) error
 	ClearCache() error
 }
+
+// DhcpcdManager abstracts starting/stopping the per-interface dhcpcd@ systemd
+// service. dhcpcd runs as its own root-owned systemd service so its internal
+// privilege-separation (chroot + setuid/setgid) works correctly; pigate only
+// asks systemd to start/stop it.
+type DhcpcdManager interface {
+	StartDhcpcd(ifaceName string) error
+	StopDhcpcd(ifaceName string) error
+}

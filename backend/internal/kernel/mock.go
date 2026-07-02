@@ -314,3 +314,19 @@ func (m *MockDNSServerManager) ClearCache() error {
 	return nil
 }
 
+// MockDhcpcdManager implements DhcpcdManager for local testing
+type MockDhcpcdManager struct{}
+
+func NewMockDhcpcdManager() *MockDhcpcdManager {
+	return &MockDhcpcdManager{}
+}
+
+func (m *MockDhcpcdManager) StartDhcpcd(ifaceName string) error {
+	log.Printf("[MockDhcpcd] Simulating starting dhcpcd for %s", ifaceName)
+	return nil
+}
+
+func (m *MockDhcpcdManager) StopDhcpcd(ifaceName string) error {
+	log.Printf("[MockDhcpcd] Simulating stopping/releasing dhcpcd for %s", ifaceName)
+	return nil
+}
