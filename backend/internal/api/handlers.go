@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -34,6 +35,7 @@ type Server struct {
 	dhcpServerService *service.DhcpServerService
 	dnsServerService  *service.DNSServerService
 	hostnameService   *service.HostnameService
+	timeService       *service.TimeService
 }
 
 func NewServer(
@@ -52,6 +54,7 @@ func NewServer(
 	dhcpServerService *service.DhcpServerService,
 	dnsServerService *service.DNSServerService,
 	hostnameService *service.HostnameService,
+	timeService *service.TimeService,
 ) *Server {
 	return &Server{
 		repo:              repo,
@@ -69,6 +72,7 @@ func NewServer(
 		dhcpServerService: dhcpServerService,
 		dnsServerService:  dnsServerService,
 		hostnameService:   hostnameService,
+		timeService:       timeService,
 	}
 }
 
@@ -1343,7 +1347,7 @@ func (s *Server) HandleGetAvailableInterfaces(w http.ResponseWriter, r *http.Req
 // =========================================================================
 
 func (s *Server) HandleGetSystemTime(w http.ResponseWriter, r *http.Request) {
-	settings, err := s.repo.GetSystemTimeSettings()
+	settings, err := s.timeService.Get()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1358,8 +1362,54 @@ func (s *Server) HandleUpdateSystemTime(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if err := s.repo.UpdateSystemTimeSettings(settings); err != nil {
+	// Validation errors are the user's fault (400); anything else is a
+	// kernel/D-Bus failure (500).
+	if err := service.ValidateTimezone(settings.Timezone); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := service.ValidateNTPServer(settings.NTPServer); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := s.timeService.Update(settings); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Return the fresh state (config + live status) so the UI can refresh.
+	updated, err := s.timeService.Get()
+	if err != nil {
+		s.writeJSON(w, http.StatusOK, settings)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) HandleSetManualTime(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Datetime string `json:"datetime"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	// Distinguish validation/state errors (400) from kernel failures (500).
+	if _, err := service.ValidateManualTime(body.Datetime); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := s.timeService.SetManualTime(body.Datetime); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	settings, err := s.timeService.Get()
+	if err != nil {
+		s.writeJSON(w, http.StatusOK, map[string]string{"message": "ตั้งเวลาสำเร็จ"})
 		return
 	}
 	s.writeJSON(w, http.StatusOK, settings)
@@ -1535,7 +1585,18 @@ func (s *Server) HandleImportConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Begin restoration transactions
 	if dump.SystemSettings != nil {
-		_ = s.repo.UpdateSystemTimeSettings(*dump.SystemSettings)
+		// Old backups may carry the legacy display timezone ("Asia/Bangkok
+		// (GMT+7:00)"); normalize before applying. Route through the service so
+		// the imported config is applied to the OS, not just written to the DB.
+		// A validation failure here is non-fatal to the rest of the import — we
+		// fall back to persisting the DB row so the value isn't lost.
+		imported := *dump.SystemSettings
+		imported.Timezone = db.NormalizeTimezone(imported.Timezone)
+		imported.Status = nil
+		if err := s.timeService.Update(imported); err != nil {
+			log.Printf("[Import] Failed to apply imported time settings (%v); saving to DB only", err)
+			_ = s.repo.UpdateSystemTimeSettings(imported)
+		}
 	}
 	if dump.HostnameSettings != nil {
 		_ = s.repo.UpdateHostnameSettings(*dump.HostnameSettings)

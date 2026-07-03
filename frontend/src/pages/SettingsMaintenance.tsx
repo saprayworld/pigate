@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, useMemo } from "react"
 import {
   Settings,
   Activity,
@@ -15,7 +15,8 @@ import {
   FileUp,
   Loader2,
   HelpCircle,
-  Server
+  Server,
+  CalendarClock
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -38,11 +39,20 @@ import {
 } from "@/components/ui/dialog"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Badge } from "@/components/ui/badge"
+import {
   type SystemTimeSettings,
   type NetworkServiceStatus
 } from "@/data-mockup/mockData"
 import { systemService, type SystemHostnameSettings } from "@/services/systemService"
 import { useAlert } from "@/components/AlertDialogProvider"
+import { buildTimeZoneOptions } from "@/lib/timezones"
 
 export default function SettingsMaintenance() {
   const { alert } = useAlert()
@@ -57,11 +67,23 @@ export default function SettingsMaintenance() {
 
   // Time & NTP States
   const [timeSettings, setTimeSettings] = useState<SystemTimeSettings>({
-    timezone: "Asia/Bangkok (GMT+7:00)",
+    timezone: "Asia/Bangkok",
     ntpSync: true,
     ntpServer: "pool.ntp.org"
   })
   const [timeFeedback, setTimeFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null)
+
+  // Manual clock (only usable while NTP sync is off)
+  const [manualDateTime, setManualDateTime] = useState("")
+  const [isSettingTime, setIsSettingTime] = useState(false)
+
+  // Timezone options (400+ zones from the browser IANA db, with GMT offsets).
+  // Recomputed only when the selected zone changes so a legacy/unknown stored
+  // value is still injected as a selectable option.
+  const timeZoneOptions = useMemo(
+    () => buildTimeZoneOptions(timeSettings.timezone),
+    [timeSettings.timezone]
+  )
 
   // Hostname & DHCP-share States
   const [hostnameSettings, setHostnameSettings] = useState<SystemHostnameSettings>({
@@ -155,11 +177,47 @@ export default function SettingsMaintenance() {
     }
 
     try {
-      await systemService.updateTimeSettings(timeSettings)
+      const updated = await systemService.updateTimeSettings(timeSettings)
+      setTimeSettings(updated)
       setTimeFeedback({ type: "success", message: "บันทึกการตั้งค่าระบบเวลา และ NTP สำเร็จ!" })
     } catch (err: any) {
       setTimeFeedback({ type: "error", message: err.message || "ไม่สามารถบันทึกการตั้งค่าเวลาได้" })
     }
+  }
+
+  // Set the wall clock manually. Converts the <input type="datetime-local">
+  // (local, no timezone) value to a full RFC3339 timestamp the backend accepts.
+  const handleSetManualTime = async () => {
+    setTimeFeedback(null)
+    if (!manualDateTime) {
+      setTimeFeedback({ type: "error", message: "กรุณาเลือกวันที่และเวลาที่ต้องการตั้ง" })
+      return
+    }
+    const parsed = new Date(manualDateTime)
+    if (isNaN(parsed.getTime())) {
+      setTimeFeedback({ type: "error", message: "รูปแบบวันที่/เวลาไม่ถูกต้อง" })
+      return
+    }
+
+    setIsSettingTime(true)
+    try {
+      const updated = await systemService.setManualTime(parsed.toISOString())
+      setTimeSettings(updated)
+      setManualDateTime("")
+      setTimeFeedback({ type: "success", message: "ตั้งเวลาระบบด้วยมือสำเร็จ!" })
+    } catch (err: any) {
+      setTimeFeedback({ type: "error", message: err.message || "ไม่สามารถตั้งเวลาได้" })
+    } finally {
+      setIsSettingTime(false)
+    }
+  }
+
+  // Formats a RFC3339 status timestamp for display in the device's locale.
+  const formatStatusTime = (iso?: string): string => {
+    if (!iso) return "—"
+    const d = new Date(iso)
+    if (isNaN(d.getTime())) return "—"
+    return d.toLocaleString()
   }
 
   // Save Hostname & Share-with-DHCP Settings
@@ -613,20 +671,48 @@ export default function SettingsMaintenance() {
                     </Alert>
                   )}
 
+                  {/* Live status: current device time + sync state */}
+                  <div className="flex items-center justify-between rounded-lg border border-border/60 bg-background/40 px-3 py-2.5">
+                    <div className="space-y-0.5">
+                      <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                        เวลาปัจจุบันของเครื่อง
+                      </p>
+                      <p className="text-sm font-mono text-foreground">
+                        {formatStatusTime(timeSettings.status?.currentTime)}
+                      </p>
+                    </div>
+                    {timeSettings.status?.ntpSynchronized ? (
+                      <Badge variant="default" className="gap-1 bg-primary/10 text-primary">
+                        <CheckCircle className="h-3 w-3" />
+                        Synchronized
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="gap-1">
+                        <AlertCircle className="h-3 w-3" />
+                        Not synced
+                      </Badge>
+                    )}
+                  </div>
+
                   <div className="space-y-1.5">
                     <Label htmlFor="timezone" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
                       Time Zone (เขตเวลา)
                     </Label>
-                    <select
-                      id="timezone"
+                    <Select
                       value={timeSettings.timezone}
-                      onChange={(e) => setTimeSettings(prev => ({ ...prev, timezone: e.target.value }))}
-                      className="w-full bg-background border border-border rounded-lg h-9 px-2.5 text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                      onValueChange={(value) => setTimeSettings(prev => ({ ...prev, timezone: value }))}
                     >
-                      <option value="Asia/Bangkok (GMT+7:00)">Asia/Bangkok (GMT+7:00)</option>
-                      <option value="Asia/Singapore (GMT+8:00)">Asia/Singapore (GMT+8:00)</option>
-                      <option value="UTC (GMT+0:00)">UTC (GMT+0:00)</option>
-                    </select>
+                      <SelectTrigger id="timezone" className="w-full h-9 text-xs bg-background">
+                        <SelectValue placeholder="เลือกเขตเวลา" />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-72">
+                        {timeZoneOptions.map((tz) => (
+                          <SelectItem key={tz.value} value={tz.value} className="text-xs">
+                            {tz.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
 
                   <div className="space-y-3 pt-2">
@@ -655,7 +741,7 @@ export default function SettingsMaintenance() {
                         placeholder="เช่น pool.ntp.org"
                       />
                       <p className="text-[11px] text-muted-foreground italic">
-                        ระบุที่อยู่ไอพีหรือโดเมนเนมของ NTP Server ที่จะไปดึงค่าเวลา
+                        ระบุที่อยู่ไอพีหรือโดเมนเนมของ NTP Server ที่จะไปดึงค่าเวลา (คั่นหลายตัวด้วยช่องว่างได้)
                       </p>
                     </div>
                   </div>
@@ -667,6 +753,38 @@ export default function SettingsMaintenance() {
                     <Clock className="h-4 w-4" />
                     Save Time Settings
                   </Button>
+
+                  {/* Manual clock — only when NTP sync is off (timedated rejects
+                      SetTime while NTP is on, so we hide it rather than error) */}
+                  {!timeSettings.ntpSync && (
+                    <div className="space-y-2 pt-4 mt-2 border-t border-border/40">
+                      <Label htmlFor="manual-time" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                        ตั้งวันที่/เวลาด้วยมือ
+                      </Label>
+                      <div className="flex gap-2">
+                        <Input
+                          id="manual-time"
+                          type="datetime-local"
+                          value={manualDateTime}
+                          onChange={(e) => setManualDateTime(e.target.value)}
+                          className="bg-background/50 h-9 font-mono"
+                        />
+                        <Button
+                          type="button"
+                          onClick={handleSetManualTime}
+                          disabled={isSettingTime || !manualDateTime}
+                          className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/95 font-bold gap-2 h-9 shrink-0"
+                        >
+                          {isSettingTime ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarClock className="h-4 w-4" />}
+                          Set Time
+                        </Button>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground italic leading-relaxed">
+                        ⚠️ การตั้งเวลาด้วยมืออาจทำให้เซสชัน/โทเคนหมดอายุผิดเวลา และการตรวจสอบใบรับรอง TLS ผิดพลาดได้ —
+                        แนะนำให้ใช้การซิงค์อัตโนมัติ (NTP) เป็นหลัก และหากบอร์ดไม่มีถ่าน RTC เวลาที่ตั้งไว้อาจเพี้ยนหลังไฟดับ
+                      </p>
+                    </div>
+                  )}
                 </form>
               </CardContent>
             </Card>
@@ -680,16 +798,12 @@ export default function SettingsMaintenance() {
               <span>🧠 Backend Integration สําหรับ หน้า Settings (คำสั่งระบบจริง)</span>
             </div>
             <pre className="bg-neutral-950 p-3 rounded border border-neutral-800 text-neutral-300 font-mono overflow-x-auto select-all leading-relaxed whitespace-pre-wrap text-[11px]">
-              {`# 1. เปลี่ยนรหัสผ่านแอดมินของบอร์ด Linux (กรณีผูกบัญชีระบบ) หรือบันทึก hash ของรหัสผ่านใหม่เข้า sqlite
-echo "admin:${newPassword || "new_password"}" | chpasswd
-
-# 2. คำสั่งตั้งค่า Timezone ของอุปกรณ์ Raspberry Pi 5
-timedatectl set-timezone ${timeSettings.timezone.split(" ")[0]}
-
-# 3. คำสั่งเปิด/ปิด บริการซิงค์เวลากับเซิร์ฟเวอร์เครือข่าย NTP
-timedatectl set-ntp ${timeSettings.ntpSync ? "true" : "false"}
-${timeSettings.ntpSync ? `# ซิงค์ข้อมูล NTP Server เข้ากับ systemd-timesyncd\necho "NTP=${timeSettings.ntpServer}" >> /etc/systemd/timesyncd.conf` : ""}`}
+              {`# เปลี่ยนรหัสผ่านแอดมินของบอร์ด Linux (กรณีผูกบัญชีระบบ) หรือบันทึก hash ของรหัสผ่านใหม่เข้า sqlite
+echo "admin:${newPassword || "new_password"}" | chpasswd`}
             </pre>
+            <p className="text-[11px] text-muted-foreground italic mt-2">
+              หมายเหตุ: การตั้งค่าเวลา/เขตเวลา/NTP ถูกนำไปใช้กับระบบจริงผ่าน D-Bus (systemd-timedated) โดยอัตโนมัติแล้ว ไม่ต้องรันคำสั่งเอง
+            </p>
           </div>
         </TabsContent>
 

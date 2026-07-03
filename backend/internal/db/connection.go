@@ -439,7 +439,53 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
+	// Normalize legacy timezone values. Older seeds stored the display string
+	// "Asia/Bangkok (GMT+7:00)" instead of a bare IANA name, which both
+	// time.LoadLocation and systemd-timedated reject. Strip anything from the
+	// first " (" onwards. Idempotent: values without the suffix are untouched.
+	if err := normalizeTimezoneSetting(db); err != nil {
+		return fmt.Errorf("failed to normalize legacy timezone value: %w", err)
+	}
+
 	return nil
+}
+
+// normalizeTimezoneSetting rewrites a legacy timezone value like
+// "Asia/Bangkok (GMT+7:00)" to the bare IANA form "Asia/Bangkok". Safe to run
+// repeatedly. If the row is missing it is a no-op.
+func normalizeTimezoneSetting(db *sql.DB) error {
+	var tz string
+	err := db.QueryRow("SELECT timezone FROM system_time_settings WHERE id = 1").Scan(&tz)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	normalized := NormalizeTimezone(tz)
+	if normalized == tz {
+		return nil
+	}
+
+	_, err = db.Exec("UPDATE system_time_settings SET timezone = ? WHERE id = 1", normalized)
+	if err != nil {
+		return err
+	}
+	log.Printf("[Migration] Normalized legacy timezone %q -> %q", tz, normalized)
+	return nil
+}
+
+// NormalizeTimezone strips a trailing " (GMT...)"-style suffix from a timezone
+// string, returning the bare IANA name. Exported so the config-import path can
+// reuse it on old backup files. It does not validate the result — callers that
+// need validation must do it separately.
+func NormalizeTimezone(tz string) string {
+	tz = strings.TrimSpace(tz)
+	if idx := strings.Index(tz, " ("); idx >= 0 {
+		tz = strings.TrimSpace(tz[:idx])
+	}
+	return tz
 }
 
 func generateRandomPassword(length int) (string, error) {
@@ -554,8 +600,8 @@ func seed(db *sql.DB, dsn string, mockMode bool) error {
 		return err
 	}
 	if timeCount == 0 {
-		_, err := db.Exec(`INSERT INTO system_time_settings (id, timezone, ntp_sync, ntp_server) VALUES 
-			(1, 'Asia/Bangkok (GMT+7:00)', 1, 'pool.ntp.org')`)
+		_, err := db.Exec(`INSERT INTO system_time_settings (id, timezone, ntp_sync, ntp_server) VALUES
+			(1, 'Asia/Bangkok', 1, 'pool.ntp.org')`)
 		if err != nil {
 			return err
 		}

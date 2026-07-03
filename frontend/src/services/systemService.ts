@@ -78,6 +78,15 @@ function saveLocalDNSConfig(cfg: { mode: string; primaryDns: string; secondaryDn
   localStorage.setItem(DNS_STORAGE_KEY, JSON.stringify(updated));
 }
 
+// Strip a legacy " (GMT+7:00)"-style suffix from a stored timezone, returning
+// the bare IANA name. Mirrors the backend NormalizeTimezone migration so old
+// mock-mode localStorage values don't break the <Select>.
+function normalizeTimezone(tz: string): string {
+  if (!tz) return tz;
+  const idx = tz.indexOf(" (");
+  return (idx >= 0 ? tz.slice(0, idx) : tz).trim();
+}
+
 // Helper to get time settings from LocalStorage
 function getLocalTimeSettings(): SystemTimeSettings {
   const stored = localStorage.getItem(TIME_STORAGE_KEY);
@@ -86,10 +95,24 @@ function getLocalTimeSettings(): SystemTimeSettings {
     return initialSystemTimeSettings;
   }
   try {
-    return JSON.parse(stored);
+    const parsed = JSON.parse(stored) as SystemTimeSettings;
+    parsed.timezone = normalizeTimezone(parsed.timezone);
+    return parsed;
   } catch (e) {
     return initialSystemTimeSettings;
   }
+}
+
+// Build a simulated live status for mock mode: current device time + a synced
+// flag that mirrors the NTP toggle.
+function mockTimeStatus(settings: SystemTimeSettings): SystemTimeSettings {
+  return {
+    ...settings,
+    status: {
+      currentTime: new Date().toISOString(),
+      ntpSynchronized: settings.ntpSync,
+    },
+  };
 }
 
 // Helper to save time settings
@@ -140,7 +163,7 @@ export const systemService = {
   getTimeSettings: async (): Promise<SystemTimeSettings> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 200));
-      return getLocalTimeSettings();
+      return mockTimeStatus(getLocalTimeSettings());
     }
 
     const response = await fetch(`${API_BASE_URL}/system/time`);
@@ -154,8 +177,11 @@ export const systemService = {
   updateTimeSettings: async (settings: SystemTimeSettings): Promise<SystemTimeSettings> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 300));
-      saveLocalTimeSettings(settings);
-      return settings;
+      // status is live-only; never persist it
+      const { status, ...toSave } = settings;
+      void status;
+      saveLocalTimeSettings(toSave);
+      return mockTimeStatus(toSave);
     }
 
     const response = await fetch(`${API_BASE_URL}/system/time`, {
@@ -164,7 +190,34 @@ export const systemService = {
       body: JSON.stringify(settings),
     });
     if (!response.ok) {
-      throw new Error(`Failed to update system time settings: ${response.statusText}`);
+      const errBody = await response.json().catch(() => ({}));
+      throw new Error(errBody.message || `Failed to update system time settings: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  // Set the wall clock manually (only permitted while NTP sync is off)
+  setManualTime: async (datetime: string): Promise<SystemTimeSettings> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const current = getLocalTimeSettings();
+      if (current.ntpSync) {
+        throw new Error("ไม่สามารถตั้งเวลาด้วยมือได้ขณะเปิดการซิงค์เวลาอัตโนมัติ (NTP) — กรุณาปิด NTP ก่อน");
+      }
+      return {
+        ...current,
+        status: { currentTime: new Date(datetime).toISOString(), ntpSynchronized: false },
+      };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/system/time/manual`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ datetime }),
+    });
+    if (!response.ok) {
+      const errBody = await response.json().catch(() => ({}));
+      throw new Error(errBody.message || `Failed to set manual time: ${response.statusText}`);
     }
     return response.json();
   },

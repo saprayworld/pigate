@@ -7,6 +7,12 @@ import (
 	"net/http"
 	"strconv"
 
+	// Embed the IANA timezone database so timezone validation
+	// (time.LoadLocation) works even on minimal environments that lack a system
+	// tzdata package (dev containers, etc.). ~450KB. On the Pi this simply
+	// mirrors the system tzdata.
+	_ "time/tzdata"
+
 	"pigate/internal/api"
 	"pigate/internal/db"
 	"pigate/internal/kernel"
@@ -71,6 +77,7 @@ func main() {
 	var dnsServer kernel.DNSServerManager
 	var dhcpcd kernel.DhcpcdManager
 	var hostnameMgr kernel.HostnameManager
+	var timeMgr kernel.TimeManager
 	dns := kernel.NewDNSManager(*mockOS)
 
 	if *mockOS || *mockFromReal {
@@ -84,6 +91,7 @@ func main() {
 		dnsServer = kernel.NewMockDNSServerManager()
 		dhcpcd = kernel.NewMockDhcpcdManager()
 		hostnameMgr = kernel.NewMockHostnameManager()
+		timeMgr = kernel.NewMockTimeManager()
 	} else {
 		// Real kernel integrations via netlink — used on Raspberry Pi 5 production.
 		// Requires: sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
@@ -95,6 +103,7 @@ func main() {
 		dnsServer = kernel.NewRealDNSServerManager()
 		dhcpcd = kernel.NewRealDhcpcdManager()
 		hostnameMgr = kernel.NewRealHostnameManager()
+		timeMgr = kernel.NewRealTimeManager()
 	}
 
 	// 5. Instantiate Server & Router
@@ -108,9 +117,19 @@ func main() {
 	dhcpServerService := service.NewDhcpServerService(repo, dhcp)
 	dnsServerService := service.NewDNSServerService(repo, dnsServer)
 	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcd, ifaceService)
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService)
+	timeService := service.NewTimeService(repo, timeMgr)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService)
 
 	// Apply config form database to kernel
+
+	// 6.0 Apply Time (timezone / NTP) configuration first. Correct time makes
+	// log timestamps and any TLS validation in the following steps sane. This
+	// applies only timezone + NTP config — never the wall clock itself (see
+	// TimeService.InitApplyConfig).
+	log.Printf("[Main] Applying database-configured time/NTP settings to kernel at startup...")
+	if err := timeService.InitApplyConfig(); err != nil {
+		log.Printf("[Main] Warning: Failed to apply time/NTP settings at startup: %v", err)
+	}
 
 	// 6.1 Apply Network Interfaces configuration at startup
 	log.Printf("[Main] Applying database-configured network interfaces to kernel at startup...")

@@ -102,6 +102,7 @@ func RegisterRoutes(s *Server) http.Handler {
 	// 9. System Management & Backup
 	authRoute("GET /api/system/time", s.HandleGetSystemTime)
 	authRoute("PUT /api/system/time", s.HandleUpdateSystemTime)
+	authRoute("POST /api/system/time/manual", s.HandleSetManualTime)
 	authRoute("GET /api/system/hostname", s.HandleGetHostname)
 	authRoute("PUT /api/system/hostname", s.HandleUpdateHostname)
 	authRoute("GET /api/system/dns", s.HandleGetDNSConfig)
