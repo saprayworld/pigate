@@ -1595,6 +1595,32 @@ func (r *Repository) UpdateSystemTimeSettings(settings model.SystemTimeSettings)
 	return err
 }
 
+// =========================================================================
+// SYSTEM HOSTNAME SETTINGS
+// =========================================================================
+
+func (r *Repository) GetHostnameSettings() (*model.SystemHostnameSettings, error) {
+	row := r.db.QueryRow("SELECT hostname, share_with_dhcp FROM system_hostname_settings WHERE id = 1")
+	var settings model.SystemHostnameSettings
+	var shareInt int
+	err := row.Scan(&settings.Hostname, &shareInt)
+	if err != nil {
+		return nil, err
+	}
+	settings.ShareWithDhcp = shareInt == 1
+	return &settings, nil
+}
+
+func (r *Repository) UpdateHostnameSettings(settings model.SystemHostnameSettings) error {
+	shareVal := 0
+	if settings.ShareWithDhcp {
+		shareVal = 1
+	}
+	_, err := r.db.Exec("UPDATE system_hostname_settings SET hostname = ?, share_with_dhcp = ? WHERE id = 1",
+		settings.Hostname, shareVal)
+	return err
+}
+
 // CreateInterfaceForTest inserts a network interface for testing purposes.
 func (r *Repository) CreateInterfaceForTest(iface model.NetworkInterface) error {
 	adminAccessStr := strings.Join(iface.AdminAccess, ",")

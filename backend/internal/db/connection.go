@@ -325,6 +325,12 @@ func migrate(db *sql.DB) error {
 			ntp_server TEXT NOT NULL
 		);`,
 
+		`CREATE TABLE IF NOT EXISTS system_hostname_settings (
+			id INTEGER PRIMARY KEY CHECK(id = 1),
+			hostname TEXT NOT NULL,
+			share_with_dhcp INTEGER DEFAULT 0 CHECK(share_with_dhcp IN (0,1))
+		);`,
+
 		`CREATE TABLE IF NOT EXISTS network_interfaces (
 			id TEXT PRIMARY KEY,
 			name TEXT UNIQUE NOT NULL,
@@ -550,6 +556,22 @@ func seed(db *sql.DB, dsn string, mockMode bool) error {
 	if timeCount == 0 {
 		_, err := db.Exec(`INSERT INTO system_time_settings (id, timezone, ntp_sync, ntp_server) VALUES 
 			(1, 'Asia/Bangkok (GMT+7:00)', 1, 'pool.ntp.org')`)
+		if err != nil {
+			return err
+		}
+	}
+
+	// 5.1 Seed Default System Hostname Settings (from actual OS hostname, never hardcoded)
+	var hostnameCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM system_hostname_settings").Scan(&hostnameCount); err != nil {
+		return err
+	}
+	if hostnameCount == 0 {
+		defaultHostname, err := os.Hostname()
+		if err != nil || defaultHostname == "" {
+			defaultHostname = "pigate"
+		}
+		_, err = db.Exec(`INSERT INTO system_hostname_settings (id, hostname, share_with_dhcp) VALUES (1, ?, 0)`, defaultHostname)
 		if err != nil {
 			return err
 		}

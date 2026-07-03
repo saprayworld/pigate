@@ -224,6 +224,12 @@ type SystemTimeSettings struct {
 	NTPServer string `json:"ntpServer"`
 }
 
+// SystemHostnameSettings represents device hostname and DHCP-client hostname sharing
+type SystemHostnameSettings struct {
+	Hostname      string `json:"hostname"`
+	ShareWithDhcp bool   `json:"shareWithDhcp"`
+}
+
 // NetworkServiceStatus represents critical host systemd service status
 type NetworkServiceStatus struct {
 	ID          string `json:"id"`

@@ -1145,6 +1145,38 @@ paths:
               schema:
                 $ref: '#/components/schemas/SystemTimeSettings'
 
+  /system/hostname:
+    get:
+      tags:
+        - System & Maintenance
+      summary: Get device hostname and DHCP hostname-sharing setting
+      responses:
+        '200':
+          description: System hostname settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemHostnameSettings'
+    put:
+      tags:
+        - System & Maintenance
+      summary: Set device hostname and/or toggle sharing it with the WAN DHCP server (Option 12)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SystemHostnameSettings'
+      responses:
+        '200':
+          description: Hostname settings updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemHostnameSettings'
+        '400':
+          description: Invalid hostname (RFC 1123 label validation failed)
+
   /system/dns:
     get:
       tags:
@@ -2406,6 +2438,21 @@ components:
         ntpServer:
           type: string
           example: pool.ntp.org
+
+    SystemHostnameSettings:
+      type: object
+      required:
+        - hostname
+        - shareWithDhcp
+      properties:
+        hostname:
+          type: string
+          example: "PiGate-RPI5"
+          description: RFC 1123 label (letters, digits, hyphens; max 63 chars; no leading/trailing hyphen)
+        shareWithDhcp:
+          type: boolean
+          example: false
+          description: When true, dhcpcd sends this hostname to the WAN DHCP server via DHCP Option 12
 
     NetworkServiceStatus:
       type: object

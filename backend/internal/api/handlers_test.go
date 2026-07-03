@@ -37,8 +37,11 @@ func setupTestServer(t *testing.T) (http.Handler, *db.Repository) {
 	dhcpServerService := service.NewDhcpServerService(repo, dhcp)
 	dnsServer := kernel.NewMockDNSServerManager()
 	dnsServerService := service.NewDNSServerService(repo, dnsServer)
+	hostnameMgr := kernel.NewMockHostnameManager()
+	dhcpcdMgr := kernel.NewMockDhcpcdManager()
+	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcdMgr, ifaceService)
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService)
 	handler := RegisterRoutes(server)
 
 	// Add test session token to activeSessions since IsSessionValid no longer allows mock_session_id_* bypass
@@ -289,9 +292,12 @@ func TestDisableEditMode(t *testing.T) {
 	dhcpServerService := service.NewDhcpServerService(repo, dhcp)
 	dnsServer := kernel.NewMockDNSServerManager()
 	dnsServerService := service.NewDNSServerService(repo, dnsServer)
+	hostnameMgr := kernel.NewMockHostnameManager()
+	dhcpcdMgr := kernel.NewMockDhcpcdManager()
+	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcdMgr, ifaceService)
 
 	// Server initialized with disableEdit = true
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, true, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, true, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService)
 	handler := RegisterRoutes(server)
 
 	// Add test session token to activeSessions since IsSessionValid no longer allows mock_session_id_* bypass
@@ -429,8 +435,11 @@ func TestForcePasswordChangeFlow(t *testing.T) {
 	dhcpServerService := service.NewDhcpServerService(repo, dhcp)
 	dnsServer := kernel.NewMockDNSServerManager()
 	dnsServerService := service.NewDNSServerService(repo, dnsServer)
+	hostnameMgr := kernel.NewMockHostnameManager()
+	dhcpcdMgr := kernel.NewMockDhcpcdManager()
+	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcdMgr, ifaceService)
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService)
 	handler := RegisterRoutes(server)
 
 	// 1. Login with correct password
@@ -508,8 +517,11 @@ func TestCheckSessionAPI(t *testing.T) {
 	dhcpServerService := service.NewDhcpServerService(repo, dhcp)
 	dnsServer := kernel.NewMockDNSServerManager()
 	dnsServerService := service.NewDNSServerService(repo, dnsServer)
+	hostnameMgr := kernel.NewMockHostnameManager()
+	dhcpcdMgr := kernel.NewMockDhcpcdManager()
+	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcdMgr, ifaceService)
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService)
 	handler := RegisterRoutes(server)
 
 	// 1. Check session without token (should fail with 401)
@@ -524,7 +536,7 @@ func TestCheckSessionAPI(t *testing.T) {
 	// 2. Check session with valid token (normal user)
 	// Update user to not be initial
 	_, _ = sqliteDB.Exec("UPDATE users SET is_initial = 0 WHERE username = 'pigate'")
-	
+
 	// Login to get token
 	loginPayload := model.LoginRequest{Username: "pigate", Password: "pigate"}
 	body, _ := json.Marshal(loginPayload)
@@ -553,7 +565,7 @@ func TestCheckSessionAPI(t *testing.T) {
 
 	// 3. Check session with initial user (must change password)
 	_, _ = sqliteDB.Exec("UPDATE users SET is_initial = 1 WHERE username = 'pigate'")
-	
+
 	req = httptest.NewRequest("GET", "/api/auth/session", nil)
 	req.Header.Set("Authorization", "Bearer "+loginRes.Token)
 	rec = httptest.NewRecorder()
@@ -591,8 +603,11 @@ func setupTestServerWithFirewall(t *testing.T) (http.Handler, *db.Repository, *k
 	dhcpServerService := service.NewDhcpServerService(repo, dhcp)
 	dnsServer := kernel.NewMockDNSServerManager()
 	dnsServerService := service.NewDNSServerService(repo, dnsServer)
+	hostnameMgr := kernel.NewMockHostnameManager()
+	dhcpcdMgr := kernel.NewMockDhcpcdManager()
+	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcdMgr, ifaceService)
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService)
 	handler := RegisterRoutes(server)
 
 	AddSession("mock_session_id_test_token", "pigate")
@@ -609,7 +624,7 @@ func TestInterfaceUpdateSyncsFirewall(t *testing.T) {
 	reconnect := false
 	failover := false
 	macAddr := "DC:A6:32:AA:BB:C1"
-	
+
 	iface := model.NetworkInterface{
 		ID:                   "iface-test-sync",
 		Name:                 "eth-test-sync",
@@ -638,7 +653,7 @@ func TestInterfaceUpdateSyncsFirewall(t *testing.T) {
 	// 1. Update interface with NO changes to AdminAccess (different order)
 	updatePayloadNoChange := iface
 	updatePayloadNoChange.Alias = "LAN_Updated_Alias"
-	updatePayloadNoChange.AdminAccess = []string{"SSH", "PING", "HTTP"} 
+	updatePayloadNoChange.AdminAccess = []string{"SSH", "PING", "HTTP"}
 
 	bodyBytes, _ := json.Marshal(updatePayloadNoChange)
 	req := httptest.NewRequest("PUT", "/api/interfaces/iface-test-sync", bytes.NewBuffer(bodyBytes))
@@ -656,7 +671,7 @@ func TestInterfaceUpdateSyncsFirewall(t *testing.T) {
 
 	// 2. Update interface WITH changes to AdminAccess
 	updatePayloadWithChange := updatePayloadNoChange
-	updatePayloadWithChange.AdminAccess = []string{"PING", "HTTPS"} 
+	updatePayloadWithChange.AdminAccess = []string{"PING", "HTTPS"}
 
 	bodyBytes2, _ := json.Marshal(updatePayloadWithChange)
 	req = httptest.NewRequest("PUT", "/api/interfaces/iface-test-sync", bytes.NewBuffer(bodyBytes2))

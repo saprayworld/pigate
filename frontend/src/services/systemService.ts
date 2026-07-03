@@ -9,6 +9,17 @@ import { IS_MOCK_MODE, API_BASE_URL } from "./config";
 const TIME_STORAGE_KEY = "pigate_system_time";
 const SERVICES_STORAGE_KEY = "pigate_network_services";
 const DNS_STORAGE_KEY = "pigate_system_dns";
+const HOSTNAME_STORAGE_KEY = "pigate_system_hostname";
+
+export interface SystemHostnameSettings {
+  hostname: string;
+  shareWithDhcp: boolean;
+}
+
+const initialHostnameSettings: SystemHostnameSettings = {
+  hostname: "PiGate-RPI5",
+  shareWithDhcp: false,
+};
 
 export interface DynamicDNSServer {
   interfaceName: string;
@@ -105,6 +116,25 @@ function saveLocalServices(services: NetworkServiceStatus[]) {
   localStorage.setItem(SERVICES_STORAGE_KEY, JSON.stringify(services));
 }
 
+// Helper to get hostname settings from LocalStorage
+function getLocalHostnameSettings(): SystemHostnameSettings {
+  const stored = localStorage.getItem(HOSTNAME_STORAGE_KEY);
+  if (!stored) {
+    localStorage.setItem(HOSTNAME_STORAGE_KEY, JSON.stringify(initialHostnameSettings));
+    return initialHostnameSettings;
+  }
+  try {
+    return JSON.parse(stored);
+  } catch {
+    return initialHostnameSettings;
+  }
+}
+
+// Helper to save hostname settings
+function saveLocalHostnameSettings(settings: SystemHostnameSettings) {
+  localStorage.setItem(HOSTNAME_STORAGE_KEY, JSON.stringify(settings));
+}
+
 export const systemService = {
   // Get system time settings
   getTimeSettings: async (): Promise<SystemTimeSettings> => {
@@ -135,6 +165,40 @@ export const systemService = {
     });
     if (!response.ok) {
       throw new Error(`Failed to update system time settings: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  // Get device hostname + DHCP hostname-sharing setting
+  getHostname: async (): Promise<SystemHostnameSettings> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return getLocalHostnameSettings();
+    }
+
+    const response = await fetch(`${API_BASE_URL}/system/hostname`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch hostname settings: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  // Save device hostname + DHCP hostname-sharing setting
+  updateHostname: async (settings: SystemHostnameSettings): Promise<SystemHostnameSettings> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      saveLocalHostnameSettings(settings);
+      return settings;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/system/hostname`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    });
+    if (!response.ok) {
+      const errBody = await response.json().catch(() => ({}));
+      throw new Error(errBody.message || `Failed to update hostname settings: ${response.statusText}`);
     }
     return response.json();
   },

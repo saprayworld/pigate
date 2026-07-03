@@ -33,6 +33,7 @@ type Server struct {
 	qosService        *service.QosService
 	dhcpServerService *service.DhcpServerService
 	dnsServerService  *service.DNSServerService
+	hostnameService   *service.HostnameService
 }
 
 func NewServer(
@@ -50,6 +51,7 @@ func NewServer(
 	qosService *service.QosService,
 	dhcpServerService *service.DhcpServerService,
 	dnsServerService *service.DNSServerService,
+	hostnameService *service.HostnameService,
 ) *Server {
 	return &Server{
 		repo:              repo,
@@ -66,6 +68,7 @@ func NewServer(
 		qosService:        qosService,
 		dhcpServerService: dhcpServerService,
 		dnsServerService:  dnsServerService,
+		hostnameService:   hostnameService,
 	}
 }
 
@@ -1087,7 +1090,7 @@ func (s *Server) HandleToggleRoute(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	
+
 	var route *model.StaticRoute
 	if s.routingService.IsEnableEditSystemRoute() && strings.HasPrefix(id, "route-sys-") {
 		routes, err := s.routingService.GetRouting()
@@ -1362,6 +1365,34 @@ func (s *Server) HandleUpdateSystemTime(w http.ResponseWriter, r *http.Request) 
 	s.writeJSON(w, http.StatusOK, settings)
 }
 
+func (s *Server) HandleGetHostname(w http.ResponseWriter, r *http.Request) {
+	settings, err := s.hostnameService.Get()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, settings)
+}
+
+func (s *Server) HandleUpdateHostname(w http.ResponseWriter, r *http.Request) {
+	var settings model.SystemHostnameSettings
+	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	if err := service.ValidateHostname(settings.Hostname); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := s.hostnameService.Update(settings); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, settings)
+}
+
 func (s *Server) HandleGetDNSConfig(w http.ResponseWriter, r *http.Request) {
 	cfg, err := s.dnsService.GetDNSConfig()
 	if err != nil {
@@ -1456,12 +1487,14 @@ func (s *Server) HandleExportConfig(w http.ResponseWriter, r *http.Request) {
 	dhcpRes, _ := s.repo.GetDHCPReservations()
 	ifaces, _ := s.repo.GetInterfaces()
 	sysTime, _ := s.repo.GetSystemTimeSettings()
+	sysHostname, _ := s.repo.GetHostnameSettings()
 
 	backup := map[string]interface{}{
-		"device":         "PiGate Firewall Gateway",
-		"version":        "v1.0.0-Release",
-		"exportedAt":     time.Now().Format(time.RFC3339),
-		"systemSettings": sysTime,
+		"device":           "PiGate Firewall Gateway",
+		"version":          "v1.0.0-Release",
+		"exportedAt":       time.Now().Format(time.RFC3339),
+		"systemSettings":   sysTime,
+		"hostnameSettings": sysHostname,
 		"config": map[string]interface{}{
 			"addresses":      addrs,
 			"serviceObjects": svcs,
@@ -1480,8 +1513,9 @@ func (s *Server) HandleExportConfig(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleImportConfig(w http.ResponseWriter, r *http.Request) {
 	var dump struct {
-		SystemSettings *model.SystemTimeSettings `json:"systemSettings"`
-		Config         struct {
+		SystemSettings   *model.SystemTimeSettings     `json:"systemSettings"`
+		HostnameSettings *model.SystemHostnameSettings `json:"hostnameSettings"`
+		Config           struct {
 			Addresses      []model.AddressObject    `json:"addresses"`
 			ServiceObjects []model.ServiceObject    `json:"serviceObjects"`
 			Policies       []model.PolicyRule       `json:"policies"`
@@ -1502,6 +1536,9 @@ func (s *Server) HandleImportConfig(w http.ResponseWriter, r *http.Request) {
 	// Begin restoration transactions
 	if dump.SystemSettings != nil {
 		_ = s.repo.UpdateSystemTimeSettings(*dump.SystemSettings)
+	}
+	if dump.HostnameSettings != nil {
+		_ = s.repo.UpdateHostnameSettings(*dump.HostnameSettings)
 	}
 
 	cfg := dump.Config

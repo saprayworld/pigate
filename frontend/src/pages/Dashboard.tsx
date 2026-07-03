@@ -27,6 +27,7 @@ import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianG
 import { type FirewallLog } from "@/data-mockup/mockData"
 import { dashboardService, type DashboardStats } from "@/services/dashboardService"
 import { interfaceService } from "@/services/interfaceService"
+import { systemService } from "@/services/systemService"
 import { type NetworkInterface } from "@/data-mockup/mockData"
 import { useAlert } from "@/components/AlertDialogProvider"
 import { useTheme } from "@/components/ThemeProvider"
@@ -109,6 +110,21 @@ export default function Dashboard() {
     fetchStats()
     const statsInterval = setInterval(fetchStats, 10000)
     return () => clearInterval(statsInterval)
+  }, [])
+
+  // --- Device Hostname (System Information card) ---
+  const [hostname, setHostname] = useState<string>("PiGate-RPI5")
+
+  useEffect(() => {
+    const fetchHostname = async () => {
+      try {
+        const data = await systemService.getHostname()
+        setHostname(data.hostname)
+      } catch {
+        // keep the fallback hostname already in state
+      }
+    }
+    fetchHostname()
   }, [])
 
   useEffect(() => {
@@ -676,7 +692,7 @@ export default function Dashboard() {
             <div className="space-y-3 text-sm">
               <div className="flex justify-between items-center py-1.5 border-b border-border/30">
                 <span className="text-muted-foreground">Hostname:</span>
-                <span className="font-semibold text-foreground">PiGate-RPI5</span>
+                <span className="font-semibold text-foreground">{hostname}</span>
               </div>
               <div className="flex justify-between items-center py-1.5 border-b border-border/30">
                 <span className="text-muted-foreground">Firmware:</span>

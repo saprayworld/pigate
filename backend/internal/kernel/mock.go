@@ -336,3 +336,32 @@ func (m *MockDhcpcdManager) StopDhcpcd(ifaceName string) error {
 	log.Printf("[MockDhcpcd] Simulating stopping/releasing dhcpcd for %s", ifaceName)
 	return nil
 }
+
+func (m *MockDhcpcdManager) SetShareHostname(share bool) error {
+	log.Printf("[MockDhcpcd] Simulating writing dhcpcd.conf (share hostname: %t)", share)
+	return nil
+}
+
+func (m *MockDhcpcdManager) RestartDhcpcd(ifaceName string) error {
+	log.Printf("[MockDhcpcd] Simulating restarting dhcpcd for %s", ifaceName)
+	return nil
+}
+
+// MockHostnameManager implements HostnameManager in-memory for local testing
+type MockHostnameManager struct {
+	hostname string
+}
+
+func NewMockHostnameManager() *MockHostnameManager {
+	return &MockHostnameManager{hostname: "pigate-mock"}
+}
+
+func (m *MockHostnameManager) GetHostname() (string, error) {
+	return m.hostname, nil
+}
+
+func (m *MockHostnameManager) SetHostname(name string) error {
+	log.Printf("[MockHostname] Simulating setting hostname to %q", name)
+	m.hostname = name
+	return nil
+}

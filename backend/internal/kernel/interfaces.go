@@ -89,4 +89,18 @@ type DNSServerManager interface {
 type DhcpcdManager interface {
 	StartDhcpcd(ifaceName string) error
 	StopDhcpcd(ifaceName string) error
+	// SetShareHostname writes/clears the `hostname` directive in the pigate-owned
+	// dhcpcd config file (/var/lib/pigate/dhcpcd.conf) that dhcpcd@.service reads.
+	// share=true makes dhcpcd send DHCP Option 12 with the system's current hostname.
+	SetShareHostname(share bool) error
+	// RestartDhcpcd restarts the per-interface dhcpcd@ service so a config change
+	// (e.g. SetShareHostname) takes effect. Causes a brief WAN lease renewal.
+	RestartDhcpcd(ifaceName string) error
+}
+
+// HostnameManager abstracts reading/writing the system hostname via
+// org.freedesktop.hostname1 (systemd-hostnamed) over D-Bus.
+type HostnameManager interface {
+	GetHostname() (string, error)
+	SetHostname(name string) error
 }

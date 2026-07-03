@@ -178,7 +178,7 @@ BindsTo=sys-subsystem-net-devices-%i.device
 
 [Service]
 Type=simple
-ExecStart=${DHCPCD_BIN} -B -q %I
+ExecStart=${DHCPCD_BIN} -B -q -f /var/lib/pigate/dhcpcd.conf %I
 ExecStop=${DHCPCD_BIN} -k %I
 Restart=on-failure
 RestartSec=5s
@@ -226,6 +226,18 @@ polkit.addRule(function(action, subject) {
             return polkit.Result.NO;
         }
     }
+
+    // ดักจับ action ของ org.freedesktop.hostname1 แยกต่างหาก (คนละ action id
+    // กับ systemd1.manage-units ด้านบน) เพื่ออนุญาตให้ pigate ตั้งชื่อเครื่องผ่าน
+    // hostnamed (org.freedesktop.hostname1) โดยไม่ต้อง exec `hostnamectl`
+    if ((action.id == "org.freedesktop.hostname1.set-static-hostname" ||
+         action.id == "org.freedesktop.hostname1.set-hostname") &&
+        subject.user == "pigate") {
+        return polkit.Result.YES;
+    }
+    else {
+        return polkit.Result.NO;
+    }
 });
 EOF
 
@@ -245,6 +257,19 @@ chown -R pigate:netdev /var/lib/pigate
 chown -R pigate:pigate /run/pigate
 chmod 775 /var/lib/pigate
 log_ok "สร้าง /var/lib/pigate และ /run/pigate สำเร็จ"
+
+# สร้างไฟล์ baseline dhcpcd.conf ที่ pigate เป็นเจ้าของ (อ่านโดย dhcpcd@.service
+# ผ่าน -f ดู STEP 2.2) หากยังไม่มี — ค่าเริ่มต้นคือไม่ share hostname (ว่าง/มีแต่
+# comment) ตรงกับค่า default ของ system_hostname_settings.share_with_dhcp = 0
+DHCPCD_CONF_FILE="/var/lib/pigate/dhcpcd.conf"
+if [[ ! -f "${DHCPCD_CONF_FILE}" ]]; then
+    cat > "${DHCPCD_CONF_FILE}" << 'EOF'
+# Managed by PiGate. Do not edit manually.
+EOF
+    chown pigate:netdev "${DHCPCD_CONF_FILE}"
+    chmod 0644 "${DHCPCD_CONF_FILE}"
+    log_ok "สร้างไฟล์ ${DHCPCD_CONF_FILE} สำเร็จ"
+fi
 
 # dhcpcd persists its DUID, IPv6 privacy secret, and lease files under /var/lib/dhcpcd.
 # ตั้งแต่ปรับให้ dhcpcd รันผ่าน dhcpcd@.service เป็น root ของตัวเอง (ดู STEP 2.2)

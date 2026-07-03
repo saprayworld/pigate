@@ -14,7 +14,8 @@ import {
   FileDown,
   FileUp,
   Loader2,
-  HelpCircle
+  HelpCircle,
+  Server
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -40,7 +41,7 @@ import {
   type SystemTimeSettings,
   type NetworkServiceStatus
 } from "@/data-mockup/mockData"
-import { systemService } from "@/services/systemService"
+import { systemService, type SystemHostnameSettings } from "@/services/systemService"
 import { useAlert } from "@/components/AlertDialogProvider"
 
 export default function SettingsMaintenance() {
@@ -61,6 +62,13 @@ export default function SettingsMaintenance() {
     ntpServer: "pool.ntp.org"
   })
   const [timeFeedback, setTimeFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null)
+
+  // Hostname & DHCP-share States
+  const [hostnameSettings, setHostnameSettings] = useState<SystemHostnameSettings>({
+    hostname: "",
+    shareWithDhcp: false
+  })
+  const [hostnameFeedback, setHostnameFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null)
 
   // Power control States
   const [powerDialog, setPowerDialog] = useState<"reboot" | "shutdown" | null>(null)
@@ -84,12 +92,14 @@ export default function SettingsMaintenance() {
     setIsLoading(true)
     setError("")
     try {
-      const [timeData, servicesData] = await Promise.all([
+      const [timeData, servicesData, hostnameData] = await Promise.all([
         systemService.getTimeSettings(),
         systemService.getServices(),
+        systemService.getHostname(),
       ])
       setTimeSettings(timeData)
       setServices(servicesData)
+      setHostnameSettings(hostnameData)
     } catch (err: any) {
       setError(err.message || "Failed to load system settings.")
     } finally {
@@ -149,6 +159,29 @@ export default function SettingsMaintenance() {
       setTimeFeedback({ type: "success", message: "บันทึกการตั้งค่าระบบเวลา และ NTP สำเร็จ!" })
     } catch (err: any) {
       setTimeFeedback({ type: "error", message: err.message || "ไม่สามารถบันทึกการตั้งค่าเวลาได้" })
+    }
+  }
+
+  // Save Hostname & Share-with-DHCP Settings
+  const HOSTNAME_REGEX = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/
+  const handleSaveHostnameSettings = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setHostnameFeedback(null)
+
+    if (!hostnameSettings.hostname.trim()) {
+      setHostnameFeedback({ type: "error", message: "กรุณาระบุชื่อ Hostname" })
+      return
+    }
+    if (!HOSTNAME_REGEX.test(hostnameSettings.hostname)) {
+      setHostnameFeedback({ type: "error", message: "Hostname ต้องประกอบด้วยตัวอักษร a-z, A-Z, ตัวเลข 0-9 และเครื่องหมาย - เท่านั้น (ห้ามขึ้นต้นหรือลงท้ายด้วย -)" })
+      return
+    }
+
+    try {
+      await systemService.updateHostname(hostnameSettings)
+      setHostnameFeedback({ type: "success", message: "บันทึกการตั้งค่า Hostname สำเร็จ! (การเชื่อมต่อ WAN อาจสะดุดชั่วขณะหากเปิด/แก้ไขการ share hostname)" })
+    } catch (err: any) {
+      setHostnameFeedback({ type: "error", message: err.message || "ไม่สามารถบันทึกการตั้งค่า Hostname ได้" })
     }
   }
 
@@ -473,6 +506,79 @@ export default function SettingsMaintenance() {
                   >
                     <Lock className="h-4 w-4" />
                     Change Password
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+
+            {/* Card: System Identity (Hostname + Share with DHCP) */}
+            <Card className="bg-card/25 border border-border/50">
+              <CardHeader className="border-b border-border/40 pb-4">
+                <CardTitle className="text-lg font-bold flex items-center gap-2">
+                  <Server className="h-5 w-5 text-primary" />
+                  System Identity (ชื่อเครื่อง)
+                </CardTitle>
+                <CardDescription className="text-xs text-muted-foreground">
+                  กำหนดชื่อเครื่อง (Hostname) ของอุปกรณ์เกตเวย์ และเลือกว่าจะส่งชื่อนี้ไปบอก Router ฝั่ง WAN ผ่าน DHCP หรือไม่
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-5">
+                <form onSubmit={handleSaveHostnameSettings} className="space-y-4">
+                  {hostnameFeedback && (
+                    <Alert
+                      variant={hostnameFeedback.type === "success" ? "default" : "destructive"}
+                      className={hostnameFeedback.type === "success" ? "border-primary/20 bg-primary/5 text-primary py-2.5 px-3" : "border-red-500/20 bg-red-500/5 py-2.5 px-3"}
+                    >
+                      {hostnameFeedback.type === "success" ? (
+                        <CheckCircle className="h-4 w-4 text-primary" />
+                      ) : (
+                        <AlertCircle className="h-4 w-4 text-red-400" />
+                      )}
+                      <AlertDescription className={`text-xs ${hostnameFeedback.type === "success" ? "text-primary" : "text-red-400"}`}>
+                        {hostnameFeedback.message}
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="hostname" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                      Hostname (ชื่อเครื่อง)
+                    </Label>
+                    <Input
+                      id="hostname"
+                      type="text"
+                      value={hostnameSettings.hostname}
+                      onChange={(e) => setHostnameSettings(prev => ({ ...prev, hostname: e.target.value }))}
+                      className="bg-background/50 placeholder:text-muted-foreground/60 h-9 font-mono"
+                      placeholder="เช่น PiGate-RPI5"
+                    />
+                    <p className="text-[11px] text-muted-foreground italic">
+                      ใช้ได้เฉพาะตัวอักษร a-z, A-Z, ตัวเลข 0-9 และเครื่องหมาย - (ไม่เกิน 63 ตัวอักษร)
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5 pt-2">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="share-hostname" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer">
+                        Share hostname with DHCP (ส่งชื่อเครื่องไปบอก Router ฝั่ง WAN)
+                      </Label>
+                      <Switch
+                        id="share-hostname"
+                        checked={hostnameSettings.shareWithDhcp}
+                        onCheckedChange={(checked) => setHostnameSettings(prev => ({ ...prev, shareWithDhcp: checked }))}
+                      />
+                    </div>
+                    <p className="text-[11px] text-muted-foreground italic">
+                      หากเปิดใช้งาน dhcpcd จะส่งชื่อเครื่องนี้ไปบอก Router ผ่าน DHCP Option 12 — การเปลี่ยนค่านี้อาจทำให้การเชื่อมต่อ WAN สะดุดชั่วขณะ (renew lease)
+                    </p>
+                  </div>
+
+                  <Button
+                    type="submit"
+                    className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/95 font-bold w-full gap-2 mt-2 h-9"
+                  >
+                    <Server className="h-4 w-4" />
+                    Save Hostname Settings
                   </Button>
                 </form>
               </CardContent>

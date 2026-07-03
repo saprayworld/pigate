@@ -70,6 +70,7 @@ func main() {
 	var qos kernel.QosManager
 	var dnsServer kernel.DNSServerManager
 	var dhcpcd kernel.DhcpcdManager
+	var hostnameMgr kernel.HostnameManager
 	dns := kernel.NewDNSManager(*mockOS)
 
 	if *mockOS || *mockFromReal {
@@ -82,6 +83,7 @@ func main() {
 		dhcp = mDhcp
 		dnsServer = kernel.NewMockDNSServerManager()
 		dhcpcd = kernel.NewMockDhcpcdManager()
+		hostnameMgr = kernel.NewMockHostnameManager()
 	} else {
 		// Real kernel integrations via netlink — used on Raspberry Pi 5 production.
 		// Requires: sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
@@ -92,6 +94,7 @@ func main() {
 		dhcp = kernel.NewRealDhcpManager()
 		dnsServer = kernel.NewRealDNSServerManager()
 		dhcpcd = kernel.NewRealDhcpcdManager()
+		hostnameMgr = kernel.NewRealHostnameManager()
 	}
 
 	// 5. Instantiate Server & Router
@@ -104,7 +107,8 @@ func main() {
 	qosService := service.NewQosService(repo, qos)
 	dhcpServerService := service.NewDhcpServerService(repo, dhcp)
 	dnsServerService := service.NewDNSServerService(repo, dnsServer)
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService)
+	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcd, ifaceService)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService)
 
 	// Apply config form database to kernel
 
@@ -126,6 +130,11 @@ func main() {
 	monitorCtx, cancelMonitor := context.WithCancel(context.Background())
 	defer cancelMonitor()
 	netlinkMonitor.Start(monitorCtx)
+
+	log.Printf("[Main] Applying database-configured hostname settings to kernel at startup...")
+	if err := hostnameService.InitApplyConfig(); err != nil {
+		log.Printf("[Main] Warning: Failed to apply hostname settings at startup: %v", err)
+	}
 
 	log.Printf("[Main] Synchronizing active DHCP interfaces status...")
 	dhcpcdService.SyncActiveInterfaces()
