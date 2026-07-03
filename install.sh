@@ -214,24 +214,29 @@ polkit.addRule(function(action, subject) {
         // 1. ถ้าเป็น Service ที่อนุญาต -> ให้ผ่าน (YES)
         //    dhcpcd@ ใช้ prefix match เพราะชื่อ interface ต่อท้ายไม่แน่นอน
         //    (ขึ้นกับฮาร์ดแวร์ เช่น wlan0, wlx0cef1548ff2b) เหมือน wpa_supplicant@
-        if (unit.indexOf("wpa_supplicant@") === 0 || 
+        if (unit.indexOf("wpa_supplicant@") === 0 ||
             unit.indexOf("dhcpcd@") === 0 ||
             unit === "systemd-resolved.service" ||
+            unit === "systemd-timesyncd.service" ||
             unit === "dnsmasq.service" ||
             unit === "pigate.service") {
             return polkit.Result.YES;
-        } 
+        }
         // 2. ถ้าเป็น Service ตัวอื่นๆ นอกเหนือจากด้านบน -> ปฏิเสธทันที (NO)
         else {
             return polkit.Result.NO;
         }
     }
 
-    // ดักจับ action ของ org.freedesktop.hostname1 แยกต่างหาก (คนละ action id
-    // กับ systemd1.manage-units ด้านบน) เพื่ออนุญาตให้ pigate ตั้งชื่อเครื่องผ่าน
-    // hostnamed (org.freedesktop.hostname1) โดยไม่ต้อง exec `hostnamectl`
+    // ดักจับ action ของ org.freedesktop.hostname1 และ org.freedesktop.timedate1
+    // แยกต่างหาก (คนละ action id กับ systemd1.manage-units ด้านบน) เพื่ออนุญาตให้
+    // pigate ตั้งชื่อเครื่องผ่าน hostnamed และตั้งเขตเวลา/NTP/เวลาผ่าน timedated
+    // โดยไม่ต้อง exec `hostnamectl` / `timedatectl`
     if ((action.id == "org.freedesktop.hostname1.set-static-hostname" ||
-         action.id == "org.freedesktop.hostname1.set-hostname") &&
+         action.id == "org.freedesktop.hostname1.set-hostname" ||
+         action.id == "org.freedesktop.timedate1.set-timezone" ||
+         action.id == "org.freedesktop.timedate1.set-ntp" ||
+         action.id == "org.freedesktop.timedate1.set-time") &&
         subject.user == "pigate") {
         return polkit.Result.YES;
     }
@@ -289,6 +294,34 @@ mkdir -p /etc/systemd/resolved.conf.d
 setfacl -m u:pigate:rwx /etc/systemd/resolved.conf.d
 setfacl -d -m u:pigate:rwx /etc/systemd/resolved.conf.d
 log_ok "ตั้งค่า /etc/systemd/resolved.conf.d สำเร็จ"
+
+# =============================================================================
+# STEP 5.1: ตั้งค่า systemd-timesyncd drop-in directory (สำหรับ NTP Server)
+# =============================================================================
+# timedate1 ไม่มี API สำหรับตั้ง NTP server เอง — pigate จึงเขียนไฟล์ drop-in
+# /etc/systemd/timesyncd.conf.d/50-pigate.conf แบบ atomic (temp+rename) แล้ว
+# restart systemd-timesyncd ผ่าน D-Bus (อนุญาตใน polkit STEP 3 แล้ว)
+log_info "STEP 5.1: ตั้งค่า systemd-timesyncd config directory..."
+
+if ! systemctl list-unit-files 2>/dev/null | grep -q '^systemd-timesyncd\.service'; then
+    log_warn "ไม่พบ systemd-timesyncd — ฟีเจอร์กำหนด NTP Server เองจะไม่ทำงาน"
+    log_warn "ติดตั้งด้วย: apt-get install systemd-timesyncd"
+fi
+
+mkdir -p /etc/systemd/timesyncd.conf.d
+setfacl -m u:pigate:rwx /etc/systemd/timesyncd.conf.d
+setfacl -d -m u:pigate:rwx /etc/systemd/timesyncd.conf.d
+# สร้างไฟล์ drop-in เปล่าไว้ล่วงหน้า (pigate เป็นเจ้าของ) — ค่าเริ่มต้นคือไม่มี
+# directive NTP= (ใช้ค่า default ของ distro) จนกว่าผู้ใช้จะกำหนด NTP Server เอง
+TIMESYNCD_DROPIN="/etc/systemd/timesyncd.conf.d/50-pigate.conf"
+if [[ ! -f "${TIMESYNCD_DROPIN}" ]]; then
+    cat > "${TIMESYNCD_DROPIN}" << 'EOF'
+# Managed by PiGate. Do not edit manually.
+EOF
+fi
+chown pigate:netdev "${TIMESYNCD_DROPIN}"
+chmod 0644 "${TIMESYNCD_DROPIN}"
+log_ok "ตั้งค่า /etc/systemd/timesyncd.conf.d สำเร็จ"
 
 # =============================================================================
 # STEP 6: คัดลอก binary และตั้งค่า capabilities

@@ -1144,6 +1144,34 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SystemTimeSettings'
+        '400':
+          description: Invalid timezone or NTP server value
+
+  /system/time/manual:
+    post:
+      tags:
+        - System & Maintenance
+      summary: Set the wall clock manually (only allowed while NTP sync is disabled)
+      description: >
+        Sets the device clock to an absolute time via systemd-timedated. Rejected
+        with 400 if NTP sync is currently enabled, or if the datetime is malformed
+        or its year is outside 2020–2100. The time is runtime-only and never
+        persisted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetManualTimeInput'
+      responses:
+        '200':
+          description: Clock updated; returns the refreshed time settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemTimeSettings'
+        '400':
+          description: NTP sync is enabled, or datetime is invalid/out of range
 
   /system/hostname:
     get:
@@ -2422,6 +2450,20 @@ components:
           example: 11 hours, 45 mins
 
     # --- System & Maintenance Schemas ---
+    TimeStatus:
+      type: object
+      description: Live time state read from the kernel (read-only; never sent on PUT).
+      properties:
+        currentTime:
+          type: string
+          format: date-time
+          description: Device local time (RFC3339)
+          example: "2026-07-03T15:04:05+07:00"
+        ntpSynchronized:
+          type: boolean
+          description: True once systemd-timesyncd has synchronized the clock
+          example: true
+
     SystemTimeSettings:
       type: object
       required:
@@ -2431,13 +2473,30 @@ components:
       properties:
         timezone:
           type: string
-          example: "Asia/Bangkok (GMT+7:00)"
+          description: Bare IANA timezone name (no GMT-offset suffix)
+          example: "Asia/Bangkok"
         ntpSync:
           type: boolean
           example: true
         ntpServer:
           type: string
+          description: NTP server hostname/IP (space-separated list allowed); empty = distro default
           example: pool.ntp.org
+        status:
+          allOf:
+            - $ref: '#/components/schemas/TimeStatus'
+          description: Live kernel status; present on GET responses only.
+
+    SetManualTimeInput:
+      type: object
+      required:
+        - datetime
+      properties:
+        datetime:
+          type: string
+          format: date-time
+          description: Absolute time in RFC3339. Only accepted while ntpSync is false.
+          example: "2026-07-03T15:04:05+07:00"
 
     SystemHostnameSettings:
       type: object

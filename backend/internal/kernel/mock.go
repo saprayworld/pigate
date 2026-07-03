@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"pigate/internal/model"
 )
@@ -363,5 +364,53 @@ func (m *MockHostnameManager) GetHostname() (string, error) {
 func (m *MockHostnameManager) SetHostname(name string) error {
 	log.Printf("[MockHostname] Simulating setting hostname to %q", name)
 	m.hostname = name
+	return nil
+}
+
+// MockTimeManager implements TimeManager in-memory for local testing. It keeps
+// the last-applied timezone/NTP/server values and simulates a synced clock.
+type MockTimeManager struct {
+	timezone  string
+	ntpOn     bool
+	ntpServer string
+	manual    time.Time // zero unless SetTime was called
+}
+
+func NewMockTimeManager() *MockTimeManager {
+	return &MockTimeManager{timezone: "Asia/Bangkok", ntpOn: true, ntpServer: "pool.ntp.org"}
+}
+
+func (m *MockTimeManager) GetTimeStatus() (*model.TimeStatus, error) {
+	now := time.Now()
+	if !m.ntpOn && !m.manual.IsZero() {
+		now = m.manual
+	}
+	return &model.TimeStatus{
+		CurrentTime:     now.Format(time.RFC3339),
+		NTPSynchronized: m.ntpOn,
+	}, nil
+}
+
+func (m *MockTimeManager) SetTimezone(tz string) error {
+	log.Printf("[MockTime] Simulating set timezone to %q", tz)
+	m.timezone = tz
+	return nil
+}
+
+func (m *MockTimeManager) SetNTP(enable bool) error {
+	log.Printf("[MockTime] Simulating set NTP to %t", enable)
+	m.ntpOn = enable
+	return nil
+}
+
+func (m *MockTimeManager) SetTime(t time.Time) error {
+	log.Printf("[MockTime] Simulating set clock to %s", t.Format(time.RFC3339))
+	m.manual = t
+	return nil
+}
+
+func (m *MockTimeManager) SetNTPServer(server string) error {
+	log.Printf("[MockTime] Simulating set NTP server to %q", server)
+	m.ntpServer = server
 	return nil
 }

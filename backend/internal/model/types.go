@@ -217,11 +217,21 @@ type ActiveDhcpLease struct {
 	ExpiresAt  string `json:"expiresAt"`
 }
 
-// SystemTimeSettings represents NTP and timezone configurations
+// TimeStatus carries live time state read from the kernel (systemd-timedated),
+// as opposed to the DB-persisted configuration. It is read-only from the API's
+// perspective and never written back to the DB.
+type TimeStatus struct {
+	CurrentTime     string `json:"currentTime"`     // RFC3339, device local time
+	NTPSynchronized bool   `json:"ntpSynchronized"` // true once timesyncd has synced
+}
+
+// SystemTimeSettings represents NTP and timezone configurations.
+// Status is populated only on GET (live kernel state); PUT callers omit it.
 type SystemTimeSettings struct {
-	Timezone  string `json:"timezone"`
-	NTPSync   bool   `json:"ntpSync"`
-	NTPServer string `json:"ntpServer"`
+	Timezone  string      `json:"timezone"`
+	NTPSync   bool        `json:"ntpSync"`
+	NTPServer string      `json:"ntpServer"`
+	Status    *TimeStatus `json:"status,omitempty"`
 }
 
 // SystemHostnameSettings represents device hostname and DHCP-client hostname sharing

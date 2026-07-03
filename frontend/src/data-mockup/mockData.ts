@@ -498,10 +498,16 @@ export const initialActiveDhcpLeases: ActiveDhcpLease[] = [
 ]
 
 // Types for Settings & Maintenance
+export interface TimeStatus {
+  currentTime: string // RFC3339, device local time
+  ntpSynchronized: boolean
+}
+
 export interface SystemTimeSettings {
-  timezone: string
+  timezone: string // bare IANA name, e.g. "Asia/Bangkok"
   ntpSync: boolean
   ntpServer: string
+  status?: TimeStatus // live kernel state, present on GET only
 }
 
 export interface NetworkServiceStatus {
@@ -513,7 +519,7 @@ export interface NetworkServiceStatus {
 
 // Initial mockup data for Settings & Maintenance
 export const initialSystemTimeSettings: SystemTimeSettings = {
-  timezone: "Asia/Bangkok (GMT+7:00)",
+  timezone: "Asia/Bangkok",
   ntpSync: true,
   ntpServer: "pool.ntp.org"
 }

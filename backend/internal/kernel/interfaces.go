@@ -2,6 +2,8 @@ package kernel
 
 import (
 	"context"
+	"time"
+
 	"pigate/internal/model"
 )
 
@@ -103,4 +105,24 @@ type DhcpcdManager interface {
 type HostnameManager interface {
 	GetHostname() (string, error)
 	SetHostname(name string) error
+}
+
+// TimeManager abstracts timezone / NTP / manual-clock control via
+// org.freedesktop.timedate1 (systemd-timedated) over D-Bus, plus the
+// systemd-timesyncd drop-in used to point NTP at a custom server.
+type TimeManager interface {
+	// GetTimeStatus reads live state (current time + whether NTP has synced).
+	GetTimeStatus() (*model.TimeStatus, error)
+	// SetTimezone sets the IANA timezone (timedated writes /etc/localtime).
+	SetTimezone(tz string) error
+	// SetNTP enables/disables automatic time sync (timedated starts/stops
+	// and enables/disables systemd-timesyncd).
+	SetNTP(enable bool) error
+	// SetTime sets the wall clock manually. Rejected by timedated while NTP
+	// is enabled — callers must guard against that first.
+	SetTime(t time.Time) error
+	// SetNTPServer writes the pigate-owned timesyncd drop-in with the given
+	// server(s) and restarts timesyncd (only while NTP is enabled). An empty
+	// server clears the drop-in back to distro defaults.
+	SetNTPServer(server string) error
 }
