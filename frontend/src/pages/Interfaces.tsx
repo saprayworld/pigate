@@ -145,6 +145,7 @@ export default function Interfaces() {
   const [formIp, setFormIp] = useState("")
   const [formNetmask, setFormNetmask] = useState("")
   const [formGateway, setFormGateway] = useState("")
+  const [formMetric, setFormMetric] = useState("") // empty string = unset (auto)
   const [formAccess, setFormAccess] = useState<AdminAccess[]>([])
   const [formError, setFormError] = useState("")
 
@@ -249,6 +250,7 @@ export default function Interfaces() {
     setFormIp(iface.ip)
     setFormNetmask(iface.netmask)
     setFormGateway(iface.gateway)
+    setFormMetric(iface.metric != null ? String(iface.metric) : "")
     setFormAccess([...iface.adminAccess])
     setFormSSID(iface.wifiSSID || "")
 
@@ -459,6 +461,15 @@ export default function Interfaces() {
       }
     }
 
+    // Validation for Route Metric (applies to all addressing modes; empty = unset/auto)
+    if (formMetric.trim() !== "") {
+      const metricNum = Number(formMetric)
+      if (!Number.isInteger(metricNum) || metricNum < 1 || metricNum > 9999) {
+        setFormError("Route Metric ต้องเป็นจำนวนเต็มในช่วง 1–9999 (เว้นว่างเพื่อใช้ค่าอัตโนมัติ)")
+        return
+      }
+    }
+
     // Validation for Wi-Fi
     if (editingIface.type === "wireless") {
       if (!formSSID.trim()) {
@@ -491,6 +502,8 @@ export default function Interfaces() {
         ip: formMode === "static" ? formIp : editingIface.ip,
         netmask: formMode === "static" ? formNetmask : editingIface.netmask,
         gateway: formMode === "static" ? formGateway : editingIface.gateway,
+        // null explicitly clears the metric back to "unset" (auto) on the backend
+        metric: formMetric.trim() === "" ? null : parseInt(formMetric),
         adminAccess: formAccess,
       }
 
@@ -713,6 +726,9 @@ export default function Interfaces() {
                       </div>
                       <div className="text-[10px] text-muted-foreground mt-0.5">
                         {iface.addressingMode === "dhcp" ? "DHCP" : "Static"}
+                        {iface.metric != null && (
+                          <span className="ml-1.5 font-mono text-primary/80">metric {iface.metric}</span>
+                        )}
                       </div>
                     </TableCell>
 
@@ -997,6 +1013,29 @@ export default function Interfaces() {
                 </div>
               </div>
             )}
+
+            {/* Route Metric (all addressing modes — used for multi-WAN failover ordering) */}
+            <div className="space-y-1.5 border border-border/40 rounded-lg p-4 bg-muted/5">
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                <ArrowUpDown className="h-3 w-3" /> Route Metric (ลำดับความสำคัญ Gateway)
+              </div>
+              <Input
+                id="form-metric"
+                type="number"
+                min={1}
+                max={9999}
+                value={formMetric}
+                onChange={(e) => setFormMetric(e.target.value)}
+                placeholder="ว่าง = อัตโนมัติ"
+                className="bg-background/50 h-8 font-mono text-xs"
+              />
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                กำหนด priority ของ default gateway route (0.0.0.0/0) สำหรับ interface นี้
+                — <span className="font-medium">เลขน้อยกว่า = ถูกเลือกใช้ก่อน</span> (ใช้จัดลำดับ WAN หลัก/สำรอง).
+                เว้นว่างเพื่อใช้ค่าอัตโนมัติ (static = 100, dhcp = ตาม dhcpcd). มีผลกับ IPv4 เท่านั้น
+                และการสลับ WAN อาจทำให้ session ที่ค้างอยู่ (รวมถึงหน้านี้) สะดุดชั่วขณะ
+              </p>
+            </div>
 
             {/* Wi-Fi Settings (only for wireless) */}
             {editingIface?.type === "wireless" && (

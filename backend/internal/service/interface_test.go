@@ -14,6 +14,7 @@ type trackingNetworkManager struct {
 	configuredInterfaces []string
 	toggledInterfaces    map[string]bool
 	wifiConfigured       []string
+	configuredMetrics    map[string]int
 }
 
 func (t *trackingNetworkManager) ToggleInterface(name string, up bool) error {
@@ -28,8 +29,12 @@ func (t *trackingNetworkManager) ScanWifi(name string) ([]model.WifiScanResult, 
 	return nil, nil
 }
 
-func (t *trackingNetworkManager) ConfigureInterface(name string, mode string, ip string, netmask string, gateway string) error {
+func (t *trackingNetworkManager) ConfigureInterface(name string, mode string, ip string, netmask string, gateway string, metric int) error {
 	t.configuredInterfaces = append(t.configuredInterfaces, name)
+	if t.configuredMetrics == nil {
+		t.configuredMetrics = make(map[string]int)
+	}
+	t.configuredMetrics[name] = metric
 	return nil
 }
 
@@ -238,5 +243,83 @@ func TestInitApplyConfigurationAtStartupWithWireless(t *testing.T) {
 	}
 	if !configured {
 		t.Errorf("Expected interface %s to be configured, but it was not", realIfaceName)
+	}
+}
+
+func intPtr(v int) *int { return &v }
+
+// TestInterfaceMetric covers saving a metric, reading it back, range validation,
+// and that a nil metric leaves the historical behavior untouched (metric 0 = "unset"
+// is passed to the kernel layer, which falls back to its default).
+func TestInterfaceMetric(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	if err := repo.ClearInterfaces(); err != nil {
+		t.Fatalf("Failed to clear DB interfaces: %v", err)
+	}
+
+	base := model.NetworkInterface{
+		ID:             "iface-metric",
+		Name:           "eth-test",
+		Alias:          "WAN Test",
+		Role:           "WAN",
+		Type:           "ethernet",
+		AddressingMode: "dhcp",
+		Status:         "up",
+		AdminAccess:    []string{"PING"},
+	}
+	if err := repo.CreateInterfaceForTest(base); err != nil {
+		t.Fatalf("Failed to seed interface: %v", err)
+	}
+
+	tracker := &trackingNetworkManager{}
+	svc := NewInterfaceService(repo, tracker)
+
+	// 1. Save a valid metric.
+	withMetric := base
+	withMetric.Metric = intPtr(100)
+	if err := svc.ApplyInterfaceConfig(withMetric); err != nil {
+		t.Fatalf("ApplyInterfaceConfig with metric 100 failed: %v", err)
+	}
+	if got := tracker.configuredMetrics["eth-test"]; got != 100 {
+		t.Errorf("expected kernel to receive metric 100, got %d", got)
+	}
+	stored, err := repo.GetInterfaceByID("iface-metric")
+	if err != nil {
+		t.Fatalf("GetInterfaceByID failed: %v", err)
+	}
+	if stored.Metric == nil || *stored.Metric != 100 {
+		t.Errorf("expected stored metric 100, got %v", stored.Metric)
+	}
+
+	// 2. Clearing the metric (nil) reverts to "unset" — kernel receives 0.
+	cleared := base
+	cleared.Metric = nil
+	if err := svc.ApplyInterfaceConfig(cleared); err != nil {
+		t.Fatalf("ApplyInterfaceConfig with nil metric failed: %v", err)
+	}
+	if got := tracker.configuredMetrics["eth-test"]; got != 0 {
+		t.Errorf("expected kernel to receive metric 0 for unset, got %d", got)
+	}
+	stored, err = repo.GetInterfaceByID("iface-metric")
+	if err != nil {
+		t.Fatalf("GetInterfaceByID failed: %v", err)
+	}
+	if stored.Metric != nil {
+		t.Errorf("expected stored metric to be nil after clearing, got %v", *stored.Metric)
+	}
+
+	// 3. Out-of-range metrics are rejected.
+	for _, bad := range []int{0, -5, 10000} {
+		invalid := base
+		invalid.Metric = intPtr(bad)
+		if err := svc.ApplyInterfaceConfig(invalid); err == nil {
+			t.Errorf("expected error for out-of-range metric %d, got nil", bad)
+		}
 	}
 }

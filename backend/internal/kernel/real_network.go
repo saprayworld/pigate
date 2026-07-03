@@ -184,7 +184,7 @@ func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, s
 // ConfigureInterface configures the IP address, netmask, gateway, and addressing mode of an interface using Netlink.
 // For DHCP mode, it clears static IPs and routes, and spawns/signals dhclient/dhcpcd to request an address.
 // For Static mode, it clears existing IPv4 addresses and sets the specified static IP/Netmask and gateway route.
-func (r *RealNetwork) ConfigureInterface(name string, mode string, ip string, netmask string, gateway string) error {
+func (r *RealNetwork) ConfigureInterface(name string, mode string, ip string, netmask string, gateway string, metric int) error {
 	link, err := netlink.LinkByName(name)
 	if err != nil {
 		return fmt.Errorf("interface %q not found: %w", name, err)
@@ -241,13 +241,19 @@ func (r *RealNetwork) ConfigureInterface(name string, mode string, ip string, ne
 			}
 		}
 
+		// Determine route priority: metric <= 0 means "unset", keep the historical default of 100
+		priority := 100
+		if metric > 0 {
+			priority = metric
+		}
+
 		// Parse default destination (0.0.0.0/0)
 		_, defaultNet, _ := net.ParseCIDR("0.0.0.0/0")
 		route := &netlink.Route{
 			LinkIndex: link.Attrs().Index,
 			Dst:       defaultNet,
 			Gw:        gwIP,
-			Priority:  100,
+			Priority:  priority,
 		}
 
 		if err := netlink.RouteAdd(route); err != nil {

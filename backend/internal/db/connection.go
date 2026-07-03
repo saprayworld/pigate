@@ -178,6 +178,19 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
+	// Add metric column to network_interfaces if it doesn't exist.
+	// Nullable (no NOT NULL/DEFAULT) so "unset" (NULL) stays distinct from metric 0.
+	var sqlCreateIfaceMetric string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='network_interfaces'").Scan(&sqlCreateIfaceMetric)
+	if err == nil {
+		if !strings.Contains(sqlCreateIfaceMetric, "metric") {
+			_, err = db.Exec("ALTER TABLE network_interfaces ADD COLUMN metric INTEGER")
+			if err != nil {
+				return fmt.Errorf("failed to add metric column: %w", err)
+			}
+		}
+	}
+
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY,
@@ -323,6 +336,7 @@ func migrate(db *sql.DB) error {
 			ip TEXT NOT NULL,
 			netmask TEXT NOT NULL,
 			gateway TEXT NOT NULL,
+			metric INTEGER,
 			mac_address TEXT NOT NULL,
 			admin_access TEXT NOT NULL, -- comma separated values like "PING,HTTP,SSH"
 			status TEXT NOT NULL CHECK(status IN ('up', 'down', 'offline')),

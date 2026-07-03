@@ -396,6 +396,9 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 	if updates.FailoverCooldown != nil {
 		iface.FailoverCooldown = updates.FailoverCooldown
 	}
+	if updates.Metric != nil {
+		iface.Metric = updates.Metric
+	}
 
 	if err := s.interfaceService.ApplyInterfaceConfig(*iface); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -493,6 +496,7 @@ func (s *Server) HandlePatchInterface(w http.ResponseWriter, r *http.Request) {
 	updatePtrInt("ipCheckTimeout", &iface.IPCheckTimeout)
 	updatePtrInt("primaryMaxRetries", &iface.PrimaryMaxRetries)
 	updatePtrInt("failoverCooldown", &iface.FailoverCooldown)
+	updatePtrInt("metric", &iface.Metric) // null clears it back to "unset" (auto)
 
 	// Safe password updates: only if non-empty and not masked, or if security is explicitly set to Open
 	if val, ok := body["wifiPassword"]; ok {

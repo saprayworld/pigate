@@ -309,6 +309,58 @@ func (r *RealRouting) AddRoute(route model.StaticRoute) error {
 	return nil
 }
 
+// EnforceDefaultRouteMetric ensures the IPv4 default gateway route on ifaceName has
+// the given priority. It targets routes typically installed by dhcpcd (which pigate
+// cannot pre-configure), leaving all other attributes (Protocol, Scope, Src, Gw)
+// intact so ApplyRoutes does not later mistake it for a pigate-managed route.
+//
+// Changing a route's priority requires delete + re-add (the kernel treats a different
+// priority as a distinct route, so RouteReplace won't move it). The check below is
+// guarded on Priority != metric so repeated calls (triggered by the Route event our
+// own del/add emits) converge to a no-op instead of looping.
+func (r *RealRouting) EnforceDefaultRouteMetric(ifaceName string, metric int) error {
+	if metric <= 0 {
+		return nil
+	}
+
+	link, err := netlink.LinkByName(ifaceName)
+	if err != nil {
+		return fmt.Errorf("interface %q not found: %w", ifaceName, err)
+	}
+
+	routes, err := netlink.RouteList(link, netlink.FAMILY_V4)
+	if err != nil {
+		return fmt.Errorf("failed to list IPv4 routes for %q: %w", ifaceName, err)
+	}
+
+	for _, rt := range routes {
+		isDefault := rt.Dst == nil || rt.Dst.String() == "0.0.0.0/0"
+		if !isDefault || rt.Gw == nil {
+			continue
+		}
+		if rt.Priority == metric {
+			// Already at the desired priority — nothing to do (keeps this idempotent).
+			continue
+		}
+
+		oldRt := rt // preserve Protocol/Scope/Src/Gw/LinkIndex from the original
+		newRt := rt
+		newRt.Priority = metric
+
+		log.Printf("[Routing] Enforcing default route metric on %s: %d -> %d (gw %s, proto %d)",
+			ifaceName, oldRt.Priority, metric, rt.Gw, rt.Protocol)
+
+		if err := netlink.RouteDel(&oldRt); err != nil {
+			return fmt.Errorf("failed to delete default route on %q while changing metric: %w", ifaceName, err)
+		}
+		if err := netlink.RouteAdd(&newRt); err != nil {
+			return fmt.Errorf("failed to re-add default route on %q with metric %d: %w", ifaceName, metric, err)
+		}
+	}
+
+	return nil
+}
+
 func (r *RealRouting) DeleteRoute(route model.StaticRoute) error {
 	existingRoutes, err := netlink.RouteList(nil, netlink.FAMILY_V4)
 	if err != nil {

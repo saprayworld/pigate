@@ -1771,6 +1771,16 @@ components:
         gateway:
           type: string
           example: ""
+        metric:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 9999
+          description: >-
+            Default-gateway route priority for this interface (lower = preferred,
+            used for multi-WAN failover). null/omitted means auto (static uses 100,
+            dhcp keeps dhcpcd's default). IPv4 only.
+          example: 100
         macAddress:
           type: string
           example: "DC:A6:32:AA:BB:C1"
