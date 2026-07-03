@@ -259,6 +259,7 @@ export interface NetworkInterface {
   ip: string                  // e.g. "192.168.1.1"
   netmask: string             // e.g. "24"
   gateway: string             // e.g. "192.168.1.254" (used for static)
+  metric?: number | null      // default-gateway route priority (lower = preferred, WAN failover); null/undefined = auto
   macAddress: string          // Effective MAC address currently active
   adminAccess: AdminAccess[]
   status: "up" | "down" | "offline"
@@ -314,6 +315,7 @@ export const initialNetworkInterfaces: NetworkInterface[] = [
     ip: "10.0.0.45",
     netmask: "24",
     gateway: "10.0.0.1",
+    metric: 100, // primary WAN priority
     macAddress: "4E:88:2F:BC:A1:90", // effective MAC
     realMacAddress: "DC:A6:32:AA:BB:C2", // hardware MAC
     macMode: "randomized",

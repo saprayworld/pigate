@@ -105,6 +105,7 @@ type NetworkInterface struct {
 	IP                   string       `json:"ip"`
 	Netmask              string       `json:"netmask"`
 	Gateway              string       `json:"gateway"`
+	Metric               *int         `json:"metric,omitempty"` // nil = auto (static: 100, dhcp: dhcpcd default); sets default-route priority for WAN failover
 	MacAddress           string       `json:"macAddress"`
 	AdminAccess          []string     `json:"adminAccess"` // PING, HTTP, HTTPS, SSH
 	Status               string       `json:"status"`      // "up", "down"

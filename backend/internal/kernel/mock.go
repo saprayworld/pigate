@@ -65,8 +65,9 @@ func (m *MockNetwork) ToggleInterface(name string, up bool) error {
 	return nil
 }
 
-func (m *MockNetwork) ConfigureInterface(name string, mode string, ip string, netmask string, gateway string) error {
+func (m *MockNetwork) ConfigureInterface(name string, mode string, ip string, netmask string, gateway string, metric int) error {
 	// Mock success
+	log.Printf("[MockNetwork] ConfigureInterface: %s mode=%s ip=%s gateway=%s metric=%d", name, mode, ip, gateway, metric)
 	return nil
 }
 
@@ -108,6 +109,11 @@ func NewMockRouting() *MockRouting {
 
 func (m *MockRouting) SetEnableEditSystemRoute(enable bool) {
 	m.enableEditSystemRoute = enable
+}
+
+func (m *MockRouting) EnforceDefaultRouteMetric(ifaceName string, metric int) error {
+	log.Printf("[MockRouting] EnforceDefaultRouteMetric called: Interface: %s, Metric: %d", ifaceName, metric)
+	return nil
 }
 
 func (m *MockRouting) AddRoute(route model.StaticRoute) error {

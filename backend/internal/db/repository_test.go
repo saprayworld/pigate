@@ -675,3 +675,89 @@ func TestInterfaceSubtype(t *testing.T) {
 	}
 }
 
+// TestInterfaceMetricColumn verifies the metric column (added by migration/schema)
+// round-trips through create/update, distinguishing "unset" (NULL) from a value,
+// including metric 0 which must remain distinct from NULL.
+func TestInterfaceMetricColumn(t *testing.T) {
+	sqliteDB, err := InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer sqliteDB.Close()
+	repo := NewRepository(sqliteDB)
+
+	metric := 100
+	iface := model.NetworkInterface{
+		ID:             "iface-metric-db",
+		Name:           "eth-metric",
+		Alias:          "WAN_Metric",
+		Role:           "WAN",
+		Type:           "ethernet",
+		AddressingMode: "dhcp",
+		IP:             "10.0.0.2",
+		Netmask:        "24",
+		Gateway:        "10.0.0.1",
+		Metric:         &metric,
+		MacAddress:     "00:11:22:33:44:66",
+		AdminAccess:    []string{"PING"},
+		Status:         "up",
+		Speed:          "1000 Mbps",
+	}
+	if err := repo.CreateInterfaceForTest(iface); err != nil {
+		t.Fatalf("CreateInterfaceForTest failed: %v", err)
+	}
+
+	fetched, err := repo.GetInterfaceByID("iface-metric-db")
+	if err != nil {
+		t.Fatalf("GetInterfaceByID failed: %v", err)
+	}
+	if fetched.Metric == nil || *fetched.Metric != 100 {
+		t.Fatalf("Expected metric 100, got %v", fetched.Metric)
+	}
+
+	// Update to metric 0 — a valid Linux priority that must survive as non-NULL.
+	zero := 0
+	fetched.Metric = &zero
+	if err := repo.UpdateInterface(*fetched); err != nil {
+		t.Fatalf("UpdateInterface (metric 0) failed: %v", err)
+	}
+	got, err := repo.GetInterfaceByID("iface-metric-db")
+	if err != nil {
+		t.Fatalf("GetInterfaceByID failed: %v", err)
+	}
+	if got.Metric == nil || *got.Metric != 0 {
+		t.Fatalf("Expected metric 0 to persist as non-NULL, got %v", got.Metric)
+	}
+
+	// Clearing to nil must store NULL and read back as nil.
+	got.Metric = nil
+	if err := repo.UpdateInterface(*got); err != nil {
+		t.Fatalf("UpdateInterface (nil metric) failed: %v", err)
+	}
+	cleared, err := repo.GetInterfaceByID("iface-metric-db")
+	if err != nil {
+		t.Fatalf("GetInterfaceByID failed: %v", err)
+	}
+	if cleared.Metric != nil {
+		t.Fatalf("Expected metric nil after clearing, got %d", *cleared.Metric)
+	}
+
+	// List read path must also surface the column without error.
+	list, err := repo.GetInterfacesFromDB()
+	if err != nil {
+		t.Fatalf("GetInterfacesFromDB failed: %v", err)
+	}
+	found := false
+	for _, item := range list {
+		if item.ID == "iface-metric-db" {
+			found = true
+			if item.Metric != nil {
+				t.Errorf("Expected nil metric in list read, got %d", *item.Metric)
+			}
+		}
+	}
+	if !found {
+		t.Error("Did not find created interface in GetInterfacesFromDB list")
+	}
+}
+

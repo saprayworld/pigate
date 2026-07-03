@@ -12,6 +12,15 @@ type trackingRoutingManager struct {
 	addedRoutes           []model.StaticRoute
 	deletedRoutes         []model.StaticRoute
 	enableEditSystemRoute bool
+	enforcedMetrics       map[string]int // ifaceName -> metric passed to EnforceDefaultRouteMetric
+}
+
+func (t *trackingRoutingManager) EnforceDefaultRouteMetric(ifaceName string, metric int) error {
+	if t.enforcedMetrics == nil {
+		t.enforcedMetrics = make(map[string]int)
+	}
+	t.enforcedMetrics[ifaceName] = metric
+	return nil
 }
 
 func (t *trackingRoutingManager) ApplyRoutes(routes []model.StaticRoute) error {
@@ -246,6 +255,71 @@ func TestInitApplyConfig(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("Expected seeded route route-seed-1 to be applied to kernel during InitApplyConfig")
+	}
+}
+
+// TestReconcileEnforcesInterfaceMetric verifies that reconciliation enforces the
+// default-route metric only for dhcp interfaces that set one, skips static ones,
+// and yields to an active DB static default route (precedence rule §4.1).
+func TestReconcileEnforcesInterfaceMetric(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	repo.SetMockMode(true, false)
+	if err := repo.ClearInterfaces(); err != nil {
+		t.Fatalf("Failed to clear interfaces: %v", err)
+	}
+
+	metric50 := 50
+	metric60 := 60
+	metric70 := 70
+	seed := []model.NetworkInterface{
+		{ID: "if-wan0", Name: "wan0", Alias: "A", Role: "WAN", Type: "ethernet", AddressingMode: "dhcp", Status: "up", Metric: &metric50},   // enforced
+		{ID: "if-wan1", Name: "wan1", Alias: "B", Role: "WAN", Type: "ethernet", AddressingMode: "dhcp", Status: "up"},                      // no metric -> skipped
+		{ID: "if-wan2", Name: "wan2", Alias: "C", Role: "WAN", Type: "ethernet", AddressingMode: "static", Status: "up", Metric: &metric60}, // static -> skipped
+		{ID: "if-wan3", Name: "wan3", Alias: "D", Role: "WAN", Type: "ethernet", AddressingMode: "dhcp", Status: "up", Metric: &metric70},   // has DB default route -> skipped
+	}
+	for _, iface := range seed {
+		if err := repo.CreateInterfaceForTest(iface); err != nil {
+			t.Fatalf("Failed to seed interface %s: %v", iface.Name, err)
+		}
+	}
+
+	// Active DB default route on wan3 -> static_routes wins, enforcement must skip wan3.
+	if err := repo.CreateRoute(model.StaticRoute{
+		ID:          "route-wan3-default",
+		Destination: "0.0.0.0/0",
+		Gateway:     "10.0.3.1",
+		Interface:   "wan3",
+		Metric:      80,
+		Status:      true,
+		Type:        "customgateway",
+	}); err != nil {
+		t.Fatalf("Failed to seed default route: %v", err)
+	}
+
+	tracker := &trackingRoutingManager{}
+	svc := NewRoutingService(repo, tracker)
+
+	if err := svc.reconcileKernelRoutingTable(); err != nil {
+		t.Fatalf("reconcileKernelRoutingTable failed: %v", err)
+	}
+
+	if got, ok := tracker.enforcedMetrics["wan0"]; !ok || got != 50 {
+		t.Errorf("expected wan0 metric enforced to 50, got %d (present=%v)", got, ok)
+	}
+	if _, ok := tracker.enforcedMetrics["wan1"]; ok {
+		t.Errorf("wan1 has no metric; enforcement should have been skipped")
+	}
+	if _, ok := tracker.enforcedMetrics["wan2"]; ok {
+		t.Errorf("wan2 is static; enforcement should have been skipped")
+	}
+	if _, ok := tracker.enforcedMetrics["wan3"]; ok {
+		t.Errorf("wan3 has an active DB default route; enforcement should have been skipped (precedence)")
 	}
 }
 

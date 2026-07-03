@@ -86,9 +86,13 @@ func (s *InterfaceService) InitApplyConfigurationAtStartup() error {
 			}
 		}
 
-		log.Printf("[Startup] Configuring IP/mode for interface %s (Mode: %s, IP: %s, Netmask: %s, Gateway: %s)...",
-			iface.Name, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway)
-		if err := s.network.ConfigureInterface(iface.Name, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway); err != nil {
+		metric := 0
+		if iface.Metric != nil {
+			metric = *iface.Metric
+		}
+		log.Printf("[Startup] Configuring IP/mode for interface %s (Mode: %s, IP: %s, Netmask: %s, Gateway: %s, Metric: %d)...",
+			iface.Name, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, metric)
+		if err := s.network.ConfigureInterface(iface.Name, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, metric); err != nil {
 			log.Printf("[Startup] Warning: Failed to configure interface %s: %v", iface.Name, err)
 		}
 
@@ -315,6 +319,10 @@ func (s *InterfaceService) GetDataLayerInterface() ([]model.NetworkInterface, er
 				kIface.Gateway = dbIface.Gateway
 			}
 
+			// Route metric applies to both static and dhcp (WAN failover ordering),
+			// so it is copied regardless of addressing mode.
+			kIface.Metric = dbIface.Metric
+
 			// Admin access and Wi-Fi fields
 			kIface.AdminAccess = dbIface.AdminAccess
 			kIface.MacMode = dbIface.MacMode
@@ -406,7 +414,20 @@ func (s *InterfaceService) ApplyInterfaceConfig(iface model.NetworkInterface) er
 		}
 	}
 
-	if err := s.network.ConfigureInterface(iface.Name, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway); err != nil {
+	// Validate metric range if set. Priority is a uint32 on the kernel side; we
+	// constrain it to 1–9999 so "unset" (nil) stays distinct from a valid value
+	// and negative/overflow values are rejected before reaching netlink.
+	if iface.Metric != nil {
+		if *iface.Metric < 1 || *iface.Metric > 9999 {
+			return fmt.Errorf("metric must be between 1 and 9999, got %d", *iface.Metric)
+		}
+	}
+
+	metric := 0
+	if iface.Metric != nil {
+		metric = *iface.Metric
+	}
+	if err := s.network.ConfigureInterface(iface.Name, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, metric); err != nil {
 		return fmt.Errorf("OS level interface configuration failed: %w", err)
 	}
 

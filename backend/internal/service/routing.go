@@ -409,5 +409,63 @@ func (s *RoutingService) reconcileKernelRoutingTable() error {
 	if err != nil {
 		return fmt.Errorf("failed to fetch database routes: %w", err)
 	}
-	return s.routing.ApplyRoutes(dbRoutes)
+	if err := s.routing.ApplyRoutes(dbRoutes); err != nil {
+		return err
+	}
+
+	// After DB static routes are applied, enforce per-interface default-route metrics
+	// for dhcp interfaces (dhcpcd installs its own default route with its own metric;
+	// this overrides it for multi-WAN failover ordering).
+	s.enforceInterfaceMetrics(dbRoutes)
+	return nil
+}
+
+// enforceInterfaceMetrics overrides the default-route priority for every dhcp interface
+// that has an explicit Metric set. It is deliberately non-fatal (logs and continues) so a
+// single interface error doesn't abort routing reconciliation.
+//
+// Precedence rule (see interface-metric-design.md §4.1): if the user also configured an
+// active DB static route for 0.0.0.0/0 on the same interface, ApplyRoutes already owns
+// that route's metric. Enforcing the interface metric on top would cause a del/add
+// ping-pong between the two mechanisms, so we let static_routes win and skip enforcement.
+func (s *RoutingService) enforceInterfaceMetrics(dbRoutes []model.StaticRoute) {
+	ifaces, err := s.repo.GetInterfacesFromDB()
+	if err != nil {
+		log.Printf("[Routing] Warning: could not load interfaces for metric enforcement: %v", err)
+		return
+	}
+
+	// Interfaces that have an active DB default route — static_routes takes precedence there.
+	dbDefaultRouteIfaces := make(map[string]bool)
+	for _, rt := range dbRoutes {
+		if rt.Status && isDefaultDestination(rt.Destination) {
+			dbDefaultRouteIfaces[rt.Interface] = true
+		}
+	}
+
+	for _, iface := range ifaces {
+		if iface.Metric == nil || iface.AddressingMode != "dhcp" {
+			continue
+		}
+		if dbDefaultRouteIfaces[iface.Name] {
+			log.Printf("[Routing] Skipping metric enforcement on %s: an active static route for 0.0.0.0/0 already governs it", iface.Name)
+			continue
+		}
+		if err := s.routing.EnforceDefaultRouteMetric(iface.Name, *iface.Metric); err != nil {
+			log.Printf("[Routing] Warning: failed to enforce metric %d on %s: %v", *iface.Metric, iface.Name, err)
+		}
+	}
+}
+
+// isDefaultDestination reports whether a destination string represents the IPv4
+// default route (0.0.0.0/0), tolerating unnormalized forms like "0.0.0.0/0" or "default".
+func isDefaultDestination(dest string) bool {
+	d := strings.TrimSpace(dest)
+	if d == "default" || d == "0.0.0.0/0" {
+		return true
+	}
+	if _, ipNet, err := net.ParseCIDR(d); err == nil {
+		return ipNet.String() == "0.0.0.0/0"
+	}
+	return false
 }
