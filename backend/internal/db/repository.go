@@ -69,10 +69,10 @@ func (r *Repository) GetPrioritizeKernelRoutes() bool {
 // =========================================================================
 
 func (r *Repository) GetUserByUsername(username string) (*model.User, error) {
-	row := r.db.QueryRow("SELECT id, username, password_hash, is_initial, created_at FROM users WHERE username = ?", username)
+	row := r.db.QueryRow("SELECT id, username, password_hash, is_initial, role, status, created_at FROM users WHERE username = ?", username)
 	var u model.User
 	var isInitInt int
-	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &isInitInt, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &isInitInt, &u.Role, &u.Status, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -86,6 +86,96 @@ func (r *Repository) GetUserByUsername(username string) (*model.User, error) {
 func (r *Repository) ChangePassword(username string, newPasswordHash string) error {
 	_, err := r.db.Exec("UPDATE users SET password_hash = ?, is_initial = 0 WHERE username = ?", newPasswordHash, username)
 	return err
+}
+
+// GetUsers returns all user accounts ordered by creation time. Password hashes
+// are populated on the struct but never serialized (model.User has json:"-").
+func (r *Repository) GetUsers() ([]model.User, error) {
+	rows, err := r.db.Query("SELECT id, username, password_hash, is_initial, role, status, created_at FROM users ORDER BY created_at ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	list := []model.User{}
+	for rows.Next() {
+		var u model.User
+		var isInitInt int
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &isInitInt, &u.Role, &u.Status, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		u.IsInitial = isInitInt == 1
+		list = append(list, u)
+	}
+	return list, nil
+}
+
+func (r *Repository) GetUserByID(id string) (*model.User, error) {
+	row := r.db.QueryRow("SELECT id, username, password_hash, is_initial, role, status, created_at FROM users WHERE id = ?", id)
+	var u model.User
+	var isInitInt int
+	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &isInitInt, &u.Role, &u.Status, &u.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	u.IsInitial = isInitInt == 1
+	return &u, nil
+}
+
+// CreateUser inserts a new account. The caller (service layer) is responsible
+// for validation, uniqueness checks, and hashing the password.
+func (r *Repository) CreateUser(u model.User) error {
+	isInitVal := 0
+	if u.IsInitial {
+		isInitVal = 1
+	}
+	_, err := r.db.Exec(
+		"INSERT INTO users (id, username, password_hash, is_initial, role, status) VALUES (?, ?, ?, ?, ?, ?)",
+		u.ID, u.Username, u.PasswordHash, isInitVal, u.Role, u.Status)
+	return err
+}
+
+// UpdateUserRole changes only the role of a user.
+func (r *Repository) UpdateUserRole(id, role string) error {
+	_, err := r.db.Exec("UPDATE users SET role = ? WHERE id = ?", role, id)
+	return err
+}
+
+// ResetUserPassword sets a new password hash and forces a password change on
+// next login (is_initial = 1). Used by super_admin password resets.
+func (r *Repository) ResetUserPassword(id, newPasswordHash string) error {
+	_, err := r.db.Exec("UPDATE users SET password_hash = ?, is_initial = 1 WHERE id = ?", newPasswordHash, id)
+	return err
+}
+
+// SetUserStatus flips an account between 'active' and 'disabled'.
+func (r *Repository) SetUserStatus(id, status string) error {
+	_, err := r.db.Exec("UPDATE users SET status = ? WHERE id = ?", status, id)
+	return err
+}
+
+func (r *Repository) DeleteUser(id string) error {
+	_, err := r.db.Exec("DELETE FROM users WHERE id = ?", id)
+	return err
+}
+
+// CountActiveSuperAdmins returns how many super_admin accounts are currently
+// active. Used by the service layer to guarantee the system can never be left
+// without at least one usable super_admin.
+func (r *Repository) CountActiveSuperAdmins() (int, error) {
+	var count int
+	err := r.db.QueryRow("SELECT COUNT(*) FROM users WHERE role = 'super_admin' AND status = 'active'").Scan(&count)
+	return count, err
+}
+
+// UsernameExists reports whether a username is already taken.
+func (r *Repository) UsernameExists(username string) (bool, error) {
+	var count int
+	err := r.db.QueryRow("SELECT COUNT(*) FROM users WHERE username = ?", username).Scan(&count)
+	return count > 0, err
 }
 
 // =========================================================================

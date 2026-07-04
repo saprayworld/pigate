@@ -118,7 +118,8 @@ func main() {
 	dnsServerService := service.NewDNSServerService(repo, dnsServer)
 	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcd, ifaceService)
 	timeService := service.NewTimeService(repo, timeMgr)
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService)
+	userService := service.NewUserService(repo)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService)
 
 	// Apply config form database to kernel
 

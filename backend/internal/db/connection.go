@@ -197,6 +197,8 @@ func migrate(db *sql.DB) error {
 			username TEXT UNIQUE NOT NULL,
 			password_hash TEXT NOT NULL,
 			is_initial INTEGER DEFAULT 0,
+			role TEXT NOT NULL DEFAULT 'super_admin' CHECK(role IN ('super_admin', 'admin_readonly')),
+			status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled')),
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,
 
@@ -437,6 +439,24 @@ func migrate(db *sql.DB) error {
 				return fmt.Errorf("failed to add is_initial column to users table: %w", err)
 			}
 		}
+
+		// Add role/status columns for the multi-user system. Detect via the
+		// unique CHECK-constraint tokens ('admin_readonly' / 'disabled') rather
+		// than the bare column names, which could collide with other substrings.
+		// Existing rows (e.g. the legacy "pigate" account) inherit the column
+		// DEFAULT of super_admin/active, so an upgraded box never locks out.
+		if !strings.Contains(sqlCreateUsers, "admin_readonly") {
+			_, err = db.Exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'super_admin' CHECK(role IN ('super_admin', 'admin_readonly'))")
+			if err != nil {
+				return fmt.Errorf("failed to add role column to users table: %w", err)
+			}
+		}
+		if !strings.Contains(sqlCreateUsers, "'disabled'") {
+			_, err = db.Exec("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled'))")
+			if err != nil {
+				return fmt.Errorf("failed to add status column to users table: %w", err)
+			}
+		}
 	}
 
 	// Normalize legacy timezone values. Older seeds stored the display string
@@ -535,8 +555,8 @@ func seed(db *sql.DB, dsn string, mockMode bool) error {
 		if dsn == ":memory:" {
 			isInitialVal = 0
 		}
-		_, err = db.Exec(`INSERT INTO users (id, username, password_hash, is_initial) VALUES (
-			'user-pigate', 'pigate', ?, ?
+		_, err = db.Exec(`INSERT INTO users (id, username, password_hash, is_initial, role, status) VALUES (
+			'user-pigate', 'pigate', ?, ?, 'super_admin', 'active'
 		)`, string(hash), isInitialVal)
 		if err != nil {
 			return err

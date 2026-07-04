@@ -36,6 +36,7 @@ type Server struct {
 	dnsServerService  *service.DNSServerService
 	hostnameService   *service.HostnameService
 	timeService       *service.TimeService
+	userService       *service.UserService
 }
 
 func NewServer(
@@ -55,6 +56,7 @@ func NewServer(
 	dnsServerService *service.DNSServerService,
 	hostnameService *service.HostnameService,
 	timeService *service.TimeService,
+	userService *service.UserService,
 ) *Server {
 	return &Server{
 		repo:              repo,
@@ -73,6 +75,7 @@ func NewServer(
 		dnsServerService:  dnsServerService,
 		hostnameService:   hostnameService,
 		timeService:       timeService,
+		userService:       userService,
 	}
 }
 
@@ -132,6 +135,14 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reject disabled accounts after verifying the password so we don't leak
+	// account existence to a wrong-password attempt. This is an internal admin
+	// box, so a clear message for the legitimate owner is acceptable.
+	if user.Status == model.StatusDisabled {
+		s.writeError(w, http.StatusUnauthorized, "บัญชีนี้ถูกปิดใช้งาน")
+		return
+	}
+
 	token := "session_id_" + generateRandomToken()
 	AddSession(token, user.Username)
 
@@ -149,6 +160,7 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, model.LoginResponse{
 		Token:              token,
 		MustChangePassword: user.IsInitial,
+		Role:               user.Role,
 	})
 }
 
@@ -184,10 +196,10 @@ func (s *Server) HandleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleCheckSession(w http.ResponseWriter, r *http.Request) {
+	// AuthMiddleware has already validated the session and injected the real
+	// username + role — no hardcoded fallback.
 	username, _ := r.Context().Value(UserContextKey).(string)
-	if username == "" {
-		username = "pigate"
-	}
+	role, _ := r.Context().Value(RoleContextKey).(string)
 
 	user, err := s.repo.GetUserByUsername(username)
 	mustChangePassword := false
@@ -198,6 +210,7 @@ func (s *Server) HandleCheckSession(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"valid":              true,
 		"username":           username,
+		"role":               role,
 		"mustChangePassword": mustChangePassword,
 	})
 }
@@ -1477,7 +1490,15 @@ func (s *Server) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := s.repo.GetUserByUsername("pigate")
+	// Resolve the authenticated user from context (set by AuthMiddleware) so a
+	// user only ever changes their own password — never a hardcoded account.
+	username, _ := r.Context().Value(UserContextKey).(string)
+	if username == "" {
+		s.writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	user, err := s.repo.GetUserByUsername(username)
 	if err != nil || user == nil {
 		s.writeError(w, http.StatusInternalServerError, "User context resolution failed")
 		return
@@ -1495,11 +1516,95 @@ func (s *Server) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.repo.ChangePassword("pigate", string(newHash)); err != nil {
+	if err := s.repo.ChangePassword(username, string(newHash)); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	w.WriteHeader(http.StatusOK)
+}
+
+// =========================================================================
+// USER MANAGEMENT HANDLERS (super_admin only — see router superAdminRoute)
+// =========================================================================
+
+// writeUserServiceError maps a UserService error to an HTTP status: a missing
+// target is 404, everything else (validation + guard rails) is 400 with the
+// service's Thai message surfaced to the UI.
+func (s *Server) writeUserServiceError(w http.ResponseWriter, err error) {
+	if err == service.ErrUserNotFound {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	s.writeError(w, http.StatusBadRequest, err.Error())
+}
+
+func (s *Server) HandleGetUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := s.userService.List()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, users)
+}
+
+func (s *Server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
+	var req model.CreateUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+	user, err := s.userService.Create(req)
+	if err != nil {
+		s.writeUserServiceError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusCreated, user)
+}
+
+func (s *Server) HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req model.UpdateUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+	actor, _ := r.Context().Value(UserContextKey).(string)
+	if err := s.userService.Update(actor, id, req); err != nil {
+		s.writeUserServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	actor, _ := r.Context().Value(UserContextKey).(string)
+
+	// Capture the username before deletion so we can purge lingering sessions.
+	target, _ := s.repo.GetUserByID(id)
+
+	if err := s.userService.Delete(actor, id); err != nil {
+		s.writeUserServiceError(w, err)
+		return
+	}
+	if target != nil {
+		RemoveSessionsForUser(target.Username)
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) HandleToggleUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	actor, _ := r.Context().Value(UserContextKey).(string)
+	if err := s.userService.Toggle(actor, id); err != nil {
+		s.writeUserServiceError(w, err)
+		return
+	}
+	// If the account is now disabled, purge its sessions immediately.
+	if u, _ := s.repo.GetUserByID(id); u != nil && u.Status == model.StatusDisabled {
+		RemoveSessionsForUser(u.Username)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 

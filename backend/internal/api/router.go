@@ -11,12 +11,27 @@ func RegisterRoutes(s *Server) http.Handler {
 	mux.Handle("POST /api/auth/login", RateLimitMiddleware(http.HandlerFunc(s.HandleLogin)))
 	mux.HandleFunc("POST /api/auth/logout", s.HandleLogout)
 
-	// Helper wrapper for authentication-protected endpoints
+	// Helper wrapper for authentication-protected endpoints. Order matters:
+	// AuthMiddleware runs first (validates session, injects username+role), then
+	// RoleReadOnlyMiddleware blocks mutations for non-super_admin roles.
 	authRoute := func(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-		mux.Handle(pattern, s.AuthMiddleware(http.HandlerFunc(handler)))
+		mux.Handle(pattern, s.AuthMiddleware(RoleReadOnlyMiddleware(http.HandlerFunc(handler))))
+	}
+
+	// superAdminRoute restricts a route to super_admin only (including GET), so
+	// a read-only admin can't even see the account list.
+	superAdminRoute := func(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+		mux.Handle(pattern, s.AuthMiddleware(SuperAdminMiddleware(http.HandlerFunc(handler))))
 	}
 
 	authRoute("GET /api/auth/session", s.HandleCheckSession)
+
+	// User Management (super_admin only)
+	superAdminRoute("GET /api/users", s.HandleGetUsers)
+	superAdminRoute("POST /api/users", s.HandleCreateUser)
+	superAdminRoute("PUT /api/users/{id}", s.HandleUpdateUser)
+	superAdminRoute("DELETE /api/users/{id}", s.HandleDeleteUser)
+	superAdminRoute("POST /api/users/{id}/toggle", s.HandleToggleUser)
 
 	// 2. Dashboard Widgets
 	authRoute("GET /api/dashboard/stats", s.HandleGetDashboardStats)
@@ -136,4 +151,3 @@ func RegisterRoutes(s *Server) http.Handler {
 	// Global CORS Wrapper must be outermost to ensure CORS headers are set on all responses (including 403 Forbidden)
 	return CORSMiddleware(handler)
 }
-
