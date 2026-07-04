@@ -81,13 +81,13 @@ The following table summarizes the development status of each feature in the PiG
 | **Routing** | Completed | Completed | CRUD operations for static routes, Netlink event monitoring, and automatic routing self-healing. |
 | **DNS System** | Completed | Completed | `systemd-resolved` D-Bus integration completed; local DNS server integration is ongoing. |
 | **Firewall System** | Completed | Completed | `nftables` management via Netlink, forward chain policy configuration, WAN Network Address Translation (Masquerade), and Docker compatibility. |
-| **DHCP Server** | Mock | In Progress | UI and SQLite database model completed; configuration generation for `dnsmasq` or `isc-dhcp-server` is ongoing. |
-| **DNS Server** | Mock | In Progress | UI and SQLite database model completed; configuration generation for local DNS resolution/FQDN is ongoing. |
+| **DHCP Server** | Completed | Completed | UI and SQLite database model completed; configuration generation for `dnsmasq` or `isc-dhcp-server` is ongoing. |
+| **DNS Server** | Completed | Completed | UI and SQLite database model completed; configuration generation for local DNS resolution/FQDN is ongoing. |
 | **QoS Limiting** | Completed | Completed | HTB and IFB traffic shaping via tc Netlink, supporting Source/Destination IP address ranges (CIDR). |
-| **Setting (Overall)** | Mock | Mock | Administrator password updates, time settings, and system service lifecycle controls via D-Bus. |
+| **Setting (Overall)** | Not Finish yet | Not Finish yet | Administrator password updates, time settings, and system service lifecycle controls via D-Bus. |
 | **Import/Export** | Mock | Mock | Configuration backup export and import capabilities via SQLite database files. |
 | **User System** | Completed | Completed | Multi-user management (create/edit/delete/enable-disable) with `super_admin` / `admin_readonly` roles, per-request DB-backed session validation, role-based authorization middleware, session-based auth, login rate limiting, and first-time login password change enforcement. |
-| **System Time** | Mock | Mock | Native operating system time synchronization and configuration. |
+| **System Time** | Completed | Completed | Native operating system time synchronization and configuration. |
 | **Power Control (Shutdown/Restart)** | Mock | Mock | Remote power actions (system shutdown or reboot) executed via API. |
 
 ---
