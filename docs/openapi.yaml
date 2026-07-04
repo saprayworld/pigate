@@ -54,8 +54,13 @@ paths:
                     type: boolean
                     description: If true, user must change password before using other API endpoints
                     example: false
+                  role:
+                    type: string
+                    enum: [super_admin, admin_readonly]
+                    description: Role of the authenticated user; the frontend uses it to adjust the UI.
+                    example: super_admin
         '401':
-          description: Invalid username or password
+          description: Invalid username or password, or the account is disabled
           content:
             application/json:
               schema:
@@ -88,6 +93,10 @@ paths:
                   username:
                     type: string
                     example: pigate
+                  role:
+                    type: string
+                    enum: [super_admin, admin_readonly]
+                    example: super_admin
                   mustChangePassword:
                     type: boolean
                     example: false
@@ -103,6 +112,127 @@ paths:
       responses:
         '200':
           description: Logout successful
+
+  # =========================================================================
+  # USER MANAGEMENT (super_admin only)
+  # =========================================================================
+  /users:
+    get:
+      tags:
+        - User Management
+      summary: List all user accounts
+      description: Restricted to super_admin. Password hashes are never returned.
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '403':
+          description: Caller is not a super_admin
+    post:
+      tags:
+        - User Management
+      summary: Create a new user
+      description: Restricted to super_admin. New users always start with is_initial=true.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Validation failure or duplicate username
+        '403':
+          description: Caller is not a super_admin
+
+  /users/{id}:
+    put:
+      tags:
+        - User Management
+      summary: Update a user's role and optionally reset password
+      description: |
+        Restricted to super_admin. Setting `password` resets it and forces a
+        change on next login. Username is immutable. Guard rails: you cannot
+        demote yourself, and the system must always keep at least one active
+        super_admin.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: User updated
+        '400':
+          description: Validation failure or guard-rail violation
+        '403':
+          description: Caller is not a super_admin
+        '404':
+          description: User not found
+    delete:
+      tags:
+        - User Management
+      summary: Delete a user
+      description: |
+        Restricted to super_admin. You cannot delete yourself, nor the last
+        active super_admin.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User deleted
+        '400':
+          description: Guard-rail violation (self-delete or last super_admin)
+        '403':
+          description: Caller is not a super_admin
+        '404':
+          description: User not found
+
+  /users/{id}/toggle:
+    post:
+      tags:
+        - User Management
+      summary: Toggle a user between active and disabled
+      description: |
+        Restricted to super_admin. You cannot disable yourself, nor the last
+        active super_admin. Disabling a user immediately evicts their sessions.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Status toggled
+        '400':
+          description: Guard-rail violation (self-disable or last super_admin)
+        '403':
+          description: Caller is not a super_admin
+        '404':
+          description: User not found
 
   # =========================================================================
   # DASHBOARD
@@ -1685,6 +1815,70 @@ components:
                 example: Not Found
 
   schemas:
+    # --- User Management Schemas ---
+    User:
+      type: object
+      description: A dashboard administrator account. The password hash is never serialized.
+      properties:
+        id:
+          type: string
+          example: user-3f9a2c1b7e6d5a4c
+        username:
+          type: string
+          example: pigate
+        isInitial:
+          type: boolean
+          description: If true, the user must change their password before using other endpoints.
+          example: false
+        role:
+          type: string
+          enum: [super_admin, admin_readonly]
+          example: super_admin
+        status:
+          type: string
+          enum: [active, disabled]
+          example: active
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateUserRequest:
+      type: object
+      required:
+        - username
+        - password
+        - role
+      properties:
+        username:
+          type: string
+          description: 3-32 characters, only a-z A-Z 0-9 and underscore. Immutable after creation.
+          example: viewer
+        password:
+          type: string
+          format: password
+          description: At least 8 characters.
+          example: password123
+        role:
+          type: string
+          enum: [super_admin, admin_readonly]
+          example: admin_readonly
+
+    UpdateUserRequest:
+      type: object
+      required:
+        - role
+      properties:
+        role:
+          type: string
+          enum: [super_admin, admin_readonly]
+          example: super_admin
+        password:
+          type: string
+          format: password
+          nullable: true
+          description: Optional. When present, resets the user's password and forces a change on next login.
+          example: newpassword456
+
     # --- Dashboard Schemas ---
     DashboardStats:
       type: object

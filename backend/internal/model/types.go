@@ -2,13 +2,43 @@ package model
 
 import "time"
 
+// User roles. super_admin can do everything (including managing other users);
+// admin_readonly can view every page but cannot perform any mutation.
+const (
+	RoleSuperAdmin    = "super_admin"
+	RoleAdminReadonly = "admin_readonly"
+)
+
+// User account statuses.
+const (
+	StatusActive   = "active"
+	StatusDisabled = "disabled"
+)
+
 // User represents dashboard administrator login credentials
 type User struct {
 	ID           string    `json:"id"`
 	Username     string    `json:"username"`
 	PasswordHash string    `json:"-"`
 	IsInitial    bool      `json:"isInitial"`
+	Role         string    `json:"role"`
+	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// CreateUserRequest represents fields to create a new user (super_admin only).
+type CreateUserRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Role     string `json:"role"`
+}
+
+// UpdateUserRequest represents fields to update a user. Password is optional:
+// when present (non-nil) it resets the target user's password and forces a
+// change on next login. Username is immutable and therefore not included.
+type UpdateUserRequest struct {
+	Role     string  `json:"role"`
+	Password *string `json:"password"`
 }
 
 // LoginRequest represents login input fields
@@ -21,6 +51,7 @@ type LoginRequest struct {
 type LoginResponse struct {
 	Token              string `json:"token"`
 	MustChangePassword bool   `json:"mustChangePassword"`
+	Role               string `json:"role"`
 }
 
 // ChangePasswordRequest represents input fields to update admin password

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
 import { dashboardService } from "@/services/dashboardService"
+import { authService } from "@/services/authService"
 import {
   LayoutDashboard,
   Network,
@@ -21,7 +22,8 @@ import {
   Sun,
   Globe,
   Activity,
-  Server
+  Server,
+  Users
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -42,6 +44,14 @@ export default function ShellLayout() {
   const location = useLocation()
   const navigate = useNavigate()
   const { theme, setTheme } = useTheme()
+
+  // Current user identity/role (cached from login/checkSession).
+  const role = authService.getRole()
+  const isSuperAdmin = role === "super_admin"
+  const username = authService.getUsername() || "admin"
+  const roleLabel =
+    role === "super_admin" ? "Super Admin" : role === "admin_readonly" ? "Read-only Admin" : "User"
+  const avatarInitials = username.slice(0, 2).toUpperCase()
 
   // Live performance metrics for Topbar badges
   const [topbarCpu, setTopbarCpu] = useState<number | null>(null)
@@ -88,13 +98,16 @@ export default function ShellLayout() {
         return "Services (Objects)"
       case "/system/settings":
         return "Settings & Maintenance"
+      case "/system/users":
+        return "User Management"
       default:
         return "PiGate Controller"
     }
   }
 
   const handleLogout = () => {
-    localStorage.removeItem("pigate_session")
+    // Clears session token, role, username and the must-change flag.
+    void authService.logout()
     navigate("/login")
   }
 
@@ -126,7 +139,12 @@ export default function ShellLayout() {
     {
       title: "System",
       items: [
-        { path: "/system/settings", label: "Settings & Maintenance", icon: Settings }
+        { path: "/system/settings", label: "Settings & Maintenance", icon: Settings },
+        // User Management is super_admin only; the backend enforces access, this
+        // just hides an unusable link from read-only admins.
+        ...(isSuperAdmin
+          ? [{ path: "/system/users", label: "User Management", icon: Users }]
+          : [])
       ]
     }
   ]
@@ -271,18 +289,18 @@ export default function ShellLayout() {
                 <button className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium hover:bg-accent hover:text-accent-foreground transition outline-none cursor-pointer">
                   <Avatar size="sm">
                     <AvatarFallback className="bg-primary/10 text-primary">
-                      AD
+                      {avatarInitials}
                     </AvatarFallback>
                   </Avatar>
-                  <span className="text-foreground hidden sm:inline">admin</span>
+                  <span className="text-foreground hidden sm:inline">{username}</span>
                   <ChevronDown className="h-4 w-4 text-muted-foreground" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56 p-1 rounded-xl bg-popover text-popover-foreground border border-border">
                 <DropdownMenuLabel>
                   <div className="flex flex-col space-y-1">
-                    <p className="text-sm font-medium leading-none text-foreground">admin</p>
-                    <p className="text-xs leading-none text-muted-foreground">admin@pigate.local</p>
+                    <p className="text-sm font-medium leading-none text-foreground">{username}</p>
+                    <p className="text-xs leading-none text-muted-foreground">{roleLabel}</p>
                   </div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />

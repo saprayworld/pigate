@@ -13,6 +13,7 @@ import FirewallPolicy from "@/pages/FirewallPolicy"
 import Addresses from "@/pages/Addresses"
 import Services from "@/pages/Services"
 import SettingsMaintenance from "@/pages/SettingsMaintenance"
+import Users from "@/pages/Users"
 import Login from "@/pages/Login"
 import ApiDocs from "./pages/ApiDocs"
 import DNS from "@/pages/DNS"
@@ -30,6 +31,17 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   }
   if (mustChangePassword) {
     return <Navigate to="/change-password" replace />
+  }
+  return <>{children}</>
+}
+
+// SuperAdminRoute guards super_admin-only pages. This is UX only — the backend
+// middleware is the real enforcement — but it prevents a read-only admin from
+// landing on a page they can't use.
+function SuperAdminRoute({ children }: { children: React.ReactNode }) {
+  const role = localStorage.getItem("pigate_role")
+  if (role !== "super_admin") {
+    return <Navigate to="/dashboard" replace />
   }
   return <>{children}</>
 }
@@ -142,6 +154,14 @@ export default function App() {
               {/* System Routes */}
               <Route path="system">
                 <Route path="settings" element={<SettingsMaintenance />} />
+                <Route
+                  path="users"
+                  element={
+                    <SuperAdminRoute>
+                      <Users />
+                    </SuperAdminRoute>
+                  }
+                />
               </Route>
             </Route>
 

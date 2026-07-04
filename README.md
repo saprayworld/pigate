@@ -86,7 +86,7 @@ The following table summarizes the development status of each feature in the PiG
 | **QoS Limiting** | Completed | Completed | HTB and IFB traffic shaping via tc Netlink, supporting Source/Destination IP address ranges (CIDR). |
 | **Setting (Overall)** | Mock | Mock | Administrator password updates, time settings, and system service lifecycle controls via D-Bus. |
 | **Import/Export** | Mock | Mock | Configuration backup export and import capabilities via SQLite database files. |
-| **User System** | Mock | Mock | JWT authentication, login rate limiting, and first-time login password change enforcement. |
+| **User System** | Completed | Completed | Multi-user management (create/edit/delete/enable-disable) with `super_admin` / `admin_readonly` roles, per-request DB-backed session validation, role-based authorization middleware, session-based auth, login rate limiting, and first-time login password change enforcement. |
 | **System Time** | Mock | Mock | Native operating system time synchronization and configuration. |
 | **Power Control (Shutdown/Restart)** | Mock | Mock | Remote power actions (system shutdown or reboot) executed via API. |
 
