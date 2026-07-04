@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"pigate/internal/db"
@@ -43,6 +44,12 @@ type NetlinkMonitor struct {
 	dhcpcdService  *DhcpcdService
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
+	// paused suppresses reconciliation while a bulk config change (e.g. a
+	// config import that replaces routes/interfaces wholesale) is in flight, so
+	// the monitor doesn't fight the importer by reconciling against a
+	// half-written DB. Events still arrive and debounce, but reconcile() becomes
+	// a no-op until Resume().
+	paused atomic.Bool
 }
 
 func NewNetlinkMonitor(repo *db.Repository, routingService *RoutingService, dnsService *DNSService, dhcpcdService *DhcpcdService) *NetlinkMonitor {
@@ -143,7 +150,26 @@ func (m *NetlinkMonitor) Start(ctx context.Context) {
 	}()
 }
 
+// Pause suppresses route/DNS reconciliation until Resume is called. Used to
+// bracket a config import so the monitor doesn't reconcile against a DB that is
+// being replaced. Safe to call in mock mode (no-op effect since no events fire).
+func (m *NetlinkMonitor) Pause() {
+	m.paused.Store(true)
+	log.Printf("[NetlinkMonitor] Reconciliation paused")
+}
+
+// Resume re-enables reconciliation after a Pause. Callers should defer Resume so
+// it always runs even if the bracketed operation fails.
+func (m *NetlinkMonitor) Resume() {
+	m.paused.Store(false)
+	log.Printf("[NetlinkMonitor] Reconciliation resumed")
+}
+
 func (m *NetlinkMonitor) reconcile() {
+	if m.paused.Load() {
+		log.Printf("[NetlinkMonitor] Reconciliation skipped (paused)")
+		return
+	}
 	log.Printf("[NetlinkMonitor] Network change/drift detected. Reconciling network routing...")
 	if err := m.routingService.reconcileKernelRoutingTable(); err != nil {
 		log.Printf("[NetlinkMonitor] Error reconciling routing table: %v", err)

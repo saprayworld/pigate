@@ -713,28 +713,37 @@ func seed(db *sql.DB, dsn string, mockMode bool) error {
 }
 
 func backupDatabase(dbPath string) error {
+	_, err := SnapshotDatabase(dbPath, "backup")
+	return err
+}
+
+// SnapshotDatabase copies the SQLite database file to a timestamped sibling file
+// named "<dbPath>.<suffix>-<timestamp>". It returns the path of the snapshot it
+// wrote (empty when there was nothing to copy, e.g. an in-memory DB or a
+// not-yet-created file). Used both for the startup safety backup ("backup") and
+// the pre-import snapshot ("backup-preimport"). Callers that need the WAL flushed
+// into the main file first should Checkpoint() before calling this.
+func SnapshotDatabase(dbPath, suffix string) (string, error) {
 	if dbPath == ":memory:" || dbPath == "" {
-		return nil
+		return "", nil
 	}
-	// Verify if db file exists
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		// Database doesn't exist yet, no need to backup
-		return nil
+		// Database doesn't exist yet, nothing to snapshot.
+		return "", nil
 	}
 
 	timestamp := time.Now().Format("20060102-150405")
-	backupPath := fmt.Sprintf("%s.backup-%s", dbPath, timestamp)
+	backupPath := fmt.Sprintf("%s.%s-%s", dbPath, suffix, timestamp)
 
 	input, err := os.ReadFile(dbPath)
 	if err != nil {
-		return fmt.Errorf("failed to read database file for backup: %w", err)
+		return "", fmt.Errorf("failed to read database file for backup: %w", err)
 	}
 
-	err = os.WriteFile(backupPath, input, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write database backup file: %w", err)
+	if err := os.WriteFile(backupPath, input, 0644); err != nil {
+		return "", fmt.Errorf("failed to write database backup file: %w", err)
 	}
 
-	log.Printf("[Backup] Database backed up successfully to %s", backupPath)
-	return nil
+	log.Printf("[Backup] Database snapshot written to %s", backupPath)
+	return backupPath, nil
 }

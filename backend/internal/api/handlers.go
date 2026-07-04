@@ -4,8 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -37,6 +38,7 @@ type Server struct {
 	hostnameService   *service.HostnameService
 	timeService       *service.TimeService
 	userService       *service.UserService
+	backupService     *service.BackupService
 }
 
 func NewServer(
@@ -57,6 +59,7 @@ func NewServer(
 	hostnameService *service.HostnameService,
 	timeService *service.TimeService,
 	userService *service.UserService,
+	backupService *service.BackupService,
 ) *Server {
 	return &Server{
 		repo:              repo,
@@ -76,6 +79,7 @@ func NewServer(
 		hostnameService:   hostnameService,
 		timeService:       timeService,
 		userService:       userService,
+		backupService:     backupService,
 	}
 }
 
@@ -1632,117 +1636,100 @@ func (s *Server) HandleShutdown(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// HandleExportConfig streams a full, typed configuration backup (schema v2).
+// Restricted to super_admin (see router) because the payload contains real
+// Wi-Fi passwords and, optionally, user credential hashes. Pass ?includeUsers=1
+// to embed the users table.
 func (s *Server) HandleExportConfig(w http.ResponseWriter, r *http.Request) {
-	// Construct configuration JSON dump
-	addrs, _ := s.repo.GetAddresses()
-	svcs, _ := s.repo.GetServices()
-	policies, _ := s.repo.GetPolicies()
-	routes, _ := s.repo.GetRoutes()
-	dhcpCfg, _ := s.repo.GetDHCPConfig()
-	dhcpRes, _ := s.repo.GetDHCPReservations()
-	ifaces, _ := s.repo.GetInterfaces()
-	sysTime, _ := s.repo.GetSystemTimeSettings()
-	sysHostname, _ := s.repo.GetHostnameSettings()
+	includeUsers := r.URL.Query().Get("includeUsers") == "1" || r.URL.Query().Get("includeUsers") == "true"
+	// Optional passphrase encrypts the config; sent via header (not query) to
+	// keep it out of access logs.
+	passphrase := r.Header.Get("X-Backup-Passphrase")
 
-	backup := map[string]interface{}{
-		"device":           "PiGate Firewall Gateway",
-		"version":          "v1.0.0-Release",
-		"exportedAt":       time.Now().Format(time.RFC3339),
-		"systemSettings":   sysTime,
-		"hostnameSettings": sysHostname,
-		"config": map[string]interface{}{
-			"addresses":      addrs,
-			"serviceObjects": svcs,
-			"policies":       policies,
-			"routes":         routes,
-			"dhcp": map[string]interface{}{
-				"config":       dhcpCfg,
-				"reservations": dhcpRes,
-			},
-			"interfaces": ifaces,
-		},
-	}
-
-	s.writeJSON(w, http.StatusOK, backup)
-}
-
-func (s *Server) HandleImportConfig(w http.ResponseWriter, r *http.Request) {
-	var dump struct {
-		SystemSettings   *model.SystemTimeSettings     `json:"systemSettings"`
-		HostnameSettings *model.SystemHostnameSettings `json:"hostnameSettings"`
-		Config           struct {
-			Addresses      []model.AddressObject    `json:"addresses"`
-			ServiceObjects []model.ServiceObject    `json:"serviceObjects"`
-			Policies       []model.PolicyRule       `json:"policies"`
-			Routes         []model.StaticRoute      `json:"routes"`
-			Interfaces     []model.NetworkInterface `json:"interfaces"`
-			DHCP           *struct {
-				Config       *model.DhcpConfig       `json:"config"`
-				Reservations []model.DhcpReservation `json:"reservations"`
-			} `json:"dhcp"`
-		} `json:"config"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&dump); err != nil {
-		s.writeError(w, http.StatusBadRequest, "Invalid request payload structure: "+err.Error())
+	backup, err := s.backupService.Export(includeUsers, passphrase)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Failed to export configuration: "+err.Error())
 		return
 	}
 
-	// Begin restoration transactions
-	if dump.SystemSettings != nil {
-		// Old backups may carry the legacy display timezone ("Asia/Bangkok
-		// (GMT+7:00)"); normalize before applying. Route through the service so
-		// the imported config is applied to the OS, not just written to the DB.
-		// A validation failure here is non-fatal to the rest of the import — we
-		// fall back to persisting the DB row so the value isn't lost.
-		imported := *dump.SystemSettings
-		imported.Timezone = db.NormalizeTimezone(imported.Timezone)
-		imported.Status = nil
-		if err := s.timeService.Update(imported); err != nil {
-			log.Printf("[Import] Failed to apply imported time settings (%v); saving to DB only", err)
-			_ = s.repo.UpdateSystemTimeSettings(imported)
-		}
-	}
-	if dump.HostnameSettings != nil {
-		_ = s.repo.UpdateHostnameSettings(*dump.HostnameSettings)
+	// Content-Disposition helps direct endpoint calls; the SPA builds its own
+	// filename (§3.1) since it downloads via fetch+Blob.
+	filename := fmt.Sprintf("pigate-backup-%s-%s.json",
+		sanitizeFilenamePart(backup.Meta.Hostname),
+		time.Now().Format("20060102-150405"))
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	s.writeJSON(w, http.StatusOK, backup)
+}
+
+// HandleImportConfig validates, snapshots, restores (single transaction), and
+// re-applies a configuration backup. Restricted to super_admin and blocked in
+// -disable-edit mode by DisableEditMiddleware. Returns an ImportResult with
+// counts + non-fatal warnings on success, or a 4xx/5xx with the reason (and no
+// DB changes) on failure.
+func (s *Server) HandleImportConfig(w http.ResponseWriter, r *http.Request) {
+	// Cap the request body at 10 MB — a backup is small; anything larger is
+	// abuse or corruption.
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "Failed to read request body (max 10 MB): "+err.Error())
+		return
 	}
 
-	cfg := dump.Config
-	for _, a := range cfg.Addresses {
-		if a.System {
-			continue // skip system seeding duplicate
-		}
-		_ = s.repo.CreateAddress(a)
-	}
-	for _, sc := range cfg.ServiceObjects {
-		if sc.Type == "system" {
-			continue
-		}
-		_ = s.repo.CreateService(sc)
-	}
-	for _, p := range cfg.Policies {
-		_ = s.repo.CreatePolicy(p)
-	}
-	for _, r := range cfg.Routes {
-		if r.Type == "system" || r.Type == "defaultgateway" {
-			continue
-		}
-		_ = s.repo.CreateRoute(r)
-	}
-	for _, i := range cfg.Interfaces {
-		_ = s.repo.UpdateInterface(i)
+	actor, _ := r.Context().Value(UserContextKey).(string)
+	var actorID string
+	if u, _ := s.repo.GetUserByUsername(actor); u != nil {
+		actorID = u.ID
 	}
 
-	if cfg.DHCP != nil {
-		if cfg.DHCP.Config != nil {
-			_ = s.repo.UpdateDHCPConfig(*cfg.DHCP.Config)
+	// includeUsers is driven by whether the file carries users AND the caller
+	// opted in via query flag; default is to ignore users in the file.
+	includeUsers := r.URL.Query().Get("includeUsers") == "1" || r.URL.Query().Get("includeUsers") == "true"
+
+	result, err := s.backupService.Import(raw, model.ImportOptions{
+		IncludeUsers:  includeUsers,
+		ActorUserID:   actorID,
+		ActorUsername: actor,
+		Passphrase:    r.Header.Get("X-Backup-Passphrase"),
+	})
+	if err != nil {
+		// An encrypted backup without a passphrase gets a specific signal so the
+		// UI can prompt for one instead of showing a generic failure.
+		if errors.Is(err, service.ErrPassphraseRequired) {
+			s.writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{
+				"message":        err.Error(),
+				"needPassphrase": true,
+			})
+			return
 		}
-		for _, dr := range cfg.DHCP.Reservations {
-			_ = s.repo.CreateDHCPReservation(dr)
-		}
+		s.writeError(w, http.StatusBadRequest, "Import failed: "+err.Error())
+		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	// Purge sessions of users removed/disabled by the import so they can't keep
+	// acting with a stale token.
+	for _, uname := range result.RemovedUsernames {
+		RemoveSessionsForUser(uname)
+	}
+
+	s.writeJSON(w, http.StatusOK, result)
+}
+
+// sanitizeFilenamePart keeps a hostname safe for use inside a download filename.
+func sanitizeFilenamePart(s string) string {
+	if s == "" {
+		return "pigate"
+	}
+	var b strings.Builder
+	for _, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
+			b.WriteRune(c)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	return b.String()
 }
 
 // =========================================================================

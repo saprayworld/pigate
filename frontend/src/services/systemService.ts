@@ -16,6 +16,33 @@ export interface SystemHostnameSettings {
   shareWithDhcp: boolean;
 }
 
+// Backup file schema (v2) — mirrors backend model.BackupFile. `config` is left
+// loosely typed because the page only reads meta for the confirm preview and
+// otherwise round-trips the payload opaquely.
+export interface BackupMeta {
+  device: string;
+  hostname: string;
+  appVersion: string;
+  schemaVersion: number;
+  exportedAt: string;
+  checksum: string;
+  includeUsers: boolean;
+}
+
+export interface BackupFile {
+  meta: BackupMeta;
+  config: Record<string, unknown>;
+}
+
+// Mirrors backend model.ImportResult.
+export interface ImportResult {
+  schemaVersion: number;
+  counts: Record<string, number>;
+  warnings: string[];
+  interfacesChanged: boolean;
+  usersImported: boolean;
+}
+
 const initialHostnameSettings: SystemHostnameSettings = {
   hostname: "PiGate-RPI5",
   shareWithDhcp: false,
@@ -351,49 +378,80 @@ export const systemService = {
     }
   },
 
-  // Export full configuration payload
-  exportConfig: async (): Promise<any> => {
+  // Export full configuration payload (schema v2). Pass includeUsers to embed
+  // the users table (bcrypt hashes) — super_admin only on the backend. When
+  // passphrase is set, the backend AES-256-GCM encrypts the config section.
+  exportConfig: async (includeUsers = false, passphrase = ""): Promise<BackupFile> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 800));
 
-      // Construct a full configuration package from all LocalStorage databases
-      const addresses = localStorage.getItem("pigate_addresses");
-      const serviceObjects = localStorage.getItem("pigate_service_objects");
-      const policies = localStorage.getItem("pigate_policies");
-      const routes = localStorage.getItem("pigate_routes");
-      const dhcpConfig = localStorage.getItem("pigate_dhcp_config");
-      const dhcpReservations = localStorage.getItem("pigate_dhcp_reservations");
-      const interfaces = localStorage.getItem("pigate_interfaces");
+      // Build a v2-shaped payload from LocalStorage so mock-mode UI testing sees
+      // the same structure the backend returns.
+      const parse = (key: string): unknown[] => {
+        const raw = localStorage.getItem(key);
+        try {
+          return raw ? JSON.parse(raw) : [];
+        } catch {
+          return [];
+        }
+      };
+      const parseObj = (key: string): unknown => {
+        const raw = localStorage.getItem(key);
+        try {
+          return raw ? JSON.parse(raw) : null;
+        } catch {
+          return null;
+        }
+      };
+
+      const hostname = getLocalHostnameSettings().hostname;
+      const dhcpCfg = parseObj("pigate_dhcp_config");
+      const config: Record<string, unknown> = {
+        interfaces: parse("pigate_interfaces"),
+        staticRoutes: parse("pigate_routes"),
+        addresses: parse("pigate_addresses"),
+        serviceObjects: parse("pigate_service_objects"),
+        policies: parse("pigate_policies"),
+        dhcpConfigs: dhcpCfg ? [dhcpCfg] : [],
+        dhcpReservations: parse("pigate_dhcp_reservations"),
+        dnsZones: parse("pigate_dns_zones"),
+        dnsServerSettings: { interfaces: [] },
+        systemDns: getLocalDNSConfig(),
+        qosRules: parse("pigate_qos_rules"),
+        systemTime: getLocalTimeSettings(),
+        systemHostname: getLocalHostnameSettings(),
+        ...(includeUsers ? { users: parse("pigate_users") } : {}),
+      };
 
       return {
-        device: "PiGate Firewall Gateway",
-        version: "v1.5.0-Release",
-        exportedAt: new Date().toISOString(),
-        systemSettings: getLocalTimeSettings(),
-        servicesStatus: getLocalServices().map((s) => ({ service: s.serviceName, status: s.status })),
-        config: {
-          addresses: addresses ? JSON.parse(addresses) : null,
-          serviceObjects: serviceObjects ? JSON.parse(serviceObjects) : null,
-          policies: policies ? JSON.parse(policies) : null,
-          routes: routes ? JSON.parse(routes) : null,
-          dhcp: {
-            config: dhcpConfig ? JSON.parse(dhcpConfig) : null,
-            reservations: dhcpReservations ? JSON.parse(dhcpReservations) : null,
-          },
-          interfaces: interfaces ? JSON.parse(interfaces) : null,
+        meta: {
+          device: "PiGate Firewall Gateway",
+          hostname,
+          appVersion: "v0.1.0-pre",
+          schemaVersion: 2,
+          exportedAt: new Date().toISOString(),
+          checksum: "sha256:mock",
+          includeUsers,
         },
+        config,
       };
     }
 
-    const response = await fetch(`${API_BASE_URL}/system/config/export`);
+    const qs = includeUsers ? "?includeUsers=1" : "";
+    const headers: Record<string, string> = {};
+    if (passphrase) headers["X-Backup-Passphrase"] = passphrase;
+    const response = await fetch(`${API_BASE_URL}/system/config/export${qs}`, { headers });
     if (!response.ok) {
-      throw new Error(`Failed to export configuration: ${response.statusText}`);
+      const errBody = await response.json().catch(() => ({}));
+      throw new Error(errBody.message || `Failed to export configuration: ${response.statusText}`);
     }
     return response.json();
   },
 
-  // Import configuration payload
-  importConfig: async (configData: any): Promise<void> => {
+  // Import a configuration backup. Returns the backend's ImportResult (counts +
+  // warnings). When includeUsers is true and the file carries users, the backend
+  // restores accounts too.
+  importConfig: async (configData: unknown, includeUsers = false, passphrase = ""): Promise<ImportResult> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
 
@@ -401,36 +459,57 @@ export const systemService = {
         throw new Error("ข้อมูลไฟล์สำรองไม่ถูกต้อง");
       }
 
-      // Restore system settings if present
-      if (configData.systemSettings) {
-        saveLocalTimeSettings(configData.systemSettings);
-      }
+      const file = configData as Partial<BackupFile> & Record<string, unknown>;
+      // Accept both v2 (meta+config) and legacy v1 (config at top level) shapes.
+      const cfg = (file.config ?? {}) as Record<string, any>;
 
-      // Restore databases to LocalStorage
-      const cfg = configData.config;
-      if (cfg) {
-        if (cfg.addresses) localStorage.setItem("pigate_addresses", JSON.stringify(cfg.addresses));
-        if (cfg.serviceObjects) localStorage.setItem("pigate_service_objects", JSON.stringify(cfg.serviceObjects));
-        if (cfg.policies) localStorage.setItem("pigate_policies", JSON.stringify(cfg.policies));
-        if (cfg.routes) localStorage.setItem("pigate_routes", JSON.stringify(cfg.routes));
-        if (cfg.dhcp) {
-          if (cfg.dhcp.config) localStorage.setItem("pigate_dhcp_config", JSON.stringify(cfg.dhcp.config));
-          if (cfg.dhcp.reservations) localStorage.setItem("pigate_dhcp_reservations", JSON.stringify(cfg.dhcp.reservations));
-        }
-        if (cfg.interfaces) localStorage.setItem("pigate_interfaces", JSON.stringify(cfg.interfaces));
-      }
-      return;
+      // Restore recognised sections back into LocalStorage.
+      if (Array.isArray(cfg.addresses)) localStorage.setItem("pigate_addresses", JSON.stringify(cfg.addresses));
+      if (Array.isArray(cfg.serviceObjects)) localStorage.setItem("pigate_service_objects", JSON.stringify(cfg.serviceObjects));
+      if (Array.isArray(cfg.policies)) localStorage.setItem("pigate_policies", JSON.stringify(cfg.policies));
+      if (Array.isArray(cfg.staticRoutes)) localStorage.setItem("pigate_routes", JSON.stringify(cfg.staticRoutes));
+      else if (Array.isArray(cfg.routes)) localStorage.setItem("pigate_routes", JSON.stringify(cfg.routes));
+      if (Array.isArray(cfg.dhcpConfigs) && cfg.dhcpConfigs[0]) localStorage.setItem("pigate_dhcp_config", JSON.stringify(cfg.dhcpConfigs[0]));
+      if (Array.isArray(cfg.dhcpReservations)) localStorage.setItem("pigate_dhcp_reservations", JSON.stringify(cfg.dhcpReservations));
+      if (Array.isArray(cfg.interfaces)) localStorage.setItem("pigate_interfaces", JSON.stringify(cfg.interfaces));
+      if (Array.isArray(cfg.dnsZones)) localStorage.setItem("pigate_dns_zones", JSON.stringify(cfg.dnsZones));
+      if (Array.isArray(cfg.qosRules)) localStorage.setItem("pigate_qos_rules", JSON.stringify(cfg.qosRules));
+      if (cfg.systemTime) saveLocalTimeSettings(cfg.systemTime);
+
+      const count = (v: unknown) => (Array.isArray(v) ? v.length : 0);
+      return {
+        schemaVersion: (file.meta?.schemaVersion as number) ?? 1,
+        counts: {
+          interfaces: count(cfg.interfaces),
+          staticRoutes: count(cfg.staticRoutes ?? cfg.routes),
+          addresses: count(cfg.addresses),
+          serviceObjects: count(cfg.serviceObjects),
+          policies: count(cfg.policies),
+          dhcpConfigs: count(cfg.dhcpConfigs),
+          dhcpReservations: count(cfg.dhcpReservations),
+          dnsZones: count(cfg.dnsZones),
+          qosRules: count(cfg.qosRules),
+          users: includeUsers ? count(cfg.users) : 0,
+        },
+        warnings: [],
+        interfacesChanged: count(cfg.interfaces) > 0,
+        usersImported: includeUsers && count(cfg.users) > 0,
+      };
     }
 
-    const response = await fetch(`${API_BASE_URL}/system/config/import`, {
+    const qs = includeUsers ? "?includeUsers=1" : "";
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (passphrase) headers["X-Backup-Passphrase"] = passphrase;
+    const response = await fetch(`${API_BASE_URL}/system/config/import${qs}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(configData),
     });
     if (!response.ok) {
       const errBody = await response.json().catch(() => ({}));
       throw new Error(errBody.message || `Failed to import configuration: ${response.statusText}`);
     }
+    return response.json();
   },
 
   // Get system DNS settings

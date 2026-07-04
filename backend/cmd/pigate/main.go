@@ -119,7 +119,20 @@ func main() {
 	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcd, ifaceService)
 	timeService := service.NewTimeService(repo, timeMgr)
 	userService := service.NewUserService(repo)
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService)
+
+	// Netlink monitor is created here (but started later, after startup config is
+	// applied) so it can be injected into the BackupService, which pauses it
+	// around a config import.
+	netlinkMonitor := service.NewNetlinkMonitor(repo, routingService, dnsService, dhcpcdService)
+
+	backupService := service.NewBackupService(
+		repo, *dbPath, "v0.1.0-pre",
+		ifaceService, routingService, firewallService, dnsService, dnsServerService,
+		qosService, dhcpServerService, dhcpcdService, hostnameService, timeService,
+		netlinkMonitor,
+	)
+
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService)
 
 	// Apply config form database to kernel
 
@@ -146,7 +159,6 @@ func main() {
 
 	// 6.2.1 Start Netlink Monitor to dynamically handle network and routing events
 	log.Printf("[Main] Initializing Netlink event monitor...")
-	netlinkMonitor := service.NewNetlinkMonitor(repo, routingService, dnsService, dhcpcdService)
 	monitorCtx, cancelMonitor := context.WithCancel(context.Background())
 	defer cancelMonitor()
 	netlinkMonitor.Start(monitorCtx)

@@ -50,12 +50,13 @@ import {
   type SystemTimeSettings,
   type NetworkServiceStatus
 } from "@/data-mockup/mockData"
-import { systemService, type SystemHostnameSettings } from "@/services/systemService"
+import { systemService, type SystemHostnameSettings, type ImportResult } from "@/services/systemService"
+import { authService } from "@/services/authService"
 import { useAlert } from "@/components/AlertDialogProvider"
 import { buildTimeZoneOptions } from "@/lib/timezones"
 
 export default function SettingsMaintenance() {
-  const { alert } = useAlert()
+  const { alert, confirm } = useAlert()
   // --- States ---
   const [activeTab, setActiveTab] = useState("settings")
 
@@ -102,6 +103,16 @@ export default function SettingsMaintenance() {
   const [backupFeedback, setBackupFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null)
   const [isExporting, setIsExporting] = useState(false)
   const [isImporting, setIsImporting] = useState(false)
+  const [includeUsers, setIncludeUsers] = useState(false)
+  const [importWarnings, setImportWarnings] = useState<string[]>([])
+  const [exportPassphrase, setExportPassphrase] = useState("")
+  const [importPassphrase, setImportPassphrase] = useState("")
+  const [importFileEncrypted, setImportFileEncrypted] = useState(false)
+
+  // Backup & Restore is gated to super_admin: the payload can contain Wi-Fi
+  // passwords and user credential hashes, and the backend endpoints are
+  // super_admin-only. UX gating here keeps a read-only admin from a dead end.
+  const isSuperAdmin = authService.getRole() === "super_admin"
 
   // Services States
   const [services, setServices] = useState<NetworkServiceStatus[]>([])
@@ -299,24 +310,41 @@ export default function SettingsMaintenance() {
     }, 1000)
   }
 
+  // Build the download filename per the backup naming convention:
+  // pigate-backup-<hostname>-<YYYYMMDD-HHmmss>.json
+  const buildBackupFilename = (hostname: string): string => {
+    const safeHost = (hostname || "pigate").replace(/[^a-zA-Z0-9_-]/g, "-")
+    const d = new Date()
+    const p = (n: number) => String(n).padStart(2, "0")
+    const ts = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+    return `pigate-backup-${safeHost}-${ts}.json`
+  }
+
   // Export Config
   const handleExportConfig = async () => {
     setIsExporting(true)
     setBackupFeedback(null)
+    setImportWarnings([])
 
     try {
-      const payload = await systemService.exportConfig()
+      const payload = await systemService.exportConfig(includeUsers, exportPassphrase.trim())
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
-      a.download = `pigate-backup-config-${new Date().toISOString().split("T")[0]}.json`
+      a.download = buildBackupFilename(payload?.meta?.hostname ?? "pigate")
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
 
-      setBackupFeedback({ type: "success", message: "ส่งออกไฟล์สำรองข้อมูล (Configuration Export) สำเร็จแล้ว!" })
+      const encNote = exportPassphrase.trim() ? " (เข้ารหัสด้วยรหัสผ่านแล้ว)" : ""
+      setBackupFeedback({
+        type: "success",
+        message: includeUsers
+          ? `ส่งออกไฟล์สำรองข้อมูลสำเร็จ (รวมบัญชีผู้ใช้)${encNote} — ไฟล์มีรหัสผ่าน Wi-Fi และข้อมูลบัญชี โปรดเก็บรักษาอย่างปลอดภัย`
+          : `ส่งออกไฟล์สำรองข้อมูล (Configuration Export) สำเร็จแล้ว!${encNote} ไฟล์มีรหัสผ่าน Wi-Fi โปรดเก็บรักษาอย่างปลอดภัย`,
+      })
     } catch (err: any) {
       setBackupFeedback({ type: "error", message: err.message || "ไม่สามารถส่งออกไฟล์สำรองข้อมูลได้" })
     } finally {
@@ -324,33 +352,88 @@ export default function SettingsMaintenance() {
     }
   }
 
-  // Import Config Simulation
+  // Import Config — confirm (with a preview from the file's meta) before the
+  // destructive wipe & restore.
   const handleImportConfig = async (e: React.FormEvent) => {
     e.preventDefault()
     setBackupFeedback(null)
+    setImportWarnings([])
 
     if (!importFile) {
       setBackupFeedback({ type: "error", message: "กรุณาเลือกไฟล์ JSON ของคุณที่บันทึกไว้ก่อนกดปุ่มนำเข้า" })
       return
     }
-
     if (!importFile.name.endsWith(".json")) {
       setBackupFeedback({ type: "error", message: "รูปแบบไฟล์ไม่ถูกต้อง โปรดใช้ไฟล์นามสกุล .json เท่านั้น" })
       return
     }
 
+    let parsed: any
+    try {
+      parsed = JSON.parse(await importFile.text())
+    } catch {
+      setBackupFeedback({ type: "error", message: "ไฟล์ไม่ใช่ JSON ที่ถูกต้อง" })
+      return
+    }
+
+    // Encrypted files need a passphrase before anything can be previewed.
+    const isEncrypted = parsed?.meta?.encrypted === true
+    if (isEncrypted && !importPassphrase.trim()) {
+      setBackupFeedback({ type: "error", message: "ไฟล์นี้ถูกเข้ารหัส กรุณากรอกรหัสผ่านสำหรับถอดรหัสก่อนนำเข้า" })
+      return
+    }
+
+    // Build a human preview from the file metadata (v2) or fall back for v1.
+    const meta = parsed?.meta
+    const cfg = parsed?.config ?? {}
+    const fileHasUsers = Array.isArray(cfg.users) && cfg.users.length > 0
+    const sectionLine = (label: string, v: unknown) =>
+      Array.isArray(v) && v.length > 0 ? `\n• ${label}: ${v.length}` : ""
+    const previewLines = [
+      meta?.hostname ? `อุปกรณ์ต้นทาง: ${meta.hostname}` : "ไฟล์รูปแบบเดิม (v1)",
+      meta?.exportedAt ? `สำรองเมื่อ: ${new Date(meta.exportedAt).toLocaleString()}` : "",
+      isEncrypted ? "\n🔒 ไฟล์ถูกเข้ารหัส — จะถอดรหัสด้วยรหัสผ่านที่กรอกไว้" : "",
+      sectionLine("Interfaces", cfg.interfaces),
+      sectionLine("Static Routes", cfg.staticRoutes ?? cfg.routes),
+      sectionLine("Address Objects", cfg.addresses),
+      sectionLine("Service Objects", cfg.serviceObjects),
+      sectionLine("Firewall Policies", cfg.policies),
+      sectionLine("DHCP Configs", cfg.dhcpConfigs),
+      sectionLine("DNS Zones", cfg.dnsZones),
+      sectionLine("QoS Rules", cfg.qosRules),
+      fileHasUsers ? `\n• บัญชีผู้ใช้: ${cfg.users.length}` : "",
+    ]
+      .filter(Boolean)
+      .join("")
+
+    const willImportUsers = includeUsers && fileHasUsers
+    const warningBody =
+      `${previewLines}\n\n` +
+      "⚠️ การนำเข้าจะ เขียนทับการตั้งค่าทั้งหมด บนอุปกรณ์นี้ (แบบ Replace) แล้วสั่ง Apply ใหม่ทันที\n" +
+      "• การเปลี่ยน IP ของ Interface อาจทำให้หลุดการเชื่อมต่อกับหน้าจัดการนี้ และต้องเชื่อมต่อใหม่\n" +
+      (willImportUsers
+        ? "• จะเขียนทับบัญชีผู้ใช้ทั้งหมดด้วยข้อมูลในไฟล์ (บัญชีของคุณจะถูกคงไว้เพื่อกันหลุดสิทธิ์)\n"
+        : fileHasUsers
+          ? "• ไฟล์มีบัญชีผู้ใช้ แต่จะไม่ถูกนำเข้า (ไม่ได้เปิดตัวเลือก “รวมบัญชีผู้ใช้”)\n"
+          : "") +
+      "\nต้องการดำเนินการต่อหรือไม่?"
+
+    const ok = await confirm("ยืนยันการนำเข้าและเขียนทับคอนฟิก", warningBody)
+    if (!ok) return
+
     setIsImporting(true)
     try {
-      const text = await importFile.text()
-      const parsedConfig = JSON.parse(text)
-      await systemService.importConfig(parsedConfig)
-      
+      const result: ImportResult = await systemService.importConfig(parsed, includeUsers, importPassphrase.trim())
+
+      const total = Object.values(result.counts || {}).reduce((a, b) => a + b, 0)
       setBackupFeedback({
         type: "success",
-        message: `นำเข้าไฟล์ "${importFile.name}" สำเร็จ! คืนค่าการตั้งค่าคอนฟิกเรียบร้อยแล้ว`
+        message: `นำเข้าไฟล์ "${importFile.name}" สำเร็จ! คืนค่า ${total} รายการและสั่ง Apply เรียบร้อยแล้ว${result.interfacesChanged ? " — การตั้งค่า Interface มีการเปลี่ยนแปลง อาจต้องเชื่อมต่อใหม่" : ""}`,
       })
+      setImportWarnings(result.warnings || [])
       setImportFile(null)
-      
+      setImportPassphrase("")
+      setImportFileEncrypted(false)
       const fileInput = document.getElementById("import-file-input") as HTMLInputElement
       if (fileInput) fileInput.value = ""
 
@@ -864,28 +947,93 @@ echo "admin:${newPassword || "new_password"}" | chpasswd`}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="pt-5">
+                  {!isSuperAdmin ? (
+                    <Alert className="border-border/50 bg-muted/30 py-2.5 px-3">
+                      <ShieldAlert className="h-4 w-4 text-muted-foreground" />
+                      <AlertDescription className="text-xs text-muted-foreground">
+                        เฉพาะผู้ดูแลระบบสูงสุด (Super Admin) เท่านั้นที่สามารถสำรอง/คืนค่าคอนฟิกได้ เนื่องจากไฟล์อาจมีรหัสผ่าน Wi-Fi และข้อมูลบัญชีผู้ใช้
+                      </AlertDescription>
+                    </Alert>
+                  ) : (
                   <form onSubmit={handleImportConfig} className="space-y-4">
                     {backupFeedback && (
                       <Alert
                         variant={backupFeedback.type === "success" ? "default" : "destructive"}
-                        className={backupFeedback.type === "success" ? "border-primary/20 bg-primary/5 text-primary py-2.5 px-3" : "border-red-500/20 bg-red-500/5 py-2.5 px-3"}
+                        className={backupFeedback.type === "success" ? "border-primary/20 bg-primary/5 text-primary py-2.5 px-3" : "border-destructive/20 bg-destructive/5 py-2.5 px-3"}
                       >
                         {backupFeedback.type === "success" ? (
                           <CheckCircle className="h-4 w-4 text-primary" />
                         ) : (
-                          <AlertCircle className="h-4 w-4 text-red-400" />
+                          <AlertCircle className="h-4 w-4 text-destructive" />
                         )}
-                        <AlertDescription className={`text-xs ${backupFeedback.type === "success" ? "text-primary" : "text-red-400"}`}>
+                        <AlertDescription className={`text-xs ${backupFeedback.type === "success" ? "text-primary" : "text-destructive"}`}>
                           {backupFeedback.message}
                         </AlertDescription>
                       </Alert>
                     )}
 
+                    {importWarnings.length > 0 && (
+                      <Alert className="border-border/50 bg-muted/30 py-2.5 px-3">
+                        <AlertCircle className="h-4 w-4 text-muted-foreground" />
+                        <AlertTitle className="text-xs font-semibold">คำเตือนระหว่างนำเข้า ({importWarnings.length})</AlertTitle>
+                        <AlertDescription className="text-[11px] text-muted-foreground">
+                          <ul className="list-disc pl-4 space-y-0.5 mt-1">
+                            {importWarnings.map((w, i) => (
+                              <li key={i}>{w}</li>
+                            ))}
+                          </ul>
+                        </AlertDescription>
+                      </Alert>
+                    )}
+
                     {/* Export Section */}
-                    <div className="border-b border-border/40 pb-4 space-y-2">
+                    <div className="border-b border-border/40 pb-4 space-y-3">
                       <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
                         สำรองข้อมูลปัจจุบัน (Configuration Export)
                       </Label>
+
+                      <div className="flex items-start justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
+                        <div className="space-y-0.5">
+                          <Label htmlFor="include-users-switch" className="text-xs font-medium cursor-pointer">
+                            รวมบัญชีผู้ใช้ (Include user accounts)
+                          </Label>
+                          <p className="text-[10px] text-muted-foreground">
+                            ไฟล์จะมีข้อมูลบัญชีและรหัสผ่าน (แบบเข้ารหัส) เพิ่มความเสี่ยง โปรดเก็บรักษาอย่างดี
+                          </p>
+                        </div>
+                        <Switch
+                          id="include-users-switch"
+                          checked={includeUsers}
+                          onCheckedChange={setIncludeUsers}
+                          className="mt-0.5"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <Label htmlFor="export-passphrase" className="text-xs font-medium">
+                          เข้ารหัสไฟล์ด้วยรหัสผ่าน (ไม่บังคับ)
+                        </Label>
+                        <Input
+                          id="export-passphrase"
+                          type="password"
+                          autoComplete="new-password"
+                          placeholder="ปล่อยว่างเพื่อไม่เข้ารหัส"
+                          value={exportPassphrase}
+                          onChange={(e) => setExportPassphrase(e.target.value)}
+                          className="h-9 text-xs"
+                        />
+                        <p className="text-[10px] text-muted-foreground">
+                          หากตั้งรหัสผ่าน เนื้อหาคอนฟิกจะถูกเข้ารหัส (AES-256-GCM) — ต้องใช้รหัสผ่านเดิมตอนนำเข้า และกู้คืนไม่ได้หากลืม
+                        </p>
+                      </div>
+
+                      <p className="text-[10px] text-muted-foreground italic flex items-start gap-1">
+                        <ShieldAlert className="h-3 w-3 mt-0.5 shrink-0" />
+                        {exportPassphrase.trim()
+                          ? "ไฟล์จะถูกเข้ารหัส — เก็บรหัสผ่านไว้ให้ดี"
+                          : "ไฟล์สำรองมีรหัสผ่าน Wi-Fi ในรูปแบบข้อความ โปรดจัดเก็บไฟล์ในที่ปลอดภัย (แนะนำให้ตั้งรหัสผ่านเข้ารหัส)"}
+                      </p>
+
                       <Button
                         type="button"
                         onClick={handleExportConfig}
@@ -912,21 +1060,47 @@ echo "admin:${newPassword || "new_password"}" | chpasswd`}
                           id="import-file-input"
                           type="file"
                           accept=".json"
-                          onChange={(e) => {
-                            if (e.target.files && e.target.files.length > 0) {
-                              setImportFile(e.target.files[0])
+                          onChange={async (e) => {
+                            const f = e.target.files && e.target.files.length > 0 ? e.target.files[0] : null
+                            setImportFile(f)
+                            setImportPassphrase("")
+                            setImportFileEncrypted(false)
+                            if (f) {
+                              try {
+                                const parsed = JSON.parse(await f.text())
+                                setImportFileEncrypted(parsed?.meta?.encrypted === true)
+                              } catch {
+                                /* invalid JSON is reported on submit */
+                              }
                             }
                           }}
                           className="w-full border border-border rounded-lg text-xs text-muted-foreground file:mr-3 file:py-1.5 file:px-3 file:rounded-l-lg file:border-0 file:border-r file:border-border file:bg-primary file:text-primary-foreground file:text-xs file:font-semibold cursor-pointer file:cursor-pointer"
                         />
                         <p className="text-[10px] text-muted-foreground italic">
-                          * ระบบจะเขียนทับฐานข้อมูลเดิมแล้วสั่ง Apply ruleset ใหม่อีกครั้งทันทีหลังการนำเข้า
+                          * ระบบจะ เขียนทับคอนฟิกทั้งหมด (Replace) แล้วสั่ง Apply ใหม่ทันที — การเปลี่ยน IP ของ Interface อาจทำให้หลุดการเชื่อมต่อ
                         </p>
                       </div>
 
+                      {importFileEncrypted && (
+                        <div className="space-y-1">
+                          <Label htmlFor="import-passphrase" className="text-xs font-medium flex items-center gap-1">
+                            <Lock className="h-3 w-3" /> รหัสผ่านสำหรับถอดรหัสไฟล์
+                          </Label>
+                          <Input
+                            id="import-passphrase"
+                            type="password"
+                            autoComplete="off"
+                            placeholder="กรอกรหัสผ่านที่ใช้ตอนส่งออก"
+                            value={importPassphrase}
+                            onChange={(e) => setImportPassphrase(e.target.value)}
+                            className="h-9 text-xs"
+                          />
+                        </div>
+                      )}
+
                       <Button
                         type="submit"
-                        disabled={isImporting || !importFile}
+                        disabled={isImporting || !importFile || (importFileEncrypted && !importPassphrase.trim())}
                         className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/95 font-bold gap-1.5 h-9 w-full"
                       >
                         {isImporting ? (
@@ -938,6 +1112,7 @@ echo "admin:${newPassword || "new_password"}" | chpasswd`}
                       </Button>
                     </div>
                   </form>
+                  )}
                 </CardContent>
               </Card>
 
