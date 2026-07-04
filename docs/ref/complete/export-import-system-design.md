@@ -73,7 +73,7 @@ README ระบุ Import/Export = "Mock" ทั้งสองฝั่ง —
     "appVersion": "v0.1.0-pre",          // version ของ binary
     "schemaVersion": 2,                  // v1 = รูปแบบเดิม (ยังรับ import ได้)
     "exportedAt": "2026-07-04T12:00:00Z",
-    "checksum": "sha256:..."             // sha256 ของ field "config" (canonical JSON)
+    "checksum": "sha256:..."             // sha256 ของ bytes ใน field "config" (ดู note ด้านล่าง)
   },
   "config": {
     "interfaces":        [...],
@@ -95,7 +95,9 @@ README ระบุ Import/Export = "Mock" ทั้งสองฝั่ง —
 ```
 
 - Backward compat: ถ้า decode แล้วไม่มี `meta.schemaVersion` → ตีความเป็น v1 (รูปแบบปัจจุบันที่ field อยู่ระดับบน `systemSettings`/`hostnameSettings`/`config.dhcp.config`) และ map เข้า struct v2 ก่อนประมวลผลต่อ ใช้ `db.NormalizeTimezone` กับ timezone เดิมตามที่ comment ในโค้ดตั้งใจไว้
-- ชื่อไฟล์ที่ frontend ตั้งตอนดาวน์โหลด: `pigate-backup-<hostname>-<YYYYMMDD-HHmmss>.json`
+- **Checksum implementation note:** Go ไม่มี canonical JSON ในตัว (ลำดับ key ของ map ไม่ deterministic) — ให้ marshal `config` เป็น `[]byte` ก่อน แล้ว sha256 จาก bytes ชุดนั้น จากนั้นฝังลง `BackupFile` เป็น `json.RawMessage` เพื่อให้ bytes ที่ checksum กับ bytes ที่ลงไฟล์เป็นชุดเดียวกันเป๊ะ (ตอน import ก็ decode `config` เป็น `json.RawMessage` มาตรวจ checksum ก่อนค่อย unmarshal ต่อ)
+- **`dnsZones`:** `repo.GetDNSZones()` (repository.go) ฝัง records ในแต่ละ zone อยู่แล้ว → ใช้ `model.DNSZone` เดิมได้เลย ไม่ต้องสร้าง `DNSZoneBackup` ใหม่
+- ชื่อไฟล์ที่ frontend ตั้งตอนดาวน์โหลด: `pigate-backup-<hostname>-<YYYYMMDD-HHmmss>.json` (ต้องแก้ทั้ง real mode และ mock mode ใน `systemService.ts` — ปัจจุบันใช้ `pigate-backup-config-<date>`)
 
 ### 3.2 Import Semantics: **Replace (wipe & restore)**
 
@@ -105,8 +107,9 @@ README ระบุ Import/Export = "Mock" ทั้งสองฝั่ง —
 2. **Snapshot** — copy ไฟล์ SQLite เป็น `<db>.backup-preimport-<timestamp>` (reuse pattern จาก `backupDatabase()` ใน connection.go — ควร refactor ให้เรียกซ้ำได้)
 3. **Restore ใน transaction เดียว** — `BEGIN` → `DELETE` ตาราง config (เว้น `users` ถ้าไม่ได้ import users, เว้น row ที่ `system=1` ของ address/service objects แล้ว insert เฉพาะ custom) → `INSERT` จากไฟล์ → `COMMIT`; error ใด ๆ → `ROLLBACK` แล้วตอบ 4xx/5xx พร้อมรายละเอียด — DB เดิมไม่ถูกแตะ
 4. **Re-apply ลง kernel** ตามลำดับเดียวกับ startup ใน `cmd/pigate/main.go` (ลำดับนี้สำคัญ อย่าสลับ):
-   time → interfaces → routes → hostname → DHCP → DNS server (zones) → DNS (system) → firewall → QoS
-   โดยเรียก `InitApplyConfig()`/`ApplyDNSConfig()` ที่มีอยู่แล้วบน service แต่ละตัว (ทุกตัวถูก inject เข้า `api.Server` อยู่แล้ว — ไม่ต้องแก้ wiring)
+   time → interfaces → routes → hostname → **dhcpcd sync (`dhcpcdService.SyncActiveInterfaces()`)** → DHCP → DNS server (zones) → DNS (system) → firewall → QoS
+   โดยเรียก `InitApplyConfig()`/`ApplyDNSConfig()` ที่มีอยู่แล้วบน service แต่ละตัว
+   - **Wiring ที่ต้องเพิ่ม:** service ตาม startup order ส่วนใหญ่ถูก inject เข้า `api.Server` แล้ว **ยกเว้น `dhcpcdService`** (สร้างใน main.go แล้วส่งให้เฉพาะ netlink monitor / hostnameService) และ `netlinkMonitor` เอง — ต้องส่งทั้งสองตัวเข้า `BackupService` (หรือเข้า `Server`) เพิ่ม
    - apply step ที่ fail ให้ **เก็บสะสมแล้วรายงาน** (HTTP 200 + `warnings: []`) ไม่ rollback DB เพราะ DB คือ source of truth ใหม่แล้ว และ reboot เครื่องจะ apply ซ้ำเองตาม startup pattern
 5. **Response** สรุปผล: จำนวน object ต่อ section, warnings, และธงบอกว่า interface config เปลี่ยน (frontend ใช้เตือนให้ผู้ใช้เตรียม reconnect)
 
@@ -136,9 +139,10 @@ Interface config ผูกกับชื่อ (`eth0`, `wlan0`) และ MAC 
 
 ### Phase 1 — Backend: Export ให้ครบและปลอดภัย (งานเล็ก เห็นผลไว)
 
-1. **`backend/internal/model/backup.go` (ใหม่)** — struct `BackupFile`, `BackupMeta`, `BackupConfig` (typed ทั้งหมด เลิกใช้ `map[string]interface{}`), `DNSZoneBackup` (zone + records ฝังใน object)
+1. **`backend/internal/model/backup.go` (ใหม่)** — struct `BackupFile`, `BackupMeta`, `BackupConfig` (typed ทั้งหมด เลิกใช้ `map[string]interface{}`); DNS zones ใช้ `model.DNSZone` เดิม (records ฝังอยู่แล้ว)
 2. **`backend/internal/service/backup.go` (ใหม่)** — `BackupService` รับ `*db.Repository` + service อื่นที่ต้องใช้ apply:
    - `Export(includeUsers bool) (*model.BackupFile, error)` — อ่านทุกตารางตาม §3.1, **เช็ค error ทุกตัว**, ใช้ `GetDHCPConfigs()` (plural), คำนวณ checksum
+   - **Routes ต้องอ่าน raw จากตาราง `static_routes` ตรง ๆ** (เพิ่ม method ใหม่ใน repo เช่น `GetRawStaticRoutes()`) — **ห้ามใช้ `GetRoutes()`** เพราะมัน merge kernel routes สดเข้ามา (ได้ route ผี `route-sys-...` ที่ไม่ใช่ config) และ **ห้ามใช้ `GetDatabaseRoutes()`** เพราะมัน resolve gateway `"default"` เป็น IP จริงของเครื่องปัจจุบัน + เขียนทับ `Type` ใหม่ — backup ต้องคงค่า `"default"`/`type` ดิบไว้เพื่อให้ restore ข้ามเครื่อง/ข้าม network ถูกต้อง
    - ย้าย logic ออกจาก handler ให้เหลือ handler บาง ๆ ตาม layering ของโปรเจค (api → service → db)
 3. **`backend/internal/api/handlers.go`** — เขียน `HandleExportConfig` ใหม่ให้เรียก `backupService.Export()`; ตั้ง header `Content-Disposition: attachment; filename=...` เพื่อให้ browser ดาวน์โหลดตรงได้ด้วย
 4. **`backend/internal/api/router.go`** — เปลี่ยน 2 เส้นทาง export/import จาก `authRoute` → `superAdminRoute`
@@ -150,33 +154,34 @@ Interface config ผูกกับชื่อ (`eth0`, `wlan0`) และ MAC 
 7. **`backend/internal/db/backup_repo.go` (ใหม่)** — method บน `Repository`:
    - `RestoreConfig(cfg model.BackupConfig, includeUsers bool) error` — ทำ wipe+insert ทุกตารางใน **transaction เดียว** (ต้องคุมลำดับ FK: ลบ `policy_addresses`/`policy_services`/`dns_records` ก่อนแม่; insert แม่ก่อนลูก; คง system objects)
    - Refactor `backupDatabase()` ใน `connection.go` ให้ export ใช้ซ้ำเป็น pre-import snapshot ได้ (เปลี่ยน suffix ได้ เช่น `.backup-preimport-...`)
-8. **`backend/internal/service/backup.go`** — `Import(raw []byte, opts ImportOptions) (*ImportResult, error)`:
+8. **`backend/internal/service/netlink_monitor.go`** — เพิ่ม `Pause()`/`Resume()` (งานจริง ไม่ใช่เผื่อไว้ — ดู Caution ข้อ 3): import จะ replace routes/interfaces ชุดใหญ่ขณะ monitor วิ่งอยู่ ปัจจุบัน monitor มีแค่ `Start`/`Stop`/`reconcile` และไม่ได้ถูก inject เข้า `api.Server` → ต้องเพิ่ม wiring ใน `main.go` ด้วย (ส่งเข้า `BackupService`)
+9. **`backend/internal/service/backup.go`** — `Import(raw []byte, opts ImportOptions) (*ImportResult, error)`:
    - decode + ตรวจ schemaVersion (รองรับ v1 เดิม → map เป็น v2), checksum, validation ราย object, in-file referential integrity
    - filter interfaces ตาม §3.5 (match ชื่อกับเครื่องจริงผ่าน `InterfaceService`)
-   - snapshot DB → `repo.RestoreConfig(...)` → re-apply kernel ตามลำดับ §3.2 ข้อ 4 → คืน `ImportResult{Counts, Warnings}`
-9. **`backend/internal/api/handlers.go`** — เขียน `HandleImportConfig` ใหม่: `http.MaxBytesReader` (10 MB), เรียก service, ตอบ error จริงแทน 200-เสมอ; ถ้า import users → purge sessions ตาม §3.4
-10. **Tests:** import round-trip (export → wipe → import → export อีกครั้งต้องเท่ากัน), import ไฟล์พัง/schema ผิด → DB ไม่เปลี่ยน (ตรวจ rollback), import v1 backup เก่า, interface ข้ามเครื่อง → ถูก skip พร้อม warning
+   - pause netlink monitor → snapshot DB → `repo.RestoreConfig(...)` → re-apply kernel ตามลำดับ §3.2 ข้อ 4 → resume monitor (ใช้ `defer` ให้ resume เสมอแม้ error) → คืน `ImportResult{Counts, Warnings}`
+10. **`backend/internal/api/handlers.go`** — เขียน `HandleImportConfig` ใหม่: `http.MaxBytesReader` (10 MB), เรียก service, ตอบ error จริงแทน 200-เสมอ; ถ้า import users → purge sessions ตาม §3.4
+11. **Tests:** import round-trip (export → wipe → import → export อีกครั้งต้องเท่ากัน), import ไฟล์พัง/schema ผิด → DB ไม่เปลี่ยน (ตรวจ rollback), import v1 backup เก่า, interface ข้ามเครื่อง → ถูก skip พร้อม warning
 
 ### Phase 3 — Frontend
 
-11. **`frontend/src/services/systemService.ts`** — พิมพ์ type `BackupFile`/`ImportResult` แทน `any`; `exportConfig(includeUsers)`; `importConfig` คืน `ImportResult`; อัปเดต mock mode ให้ payload หน้าตาเดียวกับ backend v2 (ตอนนี้ mock กับ backend คนละ shape กันอยู่)
-12. **`frontend/src/pages/SettingsMaintenance.tsx`** —
+12. **`frontend/src/services/systemService.ts`** — พิมพ์ type `BackupFile`/`ImportResult` แทน `any`; `exportConfig(includeUsers)`; `importConfig` คืน `ImportResult`; อัปเดต mock mode ให้ payload หน้าตาเดียวกับ backend v2 (ตอนนี้ mock กับ backend คนละ shape กันอยู่)
+13. **`frontend/src/pages/SettingsMaintenance.tsx`** —
     - Export: checkbox "รวมบัญชีผู้ใช้", คำเตือนว่าไฟล์มีรหัสผ่าน Wi-Fi, ตั้งชื่อไฟล์ตาม §3.1
     - Import: เปลี่ยนจาก submit ตรง → เปิด `AlertDialog` ยืนยัน (ใช้ `useAlert` provider ที่มีอยู่) แสดง preview จาก meta ในไฟล์ (hostname เครื่องต้นทาง, exportedAt, จำนวน object) + เตือนว่าจะเขียนทับทั้งหมดและอาจหลุดการเชื่อมต่อ; หลังสำเร็จแสดง warnings จาก `ImportResult`
     - ใช้ shadcn/ui primitives เท่านั้น, สี status ผ่าน theme variables (ห้าม `text-red-400` hardcode เพิ่ม — ของเดิมในหน้านี้มีอยู่ อย่า copy pattern นั้น), Dialog ที่มี portal component ใช้ `modal={false}` ตาม `docs/rules_of_work.md`
-13. **UI role-gating:** ซ่อน/disable Card Backup & Restore สำหรับ `admin_readonly` (endpoint เป็น superAdmin แล้ว UI ควรสอดคล้อง)
+14. **UI role-gating:** ซ่อน/disable Card Backup & Restore สำหรับ `admin_readonly` (endpoint เป็น superAdmin แล้ว UI ควรสอดคล้อง)
 
 ### Phase 4 — เอกสาร + เก็บงาน
 
-14. **`docs/openapi.yaml`** — อัปเดต schema ของ `/system/config/export` + `/system/config/import` (request/response, error codes, หมายเหตุ super_admin only); copy ไป `frontend/public/openapi.yaml` ด้วย (มี 2 ที่)
-15. **`README.md`** — เปลี่ยน Feature Status ของ Import/Export เมื่อเสร็จ
-16. (ถ้าทำ §3.3 Phase 2) เพิ่ม encryption แบบ opt-in — เป็นงานแยกหลังระบบหลักนิ่ง
+15. **`docs/openapi.yaml`** — อัปเดต schema ของ `/system/config/export` + `/system/config/import` (request/response, error codes, หมายเหตุ super_admin only); copy ไป `frontend/public/openapi.yaml` ด้วย (มี 2 ที่)
+16. **`README.md`** — เปลี่ยน Feature Status ของ Import/Export เมื่อเสร็จ
+17. (ถ้าทำ §3.3 Phase 2) เพิ่ม encryption แบบ opt-in — เป็นงานแยกหลังระบบหลักนิ่ง
 
 ## 5. ข้อควรระวัง (Cautions)
 
 1. **ห้ามลืมเปลี่ยนเป็น `superAdminRoute`** — นี่คือช่องรั่ว Wi-Fi password ต่อ `admin_readonly` ที่มีอยู่ *ตอนนี้* ควรแก้เป็นอย่างแรกแม้ยังไม่ทำส่วนอื่น
 2. **อย่า restore แล้วไม่ apply / apply แล้วไม่ restore** — DB คือ source of truth ของโปรเจค kernel state ต้อง reconcile จาก DB เสมอ (netlink monitor ก็ทำงานบนสมมติฐานนี้) ลำดับ apply ต้องตรงกับ `main.go` startup
-3. **Netlink monitor กำลังวิ่งอยู่ระหว่าง import** — การเปลี่ยน routes/interfaces ชุดใหญ่ระหว่าง monitor ทำงานอาจโดน reconcile สวน ตรวจว่า `InitApplyConfig` ของ routing ปลอดภัยเมื่อถูกเรียกซ้ำขณะ monitor ทำงาน (มัน idempotent ระดับ startup อยู่แล้ว แต่ startup เรียกก่อน monitor start — import เรียกหลัง) ถ้าจำเป็นให้เพิ่มกลไก pause/resume ที่ `service/netlink_monitor.go`
+3. **Netlink monitor กำลังวิ่งอยู่ระหว่าง import** — การเปลี่ยน routes/interfaces ชุดใหญ่ระหว่าง monitor ทำงานอาจโดน reconcile สวน (startup ปลอดภัยเพราะ `InitApplyConfig` ถูกเรียก*ก่อน* monitor start — import เรียก*หลัง*) → **ตัดสินใจแล้วว่าทำ `Pause()`/`Resume()`** เป็นงานใน Phase 2 ข้อ 8 พร้อม wiring (monitor ปัจจุบันไม่ได้ถูก inject เข้า `api.Server`)
 4. **System objects** (`address_objects.system=1`, `service_objects.type='system'`, routes `type IN ('system','defaultgateway')`) — seed โดยระบบ อย่าลบ/เขียนทับจากไฟล์ import (โค้ดเดิม skip ตอน insert แล้ว แต่ตอนเปลี่ยนเป็น wipe ต้อง **ไม่ wipe row เหล่านี้** ด้วย)
 5. **Policy FK RESTRICT** — `policy_addresses.address_id` เป็น `ON DELETE RESTRICT` → ตอน wipe ต้องลบ junction tables/policies ก่อน address/service objects มิฉะนั้น transaction fail
 6. **อย่า persist ค่า live-only** — `SystemTimeSettings.Status` ต้องถูกตัดก่อนเก็บ (โค้ดเดิมทำถูกแล้ว คงไว้), `dhcp_leases` ไม่อยู่ใน backup
@@ -186,6 +191,8 @@ Interface config ผูกกับชื่อ (`eth0`, `wlan0`) และ MAC 
 10. **ขนาด/ความทนทานของ input** — จำกัด body size, ห้าม trust ค่าจากไฟล์ (เช่น id ที่ยาวผิดปกติ, timezone แปลก) — วิ่ง validation ชุดเดียวกับ API ปกติ, CHECK constraints ใน SQLite ช่วยเป็นตาข่ายชั้นสุดท้าย
 11. **SD card wear** — snapshot ก่อน import เป็นการ copy ไฟล์ DB ทั้งไฟล์ ยอมรับได้เพราะ import เป็นเหตุการณ์นาน ๆ ครั้ง แต่อย่าทำ snapshot อัตโนมัติถี่กว่านั้น
 12. **Mock mode ฝั่ง frontend** (`IS_MOCK_MODE`) เก็บของใน localStorage คนละ shape กับ backend — เมื่อเปลี่ยน schema เป็น v2 ต้องแก้ mock ให้ตรงกัน ไม่งั้นทดสอบ UI แล้วเจอ shape mismatch
+13. **Export routes ต้องเป็น raw DB dump** — `GetRoutes()` merge kernel routes สด (มี route ผี `route-sys-...`) และ `GetDatabaseRoutes()` resolve gateway `"default"` เป็น IP ของเครื่องปัจจุบัน + เขียนทับ `Type` — ทั้งคู่ห้ามใช้ใน export path (ดู Phase 1 ข้อ 2) มิฉะนั้นได้ backup ที่ restore ข้ามเครื่อง/ข้าม network แล้วผิดแบบเงียบ ๆ
+14. **`Content-Disposition` header ช่วยได้จำกัด** — frontend ปัจจุบันดาวน์โหลดผ่าน `fetch` → สร้าง Blob เอง ชื่อไฟล์จริงมาจาก frontend (§3.1) ใส่ header ไว้ได้เผื่อเรียก endpoint ตรง แต่อย่านับเป็นกลไกหลักของการตั้งชื่อไฟล์
 
 ## 6. ลำดับการทดสอบ (Definition of Done)
 

@@ -1452,87 +1452,129 @@ paths:
     get:
       tags:
         - System & Maintenance
-      summary: Export full configuration JSON payload (all settings & object databases backup)
+      summary: Export full configuration backup (schema v2) — super_admin only
+      security:
+        - BearerAuth: []
       description: |
-        Returns a complete JSON backup of all system configuration including interfaces,
-        static routes, firewall policies, address objects, service objects, DHCP config,
-        DHCP reservations, and system time settings.
+        Returns a complete, typed JSON backup (schema v2) of all persisted
+        configuration: interfaces, raw static routes (gateway "default" kept
+        verbatim), address/service objects, firewall policies, per-interface DHCP
+        configs, DHCP reservations, DNS zones+records, DNS server listen
+        interfaces, system DNS, QoS rules, system time, and hostname.
+
+        Runtime/live state (DHCP leases, live time status, firewall counters) is
+        excluded by design.
+
+        **super_admin only.** The payload contains real Wi-Fi passwords and,
+        when `includeUsers=1`, user credential hashes — a read-only admin gets
+        `403`. `meta.checksum` is a SHA-256 over the canonical config, so a
+        reformatted file still verifies on import. Also available in
+        `-disable-edit` (read-only) mode.
+      parameters:
+        - name: includeUsers
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["1", "true"]
+          description: When set, embeds the users table (including bcrypt hashes).
+        - name: X-Backup-Passphrase
+          in: header
+          required: false
+          schema:
+            type: string
+          description: When provided, the config section is AES-256-GCM encrypted with an Argon2id-derived key. Sent as a header (not query) to keep it out of access logs.
       responses:
         '200':
-          description: Settings backup export payload
+          description: Configuration backup payload (schema v2)
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              description: 'attachment; filename="pigate-backup-<hostname>-<timestamp>.json"'
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  device:
-                    type: string
-                    example: PiGate Firewall Gateway
-                  version:
-                    type: string
-                    example: v1.0.0-Release
-                  exportedAt:
-                    type: string
-                    format: date-time
-                    example: "2025-01-01T00:00:00Z"
-                  systemSettings:
-                    $ref: '#/components/schemas/SystemTimeSettings'
-                  config:
-                    type: object
-                    properties:
-                      addresses:
-                        type: array
-                        items:
-                          $ref: '#/components/schemas/AddressObject'
-                      serviceObjects:
-                        type: array
-                        items:
-                          $ref: '#/components/schemas/ServiceObject'
-                      policies:
-                        type: array
-                        items:
-                          $ref: '#/components/schemas/PolicyRule'
-                      routes:
-                        type: array
-                        items:
-                          $ref: '#/components/schemas/StaticRoute'
-                      interfaces:
-                        type: array
-                        items:
-                          $ref: '#/components/schemas/NetworkInterface'
-                      dhcp:
-                        type: object
-                        properties:
-                          config:
-                            $ref: '#/components/schemas/DhcpConfig'
-                          reservations:
-                            type: array
-                            items:
-                              $ref: '#/components/schemas/DhcpReservation'
+                $ref: '#/components/schemas/BackupFile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden — requires super_admin
 
   /system/config/import:
     post:
       tags:
         - System & Maintenance
-      summary: Import configuration JSON payload (overwrites current tables and restores configs)
+      summary: Import & restore a configuration backup (Replace semantics) — super_admin only
+      security:
+        - BearerAuth: []
       description: |
-        Restores a configuration from a previously exported backup JSON.
-        System-predefined objects (system addresses, service objects, system routes, defaultgateway routes)
-        are skipped to prevent duplication.
-        All other records (custom routes, policies, custom addresses, custom services, DHCP config/reservations,
-        interfaces, and system time settings) are restored.
+        Validates, snapshots, restores (in a single transaction), and re-applies a
+        backup produced by the export endpoint. Accepts both schema v2 and legacy
+        v1 files (v1 is mapped into v2 automatically).
+
+        **Replace semantics:** all user-editable configuration is wiped and
+        restored from the file. System-seeded rows (system address/service
+        objects, `system`/`defaultgateway` routes) are preserved. On any error the
+        transaction rolls back and the original DB is left untouched — a pre-import
+        DB snapshot is also written next to the DB file.
+
+        Interfaces are matched by name to the live device; interfaces in the file
+        that don't exist here are skipped (reported in `warnings`). After the DB
+        restore the config is re-applied to the kernel in startup order; individual
+        apply failures are non-fatal and returned as `warnings`.
+
+        Users are only restored when `includeUsers=1` and the file contains a
+        `users` section; the importing account is always kept as an active
+        super_admin to prevent lock-out. **super_admin only**; blocked in
+        `-disable-edit` mode.
+      parameters:
+        - name: includeUsers
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["1", "true"]
+          description: When set (and the file has a users section), restores user accounts.
+        - name: X-Backup-Passphrase
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Required to decrypt an encrypted backup (`meta.encrypted=true`).
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              description: Same structure as the export payload
+              $ref: '#/components/schemas/BackupFile'
       responses:
         '200':
-          description: Import completed successfully and configs restored
+          description: Import completed (see counts + non-fatal warnings)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportResult'
         '400':
-          description: Invalid JSON structure in import payload
+          description: |
+            Invalid/corrupt file, checksum mismatch, unsupported schema version,
+            wrong passphrase, failed validation, or a restore error (no changes applied).
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden — requires super_admin
+        '422':
+          description: Encrypted backup imported without a passphrase
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  needPassphrase:
+                    type: boolean
+                    example: true
 
   # =========================================================================
   # QoS BANDWIDTH CONTROL
@@ -2706,6 +2748,154 @@ components:
           type: boolean
           example: false
           description: When true, dhcpcd sends this hostname to the WAN DHCP server via DHCP Option 12
+
+    BackupFile:
+      type: object
+      description: Configuration backup file (schema v2) produced by the export endpoint.
+      required:
+        - meta
+        - config
+      properties:
+        meta:
+          type: object
+          properties:
+            device:
+              type: string
+              example: PiGate Firewall Gateway
+            hostname:
+              type: string
+              example: pigate-rpi5
+            appVersion:
+              type: string
+              example: v0.1.0-pre
+            schemaVersion:
+              type: integer
+              example: 2
+            exportedAt:
+              type: string
+              format: date-time
+            checksum:
+              type: string
+              description: SHA-256 over the canonical JSON of the plaintext `config`, prefixed with "sha256:"
+              example: "sha256:7a2891..."
+            includeUsers:
+              type: boolean
+            encrypted:
+              type: boolean
+              description: True when the config is passphrase-encrypted (then `config` is absent and `encryptedConfig` is present).
+            encryption:
+              type: object
+              description: KDF/cipher parameters — present only when encrypted. Carries no secret.
+              properties:
+                algorithm:
+                  type: string
+                  example: AES-256-GCM
+                kdf:
+                  type: string
+                  example: argon2id
+                salt:
+                  type: string
+                  description: base64 Argon2id salt
+                nonce:
+                  type: string
+                  description: base64 GCM nonce
+                time:
+                  type: integer
+                memory:
+                  type: integer
+                threads:
+                  type: integer
+        encryptedConfig:
+          type: string
+          description: base64 AES-256-GCM ciphertext of the marshalled config. Present only when `meta.encrypted` is true (mutually exclusive with `config`).
+        config:
+          type: object
+          description: |
+            Typed configuration sections (present only when NOT encrypted). Arrays
+            reuse the same item schemas as their live endpoints (interfaces,
+            staticRoutes, addresses, serviceObjects, policies, dhcpConfigs,
+            dhcpReservations, dnsZones, qosRules) plus singletons
+            dnsServerSettings, systemDns, systemTime, systemHostname, and an
+            optional users array.
+          properties:
+            interfaces:
+              type: array
+              items:
+                $ref: '#/components/schemas/NetworkInterface'
+            staticRoutes:
+              type: array
+              items:
+                $ref: '#/components/schemas/StaticRoute'
+            addresses:
+              type: array
+              items:
+                $ref: '#/components/schemas/AddressObject'
+            serviceObjects:
+              type: array
+              items:
+                $ref: '#/components/schemas/ServiceObject'
+            policies:
+              type: array
+              items:
+                $ref: '#/components/schemas/PolicyRule'
+            dhcpConfigs:
+              type: array
+              items:
+                $ref: '#/components/schemas/DhcpConfig'
+            dhcpReservations:
+              type: array
+              items:
+                $ref: '#/components/schemas/DhcpReservation'
+            dnsZones:
+              type: array
+              items:
+                type: object
+            dnsServerSettings:
+              type: object
+              properties:
+                interfaces:
+                  type: array
+                  items:
+                    type: string
+            systemDns:
+              type: object
+            qosRules:
+              type: array
+              items:
+                $ref: '#/components/schemas/QosRule'
+            systemTime:
+              $ref: '#/components/schemas/SystemTimeSettings'
+            systemHostname:
+              $ref: '#/components/schemas/SystemHostnameSettings'
+            users:
+              type: array
+              description: Present only when exported with includeUsers. Contains bcrypt hashes.
+              items:
+                type: object
+
+    ImportResult:
+      type: object
+      description: Summary returned after a successful configuration import.
+      properties:
+        schemaVersion:
+          type: integer
+          description: Detected schema version of the imported file (1 or 2)
+          example: 2
+        counts:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Number of restored objects per section
+        warnings:
+          type: array
+          items:
+            type: string
+          description: Non-fatal issues (skipped interfaces, kernel re-apply failures)
+        interfacesChanged:
+          type: boolean
+          description: True if any interface config changed (admin may need to reconnect)
+        usersImported:
+          type: boolean
 
     NetworkServiceStatus:
       type: object

@@ -127,8 +127,11 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("POST /api/system/services/{id}/restart", s.HandleRestartService)
 	authRoute("POST /api/system/reboot", s.HandleReboot)
 	authRoute("POST /api/system/shutdown", s.HandleShutdown)
-	authRoute("GET /api/system/config/export", s.HandleExportConfig)
-	authRoute("POST /api/system/config/import", s.HandleImportConfig)
+	// Export/Import handle real Wi-Fi passwords and (optionally) user credential
+	// hashes, so both are super_admin only — a read-only admin must not be able
+	// to exfiltrate secrets via a backup.
+	superAdminRoute("GET /api/system/config/export", s.HandleExportConfig)
+	superAdminRoute("POST /api/system/config/import", s.HandleImportConfig)
 
 	// 10. QoS Bandwidth Rules
 	authRoute("GET /api/qos/rules", s.HandleGetQosRules)
