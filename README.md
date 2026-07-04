@@ -81,13 +81,13 @@ The following table summarizes the development status of each feature in the PiG
 | **Routing** | Completed | Completed | CRUD operations for static routes, Netlink event monitoring, and automatic routing self-healing. |
 | **DNS System** | Completed | Completed | `systemd-resolved` D-Bus integration completed; local DNS server integration is ongoing. |
 | **Firewall System** | Completed | Completed | `nftables` management via Netlink, forward chain policy configuration, WAN Network Address Translation (Masquerade), and Docker compatibility. |
-| **DHCP Server** | Mock | In Progress | UI and SQLite database model completed; configuration generation for `dnsmasq` or `isc-dhcp-server` is ongoing. |
-| **DNS Server** | Mock | In Progress | UI and SQLite database model completed; configuration generation for local DNS resolution/FQDN is ongoing. |
+| **DHCP Server** | Completed | Completed | UI and SQLite database model completed; configuration generation for `dnsmasq` or `isc-dhcp-server` is ongoing. |
+| **DNS Server** | Completed | Completed | UI and SQLite database model completed; configuration generation for local DNS resolution/FQDN is ongoing. |
 | **QoS Limiting** | Completed | Completed | HTB and IFB traffic shaping via tc Netlink, supporting Source/Destination IP address ranges (CIDR). |
 | **Setting (Overall)** | Mock | Mock | Administrator password updates, time settings, and system service lifecycle controls via D-Bus. |
 | **Import/Export** | Completed | Completed | Typed JSON backup (schema v2) with SHA-256 integrity, optional user accounts, and optional passphrase encryption (AES-256-GCM + Argon2id); import uses validate → pre-import snapshot → single-transaction wipe & restore → kernel re-apply (startup order). Cross-machine safe (raw routes, interface match-by-name), `super_admin`-only, with actor lock-out guard. Accepts legacy v1 files. |
 | **User System** | Completed | Completed | Multi-user management (create/edit/delete/enable-disable) with `super_admin` / `admin_readonly` roles, per-request DB-backed session validation, role-based authorization middleware, session-based auth, login rate limiting, and first-time login password change enforcement. |
-| **System Time** | Mock | Mock | Native operating system time synchronization and configuration. |
+| **System Time** | Completed | Completed | Native operating system time synchronization and configuration. |
 | **Power Control (Shutdown/Restart)** | Mock | Mock | Remote power actions (system shutdown or reboot) executed via API. |
 
 ---
