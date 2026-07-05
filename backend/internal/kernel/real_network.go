@@ -16,7 +16,6 @@ import (
 
 	"pigate/internal/model"
 
-	"github.com/godbus/dbus/v5"
 	"github.com/mdlayher/wifi"
 	"github.com/vishvananda/netlink"
 )
@@ -472,78 +471,4 @@ func (r *RealNetwork) GetWifiStatus(name string) (*model.WifiConnectionStatus, e
 	log.Printf("[RealNetwork] GetWifiStatus result: State=%s, SSID=%s, BSSID=%s, ActiveMac=%s, Freq=%d, KeyMgmt=%s, WifiGen=%s",
 		status.State, status.SSID, status.BSSID, status.ActiveMac, status.Freq, status.KeyMgmt, status.WifiGen)
 	return status, nil
-}
-
-// ========================================================================== //
-// D-Bus based management functions.
-// These interact with systemd-resolved via D-Bus.
-// ========================================================================== //
-
-// IsServiceActiveViaDBus เช็กว่า Service กำลังทำงานอยู่หรือไม่ (แทน systemctl is-active)
-func IsServiceActiveViaDBus(serviceName string) bool {
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		log.Printf("[RealNetwork-D-Bus] Failed to connect to system bus: %v", err)
-		return false
-	}
-
-	// 1. ถาม Manager เพื่อหา Object Path ของ Service นี้
-	obj := conn.Object("org.freedesktop.systemd1", "/org/freedesktop/systemd1")
-	var unitPath dbus.ObjectPath
-	err = obj.Call("org.freedesktop.systemd1.Manager.GetUnit", 0, serviceName).Store(&unitPath)
-	if err != nil {
-		// ถ้าไม่พบ Unit (อาจจะยังไม่เคยโหลด) ถือว่า inactive
-		return false
-	}
-
-	// 2. ดึงค่า Property 'ActiveState' จาก Object ของ Unit นั้น
-	unitObj := conn.Object("org.freedesktop.systemd1", unitPath)
-	variant, err := unitObj.GetProperty("org.freedesktop.systemd1.Unit.ActiveState")
-	if err != nil {
-		return false
-	}
-
-	state, ok := variant.Value().(string)
-	return ok && state == "active"
-}
-
-// StartServiceViaDBus สั่งรัน Service (แทน systemctl start)
-func StartServiceViaDBus(serviceName string) error {
-	log.Printf("[RealNetwork-D-Bus] Attempting to start service: %s", serviceName)
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		log.Printf("[RealNetwork-D-Bus] Failed to connect to system bus: %v", err)
-		return fmt.Errorf("failed to connect to D-Bus system bus: %w", err)
-	}
-
-	obj := conn.Object("org.freedesktop.systemd1", "/org/freedesktop/systemd1")
-	var jobPath dbus.ObjectPath
-	// โหมด "replace" จะเคลียร์คำสั่งที่อาจจะค้างอยู่ก่อนหน้า
-	err = obj.Call("org.freedesktop.systemd1.Manager.StartUnit", 0, serviceName, "replace").Store(&jobPath)
-	if err != nil {
-		log.Printf("[RealNetwork-D-Bus] Failed to call StartUnit for %s: %v", serviceName, err)
-		return fmt.Errorf("D-Bus call StartUnit failed for %s: %w", serviceName, err)
-	}
-
-	log.Printf("[RealNetwork-D-Bus] Start job queued successfully. Job Path: %s", jobPath)
-	return nil
-}
-
-// StopServiceViaDBus สั่งหยุด Service (แทน systemctl stop)
-func StopServiceViaDBus(serviceName string) error {
-	log.Printf("[RealNetwork-D-Bus] Attempting to stop service: %s", serviceName)
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		return fmt.Errorf("failed to connect to D-Bus system bus: %w", err)
-	}
-
-	obj := conn.Object("org.freedesktop.systemd1", "/org/freedesktop/systemd1")
-	var jobPath dbus.ObjectPath
-	err = obj.Call("org.freedesktop.systemd1.Manager.StopUnit", 0, serviceName, "replace").Store(&jobPath)
-	if err != nil {
-		return fmt.Errorf("D-Bus call StopUnit failed for %s: %w", serviceName, err)
-	}
-
-	log.Printf("[RealNetwork-D-Bus] Stop job queued successfully. Job Path: %s", jobPath)
-	return nil
 }
