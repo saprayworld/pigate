@@ -2,6 +2,8 @@
 
 เอกสารฉบับนี้เป็นรายงานสรุปสถานะล่าสุดของโปรเจกต์ **PiGate** (ระบบควบคุม Raspberry Pi Firewall/Gateway) ทั้งความคืบหน้า โครงสร้างระบบล่าสุด ปัญหาที่พบ และแผนงานในอนาคต
 
+> อัปเดตล่าสุด: 2026-07-05 — แผนงานที่ทำเสร็จแล้วถูกเก็บไว้ที่ [docs/ref/complete/](ref/complete/) และงานที่ค้างอยู่ที่ [docs/ref/todo/](ref/todo/)
+
 ---
 
 ## 1. สิ่งที่ได้ดำเนินการเสร็จสิ้นแล้ว (Completed Work)
@@ -91,6 +93,28 @@
   * ออกแบบระบบป้องกัน IP Spoofing ผ่าน `pigate-not-local` พร้อมระบุขอบเขตความปลอดภัยจำกัดสิทธิ์ (Security Isolation) ของกฎผู้ใช้ให้ทำงานเฉพาะใน `forward` เท่านั้น (ป้องกันการบล็อกเว็บควบคุมหรือ SSH)
   * ระบบแอดมินจำกัดสิทธิ์เข้าถึง (Admin Access Rules) สำหรับจัดการสิทธิ์ PING, HTTP (80/2479), HTTPS (443), และ SSH (22) รายอินเตอร์เฟส
   * สนับสนุนโหมดหลบเลี่ยงความขัดแย้งของ Docker (Docker Compatibility bypass) ด้วย CLI flag `-docker-compat` เพื่อข้ามการบล็อกการ์ด `docker0` และบริดจ์เสมือน `br-*` อัตโนมัติ
+* **Real DHCP Server (dnsmasq) [สำเร็จ]** (ดู [dnsmasq-design.md](ref/complete/dnsmasq-design.md)):
+  * พัฒนา `RealDhcpManager` ใน [dhcp_server.go](file:///home/sapray/dev/pigate/backend/internal/kernel/dhcp_server.go) สร้างไฟล์คอนฟิก `/etc/dnsmasq.d/pigate-dhcp.conf` (พร้อม base config) จากข้อมูล SQLite รองรับหลายอินเตอร์เฟส, IP Pool, Lease Time และ Static Reservations
+  * ตรวจสอบไวยากรณ์คอนฟิกก่อนใช้งานจริงด้วย `dnsmasq --test` บนไฟล์ชั่วคราว แล้วจึงเขียนทับและสั่ง restart `dnsmasq.service` ผ่าน systemd D-Bus
+  * พัฒนาระบบเฝ้าดู DHCP Lease แบบเรียลไทม์ (Lease Watcher) ผ่าน D-Bus signal ของ dnsmasq (`uk.org.thekelleys.dnsmasq`) แสดงผล Active Leases บนหน้าเว็บ
+* **Real DNS Server — Local Zones/FQDN (dnsmasq) [สำเร็จ]** (ดู [dnsmasq-design.md](ref/complete/dnsmasq-design.md)):
+  * พัฒนา `RealDNSServerManager` ใน [dns_server.go](file:///home/sapray/dev/pigate/backend/internal/kernel/dns_server.go) สร้างไฟล์คอนฟิก `/etc/dnsmasq.d/pigate-dns.conf` รองรับ Local DNS Zone, A/CNAME Records และ Authoritative Zone
+  * แยกการเลือกอินเตอร์เฟสรับฟัง (Listen Interfaces) ของ DNS Server ออกจาก DHCP Server อย่างอิสระ
+* **DHCP Client Manager (dhcpcd) [สำเร็จ]:**
+  * พัฒนา `DhcpcdManager` ใน [dhcpcd.go](file:///home/sapray/dev/pigate/backend/internal/kernel/dhcpcd.go) ควบคุมวงจรชีวิต `dhcpcd@<iface>.service` (WAN-side DHCP client) ผ่าน systemd D-Bus โดย `install.sh` สร้าง systemd template service ให้ dhcpcd รันเป็น root unit ของตัวเอง — ตัดความจำเป็นของ sudo ออกทั้งหมด
+
+### 1.4 ระบบจัดการระดับระบบและบัญชีผู้ใช้ (System Management Features)
+* **System Hostname [สำเร็จ]** (ดู [hostname-setting-design.md](ref/complete/hostname-setting-design.md)):
+  * จัดการ Hostname (static + transient) ผ่าน `systemd-hostnamed` D-Bus ใน [real_hostname.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_hostname.go) พร้อมประยุกต์ใช้ค่าตอนบูตและ restart DHCP client บนอินเตอร์เฟสที่เกี่ยวข้อง
+* **System Time / NTP [สำเร็จ]** (ดู [time-system-design.md](ref/complete/time-system-design.md)):
+  * ตั้งค่า Timezone, เปิด/ปิด NTP, กำหนด NTP Server (drop-in ของ `systemd-timesyncd`) และตั้งเวลาแบบ Manual ผ่าน `systemd-timedated` D-Bus ใน [real_timedate.go](file:///home/sapray/dev/pigate/backend/internal/kernel/real_timedate.go) พร้อมฝัง IANA tzdata ในไบนารี (`time/tzdata`)
+* **User System [สำเร็จ]** (ดู [user-system-design.md](ref/complete/user-system-design.md)):
+  * ระบบจัดการผู้ใช้หลายบัญชี (สร้าง/แก้ไข/ลบ/เปิด-ปิด) พร้อมบทบาท `super_admin` / `admin_readonly`, Session-based Auth ตรวจสอบกับฐานข้อมูลรายคำขอ, Middleware ตรวจสิทธิ์ตามบทบาท, Rate Limiting หน้าล็อกอิน และบังคับเปลี่ยนรหัสผ่านครั้งแรก
+* **Export/Import Configuration [สำเร็จ]** (ดู [export-import-system-design.md](ref/complete/export-import-system-design.md)):
+  * Typed JSON Backup (schema v2) พร้อม SHA-256 integrity, เข้ารหัสด้วย Passphrase ได้ (AES-256-GCM + Argon2id), รองรับไฟล์ v1 เดิม
+  * Import แบบ validate → snapshot → wipe & restore ใน transaction เดียว → re-apply ลงเคอร์เนลตามลำดับบูต จำกัดสิทธิ์ `super_admin` พร้อมกันการล็อกตัวเองออก (Actor Lock-out Guard)
+* **Per-Interface Route Metric [สำเร็จ]** (ดู [interface-metric-design.md](ref/complete/interface-metric-design.md)):
+  * กำหนดค่า Metric ของเส้นทางรายอินเตอร์เฟสเพื่อรองรับ Multi-WAN Failover
 
 ---
 
@@ -105,7 +129,12 @@
 > **ข้อจำกัดในการทดสอบระดับ Kernel Integration (Kernel Mode Limitations):**
 > * การเข้าถึงเพื่อจัดการ IP Address, Routing Table, และ nftables ผ่าน Netlink จะต้องใช้สิทธิ์ของระบบปฏิบัติการระดับสูง (`root` หรือการตั้งค่า Linux Capabilities ในแบบ `cap_net_admin,cap_net_raw+ep`)
 > * ในระหว่างการพัฒนาบนเครื่องคอมพิวเตอร์ทั่วไป (Development PC) จะเปิดใช้งานโหมดจำลอง (`-mock=true`) เพื่อเก็บสเตตทำงานทั้งหมดไว้บน SQLite และ Memory เสมอ โดยข้อมูลแลน/Wi-Fi (eth0, wlan0) จะไม่ถูก Seeding ในโหมดจริงเพื่อป้องกันการทับซ้อนกับการ์ดจริงของเครื่องเซิร์ฟเวอร์
-> * ฟีเจอร์ DNS Server, DHCP Server, Counter และ Log Streaming ปัจจุบันได้รับการจำลองพฤติกรรมบน UI และจัดเก็บข้อมูลลง SQLite เรียบร้อย แต่รอการพัฒนาตัวเชื่อมแกนหลักระบบปฏิบัติการ (Real OS integration write) ในอนาคต
+> * ฟีเจอร์ที่ยังเป็นการจำลอง (Mock) อยู่: **Firewall Rule Counters**, **Firewall Log Streaming** (อ่านจาก In-Memory Ring Buffer ที่ seed ข้อมูลตัวอย่าง ยังไม่ได้อ่าน Kernel Log จริง), **รายการ/รีสตาร์ท System Services**, **Power Control (Reboot/Shutdown)** และค่า **Dashboard บางส่วน** (Total Traffic, CPU/RAM/Temp ยังเป็นค่าจำลอง — ส่วน DHCP Lease Count และสถานะ Wi-Fi เป็นข้อมูลจริงแล้ว)
+
+> [!WARNING]
+> **งานคุณภาพโค้ดที่ค้างอยู่ (ดู [docs/ref/todo/](ref/todo/)):**
+> * **Frontend Lint ยังไม่ผ่าน** — `yarn lint` fail 141 ปัญหา (132 errors, 9 warnings) ใน 27 ไฟล์ มีแผนแก้ไขแล้วที่ [frontend-lint-check-plan.md](ref/todo/frontend-lint-check-plan.md)
+> * **Systemd D-Bus Call ยังกระจายหลายไฟล์** — logic การเรียก `org.freedesktop.systemd1` ซ้ำกันใน `real_network.go` / `dns.go` มีแผน refactor รวมศูนย์ที่ [systemd-dbus-call-design.md](ref/todo/systemd-dbus-call-design.md)
 
 ---
 
@@ -119,17 +148,26 @@
   * เมื่อสั่งยืนยัน Apply กฎใหม่ ระบบหลังบ้านจะตั้งเวลาถอยหลัง 30 วินาที หากเบราว์เซอร์ของผู้ใช้ไม่มีการส่งสัญญาณยอมรับ (Confirm/Keepalive) กลับมา ระบบจะดึงข้อมูลคอนฟิกชุดเก่าขึ้นมาบังคับรีสโตร์ทันที
 * [ ] **พัฒนาระบบและหน้าจอสลับ Docker Compatibility บน Web UI:**
   * พัฒนา API และปุ่มสลับสถานะ (Settings Toggle) บนหน้าเว็บของแอดมิน เพื่อควบคุมสถานะการเปิด/ปิด Docker Compatibility (`-docker-compat`) โดยตรงผ่านฐานข้อมูล SQLite แทนการระบุผ่าน CLI flag ตอนสตาร์ทโปรแกรม
-* [ ] **เชื่อมโยงการประยุกต์ใช้คอนฟิกตอนบูตระบบ (Startup Apply Integration):**
-  * ยกเลิกการคอมเมนต์ในไฟล์ `main.go` เพื่อเปิดใช้งานกระบวนการนำเอาค่าคอนฟิกของ Firewall (nftables), DHCP Server และ DNS Settings ล่าสุดจากฐานข้อมูล SQLite ไปลงทะเบียนติดตั้งบนเคอร์เนลโดยอัตโนมัติขณะตัวเซิร์ฟเวอร์หลังบ้านกำลังบูตสตาร์ท
-* [ ] **พัฒนาระบบ DHCP Server (Real DHCP Manager):**
-  * พัฒนาระดับชั้นเขียนคอนฟิก (Real Config Writer) เพื่อจัดส่งไฟล์และคำสั่งสตาร์ทบริการให้กับ `dnsmasq` หรือ `isc-dhcp-server` บน Linux Host
-* [ ] **พัฒนาระบบ DNS Server (Real DNS Manager):**
-  * พัฒนาระดับชั้นจัดการแก้ไขไฟล์ `/etc/resolv.conf` หรือระบบจัดการ Local DNS Resolution บนเซิร์ฟเวอร์จริง
-  * **หมายเหตุ:** `systemd-resolved` ถูก integrate ผ่าน D-Bus แล้ว (จัดการ service start/stop/restart) แต่ยังขาดระบบ Local DNS Resolution / FQDN resolution สำหรับ client ภายในเครือข่าย
+* [x] **เชื่อมโยงการประยุกต์ใช้คอนฟิกตอนบูตระบบ (Startup Apply Integration) [สำเร็จ]:**
+  * `main.go` นำค่าคอนฟิกจาก SQLite ไปประยุกต์ใช้บนเคอร์เนลตอนบูตครบทุกระบบตามลำดับ: Time/NTP → Interfaces → Static Routes → Netlink Monitor → Hostname → DHCP Client Sync → DHCP Server → DNS Local Zones → DNS Settings → Firewall → QoS
+* [x] **พัฒนาระบบ DHCP Server (Real DHCP Manager) [สำเร็จ]:**
+  * สร้างคอนฟิก `dnsmasq` (`/etc/dnsmasq.d/pigate-dhcp.conf`) พร้อมตรวจสอบไวยากรณ์ (`dnsmasq --test`), restart ผ่าน systemd D-Bus และ Lease Watcher แบบเรียลไทม์ผ่าน D-Bus signal — ดูรายละเอียดที่ [dnsmasq-design.md](ref/complete/dnsmasq-design.md)
+* [x] **พัฒนาระบบ DNS Server (Real DNS Manager) [สำเร็จ]:**
+  * Local DNS Resolution / FQDN สำหรับ client ภายในเครือข่ายผ่าน `dnsmasq` (`/etc/dnsmasq.d/pigate-dns.conf`) รองรับ Zone/Record และ Authoritative Zone — ดูรายละเอียดที่ [dnsmasq-design.md](ref/complete/dnsmasq-design.md)
 * [ ] **ติดตั้งระบบสถิติกฎไฟร์วอลล์จริง (Live Rule Counters Telemetry):**
   * เรียกใช้ข้อมูล Hit packet และ byte counters จาก `expr.Counter` บน nftables rules นำเสนอเป็นข้อมูล Telemetry เรียลไทม์ผ่าน API ไปแสดงผลในตารางกฎหน้าเว็บโดยไม่ต้องสั่งเขียนบันทึกลง SD card ของบอร์ด
 * [ ] **พัฒนาระบบล็อกความปลอดภัยสตรีมสด (Firewall Logs Stream):**
   * พัฒนาตัวอ่านข้อมูล Kernel Logs (`/dev/kmsg` หรือ Journald) ที่มีข้อความ Prefix เป็น `[PiGate]` นำเข้าสู่ In-Memory Ring Buffer และจัดส่งเป็นสตรีมข้อมูลสด (Server-Sent Events) ไปแสดงบนหน้า Dashboard ของแอดมิน
+* [ ] **พัฒนาข้อมูล Dashboard จริง (Real Dashboard Metrics):**
+  * แทนที่ค่าจำลอง Total Traffic In/Out และ CPU/RAM/Temperature ด้วยข้อมูลจริงจากระบบ (เช่น interface statistics ผ่าน Netlink และ `/proc` / `/sys/class/thermal`) — ปัจจุบัน DHCP Lease Count และสถานะ Wi-Fi เป็นข้อมูลจริงแล้ว
+* [ ] **พัฒนาระบบจัดการ System Services จริง:**
+  * แทนที่รายการ Services จำลอง (`HandleGetSystemServices` / `HandleRestartService`) ด้วยการอ่านสถานะและสั่ง restart unit จริงผ่าน systemd D-Bus
+* [ ] **พัฒนาระบบ Power Control จริง (Reboot/Shutdown):**
+  * เชื่อม `POST /api/system/reboot` และ `/api/system/shutdown` เข้ากับ `org.freedesktop.login1` (systemd-logind) ผ่าน D-Bus พร้อม Polkit rule — ปัจจุบัน handler ตอบ 200 เฉยๆ โดยไม่ทำงานจริง
+
+### 3.1.1 งานปรับปรุงคุณภาพโค้ด (Code Quality Tasks — ดูแผนใน [docs/ref/todo/](ref/todo/))
+* [ ] **รวมศูนย์ Systemd D-Bus Call:** refactor ฟังก์ชัน `IsServiceActiveViaDBus` / `StartServiceViaDBus` / `StopServiceViaDBus` / `RestartServiceViaDBus` ที่ซ้ำกันใน `real_network.go` และ `dns.go` ไปไว้ไฟล์เดียว (`dbus_systemd.go`) — แผนที่ [systemd-dbus-call-design.md](ref/todo/systemd-dbus-call-design.md)
+* [ ] **แก้ Frontend Lint ให้ผ่านทั้งหมด:** `yarn lint` ยัง fail 141 ปัญหา (132 errors, 9 warnings) ใน 27 ไฟล์ — แผนที่ [frontend-lint-check-plan.md](ref/todo/frontend-lint-check-plan.md)
 
 ### 3.2 งานตรวจสอบคุณภาพและการทดสอบบนฮาร์ดแวร์จริง (QA & Hardware Testing)
 * [ ] **ทดสอบบนบอร์ด Raspberry Pi 5 จริง:**

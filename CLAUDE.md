@@ -65,7 +65,7 @@ Startup sequence in `cmd/pigate/main.go` matters: DB init → kernel manager sel
 - `pages/` — one file per top-level route/feature (Dashboard, Interfaces, FirewallPolicy, DhcpServer, DnsServer, QoS, StaticRoutes, SettingsMaintenance, etc.).
 - `services/` — one API client module per backend resource (e.g. `interfaceService.ts`, `policyService.ts`, `dhcpService.ts`); `mockSync.ts` and `config.ts` handle mock-mode/base URL concerns.
 - `components/ui/` — shadcn/ui primitives; **all UI must be built from these**, not ad hoc components (see `docs/rules_of_work.md` §1.1).
-- Feature status (README "Feature Status" table) — Interfaces, Routing, DNS (client), Firewall, QoS are Completed on both frontend/backend; Dashboard, Settings, Import/Export, User System, Power Control are still Mock; DHCP Server and DNS Server (local) backends are In Progress with completed frontend/DB models — check current code state before assuming a feature is finished, this table can drift.
+- Feature status (README "Feature Status" table) — Interfaces, Routing, DNS (client), Firewall, QoS, DHCP Server (dnsmasq), DNS Server (local zones), Hostname, System Time, User System, Import/Export are Completed on both frontend/backend; Power Control and the System Services panel are still Mock; Dashboard backend is Partial (real leases/Wi-Fi, simulated traffic/CPU/RAM/Temp) — check current code state before assuming a feature is finished, this table can drift.
 
 ### Frontend styling rules (`docs/rules_of_work.md`)
 - No hardcoded Tailwind color classes for brand/status colors (e.g. `text-emerald-500`) — always go through theme variables (`text-primary`, `bg-primary/10`, etc.) declared in `src/index.css`.

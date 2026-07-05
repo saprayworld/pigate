@@ -45,6 +45,11 @@ pigate/
 │   │   │   ├── real_routing.go      # Routing table management using Netlink
 │   │   │   ├── real_firewall.go     # nftables management via google/nftables (Netlink)
 │   │   │   ├── real_qos.go          # Traffic Control (tc/HTB/IFB) queuing using Netlink
+│   │   │   ├── real_hostname.go     # System hostname control via systemd-hostnamed (D-Bus)
+│   │   │   ├── real_timedate.go     # Timezone/NTP configuration via systemd-timedated (D-Bus)
+│   │   │   ├── dhcp_server.go       # DHCP server: dnsmasq config generation, validation, and D-Bus lease watcher
+│   │   │   ├── dns_server.go        # Local DNS zones (FQDN) via dnsmasq config generation
+│   │   │   ├── dhcpcd.go            # DHCP client (dhcpcd@<iface>) lifecycle control via systemd D-Bus
 │   │   │   ├── wpa.go               # Wi-Fi management via unix control socket wpa_supplicant
 │   │   │   ├── dns.go               # DNS configuration and systemd-resolved control via D-Bus
 │   │   │   └── mock.go              # Memory-resident mock implementation for local testing
@@ -52,7 +57,16 @@ pigate/
 │   │   │   ├── interface.go         # Network interface status update logic
 │   │   │   ├── routing.go           # Routing logic and metric coordination
 │   │   │   ├── netlink_monitor.go   # Background service monitoring Kernel events for state reconciliation
-│   │   │   └── firewall.go          # Firewall security policy management logic
+│   │   │   ├── firewall.go          # Firewall security policy management logic
+│   │   │   ├── dhcp_server.go       # DHCP server coordination (configs, reservations, live leases)
+│   │   │   ├── dns_server.go        # Local DNS zone/record coordination
+│   │   │   ├── dns.go               # System DNS (systemd-resolved) coordination
+│   │   │   ├── dhcpcd.go            # DHCP client (WAN-side) coordination
+│   │   │   ├── qos.go               # QoS bandwidth rule coordination
+│   │   │   ├── hostname.go          # System hostname coordination
+│   │   │   ├── timesync.go          # Timezone / NTP / manual time coordination
+│   │   │   ├── user.go              # Multi-user account and role management
+│   │   │   └── backup.go            # Typed configuration export/import (backup & restore)
 │   │   ├── model/
 │   │   │   └── types.go             # Data structure structs and validation tags
 │   │   └── logs/
@@ -76,18 +90,19 @@ The following table summarizes the development status of each feature in the PiG
 
 | Feature | Frontend | Backend | Status / Remarks |
 |---|---|---|---|
-| **Dashboard** | Mock | Mock | Real-time traffic graphs (Recharts), system status via Server-Sent Events (SSE), and security event logs. |
-| **Interface** | Completed | Completed | IP management, Netlink interface handling, `wpa_supplicant` Wi-Fi scanning and state management, and random MAC addresses. |
+| **Dashboard** | Completed | Partial | UI with real-time traffic graphs (Recharts) and SSE log stream is complete. DHCP lease count and live Wi-Fi status are real; total traffic and CPU/RAM/Temp metrics are still simulated, and the firewall log stream reads the in-memory ring buffer (no kernel log reader yet). |
+| **Interface** | Completed | Completed | IP management, Netlink interface handling, `wpa_supplicant` Wi-Fi scanning and state management, random MAC addresses, per-interface route metric for multi-WAN failover, and WAN-side DHCP client via `dhcpcd@<iface>` (systemd D-Bus). |
 | **Routing** | Completed | Completed | CRUD operations for static routes, Netlink event monitoring, and automatic routing self-healing. |
-| **DNS System** | Completed | Completed | `systemd-resolved` D-Bus integration completed; local DNS server integration is ongoing. |
+| **DNS System** | Completed | Completed | `systemd-resolved` per-link DNS configuration via D-Bus. |
 | **Firewall System** | Completed | Completed | `nftables` management via Netlink, forward chain policy configuration, WAN Network Address Translation (Masquerade), and Docker compatibility. |
-| **DHCP Server** | Completed | Completed | UI and SQLite database model completed; configuration generation for `dnsmasq` or `isc-dhcp-server` is ongoing. |
-| **DNS Server** | Completed | Completed | UI and SQLite database model completed; configuration generation for local DNS resolution/FQDN is ongoing. |
+| **DHCP Server** | Completed | Completed | `dnsmasq` config generation (`/etc/dnsmasq.d/pigate-dhcp.conf`) with syntax validation (`dnsmasq --test`), service restart via systemd D-Bus, per-interface pools and reservations, and a live lease watcher via dnsmasq D-Bus signals. |
+| **DNS Server** | Completed | Completed | Local DNS zones/FQDN records via `dnsmasq` config generation (`/etc/dnsmasq.d/pigate-dns.conf`), authoritative zone support, and listen-interface selection decoupled from the DHCP server. |
 | **QoS Limiting** | Completed | Completed | HTB and IFB traffic shaping via tc Netlink, supporting Source/Destination IP address ranges (CIDR). |
-| **Setting (Overall)** | Mock | Mock | Administrator password updates, time settings, and system service lifecycle controls via D-Bus. |
+| **System Hostname** | Completed | Completed | Hostname management via `systemd-hostnamed` D-Bus (static + transient), applied at startup, with dependent DHCP client restart. |
+| **System Time** | Completed | Completed | Timezone, NTP toggle/server, and manual time setting via `systemd-timedated` D-Bus; timezone/NTP config re-applied at startup. |
+| **Setting (Overall)** | Completed | Partial | Password change, time, hostname, and export/import are fully functional. The system services list/restart panel is still mock. |
 | **Import/Export** | Completed | Completed | Typed JSON backup (schema v2) with SHA-256 integrity, optional user accounts, and optional passphrase encryption (AES-256-GCM + Argon2id); import uses validate → pre-import snapshot → single-transaction wipe & restore → kernel re-apply (startup order). Cross-machine safe (raw routes, interface match-by-name), `super_admin`-only, with actor lock-out guard. Accepts legacy v1 files. |
 | **User System** | Completed | Completed | Multi-user management (create/edit/delete/enable-disable) with `super_admin` / `admin_readonly` roles, per-request DB-backed session validation, role-based authorization middleware, session-based auth, login rate limiting, and first-time login password change enforcement. |
-| **System Time** | Completed | Completed | Native operating system time synchronization and configuration. |
 | **Power Control (Shutdown/Restart)** | Mock | Mock | Remote power actions (system shutdown or reboot) executed via API. |
 
 ---
@@ -142,9 +157,9 @@ sudo bash install.sh
 
 The script will perform the following actions:
 1. Create a system user named `pigate` and append it to the `netdev` system group.
-2. Configure Access Control Lists (ACLs) for `/etc/wpa_supplicant` and `/etc/systemd/resolved.conf.d`.
-3. Create Polkit rules at `/etc/polkit-1/rules.d/10-pigate-wpa.rules` to authorize the `pigate` user to interact with and control `wpa_supplicant` and `systemd-resolved` services via D-Bus.
-4. Grant Linux capabilities directly to `/usr/sbin/dhcpcd` (no sudo/root required) and prepare `/var/lib/dhcpcd` for the `pigate` user.
+2. Configure Access Control Lists (ACLs) for `/etc/wpa_supplicant`, `/etc/dnsmasq.d`, `/etc/systemd/resolved.conf.d`, and the `systemd-timesyncd` drop-in directory (installing `dnsmasq` if it is missing).
+3. Create a systemd template service `dhcpcd@.service` so the WAN-side DHCP client runs as its own root-owned unit, which PiGate starts/stops per interface via systemd D-Bus (no sudo required).
+4. Create Polkit rules to authorize the `pigate` user to control `wpa_supplicant`, `systemd-resolved`, `dnsmasq`, `systemd-timesyncd`, and `dhcpcd@*` services via D-Bus.
 5. Deploy the binary to `/usr/local/bin/pigate` and assign the required Linux capabilities.
 6. Configure, register, and launch the Systemd service `pigate.service`.
 
@@ -166,9 +181,11 @@ To ensure proper functionality, the host operating system must satisfy the follo
 
 ### Software Dependencies
 - **Linux Kernel** compiled with Netfilter and `nftables` support.
-- **NetworkManager** daemon (with active D-Bus configuration).
+- **systemd** with D-Bus (used to control services, hostname via `systemd-hostnamed`, and time via `systemd-timedated`).
 - **wpa_supplicant** (required for Wi-Fi management capabilities).
 - **systemd-resolved** (required for system-wide DNS configuration management).
+- **dnsmasq** (required for the DHCP Server and local DNS Server features; installed automatically by `install.sh`).
+- **dhcpcd** (required for WAN-side DHCP client operation).
 - **Yarn** package manager and **Node.js** runtime environment (required for building the frontend).
 - **Go 1.26.4+** compiler (required for compiling the backend).
 - **acl** command-line utility (required for file access control list configurations).

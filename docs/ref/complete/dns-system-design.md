@@ -1,3 +1,5 @@
+### 0. DNS System ไม่ใช่ DNS Server
+
 ### 1. Database Layer (รูปแบบ Model ของข้อมูล)
 
 ข้อมูล DNS จะถูกแยกเป็น 2 ระดับ คือ **Global** และ **Interface-specific** ดังนั้น Data Model ควรออกแบบให้รองรับทั้งสองแบบ (ตัวอย่างรูปแบบ Struct/JSON):
