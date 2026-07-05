@@ -12,7 +12,7 @@ function getLocalZones(): DNSZone[] {
   }
   try {
     return JSON.parse(stored);
-  } catch (e) {
+  } catch {
     return initialDNSZones;
   }
 }
@@ -29,7 +29,7 @@ function getLocalSettings(): DNSServerSettings {
   }
   try {
     return JSON.parse(stored);
-  } catch (e) {
+  } catch {
     return initialDNSServerSettings;
   }
 }

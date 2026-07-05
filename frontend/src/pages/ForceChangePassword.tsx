@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { getErrorMessage } from "@/lib/errors"
 import type { FormEvent } from "react"
 import { useNavigate } from "react-router-dom"
 import { Lock, AlertCircle, Loader2, Key, CheckCircle2 } from "lucide-react"
@@ -36,8 +37,8 @@ export default function ForceChangePassword() {
       setTimeout(() => {
         navigate("/")
       }, 1500)
-    } catch (err: any) {
-      setError(err.message || "Failed to change password. Please verify current password.")
+    } catch (err) {
+      setError(getErrorMessage(err) || "Failed to change password. Please verify current password.")
     } finally {
       setIsSubmitting(false)
     }
@@ -47,7 +48,7 @@ export default function ForceChangePassword() {
     try {
       await authService.logout()
       navigate("/login")
-    } catch (err) {
+    } catch {
       navigate("/login")
     }
   }

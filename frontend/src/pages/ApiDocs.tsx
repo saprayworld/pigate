@@ -2,7 +2,7 @@ import SwaggerUI from 'swagger-ui-react';
 import 'swagger-ui-react/swagger-ui.css'; // สำคัญมาก ไม่งั้นหน้าตาจะพัง
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Flame, Moon, Sun } from 'lucide-react';
-import { useTheme } from '@/components/ThemeProvider';
+import { useTheme } from '@/hooks/useTheme';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 

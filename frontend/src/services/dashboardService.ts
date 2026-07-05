@@ -38,7 +38,7 @@ function getLocalLogs(): FirewallLog[] {
   }
   try {
     return JSON.parse(stored);
-  } catch (e) {
+  } catch {
     return initialFirewallLogs;
   }
 }
@@ -58,7 +58,9 @@ export const dashboardService = {
       if (leasesStored) {
         try {
           leaseCount = JSON.parse(leasesStored).length;
-        } catch (e) {}
+        } catch {
+          // ignore malformed lease cache, fall back to default count
+        }
       }
       return {
         firewallStatus: "Active",

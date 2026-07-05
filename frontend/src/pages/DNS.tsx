@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { getErrorMessage } from "@/lib/errors";
 import { systemService, type DNSConfig } from "@/services/systemService";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -39,15 +40,31 @@ export default function DNS() {
       setPrimaryDns(data.primaryDns);
       setSecondaryDns(data.secondaryDns);
       setLocalDomain(data.localDomain || "pigate.local");
-    } catch (err: any) {
-      setError(err.message || "Failed to load DNS settings.");
+    } catch (err) {
+      setError(getErrorMessage(err) || "Failed to load DNS settings.");
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    loadDNSConfig();
+    // isLoading/error already start at their reset values; avoid a synchronous
+    // setState in the effect body
+    const initialLoad = async () => {
+      try {
+        const data = await systemService.getDNSConfig();
+        setConfig(data);
+        setMode(data.mode);
+        setPrimaryDns(data.primaryDns);
+        setSecondaryDns(data.secondaryDns);
+        setLocalDomain(data.localDomain || "pigate.local");
+      } catch (err) {
+        setError(getErrorMessage(err) || "Failed to load DNS settings.");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    initialLoad();
   }, []);
 
   const handleSave = async (e: React.FormEvent) => {
@@ -89,8 +106,8 @@ export default function DNS() {
       setSuccessMsg("บันทึกการตั้งค่า DNS เรียบร้อยแล้ว");
       // Reload config to get refreshed states
       await loadDNSConfig();
-    } catch (err: any) {
-      setError(err.message || "Failed to save DNS settings.");
+    } catch (err) {
+      setError(getErrorMessage(err) || "Failed to save DNS settings.");
     } finally {
       setIsSaving(false);
     }

@@ -1,4 +1,5 @@
-import { useState, useMemo, useRef, useEffect } from "react"
+import { useState, useMemo, useRef, useEffect, useCallback } from "react"
+import { getErrorMessage } from "@/lib/errors"
 import {
   Route,
   Plus,
@@ -39,7 +40,7 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
 import { type StaticRoute, type NetworkInterface } from "@/data-mockup/mockData"
 import { staticRouteService } from "@/services/staticRouteService"
 import { interfaceService } from "@/services/interfaceService"
-import { useAlert } from "@/components/AlertDialogProvider"
+import { useAlert } from "@/hooks/useAlert"
 import { isValidIp, isValidCidr } from "@/lib/utils"
 
 export default function StaticRoutes() {
@@ -93,17 +94,36 @@ export default function StaticRoutes() {
       setAllowEditSystemRoutes(configData.allowEditSystemRoutes)
       setEnableEditSystemRoute(configData.enableEditSystemRoute)
       setInterfaces(interfacesData)
-    } catch (err: any) {
+    } catch (err) {
       console.error(err)
-      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดตารางเส้นทางได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดตารางเส้นทางได้: " + getErrorMessage(err))
     } finally {
       if (showLoading) setIsLoading(false)
     }
   }
 
   useEffect(() => {
-    loadRoutes()
-  }, [])
+    // isLoading already starts true; avoid a synchronous setState in the effect body
+    const initialLoad = async () => {
+      try {
+        const [routesData, configData, interfacesData] = await Promise.all([
+          staticRouteService.getAll(),
+          staticRouteService.getConfig(),
+          interfaceService.getAll()
+        ])
+        setRoutes(routesData)
+        setAllowEditSystemRoutes(configData.allowEditSystemRoutes)
+        setEnableEditSystemRoute(configData.enableEditSystemRoute)
+        setInterfaces(interfacesData)
+      } catch (err) {
+        console.error(err)
+        await alert("ข้อผิดพลาด", "ไม่สามารถโหลดตารางเส้นทางได้: " + getErrorMessage(err))
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    initialLoad()
+  }, [alert])
 
   const handleToggleEditSystemMode = async (checked: boolean) => {
     if (checked) {
@@ -154,12 +174,12 @@ export default function StaticRoutes() {
     })
   }, [routes, searchQuery, selectedTypeFilter, selectedStatusFilter])
 
-  const isRouteActionDisabled = (route: StaticRoute) => {
+  const isRouteActionDisabled = useCallback((route: StaticRoute) => {
     if (uiEditSystemRouteActive) return false
     if (route.kernelOnly) return true
     if (route.type === "system" && !allowEditSystemRoutes) return true
     return false
-  }
+  }, [uiEditSystemRouteActive, allowEditSystemRoutes])
 
   const getEditTitle = (route: StaticRoute) => {
     if (uiEditSystemRouteActive) {
@@ -188,7 +208,7 @@ export default function StaticRoutes() {
   // --- Checkbox Actions (Only Custom / Default Gateway Routes or all routes if system route editing is allowed) ---
   const selectableRoutes = useMemo(() => {
     return filteredRoutes.filter(r => !isRouteActionDisabled(r))
-  }, [filteredRoutes, allowEditSystemRoutes, uiEditSystemRouteActive])
+  }, [filteredRoutes, isRouteActionDisabled])
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
@@ -216,8 +236,8 @@ export default function StaticRoutes() {
     try {
       await staticRouteService.toggleStatus(id)
       await loadRoutes(false)
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "ไม่สามารถเปลี่ยนสถานะเส้นทางได้: " + (err.message || err))
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถเปลี่ยนสถานะเส้นทางได้: " + getErrorMessage(err))
     }
   }
 
@@ -277,8 +297,8 @@ export default function StaticRoutes() {
         await staticRouteService.delete(id)
         setSelectedIds(prev => prev.filter(item => item !== id))
         await loadRoutes(false)
-      } catch (err: any) {
-        await alert("ข้อผิดพลาด", "ไม่สามารถลบเส้นทางได้: " + (err.message || err))
+      } catch (err) {
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบเส้นทางได้: " + getErrorMessage(err))
       }
     }
   }
@@ -289,8 +309,8 @@ export default function StaticRoutes() {
         await staticRouteService.deleteMultiple(selectedIds)
         setSelectedIds([])
         await loadRoutes(false)
-      } catch (err: any) {
-        await alert("ข้อผิดพลาด", "ไม่สามารถลบเส้นทางได้: " + (err.message || err))
+      } catch (err) {
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบเส้นทางได้: " + getErrorMessage(err))
       }
     }
   }
@@ -371,8 +391,8 @@ export default function StaticRoutes() {
       }
       await loadRoutes(false)
       setIsModalOpen(false)
-    } catch (err: any) {
-      setFormError(err.message || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
+    } catch (err) {
+      setFormError(getErrorMessage(err) || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
     }
   }
 

@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react"
+import { getErrorMessage } from "@/lib/errors"
 import {
   Globe,
   Plus,
@@ -38,7 +39,7 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
 import { type DNSZone, type DNSRecord, type NetworkInterface } from "@/data-mockup/mockData"
 import { dnsServerService } from "@/services/dnsServerService"
 import { interfaceService } from "@/services/interfaceService"
-import { useAlert } from "@/components/AlertDialogProvider"
+import { useAlert } from "@/hooks/useAlert"
 import { isValidIp } from "@/lib/utils"
 
 export default function DnsServer() {
@@ -85,32 +86,31 @@ export default function DnsServer() {
   const [selectedInterfaces, setSelectedInterfaces] = useState<string[]>([])
   const [isSavingInterfaces, setIsSavingInterfaces] = useState(false)
 
-  // Load DNS Data
-  const loadDnsData = async (showLoading = true) => {
-    if (showLoading) setIsLoading(true)
-    try {
-      const [data, ifaces, settings] = await Promise.all([
-        dnsServerService.getZones(),
-        interfaceService.getAll(),
-        dnsServerService.getSettings(),
-      ])
-      setZones(data || [])
-      if ((data || []).length > 0 && !selectedZoneId) {
-        setSelectedZoneId(data[0].id)
-      }
-      setAvailableInterfaces((ifaces || []).filter(i => i.role === "LAN"))
-      setSelectedInterfaces(settings.interfaces || [])
-    } catch (err: any) {
-      console.error(err)
-      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูล DNS Server ได้: " + (err.message || err))
-    } finally {
-      if (showLoading) setIsLoading(false)
-    }
-  }
-
   useEffect(() => {
-    loadDnsData()
-  }, [])
+    // isLoading already starts true; avoid a synchronous setState in the effect body.
+    // selectedZoneId is still its initial null value on this first-mount load.
+    const initialLoad = async () => {
+      try {
+        const [data, ifaces, settings] = await Promise.all([
+          dnsServerService.getZones(),
+          interfaceService.getAll(),
+          dnsServerService.getSettings(),
+        ])
+        setZones(data || [])
+        if ((data || []).length > 0) {
+          setSelectedZoneId(data[0].id)
+        }
+        setAvailableInterfaces((ifaces || []).filter(i => i.role === "LAN"))
+        setSelectedInterfaces(settings.interfaces || [])
+      } catch (err) {
+        console.error(err)
+        await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูล DNS Server ได้: " + getErrorMessage(err))
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    initialLoad()
+  }, [alert])
 
   // --- Handlers: Listen Interfaces ---
   const handleToggleInterface = async (name: string, checked: boolean) => {
@@ -123,8 +123,8 @@ export default function DnsServer() {
       await dnsServerService.updateSettings({ interfaces: next })
       setSelectedInterfaces(next)
       setIsApplied(false)
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "ไม่สามารถบันทึก Interface ของ DNS Server ได้: " + (err.message || err))
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถบันทึก Interface ของ DNS Server ได้: " + getErrorMessage(err))
     } finally {
       setIsSavingInterfaces(false)
     }
@@ -184,8 +184,8 @@ export default function DnsServer() {
           setSelectedZoneId(remaining.length > 0 ? remaining[0].id : null)
         }
         setIsApplied(false)
-      } catch (err: any) {
-        await alert("ข้อผิดพลาด", "ไม่สามารถลบโซนได้: " + (err.message || err))
+      } catch (err) {
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบโซนได้: " + getErrorMessage(err))
       }
     }
   }
@@ -195,8 +195,8 @@ export default function DnsServer() {
       await dnsServerService.toggleZone(id)
       setZones(prev => prev.map(z => z.id === id ? { ...z, enabled: checked } : z))
       setIsApplied(false)
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "ไม่สามารถเปิด/ปิดโซนได้: " + (err.message || err))
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถเปิด/ปิดโซนได้: " + getErrorMessage(err))
     }
   }
 
@@ -249,8 +249,8 @@ export default function DnsServer() {
 
       setIsZoneModalOpen(false)
       setIsApplied(false)
-    } catch (err: any) {
-      setZoneError(err.message || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
+    } catch (err) {
+      setZoneError(getErrorMessage(err) || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
     } finally {
       setIsSaving(false)
     }
@@ -291,8 +291,8 @@ export default function DnsServer() {
           return z
         }))
         setIsApplied(false)
-      } catch (err: any) {
-        await alert("ข้อผิดพลาด", "ไม่สามารถลบระเบียนได้: " + (err.message || err))
+      } catch (err) {
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบระเบียนได้: " + getErrorMessage(err))
       }
     }
   }
@@ -359,8 +359,8 @@ export default function DnsServer() {
 
       setIsRecModalOpen(false)
       setIsApplied(false)
-    } catch (err: any) {
-      setRecError(err.message || "เกิดข้อผิดพลาดในการบันทึกข้อมูลระเบียน")
+    } catch (err) {
+      setRecError(getErrorMessage(err) || "เกิดข้อผิดพลาดในการบันทึกข้อมูลระเบียน")
     } finally {
       setIsSaving(false)
     }
@@ -372,8 +372,8 @@ export default function DnsServer() {
     try {
       await dnsServerService.apply()
       setIsApplied(true)
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "ไม่สามารถเริ่มระบบ DNS เข้ากับ OS Kernel ได้: " + (err.message || err))
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถเริ่มระบบ DNS เข้ากับ OS Kernel ได้: " + getErrorMessage(err))
     } finally {
       setIsApplying(false)
     }
@@ -384,8 +384,8 @@ export default function DnsServer() {
     try {
       await dnsServerService.clearCache()
       await alert("สำเร็จ", "เคลียร์หน่วยความจำแคช DNS ของระบบเรียบร้อยแล้ว")
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "ไม่สามารถเคลียร์หน่วยความจำแคชได้: " + (err.message || err))
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถเคลียร์หน่วยความจำแคชได้: " + getErrorMessage(err))
     } finally {
       setIsClearingCache(false)
     }

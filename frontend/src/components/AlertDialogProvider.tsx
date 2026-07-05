@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type ReactNode } from "react"
+import { useState, useCallback, type ReactNode } from "react"
 import {
   Dialog,
   DialogContent,
@@ -8,6 +8,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import { AlertDialogContext } from "@/hooks/alert-context"
 
 interface AlertConfig {
   title: string
@@ -16,25 +17,12 @@ interface AlertConfig {
   resolve: (value: boolean) => void
 }
 
-interface AlertDialogContextType {
-  alert: (title: string, message: string) => Promise<void>
-  confirm: (title: string, message: string) => Promise<boolean>
-}
-
-const AlertDialogContext = createContext<AlertDialogContextType | null>(null)
-
-export function useAlert() {
-  const context = useContext(AlertDialogContext)
-  if (!context) {
-    throw new Error("useAlert must be used within an AlertDialogProvider")
-  }
-  return context
-}
-
 export function AlertDialogProvider({ children }: { children: ReactNode }) {
   const [config, setConfig] = useState<AlertConfig | null>(null)
 
-  const alert = (title: string, message: string): Promise<void> => {
+  // Stable identity (useCallback + setState setter only) so effects that call
+  // alert()/confirm() on an error path can safely list them as a dependency.
+  const alert = useCallback((title: string, message: string): Promise<void> => {
     return new Promise<void>((resolve) => {
       setConfig({
         title,
@@ -46,9 +34,9 @@ export function AlertDialogProvider({ children }: { children: ReactNode }) {
         },
       })
     })
-  }
+  }, [])
 
-  const confirm = (title: string, message: string): Promise<boolean> => {
+  const confirm = useCallback((title: string, message: string): Promise<boolean> => {
     return new Promise((resolve) => {
       setConfig({
         title,
@@ -60,7 +48,7 @@ export function AlertDialogProvider({ children }: { children: ReactNode }) {
         },
       })
     })
-  }
+  }, [])
 
   return (
     <AlertDialogContext.Provider value={{ alert, confirm }}>

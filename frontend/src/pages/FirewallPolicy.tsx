@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from "react"
+import { getErrorMessage } from "@/lib/errors"
 import {
   Flame,
   Plus,
@@ -22,7 +23,7 @@ import { policyService } from "@/services/policyService"
 import { addressService } from "@/services/addressService"
 import { serviceObjectService } from "@/services/serviceObjectService"
 import { interfaceService } from "@/services/interfaceService"
-import { useAlert } from "@/components/AlertDialogProvider"
+import { useAlert } from "@/hooks/useAlert"
 
 // shadcn UI component imports
 import {
@@ -294,9 +295,9 @@ export default function FirewallPolicy() {
       setAddressObjects(addressData)
       setServiceObjects(serviceData)
       setInterfaces(interfaceData)
-    } catch (err: any) {
+    } catch (err) {
       console.error(err)
-      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูลไฟร์วอลล์ได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูลไฟร์วอลล์ได้: " + getErrorMessage(err))
     } finally {
       if (showLoading) setIsLoading(false)
     }
@@ -336,8 +337,28 @@ export default function FirewallPolicy() {
   }, [interfaces])
 
   useEffect(() => {
-    loadPolicies()
-  }, [])
+    // isLoading already starts true; avoid a synchronous setState in the effect body
+    const initialLoad = async () => {
+      try {
+        const [policyData, addressData, serviceData, interfaceData] = await Promise.all([
+          policyService.getAll(),
+          addressService.getAll(),
+          serviceObjectService.getAll(),
+          interfaceService.getAll()
+        ])
+        setRules(policyData)
+        setAddressObjects(addressData)
+        setServiceObjects(serviceData)
+        setInterfaces(interfaceData)
+      } catch (err) {
+        console.error(err)
+        await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูลไฟร์วอลล์ได้: " + getErrorMessage(err))
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    initialLoad()
+  }, [alert])
 
   const handleApplySettings = async () => {
     setIsApplying(true)
@@ -359,9 +380,9 @@ export default function FirewallPolicy() {
           }, 5000)
         }, 600)
       }, 600)
-    } catch (err: any) {
+    } catch (err) {
       setIsApplying(false)
-      await alert("ข้อผิดพลาด", "ไม่สามารถใช้การตั้งค่าได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถใช้การตั้งค่าได้: " + getErrorMessage(err))
     }
   }
 
@@ -454,8 +475,8 @@ export default function FirewallPolicy() {
       }
       await loadPolicies(false)
       setIsModalOpen(false)
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "ไม่สามารถบันทึกกฎไฟร์วอลล์ได้: " + (err.message || err))
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถบันทึกกฎไฟร์วอลล์ได้: " + getErrorMessage(err))
     }
   }
 
@@ -464,8 +485,8 @@ export default function FirewallPolicy() {
     try {
       await policyService.toggleLog(id)
       await loadPolicies(false)
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "ไม่สามารถเปลี่ยนค่าสถานะ Log ได้: " + (err.message || err))
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถเปลี่ยนค่าสถานะ Log ได้: " + getErrorMessage(err))
     }
   }
 
@@ -473,8 +494,8 @@ export default function FirewallPolicy() {
     try {
       await policyService.toggleStatus(id)
       await loadPolicies(false)
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "ไม่สามารถเปลี่ยนสถานะใช้งานกฎได้: " + (err.message || err))
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถเปลี่ยนสถานะใช้งานกฎได้: " + getErrorMessage(err))
     }
   }
 
@@ -483,8 +504,8 @@ export default function FirewallPolicy() {
       try {
         await policyService.delete(id)
         await loadPolicies(false)
-      } catch (err: any) {
-        await alert("ข้อผิดพลาด", "ไม่สามารถลบกฎได้: " + (err.message || err))
+      } catch (err) {
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบกฎได้: " + getErrorMessage(err))
       }
     }
   }
@@ -514,8 +535,8 @@ export default function FirewallPolicy() {
 
       try {
         await policyService.saveAll(newRules)
-      } catch (err: any) {
-        await alert("ข้อผิดพลาด", "ไม่สามารถบันทึกการจัดลำดับกฎใหม่ได้: " + (err.message || err))
+      } catch (err) {
+        await alert("ข้อผิดพลาด", "ไม่สามารถบันทึกการจัดลำดับกฎใหม่ได้: " + getErrorMessage(err))
         await loadPolicies(false)
       }
     }

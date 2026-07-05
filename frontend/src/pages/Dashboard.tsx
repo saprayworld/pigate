@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react"
+import { getErrorMessage } from "@/lib/errors"
 import {
   Activity,
   Shield,
@@ -29,8 +30,8 @@ import { dashboardService, type DashboardStats } from "@/services/dashboardServi
 import { interfaceService } from "@/services/interfaceService"
 import { systemService } from "@/services/systemService"
 import { type NetworkInterface } from "@/data-mockup/mockData"
-import { useAlert } from "@/components/AlertDialogProvider"
-import { useTheme } from "@/components/ThemeProvider"
+import { useAlert } from "@/hooks/useAlert"
+import { useTheme } from "@/hooks/useTheme"
 
 // Structure for Recharts data
 interface TrafficData {
@@ -103,12 +104,22 @@ export default function Dashboard() {
     try {
       const data = await dashboardService.getStats()
       setStats(data)
-    } catch (err) { }
+    } catch {
+      // ignore transient poll failures, keep showing last known stats
+    }
   }
 
   useEffect(() => {
-    fetchStats()
-    const statsInterval = setInterval(fetchStats, 10000)
+    const pollStats = async () => {
+      try {
+        const data = await dashboardService.getStats()
+        setStats(data)
+      } catch {
+        // ignore transient poll failures, keep showing last known stats
+      }
+    }
+    pollStats()
+    const statsInterval = setInterval(pollStats, 10000)
     return () => clearInterval(statsInterval)
   }, [])
 
@@ -135,7 +146,7 @@ export default function Dashboard() {
         setMemUsage(perf.memory)
         setBoardTemp(perf.temp)
         setIsLoadingPerf(false)
-      } catch (err) {
+      } catch {
         setIsLoadingPerf(false)
       }
     }
@@ -168,7 +179,9 @@ export default function Dashboard() {
     try {
       const data = await interfaceService.getAll()
       setInterfaces(data)
-    } catch (err) { }
+    } catch {
+      // ignore refresh failure, keep showing last known interfaces
+    }
     setIsLoadingInterfaces(false)
   }
 
@@ -230,7 +243,9 @@ export default function Dashboard() {
       try {
         const initialLogs = await dashboardService.getRecentLogs()
         setLogs(initialLogs)
-      } catch (err) { }
+      } catch {
+        // ignore, live SSE stream will populate logs once connected
+      }
     }
     loadLogs()
   }, [])
@@ -243,6 +258,7 @@ export default function Dashboard() {
         cleanupSSERef.current()
         cleanupSSERef.current = null
       }
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- synchronously reflects the SSE subscription being torn down, not derived/async state
       setSseStatus("disconnected")
       return
     }
@@ -257,7 +273,7 @@ export default function Dashboard() {
           return combined.slice(0, 50)
         })
       },
-      (_err) => {
+      () => {
         setSseStatus("disconnected")
       }
     )
@@ -332,7 +348,9 @@ export default function Dashboard() {
       setCpuUsage(perf.cpu)
       setMemUsage(perf.memory)
       setBoardTemp(perf.temp)
-    } catch (err) { }
+    } catch {
+      // ignore, keep showing last known performance metrics
+    }
     handleRefreshInterfaces()
   }
 
@@ -340,8 +358,8 @@ export default function Dashboard() {
     try {
       await dashboardService.clearLogs()
       setLogs([])
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "Failed to clear logs: " + err.message)
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "Failed to clear logs: " + getErrorMessage(err))
     }
   }
 
