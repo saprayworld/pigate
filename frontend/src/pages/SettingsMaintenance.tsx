@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react"
+import { getErrorMessage } from "@/lib/errors"
 import {
   Settings,
   Activity,
@@ -52,8 +53,19 @@ import {
 } from "@/data-mockup/mockData"
 import { systemService, type SystemHostnameSettings, type ImportResult } from "@/services/systemService"
 import { authService } from "@/services/authService"
-import { useAlert } from "@/components/AlertDialogProvider"
+import { useAlert } from "@/hooks/useAlert"
 import { buildTimeZoneOptions } from "@/lib/timezones"
+
+// Shape of an uploaded backup file once JSON.parse'd; only the fields read for
+// the import preview/confirmation flow are modeled here.
+interface ParsedBackupFile {
+  meta?: {
+    hostname?: string
+    exportedAt?: string
+    encrypted?: boolean
+  }
+  config?: Record<string, unknown>
+}
 
 export default function SettingsMaintenance() {
   const { alert, confirm } = useAlert()
@@ -133,15 +145,33 @@ export default function SettingsMaintenance() {
       setTimeSettings(timeData)
       setServices(servicesData)
       setHostnameSettings(hostnameData)
-    } catch (err: any) {
-      setError(err.message || "Failed to load system settings.")
+    } catch (err) {
+      setError(getErrorMessage(err) || "Failed to load system settings.")
     } finally {
       setIsLoading(false)
     }
   }
 
   useEffect(() => {
-    loadData()
+    // isLoading/error already start at their reset values; avoid a synchronous
+    // setState in the effect body
+    const initialLoad = async () => {
+      try {
+        const [timeData, servicesData, hostnameData] = await Promise.all([
+          systemService.getTimeSettings(),
+          systemService.getServices(),
+          systemService.getHostname(),
+        ])
+        setTimeSettings(timeData)
+        setServices(servicesData)
+        setHostnameSettings(hostnameData)
+      } catch (err) {
+        setError(getErrorMessage(err) || "Failed to load system settings.")
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    initialLoad()
   }, [])
 
   // --- Handlers ---
@@ -172,8 +202,8 @@ export default function SettingsMaintenance() {
       setCurrentPassword("")
       setNewPassword("")
       setConfirmNewPassword("")
-    } catch (err: any) {
-      setPasswordFeedback({ type: "error", message: err.message || "ไม่สามารถเปลี่ยนรหัสผ่านได้" })
+    } catch (err) {
+      setPasswordFeedback({ type: "error", message: getErrorMessage(err) || "ไม่สามารถเปลี่ยนรหัสผ่านได้" })
     }
   }
 
@@ -191,8 +221,8 @@ export default function SettingsMaintenance() {
       const updated = await systemService.updateTimeSettings(timeSettings)
       setTimeSettings(updated)
       setTimeFeedback({ type: "success", message: "บันทึกการตั้งค่าระบบเวลา และ NTP สำเร็จ!" })
-    } catch (err: any) {
-      setTimeFeedback({ type: "error", message: err.message || "ไม่สามารถบันทึกการตั้งค่าเวลาได้" })
+    } catch (err) {
+      setTimeFeedback({ type: "error", message: getErrorMessage(err) || "ไม่สามารถบันทึกการตั้งค่าเวลาได้" })
     }
   }
 
@@ -216,8 +246,8 @@ export default function SettingsMaintenance() {
       setTimeSettings(updated)
       setManualDateTime("")
       setTimeFeedback({ type: "success", message: "ตั้งเวลาระบบด้วยมือสำเร็จ!" })
-    } catch (err: any) {
-      setTimeFeedback({ type: "error", message: err.message || "ไม่สามารถตั้งเวลาได้" })
+    } catch (err) {
+      setTimeFeedback({ type: "error", message: getErrorMessage(err) || "ไม่สามารถตั้งเวลาได้" })
     } finally {
       setIsSettingTime(false)
     }
@@ -249,8 +279,8 @@ export default function SettingsMaintenance() {
     try {
       await systemService.updateHostname(hostnameSettings)
       setHostnameFeedback({ type: "success", message: "บันทึกการตั้งค่า Hostname สำเร็จ! (การเชื่อมต่อ WAN อาจสะดุดชั่วขณะหากเปิด/แก้ไขการ share hostname)" })
-    } catch (err: any) {
-      setHostnameFeedback({ type: "error", message: err.message || "ไม่สามารถบันทึกการตั้งค่า Hostname ได้" })
+    } catch (err) {
+      setHostnameFeedback({ type: "error", message: getErrorMessage(err) || "ไม่สามารถบันทึกการตั้งค่า Hostname ได้" })
     }
   }
 
@@ -260,8 +290,8 @@ export default function SettingsMaintenance() {
     setPowerStatus("rebooting")
     try {
       await systemService.reboot()
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "Failed to reboot system: " + err.message)
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "Failed to reboot system: " + getErrorMessage(err))
       setPowerStatus("idle")
       return
     }
@@ -288,8 +318,8 @@ export default function SettingsMaintenance() {
       setTimeout(() => {
         setPowerStatus("powered-off")
       }, 3000)
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "Failed to shutdown system: " + err.message)
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "Failed to shutdown system: " + getErrorMessage(err))
       setPowerStatus("idle")
     }
   }
@@ -345,8 +375,8 @@ export default function SettingsMaintenance() {
           ? `ส่งออกไฟล์สำรองข้อมูลสำเร็จ (รวมบัญชีผู้ใช้)${encNote} — ไฟล์มีรหัสผ่าน Wi-Fi และข้อมูลบัญชี โปรดเก็บรักษาอย่างปลอดภัย`
           : `ส่งออกไฟล์สำรองข้อมูล (Configuration Export) สำเร็จแล้ว!${encNote} ไฟล์มีรหัสผ่าน Wi-Fi โปรดเก็บรักษาอย่างปลอดภัย`,
       })
-    } catch (err: any) {
-      setBackupFeedback({ type: "error", message: err.message || "ไม่สามารถส่งออกไฟล์สำรองข้อมูลได้" })
+    } catch (err) {
+      setBackupFeedback({ type: "error", message: getErrorMessage(err) || "ไม่สามารถส่งออกไฟล์สำรองข้อมูลได้" })
     } finally {
       setIsExporting(false)
     }
@@ -368,7 +398,7 @@ export default function SettingsMaintenance() {
       return
     }
 
-    let parsed: any
+    let parsed: ParsedBackupFile
     try {
       parsed = JSON.parse(await importFile.text())
     } catch {
@@ -386,7 +416,8 @@ export default function SettingsMaintenance() {
     // Build a human preview from the file metadata (v2) or fall back for v1.
     const meta = parsed?.meta
     const cfg = parsed?.config ?? {}
-    const fileHasUsers = Array.isArray(cfg.users) && cfg.users.length > 0
+    const userCount = Array.isArray(cfg.users) ? cfg.users.length : 0
+    const fileHasUsers = userCount > 0
     const sectionLine = (label: string, v: unknown) =>
       Array.isArray(v) && v.length > 0 ? `\n• ${label}: ${v.length}` : ""
     const previewLines = [
@@ -401,7 +432,7 @@ export default function SettingsMaintenance() {
       sectionLine("DHCP Configs", cfg.dhcpConfigs),
       sectionLine("DNS Zones", cfg.dnsZones),
       sectionLine("QoS Rules", cfg.qosRules),
-      fileHasUsers ? `\n• บัญชีผู้ใช้: ${cfg.users.length}` : "",
+      fileHasUsers ? `\n• บัญชีผู้ใช้: ${userCount}` : "",
     ]
       .filter(Boolean)
       .join("")
@@ -438,8 +469,8 @@ export default function SettingsMaintenance() {
       if (fileInput) fileInput.value = ""
 
       await loadData()
-    } catch (err: any) {
-      setBackupFeedback({ type: "error", message: err.message || "ไม่สามารถนำเข้าไฟล์สำรองข้อมูลได้" })
+    } catch (err) {
+      setBackupFeedback({ type: "error", message: getErrorMessage(err) || "ไม่สามารถนำเข้าไฟล์สำรองข้อมูลได้" })
     } finally {
       setIsImporting(false)
     }
@@ -452,8 +483,8 @@ export default function SettingsMaintenance() {
       await systemService.restartService(id)
       const updatedServices = await systemService.getServices()
       setServices(updatedServices)
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "Failed to restart service: " + err.message)
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "Failed to restart service: " + getErrorMessage(err))
     } finally {
       setRestartingServiceId(null)
     }

@@ -37,7 +37,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuGroup
 } from "@/components/ui/dropdown-menu"
-import { useTheme } from "@/components/ThemeProvider"
+import { useTheme } from "@/hooks/useTheme"
 
 export default function ShellLayout() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
@@ -65,7 +65,7 @@ export default function ShellLayout() {
         setTopbarCpu(perf.cpu)
         setTopbarMem(perf.memory)
         setTopbarTemp(perf.temp)
-      } catch (err) { /* silently ignore */ }
+      } catch { /* silently ignore */ }
     }
     fetchPerf()
     const interval = setInterval(fetchPerf, 5000)
@@ -149,7 +149,7 @@ export default function ShellLayout() {
     }
   ]
 
-  const SidebarContent = () => (
+  const sidebarContent = (
     <div className="flex h-full flex-col bg-sidebar border-r border-sidebar-border text-sidebar-foreground">
       {/* Brand Header */}
       <div className="flex h-16 items-center gap-2 px-6 border-b border-sidebar-border bg-sidebar">
@@ -208,7 +208,7 @@ export default function ShellLayout() {
     <div className="flex min-h-svh bg-background text-foreground font-sans antialiased">
       {/* Desktop Sidebar (hidden on mobile) */}
       <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 z-20">
-        <SidebarContent />
+        {sidebarContent}
       </aside>
 
       {/* Mobile Sidebar Backing */}
@@ -224,7 +224,7 @@ export default function ShellLayout() {
         className={`fixed top-0 bottom-0 left-0 w-64 bg-sidebar z-40 transform transition-transform duration-300 md:hidden ${isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
           }`}
       >
-        <SidebarContent />
+        {sidebarContent}
       </div>
 
       {/* Main Content Area */}

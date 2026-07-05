@@ -22,7 +22,7 @@ function getLocalConfigs(): DhcpConfig[] {
   }
   try {
     return JSON.parse(stored);
-  } catch (e) {
+  } catch {
     return initialDhcpConfigs;
   }
 }
@@ -40,7 +40,7 @@ function getLocalReservations(): DhcpReservation[] {
   }
   try {
     return JSON.parse(stored);
-  } catch (e) {
+  } catch {
     return initialDhcpReservations;
   }
 }
@@ -58,7 +58,7 @@ function getLocalLeases(): ActiveDhcpLease[] {
   }
   try {
     return JSON.parse(stored);
-  } catch (e) {
+  } catch {
     return initialActiveDhcpLeases;
   }
 }

@@ -1,5 +1,7 @@
 // Helper to synchronize references between Firewall Policies, Address Objects, and Service Objects in Mock Mode.
 
+import type { AddressObject, PolicyRule, ServiceObject } from "@/data-mockup/mockData";
+
 const POLICIES_KEY = "pigate_firewall_policies";
 const ADDRESSES_KEY = "pigate_addresses";
 const SERVICES_KEY = "pigate_service_objects";
@@ -27,15 +29,15 @@ export function syncReferences() {
     let servicesChanged = false;
 
     // 1. Recalculate Address Object references
-    const updatedAddresses = addresses.map((addr: any) => {
+    const updatedAddresses = addresses.map((addr: AddressObject) => {
       // An address is referenced if its name or value is in a policy's source or destination list
       const refs = policies
-        .filter((policy: any) => {
+        .filter((policy: PolicyRule) => {
           const srcMatch = policy.source && (policy.source.includes(addr.name) || policy.source.includes(addr.value));
           const destMatch = policy.destination && (policy.destination.includes(addr.name) || policy.destination.includes(addr.value));
           return srcMatch || destMatch;
         })
-        .map((policy: any) => policy.name);
+        .map((policy: PolicyRule) => policy.name);
 
       const uniqueRefs = Array.from(new Set(refs)) as string[];
       
@@ -53,21 +55,21 @@ export function syncReferences() {
     });
 
     // 2. Recalculate Service Object references
-    const updatedServices = services.map((svc: any) => {
+    const updatedServices = services.map((svc: ServiceObject) => {
       // A service is referenced if its name matches a policy's service list,
       // or if the policy service is formatted as "ServiceName (port)"
       const refs = policies
-        .filter((policy: any) => {
+        .filter((policy: PolicyRule) => {
           if (!policy.service) return false;
           return policy.service.some((ps: string) => {
             if (ps === svc.name) return true;
             // Matches "ServiceName (anything)"
-            const nameEscaped = svc.name.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+            const nameEscaped = svc.name.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
             const regex = new RegExp(`^${nameEscaped}\\s*\\(.*\\)$`);
             return regex.test(ps);
           });
         })
-        .map((policy: any) => policy.name);
+        .map((policy: PolicyRule) => policy.name);
 
       const uniqueRefs = Array.from(new Set(refs)) as string[];
 
@@ -107,7 +109,7 @@ export function propagateAddressRename(oldName: string, newName: string) {
     const policies = JSON.parse(policiesStr);
     let policiesChanged = false;
 
-    const updatedPolicies = policies.map((policy: any) => {
+    const updatedPolicies = policies.map((policy: PolicyRule) => {
       let policyChanged = false;
       let newSource = policy.source || [];
       let newDest = policy.destination || [];
@@ -155,7 +157,7 @@ export function propagateServiceRename(oldName: string, _oldPort: string, _oldPr
       if (ps === oldName) return newName;
 
       // Match "oldName (port)" or "oldName (proto port)"
-      const oldNameEscaped = oldName.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+      const oldNameEscaped = oldName.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
       const regex = new RegExp(`^${oldNameEscaped}\\s*\\((.*)\\)$`);
       if (regex.test(ps)) {
         // Replace with new name and new port
@@ -167,9 +169,9 @@ export function propagateServiceRename(oldName: string, _oldPort: string, _oldPr
       return ps;
     };
 
-    const updatedPolicies = policies.map((policy: any) => {
+    const updatedPolicies = policies.map((policy: PolicyRule) => {
       let policyChanged = false;
-      let newService = policy.service || [];
+      const newService = policy.service || [];
 
       const mappedService = newService.map((ps: string) => {
         const replaced = matchAndReplace(ps);

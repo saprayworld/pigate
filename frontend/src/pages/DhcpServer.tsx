@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from "react"
+import { getErrorMessage } from "@/lib/errors"
 import {
   Radio,
   Plus,
@@ -42,7 +43,7 @@ import {
   type ActiveDhcpLease
 } from "@/data-mockup/mockData"
 import { dhcpService } from "@/services/dhcpService"
-import { useAlert } from "@/components/AlertDialogProvider"
+import { useAlert } from "@/hooks/useAlert"
 import { isValidIp } from "@/lib/utils"
 
 export default function DhcpServer() {
@@ -90,31 +91,29 @@ export default function DhcpServer() {
 
   const dialogContentRef = useRef<HTMLDivElement | null>(null)
 
-  // Fetch logic
-  const loadDhcpData = async (showLoading = true) => {
-    if (showLoading) setIsLoading(true)
-    try {
-      const [cfgs, res, leases, avIface] = await Promise.all([
-        dhcpService.getConfigs(),
-        dhcpService.getReservations(),
-        dhcpService.getActiveLeases(),
-        dhcpService.getAvailableInterfaces()
-      ])
-      setConfigs(cfgs || [])
-      setReservations(res || [])
-      setActiveLeases(leases || [])
-      setAvailableInterfaces(avIface || [])
-    } catch (err: any) {
-      console.error(err)
-      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูล DHCP ได้: " + (err.message || err))
-    } finally {
-      if (showLoading) setIsLoading(false)
-    }
-  }
-
   useEffect(() => {
-    loadDhcpData()
-  }, [])
+    // isLoading already starts true; avoid a synchronous setState in the effect body
+    const initialLoad = async () => {
+      try {
+        const [cfgs, res, leases, avIface] = await Promise.all([
+          dhcpService.getConfigs(),
+          dhcpService.getReservations(),
+          dhcpService.getActiveLeases(),
+          dhcpService.getAvailableInterfaces()
+        ])
+        setConfigs(cfgs || [])
+        setReservations(res || [])
+        setActiveLeases(leases || [])
+        setAvailableInterfaces(avIface || [])
+      } catch (err) {
+        console.error(err)
+        await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูล DHCP ได้: " + getErrorMessage(err))
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    initialLoad()
+  }, [alert])
 
   // --- Helpers ---
   const macRegex = /^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$/
@@ -180,7 +179,7 @@ export default function DhcpServer() {
       setFormLeaseTime("86400")
       setConfigError("")
       setIsConfigModalOpen(true)
-    } catch (e: any) {
+    } catch (e) {
       console.error(e)
     }
   }
@@ -204,8 +203,8 @@ export default function DhcpServer() {
       await dhcpService.toggleConfig(id)
       setConfigs(prev => prev.map(c => c.id === id ? { ...c, enabled: checked } : c))
       setIsApplied(false)
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "ไม่สามารถเปิด/ปิดบริการ DHCP ได้: " + (err.message || err))
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถเปิด/ปิดบริการ DHCP ได้: " + getErrorMessage(err))
     }
   }
 
@@ -217,8 +216,8 @@ export default function DhcpServer() {
         const avIface = await dhcpService.getAvailableInterfaces()
         setAvailableInterfaces(avIface)
         setIsApplied(false)
-      } catch (err: any) {
-        await alert("ข้อผิดพลาด", "ไม่สามารถลบคอนฟิกได้: " + (err.message || err))
+      } catch (err) {
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบคอนฟิกได้: " + getErrorMessage(err))
       }
     }
   }
@@ -301,9 +300,9 @@ export default function DhcpServer() {
       setIsConfigModalOpen(false)
       setIsSavingConfig(false)
       setIsApplied(false)
-    } catch (err: any) {
+    } catch (err) {
       setIsSavingConfig(false)
-      setConfigError(err.message || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
+      setConfigError(getErrorMessage(err) || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
     }
   }
 
@@ -313,9 +312,9 @@ export default function DhcpServer() {
       await dhcpService.apply()
       setIsApplying(false)
       setIsApplied(true)
-    } catch (err: any) {
+    } catch (err) {
       setIsApplying(false)
-      await alert("ข้อผิดพลาด", "ไม่สามารถเริ่มระบบ DHCP เข้ากับ OS Kernel ได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถเริ่มระบบ DHCP เข้ากับ OS Kernel ได้: " + getErrorMessage(err))
     }
   }
 
@@ -324,7 +323,7 @@ export default function DhcpServer() {
     try {
       const leases = await dhcpService.getActiveLeases(true)
       setActiveLeases(leases)
-    } catch (err: any) {
+    } catch (err) {
       console.error(err)
     } finally {
       setIsRefreshingLeases(false)
@@ -356,8 +355,8 @@ export default function DhcpServer() {
         await dhcpService.deleteReservation(id)
         setReservations(prev => prev.filter(res => res.id !== id))
         setIsApplied(false)
-      } catch (err: any) {
-        await alert("ข้อผิดพลาด", "ไม่สามารถลบข้อมูลการจองได้: " + (err.message || err))
+      } catch (err) {
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบข้อมูลการจองได้: " + getErrorMessage(err))
       }
     }
   }
@@ -422,8 +421,8 @@ export default function DhcpServer() {
       }
       setIsResModalOpen(false)
       setIsApplied(false)
-    } catch (err: any) {
-      setResError(err.message || "เกิดข้อผิดพลาดในการบันทึกข้อมูลการจอง")
+    } catch (err) {
+      setResError(getErrorMessage(err) || "เกิดข้อผิดพลาดในการบันทึกข้อมูลการจอง")
     }
   }
 

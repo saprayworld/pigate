@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from "react"
+import { getErrorMessage } from "@/lib/errors"
 import {
   Sliders,
   Plus,
@@ -33,7 +34,7 @@ import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { type ServiceObject } from "@/data-mockup/mockData"
 import { serviceObjectService } from "@/services/serviceObjectService"
-import { useAlert } from "@/components/AlertDialogProvider"
+import { useAlert } from "@/hooks/useAlert"
 
 export default function Services() {
   const { alert, confirm } = useAlert()
@@ -63,17 +64,29 @@ export default function Services() {
     try {
       const data = await serviceObjectService.getAll()
       setServices(data)
-    } catch (err: any) {
+    } catch (err) {
       console.error(err)
-      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูลวัตถุบริการได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูลวัตถุบริการได้: " + getErrorMessage(err))
     } finally {
       if (showLoading) setIsLoading(false)
     }
   }
 
   useEffect(() => {
-    loadServices()
-  }, [])
+    // isLoading already starts true; avoid a synchronous setState in the effect body
+    const initialLoad = async () => {
+      try {
+        const data = await serviceObjectService.getAll()
+        setServices(data)
+      } catch (err) {
+        console.error(err)
+        await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูลวัตถุบริการได้: " + getErrorMessage(err))
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    initialLoad()
+  }, [alert])
 
   const dialogContentRef = useRef<HTMLDivElement | null>(null)
 
@@ -152,8 +165,8 @@ export default function Services() {
           setSelectedPreviewId("svc-1")
         }
         await loadServices(false)
-      } catch (err: any) {
-        await alert("ข้อผิดพลาด", "ไม่สามารถลบข้อมูลได้: " + (err.message || err))
+      } catch (err) {
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบข้อมูลได้: " + getErrorMessage(err))
       }
     }
   }
@@ -237,8 +250,8 @@ export default function Services() {
       }
       await loadServices(false)
       setIsModalOpen(false)
-    } catch (err: any) {
-      setFormError(err.message || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
+    } catch (err) {
+      setFormError(getErrorMessage(err) || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
     }
   }
 
@@ -290,10 +303,10 @@ export default function Services() {
         <div className="flex flex-wrap items-center gap-2">
           {/* Protocol filters */}
           <div className="flex rounded-lg border border-border bg-card p-0.5 gap-0.5">
-            {["All", "TCP", "UDP", "TCP/UDP", "ICMP"].map((proto) => (
+            {(["All", "TCP", "UDP", "TCP/UDP", "ICMP"] as const).map((proto) => (
               <button
                 key={proto}
-                onClick={() => setProtoFilter(proto as any)}
+                onClick={() => setProtoFilter(proto)}
                 className={`px-3 py-1 text-xs font-bold rounded-md transition ${protoFilter === proto
                   ? proto === "ICMP"
                     ? "bg-purple-650 text-purple-100 bg-purple-900"
@@ -540,7 +553,7 @@ export default function Services() {
                   id="form-proto"
                   value={formProto}
                   onChange={(e) => {
-                    const nextProto = e.target.value as any
+                    const nextProto = e.target.value as "TCP" | "UDP" | "TCP/UDP" | "ICMP"
                     setFormProto(nextProto)
                     if (nextProto === "ICMP") {
                       setFormPort("-")

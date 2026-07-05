@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react"
+import { getErrorMessage } from "@/lib/errors"
 import {
   Sliders,
   Plus,
@@ -38,7 +39,7 @@ import { Switch } from "@/components/ui/switch"
 import { qosService, type QosRule, type QosIfaceStatus } from "@/services/qosService"
 import { interfaceService } from "@/services/interfaceService"
 import { type NetworkInterface } from "@/data-mockup/mockData"
-import { useAlert } from "@/components/AlertDialogProvider"
+import { useAlert } from "@/hooks/useAlert"
 import { isValidCidr } from "@/lib/utils"
 
 export default function QoS() {
@@ -96,16 +97,45 @@ export default function QoS() {
         })
       )
       setIfaceStatuses(statusMap)
-    } catch (err: any) {
-      showAlert("Error", err.message || "Failed to load QoS data")
+    } catch (err) {
+      showAlert("Error", getErrorMessage(err) || "Failed to load QoS data")
     } finally {
       setIsLoading(false)
     }
   }
 
   useEffect(() => {
-    loadData()
-  }, [])
+    // isLoading already starts true; avoid a synchronous setState in the effect body
+    const initialLoad = async () => {
+      try {
+        const [allRules, allIfaces] = await Promise.all([
+          qosService.getAll(),
+          interfaceService.getAll()
+        ])
+        setRules(allRules)
+        setInterfaces(allIfaces)
+
+        // Fetch kernel QoS status for each interface
+        const statusMap: Record<string, QosIfaceStatus> = {}
+        await Promise.all(
+          allIfaces.map(async (iface) => {
+            try {
+              const status = await qosService.getIfaceStatus(iface.name)
+              statusMap[iface.name] = status
+            } catch (e) {
+              console.error(`Failed to get QoS status for ${iface.name}`, e)
+            }
+          })
+        )
+        setIfaceStatuses(statusMap)
+      } catch (err) {
+        showAlert("Error", getErrorMessage(err) || "Failed to load QoS data")
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    initialLoad()
+  }, [showAlert])
 
   // --- Form Reset ---
   const resetForm = (rule?: QosRule) => {
@@ -208,8 +238,8 @@ export default function QoS() {
       }
       setIsModalOpen(false)
       loadData()
-    } catch (err: any) {
-      setFormError(err.message || "Failed to save QoS rule")
+    } catch (err) {
+      setFormError(getErrorMessage(err) || "Failed to save QoS rule")
     } finally {
       setIsSaving(false)
     }
@@ -223,8 +253,8 @@ export default function QoS() {
       setIsLoading(true)
       await qosService.delete(rule.id)
       loadData()
-    } catch (err: any) {
-      showAlert("Error", err.message || "Failed to delete QoS rule")
+    } catch (err) {
+      showAlert("Error", getErrorMessage(err) || "Failed to delete QoS rule")
     } finally {
       setIsLoading(false)
     }
@@ -238,8 +268,8 @@ export default function QoS() {
         prev.map((r) => (r.id === rule.id ? { ...r, status: !r.status } : r))
       )
       loadData()
-    } catch (err: any) {
-      showAlert("Error", err.message || "Failed to toggle QoS status")
+    } catch (err) {
+      showAlert("Error", getErrorMessage(err) || "Failed to toggle QoS status")
     }
   }
 
@@ -249,8 +279,8 @@ export default function QoS() {
       await qosService.sync()
       await loadData()
       showAlert("Success", "ซิงก์การตั้งค่า QoS ไปยังเคอร์เนลเรียบร้อยแล้ว")
-    } catch (err: any) {
-      showAlert("Error", err.message || "Failed to sync QoS to kernel")
+    } catch (err) {
+      showAlert("Error", getErrorMessage(err) || "Failed to sync QoS to kernel")
     } finally {
       setIsSyncing(false)
     }
@@ -264,8 +294,8 @@ export default function QoS() {
       setIsLoading(true)
       await qosService.clearIface(ifaceName)
       loadData()
-    } catch (err: any) {
-      showAlert("Error", err.message || "Failed to clear QoS on interface")
+    } catch (err) {
+      showAlert("Error", getErrorMessage(err) || "Failed to clear QoS on interface")
     } finally {
       setIsLoading(false)
     }

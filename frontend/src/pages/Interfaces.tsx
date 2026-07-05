@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react"
+import { getErrorMessage } from "@/lib/errors"
 import {
   Network,
   Wifi,
@@ -58,7 +59,7 @@ import {
   type WifiScanResult
 } from "@/data-mockup/mockData"
 import { interfaceService } from "@/services/interfaceService"
-import { useAlert } from "@/components/AlertDialogProvider"
+import { useAlert } from "@/hooks/useAlert"
 import { isValidIp } from "@/lib/utils"
 
 
@@ -182,8 +183,8 @@ export default function Interfaces() {
     try {
       const data = await interfaceService.getAll()
       setInterfaces(data)
-    } catch (err: any) {
-      setError(err.message || "Failed to load interfaces.")
+    } catch (err) {
+      setError(getErrorMessage(err) || "Failed to load interfaces.")
     } finally {
       setIsLoading(false)
       setIsRefreshing(false)
@@ -200,7 +201,19 @@ export default function Interfaces() {
   }>>({})
 
   useEffect(() => {
-    loadData()
+    // isLoading/error already start at their reset values; avoid a synchronous
+    // setState in the effect body
+    const initialLoad = async () => {
+      try {
+        const data = await interfaceService.getAll()
+        setInterfaces(data)
+      } catch (err) {
+        setError(getErrorMessage(err) || "Failed to load interfaces.")
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    initialLoad()
   }, [])
 
   useEffect(() => {
@@ -294,8 +307,8 @@ export default function Interfaces() {
     try {
       const results = await interfaceService.scanWifi(editingIface.id)
       setScanResults(results)
-    } catch (err: any) {
-      setFormError(err.message || "Failed to scan Wi-Fi.")
+    } catch (err) {
+      setFormError(getErrorMessage(err) || "Failed to scan Wi-Fi.")
     } finally {
       setIsScanning(false)
     }
@@ -379,6 +392,9 @@ export default function Interfaces() {
 
   useEffect(() => {
     if (!isEditOpen) {
+      // Dialog can also close via Radix's own onOpenChange (overlay click/Escape),
+      // not just our explicit close handlers, so this must react to isEditOpen itself.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSimActive(false)
       setSimLogs([])
     }
@@ -389,8 +405,8 @@ export default function Interfaces() {
       await interfaceService.toggleStatus(id)
       const data = await interfaceService.getAll()
       setInterfaces(data)
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "Failed to toggle interface status: " + err.message)
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "Failed to toggle interface status: " + getErrorMessage(err))
     }
   }
 
@@ -405,8 +421,8 @@ export default function Interfaces() {
       await interfaceService.reset(id)
       await alert("สำเร็จ", "รีเซ็ตการตั้งค่าอินเทอร์เฟซเรียบร้อยแล้ว")
       await loadData()
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "Failed to reset interface settings: " + err.message)
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "Failed to reset interface settings: " + getErrorMessage(err))
     }
   }
 
@@ -421,8 +437,8 @@ export default function Interfaces() {
       await interfaceService.delete(id)
       await alert("สำเร็จ", "ลบอินเทอร์เฟซออกจากฐานข้อมูลเรียบร้อยแล้ว")
       await loadData()
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "Failed to delete interface: " + err.message)
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "Failed to delete interface: " + getErrorMessage(err))
     }
   }
 
@@ -533,8 +549,8 @@ export default function Interfaces() {
       await interfaceService.update(editingIface.id, updates)
       await loadData()
       setIsEditOpen(false)
-    } catch (err: any) {
-      setFormError(err.message || "Failed to update interface.")
+    } catch (err) {
+      setFormError(getErrorMessage(err) || "Failed to update interface.")
     }
   }
 

@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react"
+import { getErrorMessage } from "@/lib/errors"
 import {
   Users as UsersIcon,
   Plus,
@@ -31,7 +32,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { useAlert } from "@/components/AlertDialogProvider"
+import { useAlert } from "@/hooks/useAlert"
 import { authService } from "@/services/authService"
 import {
   userService,
@@ -68,16 +69,27 @@ export default function Users() {
     try {
       const data = await userService.getAll()
       setUsers(data)
-    } catch (err: any) {
-      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดรายชื่อผู้ใช้ได้: " + (err.message || err))
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดรายชื่อผู้ใช้ได้: " + getErrorMessage(err))
     } finally {
       if (showLoading) setIsLoading(false)
     }
   }
 
   useEffect(() => {
-    loadUsers()
-  }, [])
+    // isLoading already starts true; avoid a synchronous setState in the effect body
+    const initialLoad = async () => {
+      try {
+        const data = await userService.getAll()
+        setUsers(data)
+      } catch (err) {
+        await alert("ข้อผิดพลาด", "ไม่สามารถโหลดรายชื่อผู้ใช้ได้: " + getErrorMessage(err))
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    initialLoad()
+  }, [alert])
 
   const stats = useMemo(() => {
     const total = users.length
@@ -151,8 +163,8 @@ export default function Users() {
       }
       await loadUsers(false)
       setIsModalOpen(false)
-    } catch (err: any) {
-      setFormError(err.message || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
+    } catch (err) {
+      setFormError(getErrorMessage(err) || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
     } finally {
       setIsSaving(false)
     }
@@ -164,8 +176,8 @@ export default function Users() {
     try {
       await userService.toggle(u.id)
       await loadUsers(false)
-    } catch (err: any) {
-      await alert("ไม่สามารถเปลี่ยนสถานะได้", err.message || String(err))
+    } catch (err) {
+      await alert("ไม่สามารถเปลี่ยนสถานะได้", getErrorMessage(err))
     } finally {
       setBusyId(null)
     }
@@ -182,8 +194,8 @@ export default function Users() {
     try {
       await userService.remove(u.id)
       await loadUsers(false)
-    } catch (err: any) {
-      await alert("ไม่สามารถลบผู้ใช้ได้", err.message || String(err))
+    } catch (err) {
+      await alert("ไม่สามารถลบผู้ใช้ได้", getErrorMessage(err))
     } finally {
       setBusyId(null)
     }

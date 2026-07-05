@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { getErrorMessage } from "@/lib/errors"
 import type { FormEvent } from "react"
 import { useNavigate } from "react-router-dom"
 import { Shield, Lock, User, AlertCircle, Loader2 } from "lucide-react"
@@ -18,8 +19,8 @@ export default function Login() {
     try {
       await authService.login(username, password)
       navigate("/")
-    } catch (err: any) {
-      setError(err.message || "Invalid username or password.")
+    } catch (err) {
+      setError(getErrorMessage(err) || "Invalid username or password.")
     } finally {
       setIsSubmitting(false)
     }

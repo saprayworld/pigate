@@ -9,8 +9,10 @@ export const IS_MOCK_MODE = false;
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
+type PiGateWindow = Window & { __pigate_fetch_hooked__?: boolean };
+
 // Automatically hook the global window.fetch to attach the Authorization header if available
-if (typeof window !== "undefined" && !(window as any).__pigate_fetch_hooked__) {
+if (typeof window !== "undefined" && !(window as PiGateWindow).__pigate_fetch_hooked__) {
   const originalFetch = window.fetch;
   window.fetch = async (input, init) => {
     let url = "";
@@ -19,7 +21,7 @@ if (typeof window !== "undefined" && !(window as any).__pigate_fetch_hooked__) {
     } else if (input instanceof URL) {
       url = input.href;
     } else if (input) {
-      url = (input as any).url || "";
+      url = input.url || "";
     }
 
     if (url.includes("/api/")) {
@@ -45,5 +47,5 @@ if (typeof window !== "undefined" && !(window as any).__pigate_fetch_hooked__) {
 
     return response;
   };
-  (window as any).__pigate_fetch_hooked__ = true;
+  (window as PiGateWindow).__pigate_fetch_hooked__ = true;
 }

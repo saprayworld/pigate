@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from "react"
+import { getErrorMessage } from "@/lib/errors"
 import {
   BookOpen,
   Plus,
@@ -35,7 +36,7 @@ import { Label } from "@/components/ui/label"
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
 import { type AddressObject } from "@/data-mockup/mockData"
 import { addressService } from "@/services/addressService"
-import { useAlert } from "@/components/AlertDialogProvider"
+import { useAlert } from "@/hooks/useAlert"
 import { isValidCidr, isValidIpRange } from "@/lib/utils"
 
 export default function Addresses() {
@@ -60,23 +61,35 @@ export default function Addresses() {
   const [formValue, setFormValue] = useState("")
   const [formError, setFormError] = useState("")
 
-  // Fetch logic
+  // Fetch logic (used by refresh actions / after save-delete; showLoading=false for those)
   const loadAddresses = async (showLoading = true) => {
     if (showLoading) setIsLoading(true)
     try {
       const data = await addressService.getAll()
       setAddresses(data)
-    } catch (err: any) {
+    } catch (err) {
       console.error(err)
-      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูลที่อยู่ไอพีได้: " + (err.message || err))
+      await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูลที่อยู่ไอพีได้: " + getErrorMessage(err))
     } finally {
       if (showLoading) setIsLoading(false)
     }
   }
 
   useEffect(() => {
-    loadAddresses()
-  }, [])
+    // isLoading already starts true; avoid a synchronous setState in the effect body
+    const initialLoad = async () => {
+      try {
+        const data = await addressService.getAll()
+        setAddresses(data)
+      } catch (err) {
+        console.error(err)
+        await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูลที่อยู่ไอพีได้: " + getErrorMessage(err))
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    initialLoad()
+  }, [alert])
 
   const dialogContentRef = useRef<HTMLDivElement | null>(null)
 
@@ -160,8 +173,8 @@ export default function Addresses() {
         await addressService.delete(id)
         setSelectedIds(prev => prev.filter(item => item !== id))
         await loadAddresses(false)
-      } catch (err: any) {
-        await alert("ข้อผิดพลาด", "ไม่สามารถลบข้อมูลได้: " + (err.message || err))
+      } catch (err) {
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบข้อมูลได้: " + getErrorMessage(err))
       }
     }
   }
@@ -188,8 +201,8 @@ export default function Addresses() {
         await addressService.deleteMultiple(selectedIds)
         setSelectedIds([])
         await loadAddresses(false)
-      } catch (err: any) {
-        await alert("ข้อผิดพลาด", "ไม่สามารถลบข้อมูลได้: " + (err.message || err))
+      } catch (err) {
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบข้อมูลได้: " + getErrorMessage(err))
       }
     }
   }
@@ -256,8 +269,8 @@ export default function Addresses() {
       }
       await loadAddresses(false)
       setIsModalOpen(false)
-    } catch (err: any) {
-      setFormError(err.message || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
+    } catch (err) {
+      setFormError(getErrorMessage(err) || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
     }
   }
 

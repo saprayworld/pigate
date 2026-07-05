@@ -88,7 +88,7 @@ function getLocalDNSConfig(): DNSConfig {
       parsed.localDomain = "pigate.local";
     }
     return parsed;
-  } catch (e) {
+  } catch {
     return initialDNSConfig;
   }
 }
@@ -125,7 +125,7 @@ function getLocalTimeSettings(): SystemTimeSettings {
     const parsed = JSON.parse(stored) as SystemTimeSettings;
     parsed.timezone = normalizeTimezone(parsed.timezone);
     return parsed;
-  } catch (e) {
+  } catch {
     return initialSystemTimeSettings;
   }
 }
@@ -156,7 +156,7 @@ function getLocalServices(): NetworkServiceStatus[] {
   }
   try {
     return JSON.parse(stored);
-  } catch (e) {
+  } catch {
     return initialNetworkServices;
   }
 }
@@ -461,7 +461,7 @@ export const systemService = {
 
       const file = configData as Partial<BackupFile> & Record<string, unknown>;
       // Accept both v2 (meta+config) and legacy v1 (config at top level) shapes.
-      const cfg = (file.config ?? {}) as Record<string, any>;
+      const cfg = (file.config ?? {}) as Record<string, unknown>;
 
       // Restore recognised sections back into LocalStorage.
       if (Array.isArray(cfg.addresses)) localStorage.setItem("pigate_addresses", JSON.stringify(cfg.addresses));
@@ -474,7 +474,7 @@ export const systemService = {
       if (Array.isArray(cfg.interfaces)) localStorage.setItem("pigate_interfaces", JSON.stringify(cfg.interfaces));
       if (Array.isArray(cfg.dnsZones)) localStorage.setItem("pigate_dns_zones", JSON.stringify(cfg.dnsZones));
       if (Array.isArray(cfg.qosRules)) localStorage.setItem("pigate_qos_rules", JSON.stringify(cfg.qosRules));
-      if (cfg.systemTime) saveLocalTimeSettings(cfg.systemTime);
+      if (cfg.systemTime) saveLocalTimeSettings(cfg.systemTime as SystemTimeSettings);
 
       const count = (v: unknown) => (Array.isArray(v) ? v.length : 0);
       return {
@@ -527,7 +527,7 @@ export const systemService = {
   },
 
   // Save system DNS settings
-  updateDNSConfig: async (cfg: { mode: string; primaryDns: string; secondaryDns: string; localDomain: string }): Promise<any> => {
+  updateDNSConfig: async (cfg: { mode: string; primaryDns: string; secondaryDns: string; localDomain: string }): Promise<unknown> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 300));
       saveLocalDNSConfig(cfg);
