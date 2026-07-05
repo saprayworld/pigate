@@ -78,9 +78,11 @@ type QosManager interface {
 	GetIfaceQosStatus(ifaceName string) (*model.QosIfaceStatus, error)
 }
 
-// DNSServerManager abstracts local DNS zone configurations and cache clearing
+// DNSServerManager abstracts local DNS zone configurations and cache clearing.
+// upstreamServers carries the explicit forward resolvers (from System DNS) that
+// dnsmasq should use, replacing the broken resolvconf-populated resolv.conf.
 type DNSServerManager interface {
-	ApplyZones(zones []model.DNSZone, interfaces []string) error
+	ApplyZones(zones []model.DNSZone, interfaces []string, upstreamServers []string) error
 	ClearCache() error
 }
 

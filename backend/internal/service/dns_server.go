@@ -3,20 +3,25 @@ package service
 import (
 	"fmt"
 	"log"
+	"net"
+	"strings"
+
 	"pigate/internal/db"
 	"pigate/internal/kernel"
 	"pigate/internal/model"
 )
 
 type DNSServerService struct {
-	repo    *db.Repository
-	manager kernel.DNSServerManager
+	repo       *db.Repository
+	manager    kernel.DNSServerManager
+	dnsService *DNSService
 }
 
-func NewDNSServerService(repo *db.Repository, manager kernel.DNSServerManager) *DNSServerService {
+func NewDNSServerService(repo *db.Repository, manager kernel.DNSServerManager, dnsService *DNSService) *DNSServerService {
 	return &DNSServerService{
-		repo:    repo,
-		manager: manager,
+		repo:       repo,
+		manager:    manager,
+		dnsService: dnsService,
 	}
 }
 
@@ -41,11 +46,65 @@ func (s *DNSServerService) ApplyAll() error {
 		return fmt.Errorf("failed to retrieve DNS server interfaces from database: %w", err)
 	}
 
-	if err := s.manager.ApplyZones(enabledZones, interfaces); err != nil {
+	upstreams := s.resolveUpstreams()
+
+	if err := s.manager.ApplyZones(enabledZones, interfaces, upstreams); err != nil {
 		return fmt.Errorf("failed to apply DNS zone configurations: %w", err)
 	}
 
 	return nil
+}
+
+// resolveUpstreams collects the explicit upstream DNS servers dnsmasq should
+// forward to, drawn from the System DNS configuration (never read from the repo
+// directly: in "wan" mode the effective upstreams live on the per-link DNS of
+// systemd-resolved, which only DNSService.GetDNSConfig() aggregates).
+func (s *DNSServerService) resolveUpstreams() []string {
+	if s.dnsService == nil {
+		return nil
+	}
+
+	cfg, err := s.dnsService.GetDNSConfig()
+	if err != nil {
+		log.Printf("[DNSServerService] Warning: cannot read system DNS config: %v", err)
+		return nil
+	}
+
+	var servers []string
+	if cfg.Mode == "static" {
+		if cfg.PrimaryDNS != "" {
+			servers = append(servers, cfg.PrimaryDNS)
+		}
+		if cfg.SecondaryDNS != "" {
+			servers = append(servers, cfg.SecondaryDNS)
+		}
+	} else { // mode == "wan": use the DNS the WAN link got via DHCP
+		for _, d := range cfg.DynamicDNS {
+			servers = append(servers, d.DNSServers...)
+		}
+	}
+
+	return sanitizeUpstreams(servers)
+}
+
+// sanitizeUpstreams trims, drops empties/loopback addresses, and de-duplicates a
+// list of upstream DNS server IPs. Loopback (127.0.0.0/8, ::1) is excluded to
+// avoid a forwarding loop between dnsmasq and systemd-resolved's stub resolver.
+func sanitizeUpstreams(servers []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, raw := range servers {
+		ip := strings.TrimSpace(raw)
+		if ip == "" || seen[ip] {
+			continue
+		}
+		if parsed := net.ParseIP(ip); parsed != nil && parsed.IsLoopback() {
+			continue
+		}
+		seen[ip] = true
+		out = append(out, ip)
+	}
+	return out
 }
 
 // InitApplyConfig applies DNS settings on boot

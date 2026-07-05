@@ -115,7 +115,7 @@ func main() {
 	dnsService := service.NewDNSService(repo, dns)
 	qosService := service.NewQosService(repo, qos)
 	dhcpServerService := service.NewDhcpServerService(repo, dhcp)
-	dnsServerService := service.NewDNSServerService(repo, dnsServer)
+	dnsServerService := service.NewDNSServerService(repo, dnsServer, dnsService)
 	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcd, ifaceService)
 	timeService := service.NewTimeService(repo, timeMgr)
 	userService := service.NewUserService(repo)
