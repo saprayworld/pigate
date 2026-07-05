@@ -311,8 +311,8 @@ func NewMockDNSServerManager() *MockDNSServerManager {
 	return &MockDNSServerManager{}
 }
 
-func (m *MockDNSServerManager) ApplyZones(zones []model.DNSZone, interfaces []string) error {
-	log.Printf("[MockDNSServer] ApplyZones called with %d zones and interfaces: %v", len(zones), interfaces)
+func (m *MockDNSServerManager) ApplyZones(zones []model.DNSZone, interfaces []string, upstreamServers []string) error {
+	log.Printf("[MockDNSServer] ApplyZones called with %d zones, interfaces: %v, upstream servers: %v", len(zones), interfaces, upstreamServers)
 	return nil
 }
 

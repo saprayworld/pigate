@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -1484,6 +1485,15 @@ func (s *Server) HandleUpdateDNSConfig(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// System DNS is the upstream source for the local DNS server (dnsmasq).
+	// Regenerate pigate-dns.conf so its `server=` lines reflect the new config;
+	// otherwise the forwarders stay stale. The System DNS change already
+	// succeeded, so a failure here is logged, not surfaced as a request error.
+	if err := s.dnsServerService.ApplyAll(); err != nil {
+		log.Printf("[HandleUpdateDNSConfig] Warning: failed to regenerate DNS server config after System DNS update: %v", err)
+	}
+
 	s.writeJSON(w, http.StatusOK, input)
 }
 

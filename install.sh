@@ -147,6 +147,29 @@ setfacl -m u:pigate:rwx /etc/dnsmasq.d
 setfacl -d -m u:pigate:rwx /etc/dnsmasq.d
 log_ok "ตั้งค่า ACL สำหรับ /etc/dnsmasq.d สำเร็จ"
 
+# ปิดกลไก resolvconf hook (start-resolvconf) ของ dnsmasq package บน Debian/Ubuntu
+# เหตุผล: package รัน dnsmasq ด้วย `-r /run/dnsmasq/resolv.conf` ซึ่งถูกเติมโดย hook
+# start-resolvconf — hook นี้ fail บนเครื่องที่ไม่มี resolvconf/มี interface loopback
+# ("Link lo is loopback device") ทำให้ dnsmasq ไม่มี upstream และเข้าสู่โหมด REFUSED
+# ตั้ง IGNORE_RESOLVCONF=yes เพื่อตัด dependency นี้ — PiGate เขียน upstream (server=)
+# ลงใน pigate-dns.conf เองแทน ค่านี้เป็น env var ของ init/systemd-helper (ไม่ใช่ dnsmasq
+# directive) จึงห้ามใส่ปนใน pigate-*.conf และมีผลเฉพาะตอน service (re)start
+# หมายเหตุ: ไม่แตะ systemd-resolved — เป็นคนละกลไก ยังต้องใช้กับ System DNS
+if [ -f /etc/default/dnsmasq ]; then
+    if grep -q "^IGNORE_RESOLVCONF=" /etc/default/dnsmasq; then
+        sed -i 's/^IGNORE_RESOLVCONF=.*/IGNORE_RESOLVCONF=yes/' /etc/default/dnsmasq
+    elif grep -q "^#IGNORE_RESOLVCONF=" /etc/default/dnsmasq; then
+        sed -i 's/^#IGNORE_RESOLVCONF=.*/IGNORE_RESOLVCONF=yes/' /etc/default/dnsmasq
+    else
+        echo "IGNORE_RESOLVCONF=yes" >> /etc/default/dnsmasq
+    fi
+else
+    echo "IGNORE_RESOLVCONF=yes" > /etc/default/dnsmasq
+fi
+# env var มีผลเฉพาะตอน (re)start — restart ตรงนี้เลย ไม่พึ่ง side effect ตอน pigate boot
+systemctl restart dnsmasq || log_warn "ไม่สามารถ restart dnsmasq ได้ (จะถูก restart อีกครั้งตอน pigate เริ่มทำงาน)"
+log_ok "ตั้งค่า IGNORE_RESOLVCONF=yes ใน /etc/default/dnsmasq สำเร็จ"
+
 # =============================================================================
 # STEP 2.2: สร้าง systemd template service สำหรับ dhcpcd (dhcpcd@.service)
 # =============================================================================
