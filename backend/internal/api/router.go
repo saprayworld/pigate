@@ -36,6 +36,7 @@ func RegisterRoutes(s *Server) http.Handler {
 	// 2. Dashboard Widgets
 	authRoute("GET /api/dashboard/stats", s.HandleGetDashboardStats)
 	authRoute("GET /api/dashboard/performance", s.HandleGetPerformanceMetrics)
+	authRoute("GET /api/dashboard/traffic", s.HandleGetTrafficHistory)
 	authRoute("GET /api/dashboard/logs", s.HandleGetRecentLogs)
 	authRoute("POST /api/dashboard/logs/clear", s.HandleClearLogs)
 	authRoute("GET /api/dashboard/logs/stream", s.HandleLogStream)
@@ -115,6 +116,7 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("PUT /api/dns/settings", s.HandleUpdateDNSServerSettings)
 
 	// 9. System Management & Backup
+	authRoute("GET /api/system/info", s.HandleGetSystemInfo)
 	authRoute("GET /api/system/time", s.HandleGetSystemTime)
 	authRoute("PUT /api/system/time", s.HandleUpdateSystemTime)
 	authRoute("POST /api/system/time/manual", s.HandleSetManualTime)

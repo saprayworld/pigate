@@ -90,7 +90,7 @@ The following table summarizes the development status of each feature in the PiG
 
 | Feature | Frontend | Backend | Status / Remarks |
 |---|---|---|---|
-| **Dashboard** | Completed | Partial | UI with real-time traffic graphs (Recharts) and SSE log stream is complete. DHCP lease count and live Wi-Fi status are real; total traffic and CPU/RAM/Temp metrics are still simulated, and the firewall log stream reads the in-memory ring buffer (no kernel log reader yet). |
+| **Dashboard** | Completed | Completed | System status is real: CPU (usage/model/cores/freq), Memory, Temperature, Storage, Uptime/OS/kernel/board, and WAN bandwidth history are read from `/proc`, `/sys`, `statfs`, and netlink counters (no shell exec). Temperature/CPU-freq/board-model degrade to `available:false`/omitted on hosts that lack the sysfs node (e.g. WSL/x86). Traffic history is a RAM ring buffer (24h of 5-min buckets, resets on reboot). The firewall log stream still reads the in-memory ring buffer (no kernel log reader yet). |
 | **Interface** | Completed | Completed | IP management, Netlink interface handling, `wpa_supplicant` Wi-Fi scanning and state management, random MAC addresses, per-interface route metric for multi-WAN failover, and WAN-side DHCP client via `dhcpcd@<iface>` (systemd D-Bus). |
 | **Routing** | Completed | Completed | CRUD operations for static routes, Netlink event monitoring, and automatic routing self-healing. |
 | **DNS System** | Completed | Completed | `systemd-resolved` per-link DNS configuration via D-Bus. |

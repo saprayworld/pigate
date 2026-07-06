@@ -24,7 +24,12 @@ echo "# Placeholder to keep the folder in git and prevent compilation errors" > 
 # 3. Build backend
 echo "Building Go backend..."
 cd backend
-go build -o pigate-backend ./cmd/pigate
+# Derive a version string: prefer the current git tag/description, fall back to
+# a short commit hash, then to "dev". Injected into main.version via -ldflags so
+# /api/system/info and the backup metadata report the real build version.
+VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+echo "Embedding version: ${VERSION}"
+go build -ldflags "-X main.version=${VERSION}" -o pigate-backend ./cmd/pigate
 cd ..
 
 mv ./backend/pigate-backend pigate

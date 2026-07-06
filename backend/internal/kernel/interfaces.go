@@ -102,6 +102,32 @@ type DhcpcdManager interface {
 	RestartDhcpcd(ifaceName string) error
 }
 
+// SystemStatsManager abstracts host telemetry reads (/proc, /sys, statfs,
+// netlink counters). It is strictly read-only: no method mutates system state.
+// Implementations must degrade gracefully — a missing sysfs node (thermal zone,
+// cpufreq, device-tree) yields an "unavailable" field, never a whole-response
+// error, so the mock-free real path still works on WSL / x86 dev boxes.
+type SystemStatsManager interface {
+	// GetCPUSnapshot returns raw cumulative jiffies from /proc/stat. The service
+	// computes usage% from the delta between two snapshots — a single call alone
+	// is not a usage figure.
+	GetCPUSnapshot() (*model.CPUSnapshot, error)
+	// GetCPUInfo returns model name, core count, and current frequency
+	// (FreqAvailable=false when cpufreq is absent).
+	GetCPUInfo() (*model.CPUInfo, error)
+	// GetMemoryInfo returns total/used bytes from /proc/meminfo.
+	GetMemoryInfo() (*model.MemoryInfo, error)
+	// GetTemperature returns SoC temperature; Available=false when no thermal
+	// zone is present.
+	GetTemperature() (*model.TemperatureInfo, error)
+	// GetDiskUsage returns filesystem usage for the given mount path via statfs.
+	GetDiskUsage(path string) (*model.DiskUsage, error)
+	// GetHostInfo returns OS/board/kernel identity and uptime.
+	GetHostInfo() (*model.HostInfo, error)
+	// GetNetCounters returns cumulative rx/tx byte counters keyed by interface name.
+	GetNetCounters() (map[string]model.NetCounters, error)
+}
+
 // HostnameManager abstracts reading/writing the system hostname via
 // org.freedesktop.hostname1 (systemd-hostnamed) over D-Bus.
 type HostnameManager interface {

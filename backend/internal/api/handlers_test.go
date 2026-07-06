@@ -42,7 +42,7 @@ func setupTestServer(t *testing.T) (http.Handler, *db.Repository) {
 	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcdMgr, ifaceService)
 	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"))
 	handler := RegisterRoutes(server)
 
 	// Add test session token to activeSessions since IsSessionValid no longer allows mock_session_id_* bypass
@@ -299,7 +299,7 @@ func TestDisableEditMode(t *testing.T) {
 	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
 
 	// Server initialized with disableEdit = true
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, true, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, true, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"))
 	handler := RegisterRoutes(server)
 
 	// Add test session token to activeSessions since IsSessionValid no longer allows mock_session_id_* bypass
@@ -442,7 +442,7 @@ func TestForcePasswordChangeFlow(t *testing.T) {
 	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcdMgr, ifaceService)
 	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"))
 	handler := RegisterRoutes(server)
 
 	// 1. Login with correct password
@@ -525,7 +525,7 @@ func TestCheckSessionAPI(t *testing.T) {
 	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcdMgr, ifaceService)
 	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"))
 	handler := RegisterRoutes(server)
 
 	// 1. Check session without token (should fail with 401)
@@ -585,6 +585,67 @@ func TestCheckSessionAPI(t *testing.T) {
 	}
 }
 
+func TestDashboardSystemStatusAPIs(t *testing.T) {
+	handler, _ := setupTestServer(t)
+	authToken := "mock_session_id_test_token"
+
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Header.Set("Authorization", "Bearer "+authToken)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// 1. Performance metrics: backward-compat flat fields + detail objects.
+	rec := get("/api/dashboard/performance")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("performance: expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var metrics model.SystemMetrics
+	if err := json.Unmarshal(rec.Body.Bytes(), &metrics); err != nil {
+		t.Fatalf("performance: decode failed: %v", err)
+	}
+	if metrics.MemDetail.TotalBytes == 0 {
+		t.Errorf("performance: expected non-zero memDetail.totalBytes")
+	}
+	if metrics.Storage.Path != "/" {
+		t.Errorf("performance: expected storage.path '/', got %q", metrics.Storage.Path)
+	}
+
+	// 2. System info: version + hostname present, uptime numeric.
+	rec = get("/api/system/info")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("system info: expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var info model.SystemInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatalf("system info: decode failed: %v", err)
+	}
+	if info.Version != "test" {
+		t.Errorf("system info: expected version 'test', got %q", info.Version)
+	}
+	if info.Hostname == "" {
+		t.Errorf("system info: expected non-empty hostname")
+	}
+	if info.SystemTime == "" {
+		t.Errorf("system info: expected non-empty systemTime")
+	}
+
+	// 3. Traffic history: valid shape (buckets may be empty pre-Start).
+	rec = get("/api/dashboard/traffic")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("traffic: expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var hist model.TrafficHistory
+	if err := json.Unmarshal(rec.Body.Bytes(), &hist); err != nil {
+		t.Fatalf("traffic: decode failed: %v", err)
+	}
+	if hist.Interfaces == nil {
+		t.Errorf("traffic: expected non-nil interfaces array")
+	}
+}
+
 func setupTestServerWithFirewall(t *testing.T) (http.Handler, *db.Repository, *kernel.MockFirewall) {
 	sqliteDB, err := db.InitDB(":memory:")
 	if err != nil {
@@ -612,7 +673,7 @@ func setupTestServerWithFirewall(t *testing.T) (http.Handler, *db.Repository, *k
 	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcdMgr, ifaceService)
 	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"))
 	handler := RegisterRoutes(server)
 
 	AddSession("mock_session_id_test_token", "pigate")

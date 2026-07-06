@@ -263,6 +263,24 @@ paths:
               schema:
                 $ref: '#/components/schemas/PerformanceMetrics'
 
+  /dashboard/traffic:
+    get:
+      tags:
+        - Dashboard
+      summary: Get WAN bandwidth history (RAM ring buffer, ~24h of 5-minute buckets)
+      description: >
+        Returns rx/tx byte deltas bucketed in 5-minute intervals for the WAN
+        interface(s). The history lives only in RAM and resets on reboot, so
+        immediately after boot only a few buckets are present — the client must
+        cope with a short series.
+      responses:
+        '200':
+          description: Traffic history retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrafficHistory'
+
   /dashboard/logs:
     get:
       tags:
@@ -1245,6 +1263,24 @@ paths:
   # =========================================================================
   # SYSTEM & MAINTENANCE
   # =========================================================================
+  /system/info:
+    get:
+      tags:
+        - System & Maintenance
+      summary: Get host identity for the dashboard System Information card
+      description: >
+        Composes hostname (via hostnamed), PiGate build version, OS base
+        (/etc/os-release), board model (/proc/device-tree/model, Pi only),
+        kernel version, uptime, and current system time + timezone. boardModel
+        and kernelVersion are omitted when unreadable (e.g. on x86/WSL).
+      responses:
+        '200':
+          description: System information retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemInfo'
+
   /system/time:
     get:
       tags:
@@ -1926,8 +1962,8 @@ components:
       type: object
       required:
         - firewallStatus
-        - totalTrafficIn
-        - totalTrafficOut
+        - totalTrafficInBytes
+        - totalTrafficOutBytes
         - dhcpLeasesCount
         - wifiStatus
         - wifiSSID
@@ -1935,12 +1971,16 @@ components:
         firewallStatus:
           type: string
           example: Active
-        totalTrafficIn:
-          type: string
-          example: 8.7 GB
-        totalTrafficOut:
-          type: string
-          example: 3.7 GB
+        totalTrafficInBytes:
+          type: integer
+          format: int64
+          description: Cumulative WAN rx bytes since boot (RAM-only; resets on reboot).
+          example: 9345678901
+        totalTrafficOutBytes:
+          type: integer
+          format: int64
+          description: Cumulative WAN tx bytes since boot (RAM-only; resets on reboot).
+          example: 3987654321
         dhcpLeasesCount:
           type: integer
           example: 18
@@ -1953,23 +1993,184 @@ components:
 
     PerformanceMetrics:
       type: object
+      description: >
+        Live host telemetry. The flat cpu/memory/temp fields are retained for
+        backward-compatibility; the *Detail objects and storage carry the richer
+        data used by the redesigned dashboard.
       required:
         - cpu
         - memory
         - temp
+        - cpuDetail
+        - memDetail
+        - tempDetail
+        - storage
       properties:
         cpu:
           type: number
           format: float
-          example: 14.2
+          description: CPU usage percent (mirror of cpuDetail.usagePercent).
+          example: 34.2
         memory:
           type: number
           format: float
-          example: 15.5
+          description: Memory usage percent (mirror of memDetail.percent).
+          example: 63.7
         temp:
           type: number
           format: float
-          example: 48.5
+          description: SoC temperature °C (0 when tempDetail.available is false).
+          example: 58.1
+        cpuDetail:
+          type: object
+          required: [usagePercent, cores, modelName, freqMhz, freqAvailable]
+          properties:
+            usagePercent:
+              type: number
+              format: float
+              example: 34.2
+            cores:
+              type: integer
+              example: 4
+            modelName:
+              type: string
+              example: Cortex-A76
+            freqMhz:
+              type: number
+              format: float
+              example: 2400
+            freqAvailable:
+              type: boolean
+              description: false when /sys cpufreq is absent (e.g. WSL/VM).
+              example: true
+        memDetail:
+          type: object
+          required: [usedBytes, totalBytes, percent]
+          properties:
+            usedBytes:
+              type: integer
+              format: int64
+              example: 5476083712
+            totalBytes:
+              type: integer
+              format: int64
+              example: 8589934592
+            percent:
+              type: number
+              format: float
+              example: 63.7
+        tempDetail:
+          type: object
+          required: [celsius, throttleCelsius, available]
+          properties:
+            celsius:
+              type: number
+              format: float
+              example: 58.1
+            throttleCelsius:
+              type: number
+              format: float
+              example: 80
+            available:
+              type: boolean
+              description: false when no thermal zone exists (e.g. WSL/x86).
+              example: true
+        storage:
+          type: object
+          required: [path, usedBytes, totalBytes, percent]
+          properties:
+            path:
+              type: string
+              example: /
+            usedBytes:
+              type: integer
+              format: int64
+              example: 44023414784
+            totalBytes:
+              type: integer
+              format: int64
+              example: 137438953472
+            percent:
+              type: number
+              format: float
+              example: 32.0
+
+    SystemInfo:
+      type: object
+      required:
+        - hostname
+        - version
+        - osName
+        - uptimeSeconds
+        - systemTime
+        - timezone
+      properties:
+        hostname:
+          type: string
+          example: PiGate-RPI5
+        version:
+          type: string
+          example: 2.3.2
+        osName:
+          type: string
+          example: Raspberry Pi OS (64-bit)
+        boardModel:
+          type: string
+          description: Omitted when unreadable (non-Pi / x86).
+          example: Raspberry Pi 5 Model B Rev 1.0
+        kernelVersion:
+          type: string
+          description: Omitted when unreadable.
+          example: 6.6.31-v8+
+        uptimeSeconds:
+          type: integer
+          format: int64
+          description: Seconds since boot; the client ticks its own clock between polls.
+          example: 273153
+        systemTime:
+          type: string
+          format: date-time
+          example: '2026-07-06T09:41:00+07:00'
+        timezone:
+          type: string
+          example: Asia/Bangkok
+
+    TrafficBucket:
+      type: object
+      required:
+        - ts
+        - rxBytes
+        - txBytes
+      properties:
+        ts:
+          type: string
+          format: date-time
+          description: Bucket start time (device local, 5-minute aligned).
+          example: '2026-07-06T09:00:00+07:00'
+        rxBytes:
+          type: integer
+          format: int64
+          example: 123456789
+        txBytes:
+          type: integer
+          format: int64
+          example: 2345678
+
+    TrafficHistory:
+      type: object
+      required:
+        - interfaces
+        - buckets
+      properties:
+        interfaces:
+          type: array
+          items:
+            type: string
+          example: [eth0]
+        buckets:
+          type: array
+          items:
+            $ref: '#/components/schemas/TrafficBucket'
 
     FirewallLog:
       type: object

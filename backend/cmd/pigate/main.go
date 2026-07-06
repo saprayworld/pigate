@@ -21,6 +21,11 @@ import (
 	"pigate/internal/service"
 )
 
+// version is the PiGate build version. It is overridable at build time via
+// -ldflags "-X main.version=<tag>" (see build.sh); the default applies to plain
+// `go build` / `go run` during development.
+var version = "v0.1.0-pre"
+
 func main() {
 	// 1. Parse CLI flags
 	port := flag.Int("port", 2479, "Port to run the API server on")
@@ -32,10 +37,10 @@ func main() {
 	enableEditSystemRoute := flag.Bool("enable-edit-system-route", false, "Enable direct kernel management of system/kernel-only routes without database")
 	prioritizeKernelRoutes := flag.Bool("prioritize-kernel-routes", false, "Prioritize kernel route information over database if duplicate")
 	dockerCompat := flag.Bool("docker-compat", true, "Enable Docker compatibility (bypass docker0 and br-* interfaces)")
-	version := flag.Bool("v", false, "Print Version")
+	printVersion := flag.Bool("v", false, "Print Version")
 	flag.Parse()
-	if *version {
-		log.Printf("PiGate Server version %s", "v0.1.0-pre")
+	if *printVersion {
+		log.Printf("PiGate Server version %s", version)
 		return
 	}
 	log.Printf("[Main] Starting PiGate Backend Server (Go v1.26.4)...")
@@ -78,6 +83,7 @@ func main() {
 	var dhcpcd kernel.DhcpcdManager
 	var hostnameMgr kernel.HostnameManager
 	var timeMgr kernel.TimeManager
+	var sysStats kernel.SystemStatsManager
 	dns := kernel.NewDNSManager(*mockOS)
 
 	if *mockOS || *mockFromReal {
@@ -92,6 +98,7 @@ func main() {
 		dhcpcd = kernel.NewMockDhcpcdManager()
 		hostnameMgr = kernel.NewMockHostnameManager()
 		timeMgr = kernel.NewMockTimeManager()
+		sysStats = kernel.NewMockSystemStats()
 	} else {
 		// Real kernel integrations via netlink — used on Raspberry Pi 5 production.
 		// Requires: sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
@@ -104,6 +111,7 @@ func main() {
 		dhcpcd = kernel.NewRealDhcpcdManager()
 		hostnameMgr = kernel.NewRealHostnameManager()
 		timeMgr = kernel.NewRealTimeManager()
+		sysStats = kernel.NewRealSystemStats()
 	}
 
 	// 5. Instantiate Server & Router
@@ -119,6 +127,7 @@ func main() {
 	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcd, ifaceService)
 	timeService := service.NewTimeService(repo, timeMgr)
 	userService := service.NewUserService(repo)
+	systemStatusService := service.NewSystemStatusService(sysStats, repo, hostnameService, timeService, version)
 
 	// Netlink monitor is created here (but started later, after startup config is
 	// applied) so it can be injected into the BackupService, which pauses it
@@ -126,13 +135,13 @@ func main() {
 	netlinkMonitor := service.NewNetlinkMonitor(repo, routingService, dnsService, dhcpcdService)
 
 	backupService := service.NewBackupService(
-		repo, *dbPath, "v0.1.0-pre",
+		repo, *dbPath, version,
 		ifaceService, routingService, firewallService, dnsService, dnsServerService,
 		qosService, dhcpServerService, dhcpcdService, hostnameService, timeService,
 		netlinkMonitor,
 	)
 
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService)
 
 	// Apply config form database to kernel
 
@@ -162,6 +171,11 @@ func main() {
 	monitorCtx, cancelMonitor := context.WithCancel(context.Background())
 	defer cancelMonitor()
 	netlinkMonitor.Start(monitorCtx)
+
+	// Start the dashboard telemetry sampler (CPU usage + WAN traffic history).
+	// Shares the monitor context so it stops on shutdown.
+	log.Printf("[Main] Starting system status telemetry sampler...")
+	systemStatusService.Start(monitorCtx)
 
 	log.Printf("[Main] Applying database-configured hostname settings to kernel at startup...")
 	if err := hostnameService.InitApplyConfig(); err != nil {
