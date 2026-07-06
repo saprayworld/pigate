@@ -16,7 +16,7 @@ import {
   ChevronDown,
   ChevronUp
 } from "lucide-react"
-import { Card } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -36,12 +36,37 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { type StaticRoute, type NetworkInterface } from "@/data-mockup/mockData"
 import { staticRouteService } from "@/services/staticRouteService"
 import { interfaceService } from "@/services/interfaceService"
 import { useAlert } from "@/hooks/useAlert"
 import { isValidIp, isValidCidr } from "@/lib/utils"
+
+// Helper: Dashboard-style stat card (mirrors Dashboard's StatCard)
+function StatCard({
+  icon: Icon,
+  title,
+  value,
+}: {
+  icon: typeof Route
+  title: string
+  value: number
+}) {
+  return (
+    <Card size="sm" className="gap-0">
+      <CardHeader className="space-y-0">
+        <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <Icon className="h-4 w-4 shrink-0" />
+          <span className="text-foreground">{title}</span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-3">
+        <p className="text-2xl font-bold tracking-tight text-foreground">{value}</p>
+      </CardContent>
+    </Card>
+  )
+}
 
 export default function StaticRoutes() {
   const { alert, confirm } = useAlert()
@@ -399,345 +424,321 @@ export default function StaticRoutes() {
 
 
   return (
-    <div className="space-y-6">
-      {/* 1. Header Area */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
-            <Route className="h-7 w-7 text-primary fill-primary/10" />
-            Static Routes
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            กำหนดค่าตารางการกำหนดเส้นทางเพื่อนำส่งข้อมูลออกสู่เครือข่ายย่อยต่าง ๆ
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {enableEditSystemRoute && (
-            <div className="flex items-center gap-2 bg-rose-500/10 border border-rose-500/20 px-3 h-10 rounded-lg text-xs font-semibold select-none">
-              <span className="text-rose-400">แก้ไขเส้นทางระบบ</span>
-              <Switch
-                checked={uiEditSystemRouteActive}
-                onCheckedChange={handleToggleEditSystemMode}
-                size="sm"
+    <div className="space-y-4">
+      {/* 1. Stats overview */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard icon={Route} title="Total Routes" value={stats.total} />
+        <StatCard icon={CheckCircle2} title="Active Routes" value={stats.active} />
+        <StatCard icon={Network} title="System Subnets" value={stats.system} />
+        <StatCard icon={SlidersHorizontal} title="Custom Config" value={stats.custom} />
+      </div>
+
+      {/* 2. Routing table */}
+      <Card>
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0">
+          <CardTitle className="flex items-center gap-2 text-base font-semibold">
+            <Route className="h-4 w-4 text-muted-foreground" />
+            Routing Table
+          </CardTitle>
+          <div className="flex flex-wrap items-center gap-3">
+            {enableEditSystemRoute && (
+              <div className="flex h-8 items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 text-xs font-medium select-none">
+                <span className="text-red-500">แก้ไขเส้นทางระบบ</span>
+                <Switch
+                  checked={uiEditSystemRouteActive}
+                  onCheckedChange={handleToggleEditSystemMode}
+                  size="sm"
+                />
+              </div>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => loadRoutes(true)}
+              disabled={isLoading}
+              className="cursor-pointer gap-2"
+            >
+              {isLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              Refresh
+            </Button>
+            <Button size="sm" onClick={openCreateModal} className="cursor-pointer gap-1.5 font-semibold">
+              <Plus className="h-4 w-4" />
+              Create Static Route
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Toolbar (Filters & Search) */}
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex flex-wrap items-center gap-2.5">
+              {/* Type filters */}
+              <div className="flex w-fit gap-0.5 rounded-lg border border-border bg-muted p-0.5">
+                <button
+                  onClick={() => setSelectedTypeFilter("all")}
+                  className={`cursor-pointer rounded-md px-3 py-1 text-xs font-medium transition ${selectedTypeFilter === "all"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    }`}
+                >
+                  All Types
+                </button>
+                <button
+                  onClick={() => setSelectedTypeFilter("system")}
+                  className={`cursor-pointer rounded-md px-3 py-1 text-xs font-medium transition ${selectedTypeFilter === "system"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    }`}
+                >
+                  System
+                </button>
+                <button
+                  onClick={() => setSelectedTypeFilter("custom")}
+                  className={`cursor-pointer rounded-md px-3 py-1 text-xs font-medium transition ${selectedTypeFilter === "custom"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    }`}
+                >
+                  Custom
+                </button>
+              </div>
+
+              {/* Status filters */}
+              <div className="flex w-fit gap-0.5 rounded-lg border border-border bg-muted p-0.5">
+                <button
+                  onClick={() => setSelectedStatusFilter("all")}
+                  className={`cursor-pointer rounded-md px-3 py-1 text-xs font-medium transition ${selectedStatusFilter === "all"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    }`}
+                >
+                  All Status
+                </button>
+                <button
+                  onClick={() => setSelectedStatusFilter("active")}
+                  className={`cursor-pointer rounded-md px-3 py-1 text-xs font-medium transition ${selectedStatusFilter === "active"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    }`}
+                >
+                  Active Only
+                </button>
+                <button
+                  onClick={() => setSelectedStatusFilter("inactive")}
+                  className={`cursor-pointer rounded-md px-3 py-1 text-xs font-medium transition ${selectedStatusFilter === "inactive"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    }`}
+                >
+                  Inactive
+                </button>
+              </div>
+
+              {/* Bulk Action */}
+              {selectedIds.length > 0 && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleBulkDelete}
+                  className="cursor-pointer gap-1.5"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete Selected ({selectedIds.length})
+                </Button>
+              )}
+            </div>
+
+            {/* Search */}
+            <div className="relative w-full md:max-w-xs">
+              <Search className="pointer-events-none absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="ค้นหา IP เครือข่าย, Gateway หรือคำอธิบาย..."
+                className="h-9 pl-8"
               />
             </div>
-          )}
-          <Button
-            onClick={() => loadRoutes(true)}
-            disabled={isLoading}
-            variant="outline"
-            className="cursor-pointer border-border hover:bg-muted text-foreground font-bold gap-1.5 h-10 px-4"
-          >
-            {isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4.5 w-4.5" />
-            )}
-            Refresh
-          </Button>
-          <Button onClick={openCreateModal} className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 font-bold gap-1.5 h-10">
-            <Plus className="h-4.5 w-4.5" />
-            Create Static Route
-          </Button>
-        </div>
-      </div>
-
-      {/* 2. Stats Dashboard Cards */}
-      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">เส้นทางจัดเก็บทั้งหมด</div>
-          <div className="mt-2 text-2xl font-bold text-foreground font-mono">{stats.total}</div>
-        </Card>
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <CheckCircle2 className="h-3.5 w-3.5 text-primary" /> Active Routes (ใช้งาน)
-          </div>
-          <div className="mt-2 text-2xl font-bold text-primary font-mono">{stats.active}</div>
-        </Card>
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <Network className="h-3.5 w-3.5 text-primary" /> System Subnets
-          </div>
-          <div className="mt-2 text-2xl font-bold text-primary font-mono">{stats.system}</div>
-        </Card>
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <SlidersHorizontal className="h-3.5 w-3.5 text-amber-400" /> Custom Config
-          </div>
-          <div className="mt-2 text-2xl font-bold text-amber-400 font-mono">{stats.custom}</div>
-        </Card>
-      </div>
-
-
-
-      {/* 4. Toolbar (Filters & Search) */}
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between bg-card/30 p-4 rounded-xl border border-border/60">
-        <div className="flex flex-wrap items-center gap-2.5">
-          {/* Type filters */}
-          <div className="flex rounded-lg border border-border bg-card p-0.5 gap-0.5">
-            <button
-              onClick={() => setSelectedTypeFilter("all")}
-              className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${selectedTypeFilter === "all"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                }`}
-            >
-              All Types
-            </button>
-            <button
-              onClick={() => setSelectedTypeFilter("system")}
-              className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${selectedTypeFilter === "system"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                }`}
-            >
-              System
-            </button>
-            <button
-              onClick={() => setSelectedTypeFilter("custom")}
-              className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${selectedTypeFilter === "custom"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                }`}
-            >
-              Custom
-            </button>
           </div>
 
-          {/* Status filters */}
-          <div className="flex rounded-lg border border-border bg-card p-0.5 gap-0.5">
-            <button
-              onClick={() => setSelectedStatusFilter("all")}
-              className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${selectedStatusFilter === "all"
-                ? "bg-primary/20 text-primary border border-primary/20"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent"
-                }`}
-            >
-              All Status
-            </button>
-            <button
-              onClick={() => setSelectedStatusFilter("active")}
-              className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${selectedStatusFilter === "active"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                }`}
-            >
-              Active Only
-            </button>
-            <button
-              onClick={() => setSelectedStatusFilter("inactive")}
-              className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${selectedStatusFilter === "inactive"
-                ? "bg-muted text-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                }`}
-            >
-              Inactive
-            </button>
-          </div>
-
-          {/* Bulk Action */}
-          {selectedIds.length > 0 && (
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={handleBulkDelete}
-              className="cursor-pointer font-bold gap-1 h-8 px-3 ml-2"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              Delete Selected ({selectedIds.length})
-            </Button>
-          )}
-        </div>
-
-        {/* Search */}
-        <div className="relative w-full md:max-w-xs">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
-          <Input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="ค้นหา IP เครือข่าย, Gateway หรือคำอธิบาย..."
-            className="pl-8 bg-background/50 placeholder:text-muted-foreground h-9"
-          />
-        </div>
-      </div>
-
-      {/* 5. Table view */}
-      <Card className="bg-card/25 border border-border/50 overflow-hidden py-0">
-        <Table>
-          <TableHeader>
-            <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
-              <TableHead className="p-3 w-[5%]">
-                <input
-                  type="checkbox"
-                  disabled={selectableRoutes.length === 0}
-                  checked={isAllSelected}
-                  onChange={(e) => handleSelectAll(e.target.checked)}
-                  className="rounded border-input bg-background text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer accent-primary disabled:opacity-30 disabled:cursor-not-allowed"
-                />
-              </TableHead>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[22%] font-semibold">Destination Network</th>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[20%] font-semibold">Gateway</th>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[12%] font-semibold">Interface</th>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[10%] font-semibold">Metric</th>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[18%] font-semibold">Description</th>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[8%] font-semibold">Status</th>
-              <TableHead className="p-3 w-[5%] text-right"></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={8} className="p-12 text-center text-muted-foreground text-xs">
-                  <div className="flex flex-col items-center justify-center gap-2 py-4">
-                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                    <span>กำลังโหลดข้อมูล...</span>
-                  </div>
-                </TableCell>
+          {/* Table view */}
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="w-[5%]">
+                  <input
+                    type="checkbox"
+                    disabled={selectableRoutes.length === 0}
+                    checked={isAllSelected}
+                    onChange={(e) => handleSelectAll(e.target.checked)}
+                    className="h-4 w-4 cursor-pointer rounded border-input bg-background accent-primary disabled:cursor-not-allowed disabled:opacity-30"
+                  />
+                </TableHead>
+                <TableHead className="w-[22%] text-xs font-medium text-muted-foreground">Destination Network</TableHead>
+                <TableHead className="w-[20%] text-xs font-medium text-muted-foreground">Gateway</TableHead>
+                <TableHead className="w-[12%] text-xs font-medium text-muted-foreground">Interface</TableHead>
+                <TableHead className="w-[10%] text-xs font-medium text-muted-foreground">Metric</TableHead>
+                <TableHead className="w-[18%] text-xs font-medium text-muted-foreground">Description</TableHead>
+                <TableHead className="w-[8%] text-xs font-medium text-muted-foreground">Status</TableHead>
+                <TableHead className="w-[5%] text-right text-xs font-medium text-muted-foreground"></TableHead>
               </TableRow>
-            ) : filteredRoutes.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={8} className="p-8 text-center text-muted-foreground text-xs">
-                  ไม่พบเส้นทางเครือข่ายตามที่ค้นหา
-                </TableCell>
-              </TableRow>
-            ) : (
-              filteredRoutes.map((route) => (
-                <TableRow key={route.id} className="border-b border-border/40 hover:bg-muted/15">
-                  <TableCell className="p-3">
-                    <input
-                      type="checkbox"
-                      disabled={isRouteActionDisabled(route)}
-                      checked={selectedIds.includes(route.id)}
-                      onChange={(e) => handleSelectRow(route.id, e.target.checked)}
-                      className="rounded border-input bg-background text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer accent-primary disabled:opacity-30 disabled:cursor-not-allowed"
-                    />
-                  </TableCell>
-                  <TableCell className="p-3">
-                    <div className="flex flex-col gap-1">
-                      <span className="font-mono text-sm font-semibold text-foreground">{route.destination}</span>
-                      <div className="flex items-center gap-1.5">
-                        {route.type === "system" ? (
-                          <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[9px] px-1.5 py-0.2 rounded font-mono font-medium">
-                            System
-                          </Badge>
-                        ) : route.type === "defaultgateway" ? (
-                          <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[9px] px-1.5 py-0.2 rounded font-mono font-medium">
-                            Default Gateway
-                          </Badge>
-                        ) : route.type === "customgateway" ? (
-                          <Badge variant="outline" className="bg-amber-500/10 text-amber-400 border-amber-500/20 text-[9px] px-1.5 py-0.2 rounded font-mono font-medium">
-                            Custom Gateway
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="bg-amber-500/10 text-amber-400 border-amber-500/20 text-[9px] px-1.5 py-0.2 rounded font-mono font-medium">
-                            Custom
-                          </Badge>
-                        )}
-                        {route.kernelOnly && (
-                          <Badge variant="outline" className="bg-rose-500/10 text-rose-400 border-rose-500/20 text-[9px] px-1.5 py-0.2 rounded font-mono font-medium">
-                            Kernel Only
-                          </Badge>
-                        )}
-                        {route.destination === "0.0.0.0/0" && route.type !== "defaultgateway" && (
-                          <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[9px] px-1.5 py-0.2 rounded font-mono">
-                            Default Gateway
-                          </Badge>
-                        )}
-
-                        {/* Advanced options badges */}
-                        {((route.scope && route.scope !== "global") || route.src || (route.proto && route.proto !== "static" && route.proto !== "120")) && (
-                          <>
-                            {route.scope && route.scope !== "global" && (
-                              <span className="text-[10px] text-primary bg-primary/10 border border-primary/20 px-1.5 py-0.5 rounded font-mono font-medium animate-fade-in">
-                                scope: {route.scope}
-                              </span>
-                            )}
-                            {route.src && (
-                              <span className="text-[10px] text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded font-mono font-medium animate-fade-in">
-                                src: {route.src}
-                              </span>
-                            )}
-                            {route.proto && route.proto !== "static" && route.proto !== "120" && (
-                              <span className="text-[10px] text-primary bg-primary/10 border border-primary/20 px-1.5 py-0.5 rounded font-mono font-medium animate-fade-in">
-                                proto: {route.proto}
-                              </span>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell className="p-3 font-mono text-xs">
-                    {route.gateway ? (
-                      <span className="text-foreground">{route.gateway}</span>
-                    ) : (
-                      <span className="text-muted-foreground/50 italic text-[11px]">Directly Connected</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="p-3">
-                    <Badge variant="secondary" className="font-mono text-xs px-2 py-0.5 rounded">
-                      {route.interface}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="p-3 font-mono text-xs text-foreground">{route.metric}</TableCell>
-                  <TableCell className="p-3 text-xs text-muted-foreground max-w-[150px] truncate" title={route.description}>
-                    {route.description || <span className="text-muted-foreground/30 italic">No description</span>}
-                  </TableCell>
-                  <TableCell className="p-3">
-                    <Switch
-                      checked={route.status}
-                      disabled={isRouteActionDisabled(route)}
-                      onCheckedChange={() => handleToggleStatus(route.id)}
-                      className="data-[state=checked]:bg-primary"
-                    />
-                  </TableCell>
-                  <TableCell className="p-3 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        disabled={isRouteActionDisabled(route)}
-                        onClick={() => openEditModal(route)}
-                        className="cursor-pointer text-muted-foreground hover:text-foreground hover:bg-muted/50 disabled:opacity-25 disabled:cursor-not-allowed"
-                        title={getEditTitle(route)}
-                      >
-                        <Edit className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        disabled={isRouteActionDisabled(route)}
-                        onClick={() => handleDelete(route.id, route.destination)}
-                        className="cursor-pointer text-muted-foreground hover:text-red-500 hover:bg-red-500/10 disabled:opacity-25 disabled:cursor-not-allowed"
-                        title={getDeleteTitle(route)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="py-12 text-center text-xs text-muted-foreground">
+                    <div className="flex flex-col items-center justify-center gap-2 py-4">
+                      <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                      <span>กำลังโหลดข้อมูล...</span>
                     </div>
                   </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+              ) : filteredRoutes.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="py-8 text-center text-xs text-muted-foreground">
+                    ไม่พบเส้นทางเครือข่ายตามที่ค้นหา
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filteredRoutes.map((route) => (
+                  <TableRow key={route.id}>
+                    <TableCell className="py-3">
+                      <input
+                        type="checkbox"
+                        disabled={isRouteActionDisabled(route)}
+                        checked={selectedIds.includes(route.id)}
+                        onChange={(e) => handleSelectRow(route.id, e.target.checked)}
+                        className="h-4 w-4 cursor-pointer rounded border-input bg-background accent-primary disabled:cursor-not-allowed disabled:opacity-30"
+                      />
+                    </TableCell>
+                    <TableCell className="py-3">
+                      <div className="flex flex-col gap-1">
+                        <span className="font-mono text-sm font-medium text-foreground">{route.destination}</span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {route.type === "system" ? (
+                            <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0 font-mono text-[10px] font-medium text-primary">
+                              System
+                            </Badge>
+                          ) : route.type === "defaultgateway" ? (
+                            <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0 font-mono text-[10px] font-medium text-primary">
+                              Default Gateway
+                            </Badge>
+                          ) : route.type === "customgateway" ? (
+                            <Badge variant="outline" className="rounded border-amber-500/20 bg-amber-500/10 px-1.5 py-0 font-mono text-[10px] font-medium text-amber-500">
+                              Custom Gateway
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="rounded border-amber-500/20 bg-amber-500/10 px-1.5 py-0 font-mono text-[10px] font-medium text-amber-500">
+                              Custom
+                            </Badge>
+                          )}
+                          {route.kernelOnly && (
+                            <Badge variant="outline" className="rounded border-red-500/20 bg-red-500/10 px-1.5 py-0 font-mono text-[10px] font-medium text-red-500">
+                              Kernel Only
+                            </Badge>
+                          )}
+                          {route.destination === "0.0.0.0/0" && route.type !== "defaultgateway" && (
+                            <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0 font-mono text-[10px] font-medium text-primary">
+                              Default Gateway
+                            </Badge>
+                          )}
+
+                          {/* Advanced options badges */}
+                          {((route.scope && route.scope !== "global") || route.src || (route.proto && route.proto !== "static" && route.proto !== "120")) && (
+                            <>
+                              {route.scope && route.scope !== "global" && (
+                                <span className="animate-fade-in rounded border border-primary/20 bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">
+                                  scope: {route.scope}
+                                </span>
+                              )}
+                              {route.src && (
+                                <span className="animate-fade-in rounded border border-amber-500/20 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-amber-500">
+                                  src: {route.src}
+                                </span>
+                              )}
+                              {route.proto && route.proto !== "static" && route.proto !== "120" && (
+                                <span className="animate-fade-in rounded border border-primary/20 bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">
+                                  proto: {route.proto}
+                                </span>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell className="py-3 font-mono text-xs">
+                      {route.gateway ? (
+                        <span className="text-foreground">{route.gateway}</span>
+                      ) : (
+                        <span className="text-[11px] italic text-muted-foreground/50">Directly Connected</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="py-3">
+                      <Badge variant="secondary" className="rounded px-2 py-0.5 font-mono text-xs">
+                        {route.interface}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="py-3 font-mono text-xs text-foreground">{route.metric}</TableCell>
+                    <TableCell className="max-w-[150px] truncate py-3 text-xs text-muted-foreground" title={route.description}>
+                      {route.description || <span className="italic text-muted-foreground/30">No description</span>}
+                    </TableCell>
+                    <TableCell className="py-3">
+                      <Switch
+                        checked={route.status}
+                        disabled={isRouteActionDisabled(route)}
+                        onCheckedChange={() => handleToggleStatus(route.id)}
+                      />
+                    </TableCell>
+                    <TableCell className="py-3 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          variant="outline"
+                          size="icon-sm"
+                          disabled={isRouteActionDisabled(route)}
+                          onClick={() => openEditModal(route)}
+                          className="cursor-pointer text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-25"
+                          title={getEditTitle(route)}
+                        >
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={isRouteActionDisabled(route)}
+                          onClick={() => handleDelete(route.id, route.destination)}
+                          className="cursor-pointer text-muted-foreground hover:bg-red-500/10 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-25"
+                          title={getDeleteTitle(route)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
       </Card>
 
-      {/* 6. Alert Help Box */}
-      <Alert className="border-dashed border-border bg-card/10">
-        <Info className="h-4 w-4 text-muted-foreground" />
-        <AlertTitle className="font-bold text-foreground mb-0.5">การทำงานของ Routing Table:</AlertTitle>
-        <AlertDescription className="text-xs text-muted-foreground leading-relaxed">
-          เมื่อแพ็กเก็ตวิ่งเข้ามาในตัว PiGate ระบบปฏิบัติการจะตรวจสอบ Destination Network จากบนลงล่างตามลำดับของ <span className="font-semibold text-primary">Metric</span> (ค่ายิ่งต่ำยิ่งมีความสำคัญสูง)
+      {/* 3. Info note */}
+      <div className="flex gap-2 rounded-lg border border-border bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          <strong className="text-foreground">การทำงานของ Routing Table:</strong>{" "}
+          เมื่อแพ็กเก็ตวิ่งเข้ามาในตัว PiGate ระบบปฏิบัติการจะตรวจสอบ Destination Network จากบนลงล่างตามลำดับของ <strong className="text-foreground">Metric</strong> (ค่ายิ่งต่ำยิ่งมีความสำคัญสูง)
           คุณสามารถจำลองการสลับการเปิด/ปิดสถานะเพื่ออัปเดตตารางและทดลองรันคำสั่งจริงในตัวกล่องจำลอง Linux Terminal ได้ทันที
-        </AlertDescription>
-      </Alert>
+        </span>
+      </div>
 
-      {/* 7. Create / Edit Dialog */}
+      {/* 4. Create / Edit Dialog */}
       <Dialog open={isModalOpen} modal={false} onOpenChange={setIsModalOpen}>
-        <DialogContent ref={dialogContentRef} className="max-w-[500px] w-full rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up">
-          <DialogHeader className="pb-3 border-b border-border/40">
-            <DialogTitle className="text-lg font-bold text-foreground">
+        <DialogContent ref={dialogContentRef} className="w-full max-w-[500px] gap-4 rounded-xl p-6">
+          <DialogHeader className="border-b border-border/50 pb-3">
+            <DialogTitle className="text-base font-semibold">
               {editingRoute ? "แก้ไขเส้นทางเน็ตเวิร์ก (Static Route)" : "เพิ่มเส้นทางเน็ตเวิร์กใหม่ (Static Route)"}
             </DialogTitle>
           </DialogHeader>
@@ -745,16 +746,16 @@ export default function StaticRoutes() {
           {/* Form */}
           <form onSubmit={handleSave} className="space-y-4 text-sm">
             {formError && (
-              <Alert variant="destructive" className="border-red-500/20 bg-red-500/5 py-2.5 px-3">
-                <AlertCircle className="h-4 w-4 text-red-400" />
-                <AlertDescription className="text-red-400 text-xs">{formError}</AlertDescription>
+              <Alert variant="destructive" className="px-3 py-2.5">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-xs">{formError}</AlertDescription>
               </Alert>
             )}
 
             {/* Field: Destination */}
             <div className="space-y-1.5">
-              <Label htmlFor="route-dest" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                Destination Subnet IP/Mask <span className="text-red-500">*</span>
+              <Label htmlFor="route-dest" className="block text-xs font-medium text-muted-foreground">
+                Destination Subnet IP/Mask <span className="text-destructive">*</span>
               </Label>
               <Input
                 id="route-dest"
@@ -763,16 +764,16 @@ export default function StaticRoutes() {
                 value={formDestination}
                 onChange={(e) => setFormDestination(e.target.value)}
                 placeholder="เช่น 192.168.10.0/24 หรือ 0.0.0.0/0"
-                className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                className="h-9 font-mono text-sm"
               />
-              <p className="text-[11px] text-muted-foreground italic">
+              <p className="mt-0.5 text-[10px] text-muted-foreground">
                 ระบุในรูปแบบ CIDR (เช่น 192.168.10.0/24) หรือระบุ 0.0.0.0/0 สำหรับ Default Route
               </p>
             </div>
 
             {/* Field: Gateway */}
             <div className="space-y-1.5">
-              <Label htmlFor="route-gw" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+              <Label htmlFor="route-gw" className="block text-xs font-medium text-muted-foreground">
                 Gateway IP (ทางผ่าน)
               </Label>
               <Input
@@ -781,9 +782,9 @@ export default function StaticRoutes() {
                 value={formGateway}
                 onChange={(e) => setFormGateway(e.target.value)}
                 placeholder="เช่น 192.168.1.254 (ปล่อยว่างหากต้องการส่งออก Interface ตรง)"
-                className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                className="h-9 font-mono text-sm"
               />
-              <p className="text-[11px] text-muted-foreground italic">
+              <p className="mt-0.5 text-[10px] text-muted-foreground">
                 ไอพีของอุปกรณ์เกตเวย์/เร้าเตอร์ถัดไปที่เป็นตัวส่งต่อแพ็กเก็ต
               </p>
             </div>
@@ -792,14 +793,14 @@ export default function StaticRoutes() {
             <div className="grid grid-cols-2 gap-4">
               {/* Field: Interface */}
               <div className="space-y-1.5">
-                <Label htmlFor="route-iface" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                <Label htmlFor="route-iface" className="block text-xs font-medium text-muted-foreground">
                   Outgoing Interface
                 </Label>
                 <select
                   id="route-iface"
                   value={formInterface}
                   onChange={(e) => setFormInterface(e.target.value)}
-                  className="w-full bg-background border border-border rounded-lg h-9 px-2.5 text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                  className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
                 >
                   {interfaces.map((iface) => (
                     <option key={iface.id} value={iface.name}>
@@ -817,7 +818,7 @@ export default function StaticRoutes() {
 
               {/* Field: Metric */}
               <div className="space-y-1.5">
-                <Label htmlFor="route-metric" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                <Label htmlFor="route-metric" className="block text-xs font-medium text-muted-foreground">
                   Metric (ลำดับความสำคัญ)
                 </Label>
                 <Input
@@ -828,14 +829,14 @@ export default function StaticRoutes() {
                   value={formMetric}
                   onChange={(e) => setFormMetric(e.target.value)}
                   placeholder="เช่น 10, 100"
-                  className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                  className="h-9 font-mono text-sm"
                 />
               </div>
             </div>
 
             {/* Field: Description */}
             <div className="space-y-1.5">
-              <Label htmlFor="route-desc" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+              <Label htmlFor="route-desc" className="block text-xs font-medium text-muted-foreground">
                 Description (รายละเอียด)
               </Label>
               <Input
@@ -844,38 +845,38 @@ export default function StaticRoutes() {
                 value={formDescription}
                 onChange={(e) => setFormDescription(e.target.value)}
                 placeholder="เช่น เชื่อมต่อไปยังสาขาย่อย A, VPN tunnel"
-                className="bg-background/50 placeholder:text-muted-foreground h-9 text-xs"
+                className="h-9 text-sm"
               />
             </div>
 
             {/* Collapsible Advanced Section */}
-            <div className="border border-border/60 rounded-lg overflow-hidden bg-card/10">
+            <div className="overflow-hidden rounded-lg border border-border">
               <button
                 type="button"
                 onClick={() => setIsAdvancedOpen(!isAdvancedOpen)}
-                className="w-full flex items-center justify-between px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-muted/20 transition cursor-pointer select-none"
+                className="flex w-full cursor-pointer items-center justify-between px-3 py-2 text-xs font-semibold text-foreground transition select-none hover:bg-muted/50"
               >
                 <span className="flex items-center gap-1.5">
-                  <SlidersHorizontal className="h-3.5 w-3.5 text-primary" />
+                  <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
                   Advanced Routing Settings (การตั้งค่าขั้นสูง)
                 </span>
-                {isAdvancedOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                {isAdvancedOpen ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
               </button>
 
               {isAdvancedOpen && (
-                <div className="p-3 border-t border-border/40 space-y-3 bg-muted/5 animate-slide-down">
+                <div className="animate-slide-down space-y-3 border-t border-border/50 bg-muted/50 p-3">
                   {/* Grid for Scope & Protocol */}
                   <div className="grid grid-cols-2 gap-3">
                     {/* Advanced Field: Scope */}
                     <div className="space-y-1.5">
-                      <Label htmlFor="route-scope" className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block">
+                      <Label htmlFor="route-scope" className="block text-xs font-medium text-muted-foreground">
                         Scope (ขอบเขต)
                       </Label>
                       <select
                         id="route-scope"
                         value={formScope}
                         onChange={(e) => setFormScope(e.target.value)}
-                        className="w-full bg-background border border-border rounded-lg h-8 px-2 text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                        className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
                       >
                         <option value="global">global (Global route)</option>
                         <option value="link">link (Direct network link)</option>
@@ -886,14 +887,14 @@ export default function StaticRoutes() {
 
                     {/* Advanced Field: Protocol */}
                     <div className="space-y-1.5">
-                      <Label htmlFor="route-proto" className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block">
+                      <Label htmlFor="route-proto" className="block text-xs font-medium text-muted-foreground">
                         Protocol (โปรโตคอล)
                       </Label>
                       <select
                         id="route-proto"
                         value={formProto}
                         onChange={(e) => setFormProto(e.target.value)}
-                        className="w-full bg-background border border-border rounded-lg h-8 px-2 text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                        className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
                       >
                         <option value="120">120 (PiGate Custom)</option>
                         {
@@ -911,7 +912,7 @@ export default function StaticRoutes() {
 
                   {/* Advanced Field: Src IP */}
                   <div className="space-y-1.5">
-                    <Label htmlFor="route-src" className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider block">
+                    <Label htmlFor="route-src" className="block text-xs font-medium text-muted-foreground">
                       Preferred Source IP (src)
                     </Label>
                     <Input
@@ -920,9 +921,9 @@ export default function StaticRoutes() {
                       value={formSrc}
                       onChange={(e) => setFormSrc(e.target.value)}
                       placeholder="เช่น 192.168.1.2"
-                      className="bg-background/50 placeholder:text-muted-foreground h-8 font-mono text-xs"
+                      className="h-9 bg-background font-mono text-sm"
                     />
-                    <p className="text-[10px] text-muted-foreground italic leading-normal">
+                    <p className="mt-0.5 text-[10px] leading-normal text-muted-foreground">
                       IP ของฝั่งส่งที่ต้องการบังคับให้ออกจากอินเตอร์เฟสนี้ (Preferred Source IP)
                     </p>
                   </div>
@@ -931,34 +932,28 @@ export default function StaticRoutes() {
             </div>
 
             {/* Field: Status Toggle */}
-            <div className="flex items-center justify-between bg-muted/20 p-2.5 rounded-lg border border-border/40">
+            <div className="flex items-center justify-between rounded-lg border border-border bg-muted/50 p-3">
               <div className="flex flex-col gap-0.5">
-                <span className="text-xs font-bold text-foreground">เปิดใช้งานทันที (Status)</span>
+                <span className="text-xs font-semibold text-foreground">เปิดใช้งานทันที (Status)</span>
                 <span className="text-[10px] text-muted-foreground">เริ่มเปิดทำงานตารางเชื่อมต่อทันทีที่บันทึก</span>
               </div>
               <Switch
                 checked={formStatus}
                 onCheckedChange={setFormStatus}
-                className="data-[state=checked]:bg-primary"
               />
             </div>
 
-
-
             {/* Action Buttons */}
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-border/40">
+            <div className="flex items-center justify-end gap-3 border-t border-border/50 pt-4">
               <Button
                 type="button"
                 variant="ghost"
                 onClick={() => setIsModalOpen(false)}
-                className="cursor-pointer text-muted-foreground hover:bg-muted/30"
+                className="cursor-pointer text-muted-foreground"
               >
                 Cancel
               </Button>
-              <Button
-                type="submit"
-                className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/95 font-bold px-5"
-              >
+              <Button type="submit" className="cursor-pointer px-6 font-semibold">
                 Save Route
               </Button>
             </div>
