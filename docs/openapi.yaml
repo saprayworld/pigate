@@ -1104,7 +1104,10 @@ paths:
     get:
       tags:
         - DHCP Server
-      summary: Get DHCP Server main configuration parameters
+      summary: Get DHCP Server main configuration parameters (legacy single-scope)
+      description: |
+        Legacy single-configuration endpoint — returns the first DHCP config row.
+        Prefer the multi-scope `/dhcp/configs` endpoints for new code.
       responses:
         '200':
           description: DHCP configuration
@@ -1129,6 +1132,128 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DhcpConfig'
+
+  /dhcp/configs:
+    get:
+      tags:
+        - DHCP Server
+      summary: Get all per-interface DHCP server configurations (multi-scope)
+      responses:
+        '200':
+          description: List of DHCP configurations (one per LAN interface)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DhcpConfig'
+    post:
+      tags:
+        - DHCP Server
+      summary: Create a DHCP server configuration for an interface
+      description: |
+        Creates a new per-interface DHCP scope. If `id` is omitted, the backend
+        assigns the canonical ID `dhcp-cfg-<interface>`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DhcpConfig'
+      responses:
+        '200':
+          description: DHCP configuration created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DhcpConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /dhcp/configs/{id}:
+    put:
+      tags:
+        - DHCP Server
+      summary: Update a per-interface DHCP configuration by ID
+      description: The `id` in the path always wins over any `id` in the request body.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DhcpConfig'
+      responses:
+        '200':
+          description: DHCP configuration updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DhcpConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+    delete:
+      tags:
+        - DHCP Server
+      summary: Delete a per-interface DHCP configuration
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: DHCP configuration deleted
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  /dhcp/configs/{id}/toggle:
+    post:
+      tags:
+        - DHCP Server
+      summary: Toggle a per-interface DHCP configuration enabled/disabled
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Enabled state toggled
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  /dhcp/interfaces:
+    get:
+      tags:
+        - DHCP Server
+      summary: List LAN interfaces not yet bound to a DHCP configuration
+      description: |
+        Returns the names of interfaces with role LAN that do not have a DHCP
+        configuration yet — candidates for creating a new DHCP scope.
+      responses:
+        '200':
+          description: Available LAN interface names
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+                example: [eth1, wlan1]
 
   /dhcp/reservations:
     get:
@@ -1210,6 +1335,9 @@ paths:
       tags:
         - DHCP Server
       summary: Get active IP leases from DHCP lease log database
+      description: |
+        Returns leases stored in the database; if the database has none, falls
+        back to live leases read from the system (dnsmasq lease file).
       parameters:
         - name: refresh
           in: query
@@ -1217,7 +1345,7 @@ paths:
           schema:
             type: boolean
             default: false
-          description: Force reading and updating leases from system logs
+          description: Accepted for backward compatibility but currently ignored by the backend.
       responses:
         '200':
           description: List of active leases
@@ -1241,6 +1369,264 @@ paths:
               schema:
                 type: boolean
                 example: true
+
+  # =========================================================================
+  # DNS SERVER (dnsmasq local zones & records)
+  # =========================================================================
+  /dns/zones:
+    get:
+      tags:
+        - DNS Server
+      summary: List all DNS zones (forward zones and authoritative local zones)
+      responses:
+        '200':
+          description: List of DNS zones with their records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DNSZone'
+    post:
+      tags:
+        - DNS Server
+      summary: Create a new DNS zone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSZoneInput'
+      responses:
+        '200':
+          description: Zone created (records start empty)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSZone'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /dns/zones/{id}:
+    put:
+      tags:
+        - DNS Server
+      summary: Update a DNS zone (records are preserved)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSZoneInput'
+      responses:
+        '200':
+          description: Zone updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSZone'
+        '404':
+          description: DNS Zone not found
+    delete:
+      tags:
+        - DNS Server
+      summary: Delete a DNS zone (and its records)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Zone deleted
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  /dns/zones/{id}/toggle:
+    post:
+      tags:
+        - DNS Server
+      summary: Toggle a DNS zone enabled/disabled
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Zone enabled state toggled
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  /dns/zones/{id}/records:
+    get:
+      tags:
+        - DNS Server
+      summary: List all records in a DNS zone
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Zone ID
+      responses:
+        '200':
+          description: List of DNS records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DNSRecord'
+    post:
+      tags:
+        - DNS Server
+      summary: Create a new record in a DNS zone
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Zone ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSRecordInput'
+      responses:
+        '200':
+          description: Record created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSRecord'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /dns/records/{id}:
+    put:
+      tags:
+        - DNS Server
+      summary: Update a DNS record (zone binding is immutable)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSRecordInput'
+      responses:
+        '200':
+          description: Record updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSRecord'
+        '404':
+          description: DNS Record not found
+    delete:
+      tags:
+        - DNS Server
+      summary: Delete a DNS record
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Record deleted
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  /dns/apply:
+    post:
+      tags:
+        - DNS Server
+      summary: Apply DNS server configuration (regenerate dnsmasq config, restart daemon, re-sync firewall)
+      responses:
+        '200':
+          description: DNS server configuration applied
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  /dns/clear-cache:
+    post:
+      tags:
+        - DNS Server
+      summary: Clear the dnsmasq DNS resolver cache
+      responses:
+        '200':
+          description: DNS cache cleared
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  /dns/settings:
+    get:
+      tags:
+        - DNS Server
+      summary: Get the interfaces the DNS server is bound to
+      responses:
+        '200':
+          description: DNS server listen-interface settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSServerSettings'
+    put:
+      tags:
+        - DNS Server
+      summary: Set the interfaces the DNS server should bind to
+      description: |
+        Interface names are validated against the live interfaces on the device;
+        unknown names are rejected. Independent from the DHCP server configuration.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSServerSettings'
+      responses:
+        '200':
+          description: Settings saved (echoes the stored settings)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSServerSettings'
+        '400':
+          $ref: '#/components/responses/BadRequest'
 
   # =========================================================================
   # SYSTEM & MAINTENANCE
@@ -1404,7 +1790,8 @@ paths:
     get:
       tags:
         - System & Maintenance
-      summary: Get statuses of critical network service daemons (nftables, isc-dhcp-server, NetworkManager)
+      summary: Get statuses of critical network service daemons (nftables, isc-dhcp-server, NetworkManager, dnsmasq)
+      description: Currently returns mock data — the statuses are hardcoded, not read from systemd.
       responses:
         '200':
           description: Services status list
@@ -2437,6 +2824,134 @@ components:
           type: string
           example: Alternative HTTP web port
 
+    # --- DNS Server Schemas ---
+    DNSZone:
+      type: object
+      required:
+        - id
+        - zoneName
+        - forwardTo
+        - allowedIps
+        - isAuthoritative
+        - enabled
+        - records
+      properties:
+        id:
+          type: string
+          example: zone-a1b2c3d4
+        zoneName:
+          type: string
+          description: Domain suffix this zone matches (e.g. lan, corp.local)
+          example: home.lan
+        forwardTo:
+          type: string
+          description: Upstream DNS server IP to forward queries for this zone to. Empty for authoritative zones.
+          example: 192.168.1.53
+        allowedIps:
+          type: string
+          description: Optional client IP/CIDR restriction for this zone (empty = all clients).
+          example: 192.168.1.0/24
+        isAuthoritative:
+          type: boolean
+          description: True when this zone is served locally from its records instead of forwarded.
+          example: true
+        enabled:
+          type: boolean
+          example: true
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/DNSRecord'
+
+    DNSZoneInput:
+      type: object
+      required:
+        - zoneName
+        - isAuthoritative
+        - enabled
+      properties:
+        zoneName:
+          type: string
+          example: home.lan
+        forwardTo:
+          type: string
+          example: 192.168.1.53
+        allowedIps:
+          type: string
+          example: 192.168.1.0/24
+        isAuthoritative:
+          type: boolean
+          example: true
+        enabled:
+          type: boolean
+          example: true
+
+    DNSRecord:
+      type: object
+      required:
+        - id
+        - zoneId
+        - name
+        - type
+        - value
+        - ttl
+      properties:
+        id:
+          type: string
+          example: rec-a1b2c3d4
+        zoneId:
+          type: string
+          description: ID of the zone this record belongs to (immutable).
+          example: zone-a1b2c3d4
+        name:
+          type: string
+          description: Record host name (relative to the zone or FQDN).
+          example: nas
+        type:
+          type: string
+          description: DNS record type (e.g. A, AAAA, CNAME, MX, TXT).
+          example: A
+        value:
+          type: string
+          example: 192.168.1.50
+        ttl:
+          type: integer
+          description: Time-to-live in seconds.
+          example: 3600
+
+    DNSRecordInput:
+      type: object
+      required:
+        - name
+        - type
+        - value
+        - ttl
+      properties:
+        name:
+          type: string
+          example: nas
+        type:
+          type: string
+          example: A
+        value:
+          type: string
+          example: 192.168.1.50
+        ttl:
+          type: integer
+          example: 3600
+
+    DNSServerSettings:
+      type: object
+      required:
+        - interfaces
+      properties:
+        interfaces:
+          type: array
+          description: Names of the real interfaces the DNS server binds (listens) on.
+          items:
+            type: string
+          example: [eth0, wlan0]
+
     # --- Static Route Schemas ---
     RoutesConfig:
       type: object
@@ -2593,6 +3108,12 @@ components:
         - dns2
         - leaseTime
       properties:
+        id:
+          type: string
+          description: |
+            Configuration ID. Always present in responses. Optional on create —
+            when omitted, the backend assigns `dhcp-cfg-<interface>`.
+          example: dhcp-cfg-eth0
         enabled:
           type: boolean
           example: true
@@ -2849,14 +3370,9 @@ components:
             dnsZones:
               type: array
               items:
-                type: object
+                $ref: '#/components/schemas/DNSZone'
             dnsServerSettings:
-              type: object
-              properties:
-                interfaces:
-                  type: array
-                  items:
-                    type: string
+              $ref: '#/components/schemas/DNSServerSettings'
             systemDns:
               type: object
             qosRules:
