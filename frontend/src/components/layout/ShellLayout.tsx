@@ -13,10 +13,7 @@ import {
   Settings,
   LogOut,
   ChevronDown,
-  Cpu,
-  HardDrive,
   Thermometer,
-  Zap,
   Menu,
   Moon,
   Sun,
@@ -54,16 +51,12 @@ export default function ShellLayout() {
   const avatarInitials = username.slice(0, 2).toUpperCase()
 
   // Live performance metrics for Topbar badges
-  const [topbarCpu, setTopbarCpu] = useState<number | null>(null)
-  const [topbarMem, setTopbarMem] = useState<number | null>(null)
   const [topbarTemp, setTopbarTemp] = useState<number | null>(null)
 
   useEffect(() => {
     const fetchPerf = async () => {
       try {
         const perf = await dashboardService.getPerformanceMetrics()
-        setTopbarCpu(perf.cpu)
-        setTopbarMem(perf.memory)
         setTopbarTemp(perf.temp)
       } catch { /* silently ignore */ }
     }
@@ -248,24 +241,6 @@ export default function ShellLayout() {
           <div className="flex items-center gap-4">
             {/* Pi Resources Stats */}
             <div className="flex items-center gap-2 sm:gap-3">
-              {/* CPU */}
-              <Badge variant="outline" className="flex items-center gap-1.5 rounded-full border-border bg-card/60 px-3 py-1 text-foreground hover:bg-card/60 h-7 text-xs font-normal">
-                <Cpu className="h-3.5 w-3.5 text-primary" />
-                <span className="hidden lg:inline text-muted-foreground">CPU</span>
-                <span className={`font-semibold ${topbarCpu !== null && topbarCpu >= 85 ? 'text-red-500' : topbarCpu !== null && topbarCpu >= 50 ? 'text-amber-500' : 'text-primary'}`}>
-                  {topbarCpu !== null ? `${topbarCpu}%` : '—'}
-                </span>
-              </Badge>
-
-              {/* RAM */}
-              <Badge variant="outline" className="flex items-center gap-1.5 rounded-full border-border bg-card/60 px-3 py-1 text-foreground hover:bg-card/60 h-7 text-xs font-normal">
-                <HardDrive className="h-3.5 w-3.5 text-cyan-500 dark:text-cyan-400" />
-                <span className="hidden lg:inline text-muted-foreground">RAM</span>
-                <span className="font-semibold text-cyan-500 dark:text-cyan-400">
-                  {topbarMem !== null ? `${topbarMem}%` : '—'}
-                </span>
-              </Badge>
-
               {/* Temp */}
               <Badge variant="outline" className="flex items-center gap-1.5 rounded-full border-border bg-card/60 px-3 py-1 text-foreground hover:bg-card/60 h-7 text-xs font-normal">
                 <Thermometer className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
@@ -273,13 +248,6 @@ export default function ShellLayout() {
                 <span className={`font-semibold ${topbarTemp !== null && topbarTemp >= 70 ? 'text-red-500' : topbarTemp !== null && topbarTemp >= 50 ? 'text-amber-500 dark:text-amber-400' : 'text-amber-500 dark:text-amber-400'}`}>
                   {topbarTemp !== null ? `${topbarTemp}°C` : '—'}
                 </span>
-              </Badge>
-
-              {/* Power status */}
-              <Badge variant="outline" className="hidden sm:flex items-center gap-1.5 rounded-full border-border bg-card/60 px-3 py-1 text-foreground hover:bg-card/60 h-7 text-xs font-normal">
-                <Zap className="h-3.5 w-3.5 text-primary" />
-                <span className="hidden lg:inline text-muted-foreground">Power</span>
-                <span className="font-semibold text-primary">OK</span>
               </Badge>
             </div>
 
