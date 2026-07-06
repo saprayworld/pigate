@@ -368,7 +368,7 @@ export default function QoS() {
           const isQosActive = status?.hasQdisc
 
           return (
-            <Card key={iface.id} className="border-border bg-card/60 backdrop-blur-sm">
+            <Card key={iface.id} className="border-border bg-card/60">
               <CardHeader className="pb-3 flex flex-row items-start justify-between space-y-0">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
@@ -384,7 +384,7 @@ export default function QoS() {
                 </div>
                 <Badge
                   className={`rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide border ${isQosActive
-                      ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+                      ? "bg-primary/10 text-primary border-primary/20"
                       : "bg-muted text-muted-foreground border-border/40"
                     }`}
                 >
@@ -413,7 +413,7 @@ export default function QoS() {
                               <span className="truncate max-w-[100px]">{cls.ruleName || "Shared Limit"}</span>
                             </div>
                             <div className="flex items-center gap-2 text-muted-foreground">
-                              <span className={`flex items-center gap-0.5 font-semibold text-xs ${isIngress ? "text-amber-500 animate-pulse" : "text-emerald-500"}`}>
+                              <span className={`flex items-center gap-0.5 font-semibold text-xs ${isIngress ? "text-amber-500 animate-pulse" : "text-primary"}`}>
                                 {isIngress ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
                                 {cls.ceil}
                               </span>
@@ -553,7 +553,7 @@ export default function QoS() {
 
                       <TableCell className="align-middle">
                         {rule.egressRateMbps > 0 ? (
-                          <div className="flex items-center gap-1.5 text-xs text-emerald-500 font-semibold">
+                          <div className="flex items-center gap-1.5 text-xs text-primary font-semibold">
                             <ArrowUp className="h-3.5 w-3.5" />
                             <span>{rule.egressRateMbps} Mbps</span>
                             {rule.egressCeilMbps > rule.egressRateMbps && (
@@ -736,7 +736,7 @@ export default function QoS() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <Label className="text-[11px] text-muted-foreground flex items-center gap-1 font-semibold">
-                    <ArrowUp className="h-3 w-3 text-emerald-500" />
+                    <ArrowUp className="h-3 w-3 text-primary" />
                     Egress Rate (Mbps)
                   </Label>
                   <Input

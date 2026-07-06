@@ -315,9 +315,9 @@ export default function Addresses() {
         </Card>
         <Card className="bg-card/20 border border-border/50 p-4">
           <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <Globe className="h-3.5 w-3.5 text-cyan-400" /> FQDNs (Domains)
+            <Globe className="h-3.5 w-3.5 text-primary" /> FQDNs (Domains)
           </div>
-          <div className="mt-2 text-2xl font-bold text-cyan-400 font-mono">{stats.fqdns}</div>
+          <div className="mt-2 text-2xl font-bold text-primary font-mono">{stats.fqdns}</div>
         </Card>
       </div>
 
@@ -347,7 +347,7 @@ export default function Addresses() {
             <button
               onClick={() => setSelectedTypeFilter("range")}
               className={`px-3 py-1 text-xs font-bold rounded-md transition ${selectedTypeFilter === "range"
-                ? "bg-amber-500 text-neutral-950"
+                ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
                 }`}
             >
@@ -356,7 +356,7 @@ export default function Addresses() {
             <button
               onClick={() => setSelectedTypeFilter("fqdn")}
               className={`px-3 py-1 text-xs font-bold rounded-md transition ${selectedTypeFilter === "fqdn"
-                ? "bg-cyan-500 text-neutral-950"
+                ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
                 }`}
             >
@@ -451,7 +451,7 @@ export default function Addresses() {
                       </Badge>
                     )}
                     {addr.type === "fqdn" && (
-                      <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20 text-[10px] px-2 py-0.5 rounded">
+                      <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px] px-2 py-0.5 rounded">
                         FQDN
                       </Badge>
                     )}

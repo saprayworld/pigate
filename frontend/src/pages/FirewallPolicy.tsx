@@ -130,7 +130,7 @@ function SortableRow({ rule, index, interfaces, onEdit, onDelete, onToggleStatus
       <TableCell className="p-3">
         <Badge
           variant="outline"
-          className="bg-neutral-850/10 text-neutral-500 border-neutral-700/25 dark:text-neutral-400 font-mono text-[10.5px] px-1.5 py-0.5 rounded whitespace-nowrap"
+          className="bg-muted text-muted-foreground border-border dark:text-muted-foreground font-mono text-[10.5px] px-1.5 py-0.5 rounded whitespace-nowrap"
         >
           {(() => {
             const val = rule.inInterface || "ALL";
@@ -145,7 +145,7 @@ function SortableRow({ rule, index, interfaces, onEdit, onDelete, onToggleStatus
       <TableCell className="p-3">
         <Badge
           variant="outline"
-          className="bg-neutral-850/10 text-neutral-500 border-neutral-700/25 dark:text-neutral-400 font-mono text-[10.5px] px-1.5 py-0.5 rounded whitespace-nowrap"
+          className="bg-muted text-muted-foreground border-border dark:text-muted-foreground font-mono text-[10.5px] px-1.5 py-0.5 rounded whitespace-nowrap"
         >
           {(() => {
             const val = rule.outInterface || "ALL";
@@ -163,7 +163,7 @@ function SortableRow({ rule, index, interfaces, onEdit, onDelete, onToggleStatus
             <Badge
               key={i}
               variant="outline"
-              className="bg-neutral-800/10 text-neutral-600 border-neutral-700/35 dark:text-neutral-300 font-mono text-[10.5px] px-1.5 py-0.5 rounded"
+              className="bg-muted text-muted-foreground border-border dark:text-muted-foreground font-mono text-[10.5px] px-1.5 py-0.5 rounded"
             >
               {src}
             </Badge>
@@ -178,7 +178,7 @@ function SortableRow({ rule, index, interfaces, onEdit, onDelete, onToggleStatus
             <Badge
               key={i}
               variant="outline"
-              className="bg-neutral-800/10 text-neutral-600 border-neutral-700/35 dark:text-neutral-300 font-mono text-[10.5px] px-1.5 py-0.5 rounded"
+              className="bg-muted text-muted-foreground border-border dark:text-muted-foreground font-mono text-[10.5px] px-1.5 py-0.5 rounded"
             >
               {dst}
             </Badge>
@@ -193,7 +193,7 @@ function SortableRow({ rule, index, interfaces, onEdit, onDelete, onToggleStatus
             <Badge
               key={i}
               variant="outline"
-              className="bg-indigo-500/5 text-indigo-400 border-indigo-550/15 font-mono text-[10.5px] px-1.5 py-0.5 rounded"
+              className="bg-primary/5 text-primary border-primary/15 font-mono text-[10.5px] px-1.5 py-0.5 rounded"
             >
               {svc}
             </Badge>
@@ -599,9 +599,9 @@ export default function FirewallPolicy() {
 
       {/* 2. Reload States Notification */}
       {isApplying && (
-        <Alert className="animate-pulse border-blue-500/20 bg-blue-500/5">
-          <RefreshCw className="h-4 w-4 text-blue-400 animate-spin" />
-          <AlertTitle className="font-semibold text-blue-400">กำลังนำนโยบายไปปรับใช้...</AlertTitle>
+        <Alert className="animate-pulse border-primary/20 bg-primary/5">
+          <RefreshCw className="h-4 w-4 text-primary animate-spin" />
+          <AlertTitle className="font-semibold text-primary">กำลังนำนโยบายไปปรับใช้...</AlertTitle>
           <AlertDescription className="text-muted-foreground text-xs">{applyProgress}</AlertDescription>
         </Alert>
       )}
@@ -635,7 +635,7 @@ export default function FirewallPolicy() {
           </Button>
           <div className="text-xs text-muted-foreground px-2 hidden md:block">
             สถานะ: <span className="text-primary font-semibold">{activeCount} เปิดใช้งาน</span> |{" "}
-            <span className="text-neutral-400 font-semibold">{disabledCount} ปิดใช้งาน</span>
+            <span className="text-muted-foreground font-semibold">{disabledCount} ปิดใช้งาน</span>
           </div>
         </div>
 

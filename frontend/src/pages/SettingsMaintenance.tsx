@@ -515,7 +515,7 @@ export default function SettingsMaintenance() {
   // --- Render Reboot / Shutdown Full-Screen Overlays ---
   if (powerStatus === "rebooting") {
     return (
-      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-neutral-950 text-foreground font-mono">
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background text-foreground font-mono">
         <div className="space-y-6 text-center max-w-md p-6">
           <Loader2 className="mx-auto h-16 w-16 text-primary animate-spin" />
           <h2 className="text-2xl font-bold tracking-wider text-primary">REBOOTING PIGATE SYSTEM</h2>
@@ -525,7 +525,7 @@ export default function SettingsMaintenance() {
           <div className="text-5xl font-extrabold text-foreground font-mono tabular-nums">
             {rebootCountdown > 0 ? rebootCountdown : "OK"}
           </div>
-          <div className="text-[11px] text-muted-foreground/60 border border-neutral-800 bg-neutral-900/50 p-2 rounded">
+          <div className="text-[11px] text-muted-foreground/60 border border-border bg-muted p-2 rounded">
             systemctl daemon-reexec && reboot
           </div>
         </div>
@@ -535,14 +535,14 @@ export default function SettingsMaintenance() {
 
   if (powerStatus === "shutting-down") {
     return (
-      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-neutral-950 text-foreground font-mono">
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background text-foreground font-mono">
         <div className="space-y-6 text-center max-w-md p-6">
           <Loader2 className="mx-auto h-16 w-16 text-red-500 animate-spin" />
           <h2 className="text-2xl font-bold tracking-wider text-red-500">SHUTTING DOWN SYSTEM</h2>
           <p className="text-muted-foreground text-sm leading-relaxed">
             กำลังสั่งหยุดโปรเซสเครือข่าย, ถอนการเชื่อมต่อดิสก์ และปิดไฟเลี้ยงบอร์ด Raspberry Pi 5...
           </p>
-          <div className="text-[11px] text-muted-foreground/60 border border-neutral-800 bg-neutral-900/50 p-2 rounded">
+          <div className="text-[11px] text-muted-foreground/60 border border-border bg-muted p-2 rounded">
             systemctl poweroff -i
           </div>
         </div>
@@ -552,11 +552,11 @@ export default function SettingsMaintenance() {
 
   if (powerStatus === "powered-off") {
     return (
-      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black text-neutral-400 font-mono">
-        <div className="space-y-6 text-center max-w-md p-6 border border-neutral-800 bg-neutral-950 rounded-xl p-8">
-          <Power className="mx-auto h-14 w-14 text-neutral-700" />
-          <h2 className="text-xl font-bold tracking-wider text-neutral-300">SYSTEM OFFLINE</h2>
-          <p className="text-xs text-neutral-500 leading-relaxed">
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background text-muted-foreground font-mono">
+        <div className="space-y-6 text-center max-w-md p-6 border border-border bg-card rounded-xl p-8">
+          <Power className="mx-auto h-14 w-14 text-muted-foreground" />
+          <h2 className="text-xl font-bold tracking-wider text-muted-foreground">SYSTEM OFFLINE</h2>
+          <p className="text-xs text-muted-foreground leading-relaxed">
             บอร์ด PiGate ปิดการใช้งานแล้วอย่างปลอดภัย ไฟแสดงสถานะบนบอร์ดเป็นสีแดงทึบ คุณสามารถถอดสายไฟออกได้ทันที
           </p>
           <Button
@@ -911,7 +911,7 @@ export default function SettingsMaintenance() {
               <Terminal className="h-4 w-4" />
               <span>🧠 Backend Integration สําหรับ หน้า Settings (คำสั่งระบบจริง)</span>
             </div>
-            <pre className="bg-neutral-950 p-3 rounded border border-neutral-800 text-neutral-300 font-mono overflow-x-auto select-all leading-relaxed whitespace-pre-wrap text-[11px]">
+            <pre className="bg-muted p-3 rounded border border-border text-muted-foreground font-mono overflow-x-auto select-all leading-relaxed whitespace-pre-wrap text-[11px]">
               {`# เปลี่ยนรหัสผ่านแอดมินของบอร์ด Linux (กรณีผูกบัญชีระบบ) หรือบันทึก hash ของรหัสผ่านใหม่เข้า sqlite
 echo "admin:${newPassword || "new_password"}" | chpasswd`}
             </pre>
@@ -1233,7 +1233,7 @@ echo "admin:${newPassword || "new_password"}" | chpasswd`}
               <Terminal className="h-4 w-4" />
               <span>🧠 Backend Integration สําหรับ หน้า Maintenance (คำสั่งระดับ OS)</span>
             </div>
-            <pre className="bg-neutral-950 p-3 rounded border border-neutral-800 text-neutral-300 font-mono overflow-x-auto select-all leading-relaxed whitespace-pre-wrap text-[11px]">
+            <pre className="bg-muted p-3 rounded border border-border text-muted-foreground font-mono overflow-x-auto select-all leading-relaxed whitespace-pre-wrap text-[11px]">
               {`# 1. การควบคุมรีบูตและปิดเครื่องของ Raspberry Pi 5 ผ่านสิทธิ์ Sudoers พิเศษ
 # พร้อมรับคำสั่ง: sudo reboot หรือ sudo poweroff
 
@@ -1305,7 +1305,7 @@ ${restartingServiceId ? `sudo systemctl restart ${services.find(s => s.id === re
             </Button>
             <Button
               type="button"
-              className="cursor-pointer bg-red-600 hover:bg-red-700 text-white font-bold"
+              className="cursor-pointer bg-destructive hover:bg-destructive/90 text-white font-bold"
               onClick={handleConfirmShutdown}
             >
               ยืนยัน ปิดเครื่อง

@@ -280,7 +280,7 @@ export default function DNS() {
         <div className="space-y-4">
           <Card className="bg-card/25 border border-border/50 p-6 rounded-xl space-y-4">
             <h2 className="text-sm font-bold text-foreground uppercase tracking-wider flex items-center gap-1.5 border-b border-border/40 pb-2.5">
-              <Network className="h-4 w-4 text-indigo-400" /> Dynamic DNS List
+              <Network className="h-4 w-4 text-primary" /> Dynamic DNS List
             </h2>
 
             <p className="text-xs text-muted-foreground leading-relaxed">
@@ -302,7 +302,7 @@ export default function DNS() {
                     <div className="space-y-1">
                       {dyn.dnsServers.map((dns, dnsIdx) => (
                         <div key={dnsIdx} className="flex items-center gap-2 text-muted-foreground">
-                          <Check className="h-3 w-3 text-indigo-400 shrink-0" />
+                          <Check className="h-3 w-3 text-primary shrink-0" />
                           <span>{dns}</span>
                         </div>
                       ))}

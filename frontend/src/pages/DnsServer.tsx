@@ -705,7 +705,7 @@ export default function DnsServer() {
                   <p className="text-sm font-semibold text-foreground">โซนนี้ได้รับการตั้งค่าประเภทส่งต่อ (Forward Zone)</p>
                   <p className="text-xs text-muted-foreground max-w-md mx-auto leading-relaxed">
                     ระบบจะส่งคำขอความละเอียดชื่อระบบโดเมนทั้งหมดภายใต้โดเมน <span className="font-semibold text-primary">{selectedZone.zoneName}</span> ไปยัง
-                    ที่อยู่ IP <span className="font-semibold text-cyan-400 font-mono">{selectedZone.forwardTo}</span> โดยอัตโนมัติ 
+                    ที่อยู่ IP <span className="font-semibold text-primary font-mono">{selectedZone.forwardTo}</span> โดยอัตโนมัติ 
                     คุณไม่จำเป็นต้องเพิ่มระเบียน DNS เอง
                   </p>
                 </div>

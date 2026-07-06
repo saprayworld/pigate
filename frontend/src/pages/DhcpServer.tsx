@@ -502,9 +502,9 @@ export default function DhcpServer() {
         </Card>
         <Card className="bg-card/20 border border-border/50 p-4">
           <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <Network className="h-3.5 w-3.5 text-cyan-400" /> การจองไอพีคงที่ (Static)
+            <Network className="h-3.5 w-3.5 text-primary" /> การจองไอพีคงที่ (Static)
           </div>
-          <div className="mt-2 text-2xl font-bold text-cyan-400 font-mono">{stats.reservationsCount}</div>
+          <div className="mt-2 text-2xl font-bold text-primary font-mono">{stats.reservationsCount}</div>
         </Card>
         <Card className="bg-card/20 border border-border/50 p-4">
           <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
@@ -618,7 +618,7 @@ export default function DhcpServer() {
         <Card className="bg-card/25 border border-border/50 p-6 space-y-4">
           <div className="border-b border-border/40 pb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-md font-bold text-foreground flex items-center gap-2">
-              <Network className="h-4.5 w-4.5 text-cyan-400" />
+              <Network className="h-4.5 w-4.5 text-primary" />
               MAC / IP Reservation (จองไอพีแอดเดรสคงที่)
             </h2>
             <Button
@@ -669,7 +669,7 @@ export default function DhcpServer() {
                         {res.macAddress}
                       </TableCell>
                       <TableCell className="p-3 font-mono text-xs">
-                        <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20 text-xs px-2 py-0.5 rounded font-mono font-medium">
+                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-xs px-2 py-0.5 rounded font-mono font-medium">
                           {res.ipAddress}
                         </Badge>
                       </TableCell>
@@ -784,7 +784,7 @@ export default function DhcpServer() {
                               variant="ghost"
                               size="sm"
                               onClick={() => handleConvertLeaseToReservation(lease)}
-                              className="cursor-pointer text-[10px] text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 font-medium py-0.5 px-1.5 h-6 gap-0.5"
+                              className="cursor-pointer text-[10px] text-primary hover:text-primary hover:bg-primary/10 font-medium py-0.5 px-1.5 h-6 gap-0.5"
                               title="จองไอพีนี้"
                             >
                               <ArrowRightLeft className="h-2.5 w-2.5" />

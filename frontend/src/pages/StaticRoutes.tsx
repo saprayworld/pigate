@@ -456,9 +456,9 @@ export default function StaticRoutes() {
         </Card>
         <Card className="bg-card/20 border border-border/50 p-4">
           <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <Network className="h-3.5 w-3.5 text-cyan-400" /> System Subnets
+            <Network className="h-3.5 w-3.5 text-primary" /> System Subnets
           </div>
-          <div className="mt-2 text-2xl font-bold text-cyan-400 font-mono">{stats.system}</div>
+          <div className="mt-2 text-2xl font-bold text-primary font-mono">{stats.system}</div>
         </Card>
         <Card className="bg-card/20 border border-border/50 p-4">
           <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
@@ -487,7 +487,7 @@ export default function StaticRoutes() {
             <button
               onClick={() => setSelectedTypeFilter("system")}
               className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${selectedTypeFilter === "system"
-                ? "bg-cyan-500 text-neutral-950"
+                ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
                 }`}
             >
@@ -496,7 +496,7 @@ export default function StaticRoutes() {
             <button
               onClick={() => setSelectedTypeFilter("custom")}
               className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${selectedTypeFilter === "custom"
-                ? "bg-amber-500 text-neutral-950"
+                ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
                 }`}
             >
@@ -618,11 +618,11 @@ export default function StaticRoutes() {
                       <span className="font-mono text-sm font-semibold text-foreground">{route.destination}</span>
                       <div className="flex items-center gap-1.5">
                         {route.type === "system" ? (
-                          <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20 text-[9px] px-1.5 py-0.2 rounded font-mono font-medium">
+                          <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[9px] px-1.5 py-0.2 rounded font-mono font-medium">
                             System
                           </Badge>
                         ) : route.type === "defaultgateway" ? (
-                          <Badge variant="outline" className="bg-purple-500/10 text-purple-400 border-purple-500/20 text-[9px] px-1.5 py-0.2 rounded font-mono font-medium">
+                          <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[9px] px-1.5 py-0.2 rounded font-mono font-medium">
                             Default Gateway
                           </Badge>
                         ) : route.type === "customgateway" ? (
@@ -649,7 +649,7 @@ export default function StaticRoutes() {
                         {((route.scope && route.scope !== "global") || route.src || (route.proto && route.proto !== "static" && route.proto !== "120")) && (
                           <>
                             {route.scope && route.scope !== "global" && (
-                              <span className="text-[10px] text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 px-1.5 py-0.5 rounded font-mono font-medium animate-fade-in">
+                              <span className="text-[10px] text-primary bg-primary/10 border border-primary/20 px-1.5 py-0.5 rounded font-mono font-medium animate-fade-in">
                                 scope: {route.scope}
                               </span>
                             )}
@@ -659,7 +659,7 @@ export default function StaticRoutes() {
                               </span>
                             )}
                             {route.proto && route.proto !== "static" && route.proto !== "120" && (
-                              <span className="text-[10px] text-purple-400 bg-purple-500/10 border border-purple-500/20 px-1.5 py-0.5 rounded font-mono font-medium animate-fade-in">
+                              <span className="text-[10px] text-primary bg-primary/10 border border-primary/20 px-1.5 py-0.5 rounded font-mono font-medium animate-fade-in">
                                 proto: {route.proto}
                               </span>
                             )}

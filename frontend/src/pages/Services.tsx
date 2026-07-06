@@ -288,11 +288,11 @@ export default function Services() {
         </Card>
         <Card className="bg-card/20 border border-border/50 p-4">
           <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">กำหนดเอง (Custom Sets)</div>
-          <div className="mt-2 text-2xl font-bold text-indigo-400 font-mono">{stats.customCount}</div>
+          <div className="mt-2 text-2xl font-bold text-primary font-mono">{stats.customCount}</div>
         </Card>
         <Card className="bg-card/20 border border-border/50 p-4">
           <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">TCP / UDP ที่รองรับ</div>
-          <div className="mt-2 text-2xl font-bold text-cyan-400 font-mono">
+          <div className="mt-2 text-2xl font-bold text-primary font-mono">
             {stats.tcpCount} <span className="text-xs text-muted-foreground">TCP</span> / {stats.udpCount} <span className="text-xs text-muted-foreground">UDP</span>
           </div>
         </Card>
@@ -309,7 +309,7 @@ export default function Services() {
                 onClick={() => setProtoFilter(proto)}
                 className={`px-3 py-1 text-xs font-bold rounded-md transition ${protoFilter === proto
                   ? proto === "ICMP"
-                    ? "bg-purple-650 text-purple-100 bg-purple-900"
+                    ? "bg-primary text-primary bg-primary"
                     : "bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted"
                   }`}
@@ -376,7 +376,7 @@ export default function Services() {
                     </TableCell>
                     <TableCell className="p-3">
                       {svc.protocol === "TCP" && (
-                        <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20 font-mono text-[10px] px-1.5 py-0.5 rounded">
+                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 font-mono text-[10px] px-1.5 py-0.5 rounded">
                           TCP
                         </Badge>
                       )}
@@ -386,12 +386,12 @@ export default function Services() {
                         </Badge>
                       )}
                       {svc.protocol === "TCP/UDP" && (
-                        <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20 font-mono text-[10px] px-1.5 py-0.5 rounded">
+                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 font-mono text-[10px] px-1.5 py-0.5 rounded">
                           TCP/UDP
                         </Badge>
                       )}
                       {svc.protocol === "ICMP" && (
-                        <Badge variant="outline" className="bg-purple-500/10 text-purple-400 border-purple-500/20 font-mono text-[10px] px-1.5 py-0.5 rounded">
+                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 font-mono text-[10px] px-1.5 py-0.5 rounded">
                           ICMP
                         </Badge>
                       )}
@@ -403,7 +403,7 @@ export default function Services() {
                           System
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className="bg-indigo-500/10 text-indigo-400 border-indigo-500/20 text-[10px] px-2 py-0.5 rounded">
+                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px] px-2 py-0.5 rounded">
                           Custom
                         </Badge>
                       )}
@@ -464,18 +464,18 @@ export default function Services() {
                   </p>
                 </div>
 
-                <div className="bg-neutral-950 p-3 rounded-lg border border-border/60 font-mono text-[11px] leading-relaxed text-indigo-300 overflow-x-auto whitespace-pre">
+                <div className="bg-muted p-3 rounded-lg border border-border/60 font-mono text-[11px] leading-relaxed text-primary overflow-x-auto whitespace-pre">
                   {previewService.protocol === "ICMP" ? (
                     <>
                       <span className="text-muted-foreground/60"># 1. ICMP ไม่ใช้พอร์ต แต่จะกรองผ่าน protocol โดยตรง</span>
                       {"\n"}
-                      <span className="text-gray-200 font-semibold">nft add rule</span> ip filter FORWARD icmp type echo-request accept
+                      <span className="text-foreground font-semibold">nft add rule</span> ip filter FORWARD icmp type echo-request accept
                     </>
                   ) : (
                     <>
                       <span className="text-muted-foreground/60"># 1. สร้าง Named Set สำหรับเก็บ {previewService.protocol} พอร์ต</span>
                       {"\n"}
-                      <span className="text-gray-200 font-semibold">nft add set</span> ip filter set_{previewService.name} &#123;
+                      <span className="text-foreground font-semibold">nft add set</span> ip filter set_{previewService.name} &#123;
                       {"\n"}
                       {"  "}type inet_service;
                       {"\n"}
@@ -483,11 +483,11 @@ export default function Services() {
                       {"\n\n"}
                       <span className="text-muted-foreground/60"># 2. เพิ่มพอร์ต ({previewService.port}) เข้าไปในเซ็ต</span>
                       {"\n"}
-                      <span className="text-gray-200 font-semibold">nft add element</span> ip filter set_{previewService.name} &#123; {previewService.port} &#125;
+                      <span className="text-foreground font-semibold">nft add element</span> ip filter set_{previewService.name} &#123; {previewService.port} &#125;
                       {"\n\n"}
                       <span className="text-muted-foreground/60"># 3. อ้างอิงในกฎ Firewall โดยมีเครื่องหมาย @ นำหน้า</span>
                       {"\n"}
-                      <span className="text-gray-200 font-semibold">nft add rule</span> ip filter FORWARD {previewService.protocol.toLowerCase().split("/")[0]} dport @set_{previewService.name} accept
+                      <span className="text-foreground font-semibold">nft add rule</span> ip filter FORWARD {previewService.protocol.toLowerCase().split("/")[0]} dport @set_{previewService.name} accept
                     </>
                   )}
                 </div>

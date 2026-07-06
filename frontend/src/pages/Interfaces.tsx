@@ -103,25 +103,25 @@ function getInterfaceIcon(type: string, subtype?: string, className = "h-5 w-5 m
   const displayType = subtype || type
 
   if (type === "wireless") {
-    return <Wifi className={`${className} text-indigo-400`} />
+    return <Wifi className={`${className} text-primary`} />
   }
 
   switch (displayType) {
     case "wireless":
-      return <Wifi className={`${className} text-indigo-400`} />
+      return <Wifi className={`${className} text-primary`} />
     case "vlan":
       return <Layers className={`${className} text-amber-400`} />
     case "veth":
-      return <LinkIcon className={`${className} text-emerald-400`} />
+      return <LinkIcon className={`${className} text-primary`} />
     case "bridge":
-      return <GitMerge className={`${className} text-purple-400`} />
+      return <GitMerge className={`${className} text-primary`} />
     case "device":
     case "ethernet":
-      return <Cable className={`${className} text-cyan-400`} />
+      return <Cable className={`${className} text-primary`} />
     case "loopback":
       return <RotateCcw className={`${className} text-pink-400`} />
     case "tunnel":
-      return <Network className={`${className} text-blue-400`} />
+      return <Network className={`${className} text-primary`} />
     default:
       return <HelpCircle className={`${className} text-muted-foreground`} />
   }
@@ -616,15 +616,15 @@ export default function Interfaces() {
         </Card>
         <Card className="bg-card/20 border border-border/50 p-4">
           <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <Cable className="h-3.5 w-3.5 text-cyan-400" /> Ethernet
+            <Cable className="h-3.5 w-3.5 text-primary" /> Ethernet
           </div>
-          <div className="mt-2 text-2xl font-bold text-cyan-400 font-mono">{stats.ethernet}</div>
+          <div className="mt-2 text-2xl font-bold text-primary font-mono">{stats.ethernet}</div>
         </Card>
         <Card className="bg-card/20 border border-border/50 p-4">
           <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <Wifi className="h-3.5 w-3.5 text-indigo-400" /> Wireless
+            <Wifi className="h-3.5 w-3.5 text-primary" /> Wireless
           </div>
-          <div className="mt-2 text-2xl font-bold text-indigo-400 font-mono">{stats.wireless}</div>
+          <div className="mt-2 text-2xl font-bold text-primary font-mono">{stats.wireless}</div>
         </Card>
       </div>
 
@@ -664,7 +664,7 @@ export default function Interfaces() {
                       <div className="font-semibold text-foreground">{iface.name}</div>
                       <div className="text-xs text-muted-foreground mt-0.5">({iface.alias})</div>
                       <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                        <Badge variant="secondary" className="text-[9px] px-1.5 py-0.5 rounded capitalize bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 border-none font-mono font-medium">
+                        <Badge variant="secondary" className="text-[9px] px-1.5 py-0.5 rounded capitalize bg-muted dark:bg-muted text-muted-foreground dark:text-muted-foreground border-none font-mono font-medium">
                           {iface.subtype || iface.type}
                         </Badge>
                         {
@@ -715,8 +715,8 @@ export default function Interfaces() {
                         }
                         {iface.type === "wireless" && iface.status === "up" && wifiLiveStatuses[iface.id]?.ssid && (
                           <div className="flex items-center gap-1 ml-0.5">
-                            <Signal className="h-3 w-3 text-indigo-400" />
-                            <span className="text-[10px] text-indigo-400 font-mono">{wifiLiveStatuses[iface.id].ssid}</span>
+                            <Signal className="h-3 w-3 text-primary" />
+                            <span className="text-[10px] text-primary font-mono">{wifiLiveStatuses[iface.id].ssid}</span>
                           </div>
                         )}
                       </div>
@@ -729,7 +729,7 @@ export default function Interfaces() {
                           WAN
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20 text-[10px] px-2 py-0.5 rounded font-bold">
+                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px] px-2 py-0.5 rounded font-bold">
                           LAN
                         </Badge>
                       )}
@@ -854,15 +854,15 @@ export default function Interfaces() {
             <div key={iface.id} className="flex flex-col sm:flex-row sm:items-center justify-between bg-muted/10 px-3 py-2 rounded-lg border border-border/30 gap-2">
               <div className="flex items-center gap-2">
                 {iface.type === "ethernet" ? (
-                  <Cable className="h-3.5 w-3.5 text-cyan-400" />
+                  <Cable className="h-3.5 w-3.5 text-primary" />
                 ) : (
-                  <Wifi className="h-3.5 w-3.5 text-indigo-400" />
+                  <Wifi className="h-3.5 w-3.5 text-primary" />
                 )}
                 <span className="text-xs font-semibold text-foreground">{iface.name}</span>
                 {iface.type === "wireless" && iface.macMode === "randomized" && (
                   <Badge
                     variant="outline"
-                    className="text-[9px] px-1 py-0 rounded font-normal bg-indigo-500/10 text-indigo-400 border-indigo-500/20"
+                    className="text-[9px] px-1 py-0 rounded font-normal bg-primary/10 text-primary border-primary/20"
                   >
                     Randomized
                   </Badge>
@@ -905,7 +905,7 @@ export default function Interfaces() {
               Edit Interface: {editingIface?.name}
               <span className="text-sm font-normal text-muted-foreground">({editingIface?.alias})</span>
               {editingIface && (
-                <Badge variant="secondary" className="text-[9px] px-1.5 py-0.5 rounded capitalize bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 border-none font-mono font-medium ml-1">
+                <Badge variant="secondary" className="text-[9px] px-1.5 py-0.5 rounded capitalize bg-muted dark:bg-muted text-muted-foreground dark:text-muted-foreground border-none font-mono font-medium ml-1">
                   {editingIface.subtype || editingIface.type}
                 </Badge>
               )}
@@ -1056,8 +1056,8 @@ export default function Interfaces() {
             {/* Wi-Fi Settings (only for wireless) */}
             {editingIface?.type === "wireless" && (
               <>
-                <div className="space-y-3 border border-indigo-500/20 rounded-lg p-4 bg-indigo-500/5">
-                  <div className="text-xs font-semibold text-indigo-400 uppercase tracking-wider flex items-center gap-1.5">
+                <div className="space-y-3 border border-primary/20 rounded-lg p-4 bg-primary/5">
+                  <div className="text-xs font-semibold text-primary uppercase tracking-wider flex items-center gap-1.5">
                     <Wifi className="h-3.5 w-3.5" /> Wireless Client Settings
                   </div>
 
@@ -1081,7 +1081,7 @@ export default function Interfaces() {
                         size="sm"
                         onClick={handleWifiScan}
                         disabled={isScanning}
-                        className="cursor-pointer gap-1 text-xs h-8 px-3 border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10 hover:text-indigo-300"
+                        className="cursor-pointer gap-1 text-xs h-8 px-3 border-primary/30 text-primary hover:bg-primary/10 hover:text-primary"
                       >
                         <RefreshCw className={`h-3 w-3 ${isScanning ? "animate-spin" : ""}`} />
                         {isScanning ? "Scanning..." : "Scan"}
@@ -1094,7 +1094,7 @@ export default function Interfaces() {
                     <div className="rounded-lg border border-border/40 bg-background/30 overflow-hidden">
                       {isScanning ? (
                         <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
-                          <RefreshCw className="h-4 w-4 animate-spin text-indigo-400" />
+                          <RefreshCw className="h-4 w-4 animate-spin text-primary" />
                           กำลังค้นหาเครือข่าย Wi-Fi...
                         </div>
                       ) : (
@@ -1175,8 +1175,8 @@ export default function Interfaces() {
                 </div>
 
                 {/* Wi-Fi MAC Address Settings */}
-                <div className="space-y-3 border border-indigo-500/20 rounded-lg p-4 bg-indigo-500/5">
-                  <div className="text-xs font-semibold text-indigo-400 uppercase tracking-wider flex items-center gap-1.5">
+                <div className="space-y-3 border border-primary/20 rounded-lg p-4 bg-primary/5">
+                  <div className="text-xs font-semibold text-primary uppercase tracking-wider flex items-center gap-1.5">
                     <Shield className="h-3.5 w-3.5" /> MAC Address Settings (การตั้งค่า MAC)
                   </div>
                   {/* MAC Address Mode selection */}
@@ -1188,7 +1188,7 @@ export default function Interfaces() {
                       value={formMacMode}
                       onValueChange={(value: "hardware" | "randomized") => setFormMacMode(value)}
                     >
-                      <SelectTrigger id="form-mac-mode" size="sm" className="w-full sm:w-[220px] bg-background border-border/80 text-xs font-semibold text-foreground focus-visible:ring-indigo-500/20 focus-visible:border-indigo-500">
+                      <SelectTrigger id="form-mac-mode" size="sm" className="w-full sm:w-[220px] bg-background border-border/80 text-xs font-semibold text-foreground focus-visible:ring-primary/20 focus-visible:border-primary">
                         <SelectValue placeholder="เลือกโหมด MAC Address" />
                       </SelectTrigger>
                       <SelectContent className="border border-border/80 bg-popover text-foreground rounded-md text-xs font-semibold">
@@ -1199,14 +1199,14 @@ export default function Interfaces() {
                   </div>
 
                   {/* Comparison Panel */}
-                  <div className="mt-1 text-xs bg-background/40 p-3 rounded-lg border border-indigo-500/10 space-y-1.5 font-mono">
+                  <div className="mt-1 text-xs bg-background/40 p-3 rounded-lg border border-primary/10 space-y-1.5 font-mono">
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">ที่อยู่ MAC จริง (Hardware):</span>
                       <span className="text-foreground">{editingIface?.realMacAddress || editingIface?.macAddress}</span>
                     </div>
-                    <div className="flex justify-between border-t border-indigo-500/5 pt-1.5">
+                    <div className="flex justify-between border-t border-primary/5 pt-1.5">
                       <span className="text-muted-foreground">ที่อยู่ MAC ที่ใช้งานจริง (Active):</span>
-                      <span className="text-indigo-400 font-bold">
+                      <span className="text-primary font-bold">
                         {formMacMode === "hardware"
                           ? (editingIface?.realMacAddress || editingIface?.macAddress)
                           : (editingIface && wifiLiveStatuses[editingIface.id]?.activeMac) || "สุ่มอัตโนมัติเมื่อเชื่อมต่อ"}
@@ -1216,9 +1216,9 @@ export default function Interfaces() {
                 </div>
 
                 {/* Wi-Fi Failover / Backup SSID Settings */}
-                <div className="space-y-3 border border-indigo-500/20 rounded-lg p-4 bg-indigo-500/5 mt-4">
+                <div className="space-y-3 border border-primary/20 rounded-lg p-4 bg-primary/5 mt-4">
                   <div className="flex items-center justify-between">
-                    <div className="text-xs font-semibold text-indigo-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <div className="text-xs font-semibold text-primary uppercase tracking-wider flex items-center gap-1.5">
                       <Radio className="h-3.5 w-3.5" /> Wi-Fi Backup & Failover (ฟีเจอร์สำรองข้อมูลคลื่น)
                     </div>
                     <Switch
@@ -1334,22 +1334,22 @@ export default function Interfaces() {
                       <div className="border border-border/60 rounded-lg p-3 bg-background/40 space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="font-semibold text-xs text-foreground flex items-center gap-1.5">
-                            <Terminal className="h-3.5 w-3.5 text-indigo-400" /> Failover Simulator (ตัวจำลองการสลับคลื่น)
+                            <Terminal className="h-3.5 w-3.5 text-primary" /> Failover Simulator (ตัวจำลองการสลับคลื่น)
                           </span>
                           <Button
                             type="button"
                             size="sm"
                             onClick={runFailoverSimulation}
                             disabled={simActive}
-                            className="cursor-pointer h-7 px-2.5 bg-indigo-500 text-neutral-950 hover:bg-indigo-400 font-bold gap-1 text-[11px]"
+                            className="cursor-pointer h-7 px-2.5 bg-primary text-primary-foreground hover:bg-primary/90 font-bold gap-1 text-[11px]"
                           >
-                            <Play className="h-3 w-3 fill-neutral-950" />
+                            <Play className="h-3 w-3 fill-primary-foreground" />
                             {simActive ? "Simulating..." : "Simulate Failover"}
                           </Button>
                         </div>
 
                         {simLogs.length > 0 && (
-                          <div className="bg-muted/50 dark:bg-black/60 rounded p-2 text-[10px] font-mono text-cyan-600 dark:text-cyan-400 max-h-[140px] overflow-y-auto space-y-1 border border-border/50 dark:border-border/20 scrollbar-thin">
+                          <div className="bg-muted/50 dark:bg-background/80 rounded p-2 text-[10px] font-mono text-primary dark:text-primary max-h-[140px] overflow-y-auto space-y-1 border border-border/50 dark:border-border/20 scrollbar-thin">
                             {simLogs.map((log, idx) => (
                               <div key={idx} className="leading-relaxed whitespace-pre-wrap">{log}</div>
                             ))}
