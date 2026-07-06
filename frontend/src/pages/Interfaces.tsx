@@ -22,9 +22,11 @@ import {
   Layers,
   Link as LinkIcon,
   GitMerge,
-  HelpCircle
+  HelpCircle,
+  Fingerprint,
+  Info
 } from "lucide-react"
-import { Card } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -67,8 +69,8 @@ import { isValidIp } from "@/lib/utils"
 // Helper: Signal strength color
 function signalColor(signal: number): string {
   if (signal >= 70) return "text-primary"
-  if (signal >= 40) return "text-amber-400"
-  return "text-red-400"
+  if (signal >= 40) return "text-amber-500"
+  return "text-red-500"
 }
 
 // Helper: Signal bar fill for visual indicator
@@ -84,8 +86,8 @@ function SignalBar({ signal }: { signal: number }) {
             ? signal >= 70
               ? "bg-primary"
               : signal >= 40
-                ? "bg-amber-400"
-                : "bg-red-400"
+                ? "bg-amber-500"
+                : "bg-red-500"
             : "bg-muted-foreground/20"
             }`}
           style={{ height: `${((i + 1) / bars) * 100}%` }}
@@ -96,6 +98,31 @@ function SignalBar({ signal }: { signal: number }) {
 }
 
 
+
+// Helper: Dashboard-style stat card (mirrors Dashboard's StatCard)
+function StatCard({
+  icon: Icon,
+  title,
+  value,
+}: {
+  icon: typeof Network
+  title: string
+  value: number
+}) {
+  return (
+    <Card size="sm" className="gap-0">
+      <CardHeader className="space-y-0">
+        <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <Icon className="h-4 w-4 shrink-0" />
+          <span className="text-foreground">{title}</span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-3">
+        <p className="text-2xl font-bold tracking-tight text-foreground">{value}</p>
+      </CardContent>
+    </Card>
+  )
+}
 
 const ALL_ACCESS_OPTIONS: AdminAccess[] = ["HTTPS", "HTTP", "PING", "SSH"]
 
@@ -110,7 +137,7 @@ function getInterfaceIcon(type: string, subtype?: string, className = "h-5 w-5 m
     case "wireless":
       return <Wifi className={`${className} text-primary`} />
     case "vlan":
-      return <Layers className={`${className} text-amber-400`} />
+      return <Layers className={`${className} text-primary`} />
     case "veth":
       return <LinkIcon className={`${className} text-primary`} />
     case "bridge":
@@ -119,7 +146,7 @@ function getInterfaceIcon(type: string, subtype?: string, className = "h-5 w-5 m
     case "ethernet":
       return <Cable className={`${className} text-primary`} />
     case "loopback":
-      return <RotateCcw className={`${className} text-pink-400`} />
+      return <RotateCcw className={`${className} text-primary`} />
     case "tunnel":
       return <Network className={`${className} text-primary`} />
     default:
@@ -565,30 +592,31 @@ export default function Interfaces() {
 
   if (error) {
     return (
-      <div className="p-6">
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4 text-red-400" />
-          <AlertTitle>Error Loading Interfaces</AlertTitle>
-          <AlertDescription className="text-xs text-red-400">{error}</AlertDescription>
-        </Alert>
-      </div>
+      <Alert variant="destructive">
+        <AlertCircle className="h-4 w-4" />
+        <AlertTitle>Error Loading Interfaces</AlertTitle>
+        <AlertDescription className="text-xs">{error}</AlertDescription>
+      </Alert>
     )
   }
 
   return (
-    <div className="space-y-6">
-      {/* 1. Header Area */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
-            <Network className="h-7 w-7 text-primary fill-primary/10" />
-            Network Interfaces
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            จัดการอินเทอร์เฟซเครือข่าย Physical และ Virtual บนบอร์ด Raspberry Pi
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
+    <div className="space-y-4">
+      {/* 1. Stats overview */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard icon={Network} title="Total Interfaces" value={stats.total} />
+        <StatCard icon={Activity} title="Active (UP)" value={stats.up} />
+        <StatCard icon={Cable} title="Ethernet" value={stats.ethernet} />
+        <StatCard icon={Wifi} title="Wireless" value={stats.wireless} />
+      </div>
+
+      {/* 2. Interface Table */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <CardTitle className="flex items-center gap-2 text-base font-semibold">
+            <Network className="h-4 w-4 text-muted-foreground" />
+            Interface List
+          </CardTitle>
           <Button
             variant="outline"
             size="sm"
@@ -599,82 +627,52 @@ export default function Interfaces() {
             <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
             Refresh
           </Button>
-        </div>
-      </div>
-
-      {/* 2. Stats Dashboard Cards */}
-      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">อินเทอร์เฟซทั้งหมด</div>
-          <div className="mt-2 text-2xl font-bold text-foreground font-mono">{stats.total}</div>
-        </Card>
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <Activity className="h-3.5 w-3.5 text-primary" /> Active (UP)
-          </div>
-          <div className="mt-2 text-2xl font-bold text-primary font-mono">{stats.up}</div>
-        </Card>
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <Cable className="h-3.5 w-3.5 text-primary" /> Ethernet
-          </div>
-          <div className="mt-2 text-2xl font-bold text-primary font-mono">{stats.ethernet}</div>
-        </Card>
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <Wifi className="h-3.5 w-3.5 text-primary" /> Wireless
-          </div>
-          <div className="mt-2 text-2xl font-bold text-primary font-mono">{stats.wireless}</div>
-        </Card>
-      </div>
-
-      {/* 3. Interface Table */}
-      <Card className="bg-card/25 border border-border/50 overflow-hidden py-0">
-        <div className="overflow-x-auto w-full">
+        </CardHeader>
+        <CardContent>
           <Table>
             <TableHeader>
-              <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
-                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[6%] font-semibold">Port</th>
-                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[25%] font-semibold">Name (Alias)</th>
-                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[5%] font-semibold">Role</th>
-                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[20%] font-semibold">IP / Netmask</th>
-                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[18%] font-semibold">Admin Access</th>
-                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[5%] font-semibold">Speed</th>
-                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[5%] font-semibold">Status</th>
-                <TableHead className="p-3 w-[13%] text-right text-[11px] uppercase tracking-wider font-semibold">Action</TableHead>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="w-[6%] text-xs font-medium text-muted-foreground">Port</TableHead>
+                <TableHead className="w-[25%] text-xs font-medium text-muted-foreground">Name (Alias)</TableHead>
+                <TableHead className="w-[5%] text-xs font-medium text-muted-foreground">Role</TableHead>
+                <TableHead className="w-[20%] text-xs font-medium text-muted-foreground">IP / Netmask</TableHead>
+                <TableHead className="w-[18%] text-xs font-medium text-muted-foreground">Admin Access</TableHead>
+                <TableHead className="w-[5%] text-xs font-medium text-muted-foreground">Speed</TableHead>
+                <TableHead className="w-[5%] text-xs font-medium text-muted-foreground">Status</TableHead>
+                <TableHead className="w-[13%] text-right text-xs font-medium text-muted-foreground">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {interfaces.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="p-8 text-center text-muted-foreground text-xs">
+                  <TableCell colSpan={8} className="py-8 text-center text-xs text-muted-foreground">
                     ไม่พบอินเทอร์เฟซเครือข่าย
                   </TableCell>
                 </TableRow>
               ) : (
                 interfaces.map((iface) => (
-                  <TableRow key={iface.id} className="border-b border-border/40 hover:bg-muted/15">
+                  <TableRow key={iface.id}>
                     {/* Port Icon */}
-                    <TableCell className="p-3 text-center">
+                    <TableCell className="py-3 text-center">
                       {getInterfaceIcon(iface.type, iface.subtype, "h-5 w-5 mx-auto")}
                     </TableCell>
 
                     {/* Name (Alias) */}
-                    <TableCell className="p-3">
-                      <div className="font-semibold text-foreground">{iface.name}</div>
-                      <div className="text-xs text-muted-foreground mt-0.5">({iface.alias})</div>
-                      <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                        <Badge variant="secondary" className="text-[9px] px-1.5 py-0.5 rounded capitalize bg-muted dark:bg-muted text-muted-foreground dark:text-muted-foreground border-none font-mono font-medium">
+                    <TableCell className="py-3">
+                      <div className="font-medium text-foreground">{iface.name}</div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">({iface.alias})</div>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                        <Badge variant="secondary" className="rounded px-1.5 py-0 font-mono text-[10px] font-medium capitalize">
                           {iface.subtype || iface.type}
                         </Badge>
                         {
                           iface.type === "wireless" ? (
                             wifiLiveStatuses[iface.id]?.state === "COMPLETED" ? (
-                              <Badge className="bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                              <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0 text-[10px] font-semibold text-primary">
                                 Connected
                               </Badge>
                             ) : wifiLiveStatuses[iface.id]?.state === "SCANNING" ? (
-                              <Badge className="bg-amber-500/10 text-amber-500 border border-amber-500/20 hover:bg-amber-500/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                              <Badge variant="outline" className="rounded border-amber-500/20 bg-amber-500/10 px-1.5 py-0 text-[10px] font-semibold text-amber-500">
                                 Scanning
                               </Badge>
                             ) : wifiLiveStatuses[iface.id]?.state === "ASSOCIATING" ||
@@ -682,11 +680,11 @@ export default function Interfaces() {
                               wifiLiveStatuses[iface.id]?.state === "ASSOCIATED" ||
                               wifiLiveStatuses[iface.id]?.state === "4WAY_HANDSHAKE" ||
                               wifiLiveStatuses[iface.id]?.state === "GROUP_HANDSHAKE" ? (
-                              <Badge className="bg-amber-500/10 text-amber-500 border border-amber-500/20 hover:bg-amber-500/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                              <Badge variant="outline" className="rounded border-amber-500/20 bg-amber-500/10 px-1.5 py-0 text-[10px] font-semibold text-amber-500">
                                 Connecting
                               </Badge>
                             ) : (
-                              <Badge className="bg-red-500/10 text-red-500 border border-red-500/20 hover:bg-red-500/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                              <Badge variant="outline" className="rounded border-red-500/20 bg-red-500/10 px-1.5 py-0 text-[10px] font-semibold text-red-500">
                                 Disconnected
                               </Badge>
                             )
@@ -696,17 +694,17 @@ export default function Interfaces() {
                           iface.type === "wireless" && iface.status === "up" && wifiLiveStatuses[iface.id] ? (
                             <>
                               {wifiLiveStatuses[iface.id].freq ? (
-                                <Badge className="bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                                <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0 text-[10px] font-semibold text-primary">
                                   {wifiLiveStatuses[iface.id].freq} MHz
                                 </Badge>
                               ) : null}
                               {wifiLiveStatuses[iface.id].wifiGen ? (
-                                <Badge className="bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                                <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0 text-[10px] font-semibold text-primary">
                                   {wifiLiveStatuses[iface.id].wifiGen}
                                 </Badge>
                               ) : null}
                               {wifiLiveStatuses[iface.id].keyMgmt ? (
-                                <Badge className="bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 px-1.5 h-4.5 rounded text-[9px] font-bold">
+                                <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0 text-[10px] font-semibold text-primary">
                                   {wifiLiveStatuses[iface.id].keyMgmt}
                                 </Badge>
                               ) : null}
@@ -723,24 +721,24 @@ export default function Interfaces() {
                     </TableCell>
 
                     {/* Role */}
-                    <TableCell className="p-3">
+                    <TableCell className="py-3">
                       {iface.role === "WAN" ? (
-                        <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/20 text-[10px] px-2 py-0.5 rounded font-bold">
+                        <Badge variant="outline" className="rounded border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-500">
                           WAN
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px] px-2 py-0.5 rounded font-bold">
+                        <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
                           LAN
                         </Badge>
                       )}
                     </TableCell>
 
                     {/* IP / Netmask */}
-                    <TableCell className="p-3">
+                    <TableCell className="py-3">
                       <div className="font-mono text-xs text-foreground">
                         {iface.status === "up" ? `${iface.ip} / ${iface.netmask}` : "—"}
                       </div>
-                      <div className="text-[10px] text-muted-foreground mt-0.5">
+                      <div className="mt-0.5 text-[10px] text-muted-foreground">
                         {iface.addressingMode === "dhcp" ? "DHCP" : "Static"}
                         {iface.metric != null && (
                           <span className="ml-1.5 font-mono text-primary/80">metric {iface.metric}</span>
@@ -749,16 +747,16 @@ export default function Interfaces() {
                     </TableCell>
 
                     {/* Admin Access */}
-                    <TableCell className="p-3">
+                    <TableCell className="py-3">
                       <div className="flex flex-wrap gap-1">
                         {iface.adminAccess.length === 0 ? (
-                          <span className="text-xs text-muted-foreground/45 italic">None</span>
+                          <span className="text-xs italic text-muted-foreground/45">None</span>
                         ) : (
                           iface.adminAccess.map((access) => (
                             <Badge
                               key={access}
                               variant="outline"
-                              className="bg-muted/30 text-muted-foreground border-border/40 text-[9px] px-1.5 py-0.5 rounded font-mono"
+                              className="rounded px-1.5 py-0 font-mono text-[10px] text-muted-foreground"
                             >
                               {access}
                             </Badge>
@@ -768,71 +766,70 @@ export default function Interfaces() {
                     </TableCell>
 
                     {/* Speed */}
-                    <TableCell className="p-3">
+                    <TableCell className="py-3">
                       <span className="font-mono text-xs text-muted-foreground">
                         {iface.status === "up" ? iface.speed : "—"}
                       </span>
                     </TableCell>
 
                     {/* Status */}
-                    <TableCell className="p-3">
+                    <TableCell className="py-3">
                       {iface.status === "up" ? (
-                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px] px-2 py-0.5 rounded font-bold">
+                        <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
                           UP
                         </Badge>
                       ) : iface.status === "offline" ? (
-                        <Badge variant="outline" className="bg-amber-500/10 text-amber-400 border-amber-500/20 text-[10px] px-2 py-0.5 rounded font-bold animate-pulse">
+                        <Badge variant="outline" className="animate-pulse rounded border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-500">
                           OFFLINE
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/20 text-[10px] px-2 py-0.5 rounded font-bold">
+                        <Badge variant="outline" className="rounded border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-500">
                           DOWN
                         </Badge>
                       )}
                     </TableCell>
 
                     {/* Action */}
-                    <TableCell className="p-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
+                    <TableCell className="py-3 text-right">
+                      <div className="flex items-center justify-end gap-4">
                         {iface.status === "offline" ? (
-                          <>
+                          <div className="flex items-center gap-2">
                             <Button
                               variant="ghost"
-                              size="icon-xs"
+                              size="icon-sm"
                               onClick={() => handleResetInterface(iface.id, iface.name)}
-                              className="cursor-pointer text-amber-400 hover:text-amber-300 hover:bg-amber-500/10"
+                              className="cursor-pointer text-amber-500 hover:bg-amber-500/10 hover:text-amber-500"
                               title="รีเซ็ตการตั้งค่าเป็นค่าเริ่มต้น"
                             >
-                              <RotateCcw className="h-3.5 w-3.5" />
+                              <RotateCcw className="h-4 w-4" />
                             </Button>
                             <Button
                               variant="ghost"
-                              size="icon-xs"
+                              size="icon-sm"
                               onClick={() => handleDeleteInterface(iface.id, iface.name)}
-                              className="cursor-pointer text-red-500 hover:text-red-400 hover:bg-red-500/10"
+                              className="cursor-pointer text-red-500 hover:bg-red-500/10 hover:text-red-500"
                               title="ลบอินเทอร์เฟซออกจากฐานข้อมูล"
                             >
-                              <Trash2 className="h-3.5 w-3.5" />
+                              <Trash2 className="h-4 w-4" />
                             </Button>
-                          </>
+                          </div>
                         ) : (
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-[10px] text-muted-foreground">{iface.status === "up" ? "ON" : "OFF"}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">{iface.status === "up" ? "ON" : "OFF"}</span>
                             <Switch
-                              size="sm"
                               checked={iface.status === "up"}
                               onCheckedChange={() => handleToggleStatus(iface.id)}
                             />
                           </div>
                         )}
                         <Button
-                          variant="ghost"
-                          size="icon-xs"
+                          variant="outline"
+                          size="icon-sm"
                           onClick={() => openEditDialog(iface)}
-                          className="cursor-pointer text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                          className="cursor-pointer text-muted-foreground hover:text-foreground"
                           title="แก้ไขอินเทอร์เฟซ"
                         >
-                          <Edit className="h-3.5 w-3.5" />
+                          <Edit className="h-4 w-4" />
                         </Button>
                       </div>
                     </TableCell>
@@ -841,71 +838,76 @@ export default function Interfaces() {
               )}
             </TableBody>
           </Table>
-        </div>
+        </CardContent>
       </Card>
 
-      {/* 4. MAC Address reference table */}
-      <Card className="bg-card/20 border border-border/50 p-4">
-        <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-          Hardware Address (MAC)
-        </div>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {interfaces.map((iface) => (
-            <div key={iface.id} className="flex flex-col sm:flex-row sm:items-center justify-between bg-muted/10 px-3 py-2 rounded-lg border border-border/30 gap-2">
-              <div className="flex items-center gap-2">
-                {iface.type === "ethernet" ? (
-                  <Cable className="h-3.5 w-3.5 text-primary" />
-                ) : (
-                  <Wifi className="h-3.5 w-3.5 text-primary" />
-                )}
-                <span className="text-xs font-semibold text-foreground">{iface.name}</span>
-                {iface.type === "wireless" && iface.macMode === "randomized" && (
-                  <Badge
-                    variant="outline"
-                    className="text-[9px] px-1 py-0 rounded font-normal bg-primary/10 text-primary border-primary/20"
-                  >
-                    Randomized
-                  </Badge>
-                )}
-              </div>
-              <div className="flex flex-col items-end gap-0.5">
-                <span className="text-xs font-mono text-foreground">
-                  {iface.type === "wireless" && iface.macMode === "randomized"
-                    ? (wifiLiveStatuses[iface.id]?.activeMac || "สุ่มอัตโนมัติเมื่อเชื่อมต่อ")
-                    : iface.macAddress}
-                </span>
-                {iface.type === "wireless" && iface.macMode === "randomized" && (
-                  <span className="text-[10px] font-mono text-muted-foreground">
-                    Real: {iface.realMacAddress || iface.macAddress}
+      {/* 3. MAC Address reference */}
+      <Card>
+        <CardHeader className="space-y-0">
+          <CardTitle className="flex items-center gap-2 text-base font-semibold">
+            <Fingerprint className="h-4 w-4 text-muted-foreground" />
+            Hardware Address (MAC)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {interfaces.map((iface) => (
+              <div key={iface.id} className="flex flex-col justify-between gap-2 rounded-lg border border-border bg-muted/50 px-3 py-2 sm:flex-row sm:items-center">
+                <div className="flex items-center gap-2">
+                  {iface.type === "ethernet" ? (
+                    <Cable className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <Wifi className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  )}
+                  <span className="text-xs font-semibold text-foreground">{iface.name}</span>
+                  {iface.type === "wireless" && iface.macMode === "randomized" && (
+                    <Badge
+                      variant="outline"
+                      className="rounded border-primary/20 bg-primary/10 px-1 py-0 text-[9px] font-normal text-primary"
+                    >
+                      Randomized
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex flex-col items-end gap-0.5">
+                  <span className="font-mono text-xs text-foreground">
+                    {iface.type === "wireless" && iface.macMode === "randomized"
+                      ? (wifiLiveStatuses[iface.id]?.activeMac || "สุ่มอัตโนมัติเมื่อเชื่อมต่อ")
+                      : iface.macAddress}
                   </span>
-                )}
+                  {iface.type === "wireless" && iface.macMode === "randomized" && (
+                    <span className="font-mono text-[10px] text-muted-foreground">
+                      Real: {iface.realMacAddress || iface.macAddress}
+                    </span>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        </CardContent>
       </Card>
 
-      {/* 5. Warning / Help Box */}
-      <Alert className="border-dashed border-border bg-card/10">
-        <AlertCircle className="h-4 w-4 text-muted-foreground" />
-        <AlertTitle className="font-bold text-foreground mb-0.5">ข้อมูลสำคัญ:</AlertTitle>
-        <AlertDescription className="text-xs text-muted-foreground leading-relaxed">
+      {/* 4. Info note */}
+      <div className="flex gap-2 rounded-lg border border-border bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          <strong className="text-foreground">ข้อมูลสำคัญ:</strong>{" "}
           การเปลี่ยนค่า IP Address หรือ Addressing Mode ของอินเทอร์เฟซอาจทำให้เชื่อมต่อกับบอร์ดไม่ได้ชั่วคราว
-          กรุณาตรวจสอบค่าอย่างถี่ถ้วนก่อนบันทึก อินเทอร์เฟซที่ตั้งค่าเป็น <span className="font-semibold text-primary">"LAN"</span> ควรใช้ Static IP
-          และอินเทอร์เฟซ <span className="font-semibold text-primary">"WAN"</span> ควรใช้ DHCP เพื่อรับ IP จากเราเตอร์ต้นทาง
-        </AlertDescription>
-      </Alert>
+          กรุณาตรวจสอบค่าอย่างถี่ถ้วนก่อนบันทึก อินเทอร์เฟซที่ตั้งค่าเป็น <strong className="text-foreground">"LAN"</strong> ควรใช้ Static IP
+          และอินเทอร์เฟซ <strong className="text-foreground">"WAN"</strong> ควรใช้ DHCP เพื่อรับ IP จากเราเตอร์ต้นทาง
+        </span>
+      </div>
 
-      {/* 6. Edit Interface Dialog */}
+      {/* 5. Edit Interface Dialog */}
       <Dialog open={isEditOpen} modal={false} onOpenChange={setIsEditOpen}>
-        <DialogContent className="w-full md:max-w-[920px] rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up max-h-[90vh] overflow-y-auto">
-          <DialogHeader className="pb-3 border-b border-border/40">
-            <DialogTitle className="text-lg font-bold text-foreground flex items-center gap-2">
-              {editingIface && getInterfaceIcon(editingIface.type, editingIface.subtype, "h-5 w-5")}
+        <DialogContent className="max-h-[90vh] w-full gap-4 overflow-y-auto rounded-xl p-6 md:max-w-[920px]">
+          <DialogHeader className="border-b border-border/50 pb-3">
+            <DialogTitle className="flex items-center gap-2 text-base font-semibold">
+              {editingIface && getInterfaceIcon(editingIface.type, editingIface.subtype, "h-4 w-4")}
               Edit Interface: {editingIface?.name}
               <span className="text-sm font-normal text-muted-foreground">({editingIface?.alias})</span>
               {editingIface && (
-                <Badge variant="secondary" className="text-[9px] px-1.5 py-0.5 rounded capitalize bg-muted dark:bg-muted text-muted-foreground dark:text-muted-foreground border-none font-mono font-medium ml-1">
+                <Badge variant="secondary" className="ml-1 rounded px-1.5 py-0 font-mono text-[10px] font-medium capitalize">
                   {editingIface.subtype || editingIface.type}
                 </Badge>
               )}
@@ -914,17 +916,17 @@ export default function Interfaces() {
 
           <form onSubmit={handleSave} className="space-y-4 text-sm">
             {formError && (
-              <Alert variant="destructive" className="border-red-500/20 bg-red-500/5 py-2.5 px-3">
-                <AlertCircle className="h-4 w-4 text-red-400" />
-                <AlertDescription className="text-red-400 text-xs">{formError}</AlertDescription>
+              <Alert variant="destructive" className="px-3 py-2.5">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-xs">{formError}</AlertDescription>
               </Alert>
             )}
 
             {/* Row 1: Alias Name & Port Role */}
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label htmlFor="form-alias" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                  Alias Name <span className="text-red-500">*</span>
+                <Label htmlFor="form-alias" className="block text-xs font-medium text-muted-foreground">
+                  Alias Name <span className="text-destructive">*</span>
                 </Label>
                 <Input
                   id="form-alias"
@@ -933,42 +935,42 @@ export default function Interfaces() {
                   value={formAlias}
                   onChange={(e) => setFormAlias(e.target.value)}
                   placeholder="เช่น LAN_Internal, WAN_WiFi"
-                  className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono"
+                  className="h-9 font-mono text-sm"
                 />
-                <p className="text-[11px] text-muted-foreground italic">ห้ามเว้นวรรค ใช้ได้เฉพาะอักษรภาษาอังกฤษ ตัวเลข และ _</p>
+                <p className="mt-0.5 text-[10px] text-muted-foreground">ห้ามเว้นวรรค ใช้ได้เฉพาะอักษรภาษาอังกฤษ ตัวเลข และ _</p>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="form-role" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                  Port Role (หน้าที่ของพอร์ต) <span className="text-red-500">*</span>
+                <Label htmlFor="form-role" className="block text-xs font-medium text-muted-foreground">
+                  Port Role (หน้าที่ของพอร์ต) <span className="text-destructive">*</span>
                 </Label>
                 <Select
                   value={formRole}
                   onValueChange={(value: "LAN" | "WAN") => setFormRole(value)}
                 >
-                  <SelectTrigger id="form-role" className="bg-background/50 border-border/80 h-9 text-xs font-semibold text-foreground">
+                  <SelectTrigger id="form-role" className="h-9 w-full text-xs font-medium">
                     <SelectValue placeholder="เลือกประเภทพอร์ต" />
                   </SelectTrigger>
-                  <SelectContent className="border border-border/80 bg-popover text-foreground rounded-md text-xs font-semibold">
+                  <SelectContent className="text-xs font-medium">
                     <SelectItem value="LAN">LAN (วงภายใน)</SelectItem>
                     <SelectItem value="WAN">WAN (ต่อขายนอก / อินเทอร์เน็ต)</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-[11px] text-muted-foreground italic">LAN สำหรับเครือข่ายภายใน และ WAN สำหรับเชื่อมต่อเครือข่ายภายนอก</p>
+                <p className="mt-0.5 text-[10px] text-muted-foreground">LAN สำหรับเครือข่ายภายใน และ WAN สำหรับเชื่อมต่อเครือข่ายภายนอก</p>
               </div>
             </div>
 
             {/* Field: Addressing Mode */}
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+            <div className="space-y-2">
+              <Label className="block text-xs font-medium text-muted-foreground">
                 Addressing Mode
               </Label>
-              <div className="flex rounded-lg border border-border bg-background p-0.5 gap-0.5 w-fit">
+              <div className="flex w-fit gap-0.5 rounded-lg border border-border bg-muted p-0.5">
                 <button
                   type="button"
                   onClick={() => setFormMode("dhcp")}
-                  className={`px-4 py-1.5 text-xs font-bold rounded-md transition cursor-pointer ${formMode === "dhcp"
+                  className={`cursor-pointer rounded-md px-4 py-1.5 text-xs font-medium transition ${formMode === "dhcp"
                     ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
                     }`}
                 >
                   DHCP (Auto)
@@ -976,9 +978,9 @@ export default function Interfaces() {
                 <button
                   type="button"
                   onClick={() => setFormMode("static")}
-                  className={`px-4 py-1.5 text-xs font-bold rounded-md transition cursor-pointer ${formMode === "static"
+                  className={`cursor-pointer rounded-md px-4 py-1.5 text-xs font-medium transition ${formMode === "static"
                     ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
                     }`}
                 >
                   Manual (Static)
@@ -988,52 +990,52 @@ export default function Interfaces() {
 
             {/* Static IP Fields (conditional) */}
             {formMode === "static" && (
-              <div className="space-y-3 border border-border/40 rounded-lg p-4 bg-muted/5">
-                <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-                  <ArrowUpDown className="h-3 w-3" /> Static IP Configuration
+              <div className="space-y-3 rounded-lg border border-border bg-muted/50 p-4">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                  <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" /> Static IP Configuration
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <Label htmlFor="form-ip" className="text-[11px] text-muted-foreground">IP Address <span className="text-red-500">*</span></Label>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="form-ip" className="text-xs font-medium text-muted-foreground">IP Address <span className="text-destructive">*</span></Label>
                     <Input
                       id="form-ip"
                       type="text"
                       value={formIp}
                       onChange={(e) => setFormIp(e.target.value)}
                       placeholder="192.168.1.1"
-                      className="bg-background/50 h-8 font-mono text-xs"
+                      className="h-9 font-mono text-sm"
                     />
                   </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="form-netmask" className="text-[11px] text-muted-foreground">Netmask (CIDR) <span className="text-red-500">*</span></Label>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="form-netmask" className="text-xs font-medium text-muted-foreground">Netmask (CIDR) <span className="text-destructive">*</span></Label>
                     <Input
                       id="form-netmask"
                       type="text"
                       value={formNetmask}
                       onChange={(e) => setFormNetmask(e.target.value)}
                       placeholder="24"
-                      className="bg-background/50 h-8 font-mono text-xs"
+                      className="h-9 font-mono text-sm"
                     />
                   </div>
                 </div>
-                <div className="space-y-1">
-                  <Label htmlFor="form-gateway" className="text-[11px] text-muted-foreground">Gateway</Label>
+                <div className="space-y-1.5">
+                  <Label htmlFor="form-gateway" className="text-xs font-medium text-muted-foreground">Gateway</Label>
                   <Input
                     id="form-gateway"
                     type="text"
                     value={formGateway}
                     onChange={(e) => setFormGateway(e.target.value)}
                     placeholder="192.168.1.254"
-                    className="bg-background/50 h-8 font-mono text-xs"
+                    className="h-9 font-mono text-sm"
                   />
                 </div>
               </div>
             )}
 
             {/* Route Metric (all addressing modes — used for multi-WAN failover ordering) */}
-            <div className="space-y-1.5 border border-border/40 rounded-lg p-4 bg-muted/5">
-              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-                <ArrowUpDown className="h-3 w-3" /> Route Metric (ลำดับความสำคัญ Gateway)
+            <div className="space-y-2 rounded-lg border border-border bg-muted/50 p-4">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" /> Route Metric (ลำดับความสำคัญ Gateway)
               </div>
               <Input
                 id="form-metric"
@@ -1043,11 +1045,11 @@ export default function Interfaces() {
                 value={formMetric}
                 onChange={(e) => setFormMetric(e.target.value)}
                 placeholder="ว่าง = อัตโนมัติ"
-                className="bg-background/50 h-8 font-mono text-xs"
+                className="h-9 font-mono text-sm"
               />
-              <p className="text-[11px] text-muted-foreground leading-relaxed">
+              <p className="text-[10px] leading-relaxed text-muted-foreground">
                 กำหนด priority ของ default gateway route (0.0.0.0/0) สำหรับ interface นี้
-                — <span className="font-medium">เลขน้อยกว่า = ถูกเลือกใช้ก่อน</span> (ใช้จัดลำดับ WAN หลัก/สำรอง).
+                — <strong className="text-foreground">เลขน้อยกว่า = ถูกเลือกใช้ก่อน</strong> (ใช้จัดลำดับ WAN หลัก/สำรอง).
                 เว้นว่างเพื่อใช้ค่าอัตโนมัติ (static = 100, dhcp = ตาม dhcpcd). มีผลกับ IPv4 เท่านั้น
                 และการสลับ WAN อาจทำให้ session ที่ค้างอยู่ (รวมถึงหน้านี้) สะดุดชั่วขณะ
               </p>
@@ -1056,15 +1058,15 @@ export default function Interfaces() {
             {/* Wi-Fi Settings (only for wireless) */}
             {editingIface?.type === "wireless" && (
               <>
-                <div className="space-y-3 border border-primary/20 rounded-lg p-4 bg-primary/5">
-                  <div className="text-xs font-semibold text-primary uppercase tracking-wider flex items-center gap-1.5">
-                    <Wifi className="h-3.5 w-3.5" /> Wireless Client Settings
+                <div className="space-y-3 rounded-lg border border-border bg-muted/50 p-4">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                    <Wifi className="h-3.5 w-3.5 text-muted-foreground" /> Wireless Client Settings
                   </div>
 
                   {/* SSID with Scanner */}
                   <div className="space-y-1.5">
-                    <Label htmlFor="form-ssid" className="text-[11px] text-muted-foreground">
-                      SSID <span className="text-red-500">*</span>
+                    <Label htmlFor="form-ssid" className="text-xs font-medium text-muted-foreground">
+                      SSID <span className="text-destructive">*</span>
                     </Label>
                     <div className="flex gap-2">
                       <Input
@@ -1073,7 +1075,7 @@ export default function Interfaces() {
                         value={formSSID}
                         onChange={(e) => setFormSSID(e.target.value)}
                         placeholder="ชื่อเครือข่าย Wi-Fi"
-                        className="bg-background/50 h-8 font-mono text-xs flex-1"
+                        className="h-9 flex-1 font-mono text-sm"
                       />
                       <Button
                         type="button"
@@ -1081,9 +1083,9 @@ export default function Interfaces() {
                         size="sm"
                         onClick={handleWifiScan}
                         disabled={isScanning}
-                        className="cursor-pointer gap-1 text-xs h-8 px-3 border-primary/30 text-primary hover:bg-primary/10 hover:text-primary"
+                        className="h-9 cursor-pointer gap-1.5 px-3 text-xs"
                       >
-                        <RefreshCw className={`h-3 w-3 ${isScanning ? "animate-spin" : ""}`} />
+                        <RefreshCw className={`h-3.5 w-3.5 ${isScanning ? "animate-spin" : ""}`} />
                         {isScanning ? "Scanning..." : "Scan"}
                       </Button>
                     </div>
@@ -1091,7 +1093,7 @@ export default function Interfaces() {
 
                   {/* Scan Results */}
                   {showScanResults && (
-                    <div className="rounded-lg border border-border/40 bg-background/30 overflow-hidden">
+                    <div className="overflow-hidden rounded-lg border border-border bg-background">
                       {isScanning ? (
                         <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
                           <RefreshCw className="h-4 w-4 animate-spin text-primary" />
@@ -1104,7 +1106,7 @@ export default function Interfaces() {
                               key={idx}
                               type="button"
                               onClick={() => selectSSID(wifi.ssid)}
-                              className={`w-full flex items-center justify-between px-3 py-2 text-xs transition cursor-pointer hover:bg-muted/20 border-b border-border/20 last:border-b-0 ${formSSID === wifi.ssid ? "bg-primary/10" : ""
+                              className={`flex w-full cursor-pointer items-center justify-between border-b border-border/50 px-3 py-2 text-xs transition last:border-b-0 hover:bg-muted/50 ${formSSID === wifi.ssid ? "bg-primary/10" : ""
                                 }`}
                             >
                               <div className="flex items-center gap-2">
@@ -1113,7 +1115,7 @@ export default function Interfaces() {
                                 {wifi.security !== "Open" ? (
                                   <Lock className="h-3 w-3 text-muted-foreground" />
                                 ) : (
-                                  <Unlock className="h-3 w-3 text-amber-400" />
+                                  <Unlock className="h-3 w-3 text-amber-500" />
                                 )}
                                 {formSSID === wifi.ssid && (
                                   <Check className="h-3 w-3 text-primary" />
@@ -1123,7 +1125,7 @@ export default function Interfaces() {
                                 <span className={signalColor(wifi.signal)}>{wifi.signal}%</span>
                                 <span className="text-[10px]">{wifi.security}</span>
                                 <span className="text-[10px]">Ch.{wifi.channel}</span>
-                                <Badge variant="outline" className="text-[9px] px-1 py-0 rounded border-border/40">
+                                <Badge variant="outline" className="rounded px-1 py-0 text-[9px]">
                                   {wifi.frequency}
                                 </Badge>
                               </div>
@@ -1137,17 +1139,17 @@ export default function Interfaces() {
                   {/* Wi-Fi Password & Security */}
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div className="space-y-1.5">
-                      <Label htmlFor="form-wifi-security" className="text-[11px] text-muted-foreground block font-semibold uppercase tracking-wider">
+                      <Label htmlFor="form-wifi-security" className="block text-xs font-medium text-muted-foreground">
                         Key Management (ระบบความปลอดภัย)
                       </Label>
                       <Select
                         value={formWifiSecurity}
                         onValueChange={(value) => setFormWifiSecurity(value)}
                       >
-                        <SelectTrigger id="form-wifi-security" className="bg-background/50 border-border/80 h-8 text-xs font-semibold text-foreground">
+                        <SelectTrigger id="form-wifi-security" className="h-9 w-full text-xs font-medium">
                           <SelectValue placeholder="เลือกประเภทความปลอดภัย" />
                         </SelectTrigger>
-                        <SelectContent className="border border-border/80 bg-popover text-foreground rounded-md text-xs font-semibold">
+                        <SelectContent className="text-xs font-medium">
                           <SelectItem value="Open">Open (ไม่มีรหัสผ่าน)</SelectItem>
                           <SelectItem value="WPA2">WPA2 (แนะนำทั่วไป)</SelectItem>
                           <SelectItem value="WPA3">WPA3 (SAE-only)</SelectItem>
@@ -1157,7 +1159,7 @@ export default function Interfaces() {
                     </div>
                     {formWifiSecurity !== "Open" && (
                       <div className="space-y-1.5">
-                        <Label htmlFor="form-wifi-password" className="text-[11px] text-muted-foreground block">
+                        <Label htmlFor="form-wifi-password" className="block text-xs font-medium text-muted-foreground">
                           Password (PSK)
                         </Label>
                         <Input
@@ -1166,32 +1168,32 @@ export default function Interfaces() {
                           value={formWifiPassword}
                           onChange={(e) => setFormWifiPassword(e.target.value)}
                           placeholder="••••••••"
-                          className="bg-background/50 h-8 font-mono text-xs w-full"
+                          className="h-9 w-full font-mono text-sm"
                         />
-                        <p className="text-[10px] text-muted-foreground italic mt-0.5">เว้นว่างหากไม่ต้องการเปลี่ยนรหัสผ่าน</p>
+                        <p className="mt-0.5 text-[10px] text-muted-foreground">เว้นว่างหากไม่ต้องการเปลี่ยนรหัสผ่าน</p>
                       </div>
                     )}
                   </div>
                 </div>
 
                 {/* Wi-Fi MAC Address Settings */}
-                <div className="space-y-3 border border-primary/20 rounded-lg p-4 bg-primary/5">
-                  <div className="text-xs font-semibold text-primary uppercase tracking-wider flex items-center gap-1.5">
-                    <Shield className="h-3.5 w-3.5" /> MAC Address Settings (การตั้งค่า MAC)
+                <div className="space-y-3 rounded-lg border border-border bg-muted/50 p-4">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                    <Shield className="h-3.5 w-3.5 text-muted-foreground" /> MAC Address Settings (การตั้งค่า MAC)
                   </div>
                   {/* MAC Address Mode selection */}
                   <div className="space-y-1.5">
-                    <Label htmlFor="form-mac-mode" className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block">
+                    <Label htmlFor="form-mac-mode" className="block text-xs font-medium text-muted-foreground">
                       MAC Address Mode
                     </Label>
                     <Select
                       value={formMacMode}
                       onValueChange={(value: "hardware" | "randomized") => setFormMacMode(value)}
                     >
-                      <SelectTrigger id="form-mac-mode" size="sm" className="w-full sm:w-[220px] bg-background border-border/80 text-xs font-semibold text-foreground focus-visible:ring-primary/20 focus-visible:border-primary">
+                      <SelectTrigger id="form-mac-mode" size="sm" className="w-full text-xs font-medium sm:w-[220px]">
                         <SelectValue placeholder="เลือกโหมด MAC Address" />
                       </SelectTrigger>
-                      <SelectContent className="border border-border/80 bg-popover text-foreground rounded-md text-xs font-semibold">
+                      <SelectContent className="text-xs font-medium">
                         <SelectItem value="hardware">Hardware MAC (ที่อยู่จริง)</SelectItem>
                         <SelectItem value="randomized">Random MAC (สุ่มที่อยู่โดย wpa_supplicant)</SelectItem>
                       </SelectContent>
@@ -1199,14 +1201,14 @@ export default function Interfaces() {
                   </div>
 
                   {/* Comparison Panel */}
-                  <div className="mt-1 text-xs bg-background/40 p-3 rounded-lg border border-primary/10 space-y-1.5 font-mono">
+                  <div className="mt-1 space-y-1.5 rounded-lg border border-border bg-background p-3 font-mono text-xs">
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">ที่อยู่ MAC จริง (Hardware):</span>
                       <span className="text-foreground">{editingIface?.realMacAddress || editingIface?.macAddress}</span>
                     </div>
-                    <div className="flex justify-between border-t border-primary/5 pt-1.5">
+                    <div className="flex justify-between border-t border-border/50 pt-1.5">
                       <span className="text-muted-foreground">ที่อยู่ MAC ที่ใช้งานจริง (Active):</span>
-                      <span className="text-primary font-bold">
+                      <span className="font-semibold text-primary">
                         {formMacMode === "hardware"
                           ? (editingIface?.realMacAddress || editingIface?.macAddress)
                           : (editingIface && wifiLiveStatuses[editingIface.id]?.activeMac) || "สุ่มอัตโนมัติเมื่อเชื่อมต่อ"}
@@ -1216,10 +1218,10 @@ export default function Interfaces() {
                 </div>
 
                 {/* Wi-Fi Failover / Backup SSID Settings */}
-                <div className="space-y-3 border border-primary/20 rounded-lg p-4 bg-primary/5 mt-4">
+                <div className="space-y-3 rounded-lg border border-border bg-muted/50 p-4">
                   <div className="flex items-center justify-between">
-                    <div className="text-xs font-semibold text-primary uppercase tracking-wider flex items-center gap-1.5">
-                      <Radio className="h-3.5 w-3.5" /> Wi-Fi Backup & Failover (ฟีเจอร์สำรองข้อมูลคลื่น)
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                      <Radio className="h-3.5 w-3.5 text-muted-foreground" /> Wi-Fi Backup & Failover (ฟีเจอร์สำรองข้อมูลคลื่น)
                     </div>
                     <Switch
                       size="sm"
@@ -1233,7 +1235,7 @@ export default function Interfaces() {
                       {/* Optional Backup SSID & Security */}
                       <div className="grid gap-3 sm:grid-cols-2">
                         <div className="space-y-1.5">
-                          <Label htmlFor="form-backup-ssid" className="text-[11px] text-muted-foreground">
+                          <Label htmlFor="form-backup-ssid" className="text-xs font-medium text-muted-foreground">
                             Backup SSID (ชื่อ Wi-Fi สำรอง)
                           </Label>
                           <Input
@@ -1242,21 +1244,21 @@ export default function Interfaces() {
                             value={formBackupSSID}
                             onChange={(e) => setFormBackupSSID(e.target.value)}
                             placeholder="ชื่อเครือข่าย Wi-Fi สำรอง"
-                            className="bg-background/50 h-8 font-mono text-xs"
+                            className="h-9 font-mono text-sm"
                           />
                         </div>
                         <div className="space-y-1.5">
-                          <Label htmlFor="form-backup-wifi-security" className="text-[11px] text-muted-foreground block font-semibold uppercase tracking-wider">
+                          <Label htmlFor="form-backup-wifi-security" className="block text-xs font-medium text-muted-foreground">
                             Backup Security (ระบบความปลอดภัยสำรอง)
                           </Label>
                           <Select
                             value={formBackupWifiSecurity}
                             onValueChange={(value) => setFormBackupWifiSecurity(value)}
                           >
-                            <SelectTrigger id="form-backup-wifi-security" className="bg-background/50 border-border/80 h-8 text-xs font-semibold text-foreground">
+                            <SelectTrigger id="form-backup-wifi-security" className="h-9 w-full text-xs font-medium">
                               <SelectValue placeholder="เลือกประเภทความปลอดภัย" />
                             </SelectTrigger>
-                            <SelectContent className="border border-border/80 bg-popover text-foreground rounded-md text-xs font-semibold">
+                            <SelectContent className="text-xs font-medium">
                               <SelectItem value="Open">Open (ไม่มีรหัสผ่าน)</SelectItem>
                               <SelectItem value="WPA2">WPA2 (แนะนำทั่วไป)</SelectItem>
                               <SelectItem value="WPA3">WPA3 (SAE-only)</SelectItem>
@@ -1268,8 +1270,8 @@ export default function Interfaces() {
 
                       {/* Backup Password (conditional) */}
                       {formBackupWifiSecurity !== "Open" && (
-                        <div className="space-y-1.5 max-w-md">
-                          <Label htmlFor="form-backup-wifi-password" className="text-[11px] text-muted-foreground block">
+                        <div className="max-w-md space-y-1.5">
+                          <Label htmlFor="form-backup-wifi-password" className="block text-xs font-medium text-muted-foreground">
                             Backup Password (รหัสผ่านสำรอง)
                           </Label>
                           <Input
@@ -1278,16 +1280,16 @@ export default function Interfaces() {
                             value={formBackupWifiPassword}
                             onChange={(e) => setFormBackupWifiPassword(e.target.value)}
                             placeholder="รหัสผ่านสำรอง"
-                            className="bg-background/50 h-8 font-mono text-xs w-full"
+                            className="h-9 w-full font-mono text-sm"
                           />
-                          <p className="text-[10px] text-muted-foreground italic mt-0.5">เว้นว่างหากไม่ต้องการเปลี่ยนรหัสผ่านสำรอง</p>
+                          <p className="mt-0.5 text-[10px] text-muted-foreground">เว้นว่างหากไม่ต้องการเปลี่ยนรหัสผ่านสำรอง</p>
                         </div>
                       )}
 
                       {/* Settings grid */}
                       <div className="grid gap-3 sm:grid-cols-3">
                         <div className="space-y-1.5">
-                          <Label htmlFor="form-ip-check-timeout" className="text-[11px] text-muted-foreground block" title="เวลาที่ใช้ในการตรวจสอบการตอบกลับ IP ก่อนพิจารณาว่าล้มเหลว">
+                          <Label htmlFor="form-ip-check-timeout" className="block text-xs font-medium text-muted-foreground" title="เวลาที่ใช้ในการตรวจสอบการตอบกลับ IP ก่อนพิจารณาว่าล้มเหลว">
                             IP Check Timeout (วินาที)
                           </Label>
                           <Input
@@ -1297,11 +1299,11 @@ export default function Interfaces() {
                             max="300"
                             value={formIpCheckTimeout}
                             onChange={(e) => setFormIpCheckTimeout(parseInt(e.target.value) || 15)}
-                            className="bg-background/50 h-8 font-mono text-xs"
+                            className="h-9 font-mono text-sm"
                           />
                         </div>
                         <div className="space-y-1.5">
-                          <Label htmlFor="form-primary-max-retries" className="text-[11px] text-muted-foreground block" title="จำนวนครั้งในการเปิด/ปิดพอร์ตใหม่เพื่อเชื่อมต่อ SSID หลัก">
+                          <Label htmlFor="form-primary-max-retries" className="block text-xs font-medium text-muted-foreground" title="จำนวนครั้งในการเปิด/ปิดพอร์ตใหม่เพื่อเชื่อมต่อ SSID หลัก">
                             Max Retries (ครั้ง)
                           </Label>
                           <Input
@@ -1311,11 +1313,11 @@ export default function Interfaces() {
                             max="10"
                             value={formPrimaryMaxRetries}
                             onChange={(e) => setFormPrimaryMaxRetries(parseInt(e.target.value) || 3)}
-                            className="bg-background/50 h-8 font-mono text-xs"
+                            className="h-9 font-mono text-sm"
                           />
                         </div>
                         <div className="space-y-1.5">
-                          <Label htmlFor="form-failover-cooldown" className="text-[11px] text-muted-foreground block" title="ระยะหน่วงเวลาก่อนสลับกลับมาลองเชื่อมต่อ SSID หลักอีกครั้ง">
+                          <Label htmlFor="form-failover-cooldown" className="block text-xs font-medium text-muted-foreground" title="ระยะหน่วงเวลาก่อนสลับกลับมาลองเชื่อมต่อ SSID หลักอีกครั้ง">
                             Cooldown Delay (วินาที)
                           </Label>
                           <Input
@@ -1325,23 +1327,23 @@ export default function Interfaces() {
                             max="3600"
                             value={formFailoverCooldown}
                             onChange={(e) => setFormFailoverCooldown(parseInt(e.target.value) || 60)}
-                            className="bg-background/50 h-8 font-mono text-xs"
+                            className="h-9 font-mono text-sm"
                           />
                         </div>
                       </div>
 
                       {/* Interactive Simulator Section */}
-                      <div className="border border-border/60 rounded-lg p-3 bg-background/40 space-y-2">
+                      <div className="space-y-2 rounded-lg border border-border bg-background p-3">
                         <div className="flex items-center justify-between">
-                          <span className="font-semibold text-xs text-foreground flex items-center gap-1.5">
-                            <Terminal className="h-3.5 w-3.5 text-primary" /> Failover Simulator (ตัวจำลองการสลับคลื่น)
+                          <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                            <Terminal className="h-3.5 w-3.5 text-muted-foreground" /> Failover Simulator (ตัวจำลองการสลับคลื่น)
                           </span>
                           <Button
                             type="button"
                             size="sm"
                             onClick={runFailoverSimulation}
                             disabled={simActive}
-                            className="cursor-pointer h-7 px-2.5 bg-primary text-primary-foreground hover:bg-primary/90 font-bold gap-1 text-[11px]"
+                            className="h-7 cursor-pointer gap-1 px-2.5 text-[11px] font-semibold"
                           >
                             <Play className="h-3 w-3 fill-primary-foreground" />
                             {simActive ? "Simulating..." : "Simulate Failover"}
@@ -1349,7 +1351,7 @@ export default function Interfaces() {
                         </div>
 
                         {simLogs.length > 0 && (
-                          <div className="bg-muted/50 dark:bg-background/80 rounded p-2 text-[10px] font-mono text-primary dark:text-primary max-h-[140px] overflow-y-auto space-y-1 border border-border/50 dark:border-border/20 scrollbar-thin">
+                          <div className="scrollbar-thin max-h-[140px] space-y-1 overflow-y-auto rounded-md border border-border bg-muted/50 p-2 font-mono text-[10px] text-primary">
                             {simLogs.map((log, idx) => (
                               <div key={idx} className="leading-relaxed whitespace-pre-wrap">{log}</div>
                             ))}
@@ -1364,8 +1366,8 @@ export default function Interfaces() {
 
             {/* Admin Access Checkboxes */}
             <div className="space-y-2">
-              <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                <Shield className="h-3 w-3 inline mr-1" />
+              <Label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <Shield className="h-3.5 w-3.5" />
                 Admin Access (Management)
               </Label>
               <div className="flex flex-wrap gap-2">
@@ -1376,12 +1378,12 @@ export default function Interfaces() {
                       key={access}
                       type="button"
                       onClick={() => toggleAccess(access)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition cursor-pointer ${isActive
+                      className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition ${isActive
                         ? "border-primary/40 bg-primary/10 text-primary"
-                        : "border-border/40 bg-muted/10 text-muted-foreground hover:bg-muted/20 hover:text-foreground"
+                        : "border-border bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
                         }`}
                     >
-                      <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center ${isActive ? "bg-primary border-primary" : "border-muted-foreground/40"
+                      <div className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${isActive ? "border-primary bg-primary" : "border-muted-foreground/40"
                         }`}>
                         {isActive && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
                       </div>
@@ -1393,19 +1395,16 @@ export default function Interfaces() {
             </div>
 
             {/* Action Buttons */}
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-border/40">
+            <div className="flex items-center justify-end gap-3 border-t border-border/50 pt-4">
               <Button
                 type="button"
                 variant="ghost"
                 onClick={() => setIsEditOpen(false)}
-                className="cursor-pointer text-muted-foreground hover:bg-muted/30"
+                className="cursor-pointer text-muted-foreground"
               >
                 Cancel
               </Button>
-              <Button
-                type="submit"
-                className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/95 font-bold px-5"
-              >
+              <Button type="submit" className="cursor-pointer px-6 font-semibold">
                 Save Changes
               </Button>
             </div>
