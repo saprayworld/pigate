@@ -1,18 +1,19 @@
-import { useState, useMemo, useRef, useEffect } from "react"
+import { useState, useMemo, useRef, useEffect, type ReactNode } from "react"
 import { getErrorMessage } from "@/lib/errors"
 import {
   Sliders,
+  SlidersHorizontal,
   Plus,
   Search,
   Edit,
   Trash2,
   Lock,
   AlertCircle,
-  Info,
-  Terminal,
+  Network,
+  ShieldCheck,
   Loader2
 } from "lucide-react"
-import { Card } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -35,6 +36,32 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { type ServiceObject } from "@/data-mockup/mockData"
 import { serviceObjectService } from "@/services/serviceObjectService"
 import { useAlert } from "@/hooks/useAlert"
+import { cn } from "@/lib/utils"
+
+// Helper: Dashboard-style stat card (mirrors Dashboard's StatCard, value accepts a node)
+function StatCard({
+  icon: Icon,
+  title,
+  value,
+}: {
+  icon: typeof Sliders
+  title: string
+  value: ReactNode
+}) {
+  return (
+    <Card size="sm" className="gap-0">
+      <CardHeader className="space-y-0">
+        <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <Icon className="h-4 w-4 shrink-0" />
+          <span className="text-foreground">{title}</span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-3">
+        <div className="text-2xl font-bold tracking-tight text-foreground">{value}</div>
+      </CardContent>
+    </Card>
+  )
+}
 
 export default function Services() {
   const { alert, confirm } = useAlert()
@@ -44,9 +71,6 @@ export default function Services() {
   const [isLoading, setIsLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
   const [protoFilter, setProtoFilter] = useState<"All" | "TCP" | "UDP" | "TCP/UDP" | "ICMP">("All")
-
-  // Selected service object for the interactive nftables backend preview
-  const [selectedPreviewId, setSelectedPreviewId] = useState<string>("svc-6") // Web_Testing_Pool as default
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -119,11 +143,6 @@ export default function Services() {
     })
   }, [services, searchQuery, protoFilter])
 
-  // Get current active preview service details
-  const previewService = useMemo(() => {
-    return services.find(s => s.id === selectedPreviewId) || services[0]
-  }, [services, selectedPreviewId])
-
   // --- CRUD Actions ---
   const openCreateModal = () => {
     setEditingObject(null)
@@ -160,10 +179,6 @@ export default function Services() {
     if (await confirm("ยืนยันการลบ", `คุณต้องการลบวัตถุบริการ "${name}" ใช่หรือไม่?`)) {
       try {
         await serviceObjectService.delete(id)
-        // If we deleted the preview item, reset preview selection
-        if (selectedPreviewId === id) {
-          setSelectedPreviewId("svc-1")
-        }
         await loadServices(false)
       } catch (err) {
         await alert("ข้อผิดพลาด", "ไม่สามารถลบข้อมูลได้: " + getErrorMessage(err))
@@ -241,12 +256,11 @@ export default function Services() {
         })
       } else {
         // Create
-        const newSvc = await serviceObjectService.create({
+        await serviceObjectService.create({
           name: formName,
           protocol: formProto,
           port: finalPort
         })
-        setSelectedPreviewId(newSvc.id)
       }
       await loadServices(false)
       setIsModalOpen(false)
@@ -255,264 +269,192 @@ export default function Services() {
     }
   }
 
+  const protoFilters = ["All", "TCP", "UDP", "TCP/UDP", "ICMP"] as const
+
   return (
-    <div className="space-y-6">
-      {/* 1. Header Area */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
-            <Sliders className="h-7 w-7 text-primary fill-primary/10" />
-            Services (วัตถุบริการและพอร์ต)
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            ระบุโปรโตคอล TCP/UDP และช่วงพอร์ตเพื่อนำไปใช้อ้างอิงเป็นกลุ่มบริการใน Firewall Policy
-          </p>
-        </div>
-        <div>
-          <Button onClick={openCreateModal} className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 font-bold gap-1.5">
-            <Plus className="h-4.5 w-4.5" />
-            Create New Service
-          </Button>
-        </div>
+    <div className="space-y-4">
+      {/* 1. Stats overview */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard icon={Sliders} title="Total Services" value={stats.total} />
+        <StatCard icon={ShieldCheck} title="System Default" value={stats.systemCount} />
+        <StatCard icon={SlidersHorizontal} title="Custom Sets" value={stats.customCount} />
+        <StatCard
+          icon={Network}
+          title="TCP / UDP"
+          value={
+            <>
+              {stats.tcpCount} <span className="text-xs font-normal text-muted-foreground">TCP</span>
+              {" / "}
+              {stats.udpCount} <span className="text-xs font-normal text-muted-foreground">UDP</span>
+            </>
+          }
+        />
       </div>
 
-      {/* 2. Stats Dashboard Cards */}
-      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">บริการทั้งหมด</div>
-          <div className="mt-2 text-2xl font-bold text-foreground font-mono">{stats.total}</div>
-        </Card>
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">ระบบ (System Default)</div>
-          <div className="mt-2 text-2xl font-bold text-primary font-mono">{stats.systemCount}</div>
-        </Card>
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">กำหนดเอง (Custom Sets)</div>
-          <div className="mt-2 text-2xl font-bold text-primary font-mono">{stats.customCount}</div>
-        </Card>
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">TCP / UDP ที่รองรับ</div>
-          <div className="mt-2 text-2xl font-bold text-primary font-mono">
-            {stats.tcpCount} <span className="text-xs text-muted-foreground">TCP</span> / {stats.udpCount} <span className="text-xs text-muted-foreground">UDP</span>
-          </div>
-        </Card>
-      </div>
+      {/* 2. Services table */}
+      <Card>
+        <CardHeader className="flex flex-col gap-4 space-y-0 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                <Sliders className="h-4 w-4 text-muted-foreground" />
+                Service Objects
+                <Badge variant="secondary" className="rounded-full px-2 py-0 text-xs font-semibold">
+                  {stats.total}
+                </Badge>
+              </CardTitle>
+              <CardDescription className="text-xs">
+                ระบุโปรโตคอล TCP/UDP และช่วงพอร์ตเพื่อนำไปใช้อ้างอิงเป็นกลุ่มบริการใน Firewall Policy
+              </CardDescription>
+            </div>
 
-      {/* 3. Toolbar (Filters & Search) */}
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between bg-card/30 p-4 rounded-xl border border-border/60">
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Protocol filters */}
-          <div className="flex rounded-lg border border-border bg-card p-0.5 gap-0.5">
-            {(["All", "TCP", "UDP", "TCP/UDP", "ICMP"] as const).map((proto) => (
-              <button
-                key={proto}
-                onClick={() => setProtoFilter(proto)}
-                className={`px-3 py-1 text-xs font-bold rounded-md transition ${protoFilter === proto
-                  ? proto === "ICMP"
-                    ? "bg-primary text-primary bg-primary"
-                    : "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                  }`}
-              >
-                {proto}
-              </button>
-            ))}
-          </div>
-        </div>
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Search */}
+              <div className="relative w-full sm:w-[200px]">
+                <Search className="pointer-events-none absolute top-2 left-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="ค้นหาบริการ, พอร์ต..."
+                  className="h-8 pl-8 text-xs"
+                />
+              </div>
+              <Button size="sm" onClick={openCreateModal} className="cursor-pointer gap-1.5 font-semibold">
+                <Plus className="h-4 w-4" />
+                Create New Service
+              </Button>
+            </div>
+          </CardHeader>
 
-        {/* Search */}
-        <div className="relative w-full md:max-w-xs">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
-          <Input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="ค้นหาชื่อบริการ, โปรโตคอล, พอร์ต..."
-            className="pl-8 bg-background/50 placeholder:text-muted-foreground h-9"
-          />
-        </div>
-      </div>
+          <CardContent className="space-y-4">
+            {/* Protocol filters */}
+            <div className="flex w-fit gap-0.5 rounded-lg border border-border bg-muted p-0.5">
+              {protoFilters.map((proto) => (
+                <button
+                  key={proto}
+                  onClick={() => setProtoFilter(proto)}
+                  className={cn(
+                    "cursor-pointer rounded-md px-3 py-1 text-xs font-medium transition",
+                    protoFilter === proto
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                >
+                  {proto}
+                </button>
+              ))}
+            </div>
 
-      {/* 4. Table view */}
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Left 2 Columns: Services Table */}
-        <Card className="lg:col-span-2 bg-card/25 border border-border/50 overflow-hidden h-fit py-0">
-          <Table>
-            <TableHeader>
-              <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
-                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[30%] font-semibold pl-4">Service Name</th>
-                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[15%] font-semibold">Protocol</th>
-                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[25%] font-semibold">Port Range / Details</th>
-                <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[20%] font-semibold">Type</th>
-                <TableHead className="p-3 w-[10%] text-right"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="p-12 text-center text-muted-foreground text-xs">
-                    <div className="flex flex-col items-center justify-center gap-2 py-4">
-                      <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                      <span>กำลังโหลดข้อมูล...</span>
-                    </div>
-                  </TableCell>
+            {/* Table view */}
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="w-[30%] text-xs font-medium text-muted-foreground">Service Name</TableHead>
+                  <TableHead className="w-[15%] text-xs font-medium text-muted-foreground">Protocol</TableHead>
+                  <TableHead className="w-[25%] text-xs font-medium text-muted-foreground">Port Range / Details</TableHead>
+                  <TableHead className="w-[20%] text-xs font-medium text-muted-foreground">Type</TableHead>
+                  <TableHead className="w-[10%] text-right text-xs font-medium text-muted-foreground"></TableHead>
                 </TableRow>
-              ) : filteredServices.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="p-8 text-center text-muted-foreground text-xs">
-                    ไม่พบข้อมูลวัตถุบริการที่ค้นหา
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filteredServices.map((svc) => (
-                  <TableRow
-                    key={svc.id}
-                    onClick={() => setSelectedPreviewId(svc.id)}
-                    className={`border-b border-border/40 hover:bg-muted/15 cursor-pointer transition ${selectedPreviewId === svc.id ? "bg-muted/20 border-l-2 border-l-primary" : ""
-                      }`}
-                  >
-                    <TableCell className="p-3 font-semibold text-foreground pl-4">
-                      {svc.name}
-                    </TableCell>
-                    <TableCell className="p-3">
-                      {svc.protocol === "TCP" && (
-                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 font-mono text-[10px] px-1.5 py-0.5 rounded">
-                          TCP
-                        </Badge>
-                      )}
-                      {svc.protocol === "UDP" && (
-                        <Badge variant="outline" className="bg-amber-500/10 text-amber-400 border-amber-500/20 font-mono text-[10px] px-1.5 py-0.5 rounded">
-                          UDP
-                        </Badge>
-                      )}
-                      {svc.protocol === "TCP/UDP" && (
-                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 font-mono text-[10px] px-1.5 py-0.5 rounded">
-                          TCP/UDP
-                        </Badge>
-                      )}
-                      {svc.protocol === "ICMP" && (
-                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 font-mono text-[10px] px-1.5 py-0.5 rounded">
-                          ICMP
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="p-3 font-mono text-xs text-muted-foreground">{svc.port}</TableCell>
-                    <TableCell className="p-3">
-                      {svc.type === "system" ? (
-                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px] px-2 py-0.5 rounded">
-                          System
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px] px-2 py-0.5 rounded">
-                          Custom
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="p-3 text-right" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-center justify-end gap-1">
-                        {svc.type === "system" ? (
-                          <span className="p-1 rounded text-muted-foreground/45 flex items-center justify-center" title="ระบบกำหนดไว้เริ่มต้น (แก้ไขไม่ได้)">
-                            <Lock className="h-3.5 w-3.5" />
-                          </span>
-                        ) : (
-                          <>
-                            <Button
-                              variant="ghost"
-                              size="icon-xs"
-                              onClick={() => openEditModal(svc)}
-                              className="cursor-pointer text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                              title="แก้ไขวัตถุบริการ"
-                            >
-                              <Edit className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon-xs"
-                              onClick={() => handleDelete(svc.id, svc.name)}
-                              className="cursor-pointer text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
-                              title="ลบวัตถุบริการ"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </>
-                        )}
+              </TableHeader>
+              <TableBody>
+                {isLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="py-12 text-center text-xs text-muted-foreground">
+                      <div className="flex flex-col items-center justify-center gap-2 py-4">
+                        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                        <span>กำลังโหลดข้อมูล...</span>
                       </div>
                     </TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+                ) : filteredServices.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="py-8 text-center text-xs text-muted-foreground">
+                      ไม่พบข้อมูลวัตถุบริการที่ค้นหา
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filteredServices.map((svc) => (
+                    <TableRow key={svc.id}>
+                      <TableCell className="py-3 font-mono text-sm font-medium text-foreground">
+                        {svc.name}
+                      </TableCell>
+                      <TableCell className="py-3">
+                        {svc.protocol === "TCP" && (
+                          <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">
+                            TCP
+                          </Badge>
+                        )}
+                        {svc.protocol === "UDP" && (
+                          <Badge variant="outline" className="rounded border-amber-500/20 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-amber-500">
+                            UDP
+                          </Badge>
+                        )}
+                        {svc.protocol === "TCP/UDP" && (
+                          <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">
+                            TCP/UDP
+                          </Badge>
+                        )}
+                        {svc.protocol === "ICMP" && (
+                          <Badge variant="secondary" className="rounded px-1.5 py-0.5 font-mono text-[10px] font-medium">
+                            ICMP
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="py-3 font-mono text-xs text-muted-foreground">{svc.port}</TableCell>
+                      <TableCell className="py-3">
+                        {svc.type === "system" ? (
+                          <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                            System
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="rounded border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500">
+                            Custom
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="py-3 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          {svc.type === "system" ? (
+                            <span className="flex items-center justify-center p-1 text-muted-foreground/45" title="ระบบกำหนดไว้เริ่มต้น (แก้ไขไม่ได้)">
+                              <Lock className="h-4 w-4" />
+                            </span>
+                          ) : (
+                            <>
+                              <Button
+                                variant="outline"
+                                size="icon-sm"
+                                onClick={() => openEditModal(svc)}
+                                className="cursor-pointer text-muted-foreground hover:text-foreground"
+                                title="แก้ไขวัตถุบริการ"
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                onClick={() => handleDelete(svc.id, svc.name)}
+                                className="cursor-pointer text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
+                                title="ลบวัตถุบริการ"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
         </Card>
 
-        {/* Right 1 Column: Interactive Backend Integration Concept Preview */}
-        <div className="space-y-4 lg:col-span-1">
-          <Card className="bg-card border border-border p-5 rounded-xl flex flex-col gap-4 text-xs">
-            <div className="flex items-center gap-2 border-b border-border/60 pb-3">
-              <Terminal className="h-5 w-5 text-amber-500" />
-              <div>
-                <h3 className="font-bold text-foreground text-sm">nftables Named Set Preview</h3>
-                <p className="text-[10px] text-muted-foreground">โครงสร้างคำสั่งจำลองบน Linux Kernel</p>
-              </div>
-            </div>
-
-            {previewService ? (
-              <div className="space-y-4">
-                <div>
-                  <p className="text-muted-foreground mb-1 leading-relaxed">
-                    เมื่อคุณบันทึกวัตถุบริการ <strong>{previewService.name}</strong> เข้าไปในระบบ ตัวแปลคำสั่งหลังบ้าน (Python/Go daemon) จะเปลี่ยนวัตถุนั้นเป็น **Named Set** ในหน่วยความจำ `nftables` บน Raspberry Pi ดังนี้:
-                  </p>
-                </div>
-
-                <div className="bg-muted p-3 rounded-lg border border-border/60 font-mono text-[11px] leading-relaxed text-primary overflow-x-auto whitespace-pre">
-                  {previewService.protocol === "ICMP" ? (
-                    <>
-                      <span className="text-muted-foreground/60"># 1. ICMP ไม่ใช้พอร์ต แต่จะกรองผ่าน protocol โดยตรง</span>
-                      {"\n"}
-                      <span className="text-foreground font-semibold">nft add rule</span> ip filter FORWARD icmp type echo-request accept
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-muted-foreground/60"># 1. สร้าง Named Set สำหรับเก็บ {previewService.protocol} พอร์ต</span>
-                      {"\n"}
-                      <span className="text-foreground font-semibold">nft add set</span> ip filter set_{previewService.name} &#123;
-                      {"\n"}
-                      {"  "}type inet_service;
-                      {"\n"}
-                      &#125;
-                      {"\n\n"}
-                      <span className="text-muted-foreground/60"># 2. เพิ่มพอร์ต ({previewService.port}) เข้าไปในเซ็ต</span>
-                      {"\n"}
-                      <span className="text-foreground font-semibold">nft add element</span> ip filter set_{previewService.name} &#123; {previewService.port} &#125;
-                      {"\n\n"}
-                      <span className="text-muted-foreground/60"># 3. อ้างอิงในกฎ Firewall โดยมีเครื่องหมาย @ นำหน้า</span>
-                      {"\n"}
-                      <span className="text-foreground font-semibold">nft add rule</span> ip filter FORWARD {previewService.protocol.toLowerCase().split("/")[0]} dport @set_{previewService.name} accept
-                    </>
-                  )}
-                </div>
-
-                <div className="flex items-start gap-2 bg-amber-500/5 border border-amber-500/10 rounded-lg p-3 text-[11px] text-muted-foreground leading-relaxed">
-                  <Info className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
-                  <p>
-                    <strong>การเลือกแถวในตาราง:</strong> คุณสามารถคลิกเลือกบริการใด ๆ ในตารางเพื่อแสดงการจำลองการบิลด์คำสั่ง Set ของบริการนั้นได้แบบเรียลไทม์
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <div className="text-center text-muted-foreground py-8">
-                กรุณาคลิกเลือกวัตถุบริการเพื่อแสดงพรีวิวคำสั่ง
-              </div>
-            )}
-          </Card>
-        </div>
-      </div>
-
-      {/* 5. Create / Edit Dialog */}
+      {/* 3. Create / Edit Dialog */}
       <Dialog open={isModalOpen} modal={false} onOpenChange={setIsModalOpen}>
-        <DialogContent ref={dialogContentRef} className="md:max-w-[50vw] lg:max-w-[960px] w-full rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up">
-          <DialogHeader className="pb-3 border-b border-border/40">
-            <DialogTitle className="text-lg font-bold text-foreground">
+        <DialogContent ref={dialogContentRef} className="w-full max-w-[500px] gap-4 rounded-xl p-6">
+          <DialogHeader className="border-b border-border/50 pb-3">
+            <DialogTitle className="text-base font-semibold">
               {editingObject ? "แก้ไขวัตถุบริการพอร์ต" : "สร้างวัตถุบริการพอร์ตใหม่"}
             </DialogTitle>
           </DialogHeader>
@@ -520,16 +462,16 @@ export default function Services() {
           {/* Form */}
           <form onSubmit={handleSave} className="space-y-4 text-sm">
             {formError && (
-              <Alert variant="destructive" className="border-red-500/20 bg-red-500/5 py-2.5 px-3">
-                <AlertCircle className="h-4 w-4 text-red-400" />
-                <AlertDescription className="text-red-400 text-xs">{formError}</AlertDescription>
+              <Alert variant="destructive" className="px-3 py-2.5">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-xs">{formError}</AlertDescription>
               </Alert>
             )}
 
             {/* Field: Name */}
             <div className="space-y-1.5">
-              <Label htmlFor="form-name" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                ชื่อบริการ (Service Name) <span className="text-red-500">*</span>
+              <Label htmlFor="form-name" className="block text-xs font-medium text-muted-foreground">
+                ชื่อบริการ (Service Name) <span className="text-destructive">*</span>
               </Label>
               <Input
                 id="form-name"
@@ -538,15 +480,15 @@ export default function Services() {
                 value={formName}
                 onChange={(e) => setFormName(e.target.value)}
                 placeholder="เช่น Custom_RDP, API_Port_Range"
-                className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono"
+                className="h-9 font-mono text-sm"
               />
-              <p className="text-[11px] text-muted-foreground italic">ห้ามเว้นวรรค ใช้ได้เฉพาะอักษรภาษาอังกฤษ ตัวเลข และ _</p>
+              <p className="mt-0.5 text-[10px] text-muted-foreground">ห้ามเว้นวรรค ใช้ได้เฉพาะอักษรภาษาอังกฤษ ตัวเลข และ _</p>
             </div>
 
             {/* Field: Protocol & Port Row */}
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label htmlFor="form-proto" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                <Label htmlFor="form-proto" className="block text-xs font-medium text-muted-foreground">
                   โปรโตคอล (Protocol)
                 </Label>
                 <select
@@ -561,7 +503,7 @@ export default function Services() {
                       setFormPort("")
                     }
                   }}
-                  className="w-full bg-background border border-border rounded-lg h-9 px-2.5 text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                  className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
                 >
                   <option value="TCP">TCP</option>
                   <option value="UDP">UDP</option>
@@ -571,8 +513,8 @@ export default function Services() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="form-port" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                  หมายเลขพอร์ต (Destination Port) {formProto !== "ICMP" && <span className="text-red-500">*</span>}
+                <Label htmlFor="form-port" className="block text-xs font-medium text-muted-foreground">
+                  หมายเลขพอร์ต (Destination Port) {formProto !== "ICMP" && <span className="text-destructive">*</span>}
                 </Label>
                 <Input
                   id="form-port"
@@ -582,30 +524,30 @@ export default function Services() {
                   value={formPort}
                   onChange={(e) => setFormPort(e.target.value)}
                   placeholder={formProto === "ICMP" ? "ไม่ต้องระบุพอร์ตสำหรับ ICMP" : "เช่น 3389 หรือ 8000-8010"}
-                  className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono"
+                  className="h-9 font-mono text-sm"
                 />
               </div>
             </div>
 
             {formProto !== "ICMP" && (
-              <p className="text-[11px] text-muted-foreground italic leading-relaxed">
+              <p className="text-[10px] leading-relaxed text-muted-foreground">
                 ระบุเป็นพอร์ตเดี่ยว (เช่น 8080) หรือระบุเป็นช่วงด้วยเครื่องหมายขีด (เช่น 8000-8010) ห้ามมีเว้นวรรค
               </p>
             )}
 
             {/* Action Buttons */}
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-border/40">
+            <div className="flex items-center justify-end gap-3 border-t border-border/50 pt-4">
               <Button
                 type="button"
                 variant="ghost"
                 onClick={() => setIsModalOpen(false)}
-                className="cursor-pointer text-muted-foreground hover:bg-muted/30"
+                className="cursor-pointer text-muted-foreground"
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
-                className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/95 font-bold px-5"
+                className="cursor-pointer px-6 font-semibold"
               >
                 Save Service
               </Button>
