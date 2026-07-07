@@ -21,6 +21,7 @@ import DNS from "@/pages/DNS"
 import DnsServer from "@/pages/DnsServer"
 import ForceChangePassword from "@/pages/ForceChangePassword"
 import QoS from "@/pages/QoS"
+import { SizeIndicator, TailwindIndicator } from "./components/tailwindIndicator"
 
 // A simple authentication route guard
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -101,78 +102,82 @@ export default function App() {
   }
 
   return (
-    <ThemeProvider defaultTheme="dark" storageKey="pigate-ui-theme">
-      <TooltipProvider>
-        <AlertDialogProvider>
-          <BrowserRouter>
+    <>
+      <ThemeProvider defaultTheme="dark" storageKey="pigate-ui-theme">
+        <SizeIndicator className="top-0 z-[9999] fixed" />
+        <TooltipProvider>
+          <AlertDialogProvider>
+            <BrowserRouter>
 
-            <Routes>
-              {/* Public Login Route */}
-              <Route path="/login" element={<Login />} />
+              <Routes>
+                {/* Public Login Route */}
+                <Route path="/login" element={<Login />} />
 
-              {/* Force change password route */}
-              <Route
-                path="/change-password"
-                element={
-                  <ChangePasswordRoute>
-                    <ForceChangePassword />
-                  </ChangePasswordRoute>
-                }
-              />
+                {/* Force change password route */}
+                <Route
+                  path="/change-password"
+                  element={
+                    <ChangePasswordRoute>
+                      <ForceChangePassword />
+                    </ChangePasswordRoute>
+                  }
+                />
 
-              <Route path="/api-docs" element={<ApiDocs />} />
+                <Route path="/api-docs" element={<ApiDocs />} />
 
-              {/* Protected Admin Routes under Shell Layout */}
-              <Route
-                path="/"
-                element={
-                  <ProtectedRoute>
-                    <ShellLayout />
-                  </ProtectedRoute>
-                }
-              >
-                {/* Index route redirects to /dashboard */}
-                <Route index element={<Navigate to="/dashboard" replace />} />
+                {/* Protected Admin Routes under Shell Layout */}
+                <Route
+                  path="/"
+                  element={
+                    <ProtectedRoute>
+                      <ShellLayout />
+                    </ProtectedRoute>
+                  }
+                >
+                  {/* Index route redirects to /dashboard */}
+                  <Route index element={<Navigate to="/dashboard" replace />} />
 
-                <Route path="dashboard" element={<Dashboard />} />
+                  <Route path="dashboard" element={<Dashboard />} />
 
-                {/* Network Routes */}
-                <Route path="network">
-                  <Route path="interfaces" element={<Interfaces />} />
-                  <Route path="dns" element={<DNS />} />
-                  <Route path="dns-server" element={<DnsServer />} />
-                  <Route path="routes" element={<StaticRoutes />} />
-                  <Route path="dhcp" element={<DhcpServer />} />
-                  <Route path="qos" element={<QoS />} />
+                  {/* Network Routes */}
+                  <Route path="network">
+                    <Route path="interfaces" element={<Interfaces />} />
+                    <Route path="dns" element={<DNS />} />
+                    <Route path="dns-server" element={<DnsServer />} />
+                    <Route path="routes" element={<StaticRoutes />} />
+                    <Route path="dhcp" element={<DhcpServer />} />
+                    <Route path="qos" element={<QoS />} />
+                  </Route>
+
+                  {/* Policy & Objects Routes */}
+                  <Route path="policy">
+                    <Route path="firewall" element={<FirewallPolicy />} />
+                    <Route path="addresses" element={<Addresses />} />
+                    <Route path="services" element={<Services />} />
+                  </Route>
+
+                  {/* System Routes */}
+                  <Route path="system">
+                    <Route path="settings" element={<SettingsMaintenance />} />
+                    <Route
+                      path="users"
+                      element={
+                        <SuperAdminRoute>
+                          <Users />
+                        </SuperAdminRoute>
+                      }
+                    />
+                  </Route>
                 </Route>
 
-                {/* Policy & Objects Routes */}
-                <Route path="policy">
-                  <Route path="firewall" element={<FirewallPolicy />} />
-                  <Route path="addresses" element={<Addresses />} />
-                  <Route path="services" element={<Services />} />
-                </Route>
-
-                {/* System Routes */}
-                <Route path="system">
-                  <Route path="settings" element={<SettingsMaintenance />} />
-                  <Route
-                    path="users"
-                    element={
-                      <SuperAdminRoute>
-                        <Users />
-                      </SuperAdminRoute>
-                    }
-                  />
-                </Route>
-              </Route>
-
-              {/* Fallback Catch-All Redirect */}
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </BrowserRouter>
-        </AlertDialogProvider>
-      </TooltipProvider>
-    </ThemeProvider>
+                {/* Fallback Catch-All Redirect */}
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </BrowserRouter>
+          </AlertDialogProvider>
+        </TooltipProvider>
+      </ThemeProvider>
+      <TailwindIndicator />
+    </>
   )
 }
