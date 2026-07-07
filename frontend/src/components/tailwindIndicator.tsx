@@ -51,7 +51,7 @@ export function SizeIndicator({ className }: { className?: string}) {
       <div className="flex w-64 shrink-0 grow-0 gap-2">
         <div className="h-8 w-px shrink-0 bg-gray-950/20 not-2xl:bg-gray-950/5 dark:bg-white/30 dark:not-2xl:bg-white/10"></div>
         <span className="not-2xl:opacity-40">
-          <div className="font-mono font-bold -ml-10 pr-4 text-right  text-[13px]/7 text-gray-950 dark:text-white">2xl &gt;</div>
+          <div className="font-mono font-bold -ml-12 pr-4 text-right  text-[13px]/7 text-gray-950 dark:text-white">2xl &gt;</div>
         </span>
       </div>
     </div>
