@@ -17,7 +17,6 @@ import {
 
 import { NavUser } from "@/components/nav-user"
 import { authService } from "@/services/authService"
-import { Badge } from "@/components/ui/badge"
 import {
   Sidebar,
   SidebarContent,
@@ -81,19 +80,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           <SidebarMenuItem>
             <SidebarMenuButton
               asChild
-              className="data-[slot=sidebar-menu-button]:p-1.5!"
+              className="h-8 data-[slot=sidebar-menu-button]:p-1.5! data-[slot=sidebar-menu-button]:pl-0!"
             >
               <NavLink to="/dashboard">
                 <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
                   <Flame className="size-5 fill-primary/20" />
                 </div>
-                <span className="text-base font-bold tracking-wider">PiGate</span>
-                <Badge
-                  variant="outline"
-                  className="ml-auto h-4.5 rounded-full border-primary/20 bg-primary/10 px-1.5 text-[10px] text-primary"
-                >
-                  v1.0
-                </Badge>
+                <div className="grid flex-1 text-left text-xs leading-tight">
+                  <span className="truncate text-sm font-bold tracking-wider">PiGate</span>
+                  <span className="truncate text-xs text-muted-foreground font-mono">home-000002.pigate.lan</span>
+                </div>
               </NavLink>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -103,7 +99,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarContent>
         {groups.map((group, i) => (
           <SidebarGroup key={group.title ?? `group-${i}`}>
-            {group.title && <SidebarGroupLabel>{group.title}</SidebarGroupLabel>}
+            {group.title && <SidebarGroupLabel className="text-nowrap">{group.title}</SidebarGroupLabel>}
             <SidebarGroupContent>
               <SidebarMenu>
                 {group.items.map((item) => {
