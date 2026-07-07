@@ -11,7 +11,6 @@ import {
   ShieldAlert,
   CheckCircle,
   AlertCircle,
-  Terminal,
   FileDown,
   FileUp,
   Loader2,
@@ -29,6 +28,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
@@ -55,6 +55,24 @@ import { systemService, type SystemHostnameSettings, type ImportResult } from "@
 import { authService } from "@/services/authService"
 import { useAlert } from "@/hooks/useAlert"
 import { buildTimeZoneOptions } from "@/lib/timezones"
+import { cn } from "@/lib/utils"
+
+// Shared success/error feedback banner used by every settings form.
+function FeedbackAlert({ feedback }: { feedback: { type: "success" | "error"; message: string } | null }) {
+  if (!feedback) return null
+  const ok = feedback.type === "success"
+  return (
+    <Alert
+      variant={ok ? "default" : "destructive"}
+      className={cn("px-3 py-2.5", ok && "border-primary/20 bg-primary/5 text-primary")}
+    >
+      {ok ? <CheckCircle className="h-4 w-4 text-primary" /> : <AlertCircle className="h-4 w-4" />}
+      <AlertDescription className={cn("text-xs", ok && "text-primary")}>
+        {feedback.message}
+      </AlertDescription>
+    </Alert>
+  )
+}
 
 // Shape of an uploaded backup file once JSON.parse'd; only the fields read for
 // the import preview/confirmation flow are modeled here.
@@ -504,9 +522,9 @@ export default function SettingsMaintenance() {
     return (
       <div className="p-6">
         <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4 text-red-400" />
+          <AlertCircle className="h-4 w-4" />
           <AlertTitle>Error Loading Settings</AlertTitle>
-          <AlertDescription className="text-xs text-red-400">{error}</AlertDescription>
+          <AlertDescription className="text-xs">{error}</AlertDescription>
         </Alert>
       </div>
     )
@@ -572,21 +590,8 @@ export default function SettingsMaintenance() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* 1. Header Area */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
-            <Settings className="h-7 w-7 text-primary fill-primary/10" />
-            Settings & Maintenance (ตั้งค่าและดูแลระบบ)
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            จัดการรหัสผ่านผู้ดูแลระบบ ตั้งค่าเวลา ซิงค์ NTP สำรอง/คืนค่าระบบ และควบคุมสถานะฮาร์ดแวร์ Raspberry Pi 5
-          </p>
-        </div>
-      </div>
-
-      {/* 2. Tabs selection */}
+    <div className="space-y-4">
+      {/* Tabs selection */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="grid grid-cols-2 max-w-[320px]">
           <TabsTrigger value="settings" className="font-bold flex items-center gap-1.5">
@@ -598,40 +603,26 @@ export default function SettingsMaintenance() {
         </TabsList>
 
         {/* ==================== TAB 1: SETTINGS ==================== */}
-        <TabsContent value="settings" className="space-y-6 mt-4">
-          <div className="grid gap-6 md:grid-cols-2">
+        <TabsContent value="settings" className="mt-4 space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
 
             {/* Card: Administrator Password */}
-            <Card className="bg-card/25 border border-border/50">
-              <CardHeader className="border-b border-border/40 pb-4">
-                <CardTitle className="text-lg font-bold flex items-center gap-2">
-                  <Lock className="h-5 w-5 text-primary" />
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                  <Lock className="h-4 w-4 text-muted-foreground" />
                   Administrator Password (รหัสผ่านผู้ดูแลระบบ)
                 </CardTitle>
                 <CardDescription className="text-xs text-muted-foreground">
                   เปลี่ยนรหัสผ่านสำหรับเข้าสู่ระบบส่วนควบคุม PiGate Web Panel
                 </CardDescription>
               </CardHeader>
-              <CardContent className="pt-5">
+              <CardContent>
                 <form onSubmit={handlePasswordChange} className="space-y-4">
-                  {passwordFeedback && (
-                    <Alert
-                      variant={passwordFeedback.type === "success" ? "default" : "destructive"}
-                      className={passwordFeedback.type === "success" ? "border-primary/20 bg-primary/5 text-primary py-2.5 px-3" : "border-red-500/20 bg-red-500/5 py-2.5 px-3"}
-                    >
-                      {passwordFeedback.type === "success" ? (
-                        <CheckCircle className="h-4 w-4 text-primary" />
-                      ) : (
-                        <AlertCircle className="h-4 w-4 text-red-400" />
-                      )}
-                      <AlertDescription className={`text-xs ${passwordFeedback.type === "success" ? "text-primary" : "text-red-400"}`}>
-                        {passwordFeedback.message}
-                      </AlertDescription>
-                    </Alert>
-                  )}
+                  <FeedbackAlert feedback={passwordFeedback} />
 
                   <div className="space-y-1.5">
-                    <Label htmlFor="curr-pass" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                    <Label htmlFor="curr-pass" className="block text-xs font-medium text-muted-foreground">
                       Current Password (รหัสผ่านปัจจุบัน)
                     </Label>
                     <Input
@@ -640,12 +631,12 @@ export default function SettingsMaintenance() {
                       placeholder="รหัสผ่านปัจจุบัน"
                       value={currentPassword}
                       onChange={(e) => setCurrentPassword(e.target.value)}
-                      className="bg-background/50 placeholder:text-muted-foreground/60 h-9"
+                      className="h-9"
                     />
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label htmlFor="new-pass" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                    <Label htmlFor="new-pass" className="block text-xs font-medium text-muted-foreground">
                       New Password (รหัสผ่านใหม่)
                     </Label>
                     <Input
@@ -654,12 +645,12 @@ export default function SettingsMaintenance() {
                       placeholder="รหัสผ่านใหม่ (ไม่ต่ำกว่า 8 อักษร)"
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
-                      className="bg-background/50 placeholder:text-muted-foreground/60 h-9"
+                      className="h-9"
                     />
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label htmlFor="conf-pass" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                    <Label htmlFor="conf-pass" className="block text-xs font-medium text-muted-foreground">
                       Confirm New Password (ยืนยันรหัสผ่านใหม่)
                     </Label>
                     <Input
@@ -668,13 +659,13 @@ export default function SettingsMaintenance() {
                       placeholder="ยืนยันรหัสผ่านใหม่"
                       value={confirmNewPassword}
                       onChange={(e) => setConfirmNewPassword(e.target.value)}
-                      className="bg-background/50 placeholder:text-muted-foreground/60 h-9"
+                      className="h-9"
                     />
                   </div>
 
                   <Button
                     type="submit"
-                    className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/95 font-bold w-full gap-2 mt-2 h-9"
+                    className="cursor-pointer mt-2 w-full gap-2 font-semibold"
                   >
                     <Lock className="h-4 w-4" />
                     Change Password
@@ -684,36 +675,22 @@ export default function SettingsMaintenance() {
             </Card>
 
             {/* Card: System Identity (Hostname + Share with DHCP) */}
-            <Card className="bg-card/25 border border-border/50">
-              <CardHeader className="border-b border-border/40 pb-4">
-                <CardTitle className="text-lg font-bold flex items-center gap-2">
-                  <Server className="h-5 w-5 text-primary" />
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                  <Server className="h-4 w-4 text-muted-foreground" />
                   System Identity (ชื่อเครื่อง)
                 </CardTitle>
                 <CardDescription className="text-xs text-muted-foreground">
                   กำหนดชื่อเครื่อง (Hostname) ของอุปกรณ์เกตเวย์ และเลือกว่าจะส่งชื่อนี้ไปบอก Router ฝั่ง WAN ผ่าน DHCP หรือไม่
                 </CardDescription>
               </CardHeader>
-              <CardContent className="pt-5">
+              <CardContent>
                 <form onSubmit={handleSaveHostnameSettings} className="space-y-4">
-                  {hostnameFeedback && (
-                    <Alert
-                      variant={hostnameFeedback.type === "success" ? "default" : "destructive"}
-                      className={hostnameFeedback.type === "success" ? "border-primary/20 bg-primary/5 text-primary py-2.5 px-3" : "border-red-500/20 bg-red-500/5 py-2.5 px-3"}
-                    >
-                      {hostnameFeedback.type === "success" ? (
-                        <CheckCircle className="h-4 w-4 text-primary" />
-                      ) : (
-                        <AlertCircle className="h-4 w-4 text-red-400" />
-                      )}
-                      <AlertDescription className={`text-xs ${hostnameFeedback.type === "success" ? "text-primary" : "text-red-400"}`}>
-                        {hostnameFeedback.message}
-                      </AlertDescription>
-                    </Alert>
-                  )}
+                  <FeedbackAlert feedback={hostnameFeedback} />
 
                   <div className="space-y-1.5">
-                    <Label htmlFor="hostname" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                    <Label htmlFor="hostname" className="block text-xs font-medium text-muted-foreground">
                       Hostname (ชื่อเครื่อง)
                     </Label>
                     <Input
@@ -721,7 +698,7 @@ export default function SettingsMaintenance() {
                       type="text"
                       value={hostnameSettings.hostname}
                       onChange={(e) => setHostnameSettings(prev => ({ ...prev, hostname: e.target.value }))}
-                      className="bg-background/50 placeholder:text-muted-foreground/60 h-9 font-mono"
+                      className="h-9 font-mono"
                       placeholder="เช่น PiGate-RPI5"
                     />
                     <p className="text-[11px] text-muted-foreground italic">
@@ -731,7 +708,7 @@ export default function SettingsMaintenance() {
 
                   <div className="space-y-1.5 pt-2">
                     <div className="flex items-center justify-between">
-                      <Label htmlFor="share-hostname" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer">
+                      <Label htmlFor="share-hostname" className="cursor-pointer text-xs font-medium text-muted-foreground">
                         Share hostname with DHCP (ส่งชื่อเครื่องไปบอก Router ฝั่ง WAN)
                       </Label>
                       <Switch
@@ -747,7 +724,7 @@ export default function SettingsMaintenance() {
 
                   <Button
                     type="submit"
-                    className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/95 font-bold w-full gap-2 mt-2 h-9"
+                    className="cursor-pointer mt-2 w-full gap-2 font-semibold"
                   >
                     <Server className="h-4 w-4" />
                     Save Hostname Settings
@@ -757,41 +734,27 @@ export default function SettingsMaintenance() {
             </Card>
 
             {/* Card: System Time & NTP */}
-            <Card className="bg-card/25 border border-border/50">
-              <CardHeader className="border-b border-border/40 pb-4">
-                <CardTitle className="text-lg font-bold flex items-center gap-2">
-                  <Clock className="h-5 w-5 text-primary" />
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                  <Clock className="h-4 w-4 text-muted-foreground" />
                   System Time & NTP (เวลาและเขตเวลา)
                 </CardTitle>
                 <CardDescription className="text-xs text-muted-foreground">
                   กำหนดเขตเวลาของอุปกรณ์เกตเวย์ และเปิดการซิงค์เวลาอัตโนมัติผ่านอินเทอร์เน็ต
                 </CardDescription>
               </CardHeader>
-              <CardContent className="pt-5">
+              <CardContent>
                 <form onSubmit={handleSaveTimeSettings} className="space-y-4">
-                  {timeFeedback && (
-                    <Alert
-                      variant={timeFeedback.type === "success" ? "default" : "destructive"}
-                      className={timeFeedback.type === "success" ? "border-primary/20 bg-primary/5 text-primary py-2.5 px-3" : "border-red-500/20 bg-red-500/5 py-2.5 px-3"}
-                    >
-                      {timeFeedback.type === "success" ? (
-                        <CheckCircle className="h-4 w-4 text-primary" />
-                      ) : (
-                        <AlertCircle className="h-4 w-4 text-red-400" />
-                      )}
-                      <AlertDescription className={`text-xs ${timeFeedback.type === "success" ? "text-primary" : "text-red-400"}`}>
-                        {timeFeedback.message}
-                      </AlertDescription>
-                    </Alert>
-                  )}
+                  <FeedbackAlert feedback={timeFeedback} />
 
                   {/* Live status: current device time + sync state */}
-                  <div className="flex items-center justify-between rounded-lg border border-border/60 bg-background/40 px-3 py-2.5">
+                  <div className="flex items-center justify-between rounded-lg border border-border bg-muted/50 px-3 py-2.5">
                     <div className="space-y-0.5">
-                      <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                      <p className="text-[11px] font-medium text-muted-foreground">
                         เวลาปัจจุบันของเครื่อง
                       </p>
-                      <p className="text-sm font-mono text-foreground">
+                      <p className="font-mono text-sm text-foreground">
                         {formatStatusTime(timeSettings.status?.currentTime)}
                       </p>
                     </div>
@@ -809,7 +772,7 @@ export default function SettingsMaintenance() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label htmlFor="timezone" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                    <Label htmlFor="timezone" className="block text-xs font-medium text-muted-foreground">
                       Time Zone (เขตเวลา)
                     </Label>
                     <Select
@@ -831,7 +794,7 @@ export default function SettingsMaintenance() {
 
                   <div className="space-y-3 pt-2">
                     <div className="flex items-center justify-between">
-                      <Label htmlFor="ntp-sync" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer">
+                      <Label htmlFor="ntp-sync" className="cursor-pointer text-xs font-medium text-muted-foreground">
                         NTP Server Sync (เปิดใช้งานการซิงค์เวลาอัตโนมัติ)
                       </Label>
                       <Switch
@@ -842,7 +805,7 @@ export default function SettingsMaintenance() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <Label htmlFor="ntp-server" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                      <Label htmlFor="ntp-server" className="block text-xs font-medium text-muted-foreground">
                         NTP Server Address
                       </Label>
                       <Input
@@ -851,7 +814,7 @@ export default function SettingsMaintenance() {
                         disabled={!timeSettings.ntpSync}
                         value={timeSettings.ntpServer}
                         onChange={(e) => setTimeSettings(prev => ({ ...prev, ntpServer: e.target.value }))}
-                        className="bg-background/50 placeholder:text-muted-foreground/60 h-9 font-mono"
+                        className="h-9 font-mono"
                         placeholder="เช่น pool.ntp.org"
                       />
                       <p className="text-[11px] text-muted-foreground italic">
@@ -862,7 +825,7 @@ export default function SettingsMaintenance() {
 
                   <Button
                     type="submit"
-                    className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/95 font-bold w-full gap-2 mt-2 h-9"
+                    className="cursor-pointer mt-2 w-full gap-2 font-semibold"
                   >
                     <Clock className="h-4 w-4" />
                     Save Time Settings
@@ -871,8 +834,8 @@ export default function SettingsMaintenance() {
                   {/* Manual clock — only when NTP sync is off (timedated rejects
                       SetTime while NTP is on, so we hide it rather than error) */}
                   {!timeSettings.ntpSync && (
-                    <div className="space-y-2 pt-4 mt-2 border-t border-border/40">
-                      <Label htmlFor="manual-time" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                    <div className="mt-2 space-y-2 border-t border-border/50 pt-4">
+                      <Label htmlFor="manual-time" className="block text-xs font-medium text-muted-foreground">
                         ตั้งวันที่/เวลาด้วยมือ
                       </Label>
                       <div className="flex gap-2">
@@ -881,7 +844,7 @@ export default function SettingsMaintenance() {
                           type="datetime-local"
                           value={manualDateTime}
                           onChange={(e) => setManualDateTime(e.target.value)}
-                          className="bg-background/50 h-9 font-mono"
+                          className="h-9 font-mono"
                         />
                         <Button
                           type="button"
@@ -904,42 +867,27 @@ export default function SettingsMaintenance() {
             </Card>
 
           </div>
-
-          {/* Console integration preview for settings */}
-          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4 text-xs">
-            <div className="flex items-center gap-2 text-amber-500 font-semibold mb-2">
-              <Terminal className="h-4 w-4" />
-              <span>🧠 Backend Integration สําหรับ หน้า Settings (คำสั่งระบบจริง)</span>
-            </div>
-            <pre className="bg-muted p-3 rounded border border-border text-muted-foreground font-mono overflow-x-auto select-all leading-relaxed whitespace-pre-wrap text-[11px]">
-              {`# เปลี่ยนรหัสผ่านแอดมินของบอร์ด Linux (กรณีผูกบัญชีระบบ) หรือบันทึก hash ของรหัสผ่านใหม่เข้า sqlite
-echo "admin:${newPassword || "new_password"}" | chpasswd`}
-            </pre>
-            <p className="text-[11px] text-muted-foreground italic mt-2">
-              หมายเหตุ: การตั้งค่าเวลา/เขตเวลา/NTP ถูกนำไปใช้กับระบบจริงผ่าน D-Bus (systemd-timedated) โดยอัตโนมัติแล้ว ไม่ต้องรันคำสั่งเอง
-            </p>
-          </div>
         </TabsContent>
 
         {/* ==================== TAB 2: MAINTENANCE ==================== */}
-        <TabsContent value="maintenance" className="space-y-6 mt-4">
-          <div className="grid gap-6 md:grid-cols-2">
+        <TabsContent value="maintenance" className="mt-4 space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
 
             {/* Left Column Container */}
-            <div className="space-y-6">
+            <div className="space-y-4">
 
               {/* Card: System Actions (Power control) */}
-              <Card className="bg-card/25 border border-border/50">
-                <CardHeader className="border-b border-border/40 pb-4">
-                  <CardTitle className="text-lg font-bold flex items-center gap-2">
-                    <Power className="h-5 w-5 text-red-500" />
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                    <Power className="h-4 w-4 text-muted-foreground" />
                     System Actions (ควบคุมพลังงานบอร์ด)
                   </CardTitle>
                   <CardDescription className="text-xs text-muted-foreground">
                     รีบูตระบบ หรือสั่งปิดเครื่องอุปกรณ์ Raspberry Pi 5 เมื่อต้องการหยุดทำงาน
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="pt-5 space-y-4">
+                <CardContent className="space-y-4">
                   <p className="text-xs text-muted-foreground leading-relaxed">
                     การทำรายการพลังงานจะทำการปิดการเชื่อมต่อเครือข่ายและเกตเวย์ทั้งหมดชั่วขณะ โปรดตรวจสอบการทำงานของผู้ใช้ที่เชื่อมต่อผ่านเกตเวย์นี้อยู่
                   </p>
@@ -948,7 +896,7 @@ echo "admin:${newPassword || "new_password"}" | chpasswd`}
                       type="button"
                       variant="destructive"
                       onClick={() => setPowerDialog("reboot")}
-                      className="cursor-pointer font-bold gap-1.5 h-9"
+                      className="cursor-pointer gap-1.5"
                     >
                       <RefreshCw className="h-4 w-4" />
                       Reboot System (รีบูตเครื่อง)
@@ -957,9 +905,9 @@ echo "admin:${newPassword || "new_password"}" | chpasswd`}
                       type="button"
                       variant="destructive"
                       onClick={() => setPowerDialog("shutdown")}
-                      className="cursor-pointer font-bold gap-1.5 h-9"
+                      className="cursor-pointer gap-1.5"
                     >
-                      <Power className="h-4 w-4 text-red-400" />
+                      <Power className="h-4 w-4" />
                       Shutdown System (ปิดเครื่อง)
                     </Button>
                   </div>
@@ -967,17 +915,17 @@ echo "admin:${newPassword || "new_password"}" | chpasswd`}
               </Card>
 
               {/* Card: Backup & Restore */}
-              <Card className="bg-card/25 border border-border/50">
-                <CardHeader className="border-b border-border/40 pb-4">
-                  <CardTitle className="text-lg font-bold flex items-center gap-2">
-                    <Database className="h-5 w-5 text-primary" />
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                    <Database className="h-4 w-4 text-muted-foreground" />
                     Backup & Restore (สำรองและคืนค่าคอนฟิก)
                   </CardTitle>
                   <CardDescription className="text-xs text-muted-foreground">
                     ดาวน์โหลดหรืออัปโหลดไฟล์ข้อมูลนโยบายความปลอดภัยและรายการวัตถุ
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="pt-5">
+                <CardContent>
                   {!isSuperAdmin ? (
                     <Alert className="border-border/50 bg-muted/30 py-2.5 px-3">
                       <ShieldAlert className="h-4 w-4 text-muted-foreground" />
@@ -987,21 +935,7 @@ echo "admin:${newPassword || "new_password"}" | chpasswd`}
                     </Alert>
                   ) : (
                   <form onSubmit={handleImportConfig} className="space-y-4">
-                    {backupFeedback && (
-                      <Alert
-                        variant={backupFeedback.type === "success" ? "default" : "destructive"}
-                        className={backupFeedback.type === "success" ? "border-primary/20 bg-primary/5 text-primary py-2.5 px-3" : "border-destructive/20 bg-destructive/5 py-2.5 px-3"}
-                      >
-                        {backupFeedback.type === "success" ? (
-                          <CheckCircle className="h-4 w-4 text-primary" />
-                        ) : (
-                          <AlertCircle className="h-4 w-4 text-destructive" />
-                        )}
-                        <AlertDescription className={`text-xs ${backupFeedback.type === "success" ? "text-primary" : "text-destructive"}`}>
-                          {backupFeedback.message}
-                        </AlertDescription>
-                      </Alert>
-                    )}
+                    <FeedbackAlert feedback={backupFeedback} />
 
                     {importWarnings.length > 0 && (
                       <Alert className="border-border/50 bg-muted/30 py-2.5 px-3">
@@ -1018,12 +952,12 @@ echo "admin:${newPassword || "new_password"}" | chpasswd`}
                     )}
 
                     {/* Export Section */}
-                    <div className="border-b border-border/40 pb-4 space-y-3">
-                      <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                    <div className="space-y-3 border-b border-border/50 pb-4">
+                      <Label className="block text-xs font-medium text-muted-foreground">
                         สำรองข้อมูลปัจจุบัน (Configuration Export)
                       </Label>
 
-                      <div className="flex items-start justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
+                      <div className="flex items-start justify-between gap-3 rounded-lg border border-border bg-muted/50 px-3 py-2">
                         <div className="space-y-0.5">
                           <Label htmlFor="include-users-switch" className="text-xs font-medium cursor-pointer">
                             รวมบัญชีผู้ใช้ (Include user accounts)
@@ -1070,12 +1004,12 @@ echo "admin:${newPassword || "new_password"}" | chpasswd`}
                         onClick={handleExportConfig}
                         disabled={isExporting}
                         variant="outline"
-                        className="cursor-pointer text-primary border border-primary font-bold gap-1.5 h-9"
+                        className="cursor-pointer gap-1.5 font-semibold"
                       >
                         {isExporting ? (
-                          <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                          <Loader2 className="h-4 w-4 animate-spin" />
                         ) : (
-                          <FileDown className="h-4 w-4 text-primary" />
+                          <FileDown className="h-4 w-4" />
                         )}
                         Export Configuration File (.json)
                       </Button>
@@ -1083,7 +1017,7 @@ echo "admin:${newPassword || "new_password"}" | chpasswd`}
 
                     {/* Import Section */}
                     <div className="space-y-3 pt-2">
-                      <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                      <Label className="block text-xs font-medium text-muted-foreground">
                         คืนค่าจากไฟล์สำรอง (Configuration Import)
                       </Label>
                       <div className="space-y-2">
@@ -1132,7 +1066,7 @@ echo "admin:${newPassword || "new_password"}" | chpasswd`}
                       <Button
                         type="submit"
                         disabled={isImporting || !importFile || (importFileEncrypted && !importPassphrase.trim())}
-                        className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/95 font-bold gap-1.5 h-9 w-full"
+                        className="cursor-pointer w-full gap-1.5 font-semibold"
                       >
                         {isImporting ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
@@ -1153,58 +1087,58 @@ echo "admin:${newPassword || "new_password"}" | chpasswd`}
             <div className="space-y-6">
 
               {/* Card: Services Control */}
-              <Card className="bg-card/25 border border-border/50 h-full">
-                <CardHeader className="border-b border-border/40 pb-4">
-                  <CardTitle className="text-lg font-bold flex items-center gap-2">
-                    <Activity className="h-5 w-5 text-primary" />
+              <Card className="h-full">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                    <Activity className="h-4 w-4 text-muted-foreground" />
                     Network Services Status (ควบคุมบริการย่อย)
                   </CardTitle>
                   <CardDescription className="text-xs text-muted-foreground">
                     ควบคุมและดูสถานะบริการที่สำคัญในระบบปฏิบัติการ Linux ของ PiGate
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="pt-4 p-0">
+                <CardContent className="p-0">
                   <Table>
                     <TableHeader>
-                      <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
-                        <th className="p-3 text-left text-[11px] uppercase tracking-wider font-semibold">Service Engine</th>
-                        <th className="p-3 text-left text-[11px] uppercase tracking-wider font-semibold w-[30%]">Status</th>
-                        <th className="p-3 text-right text-[11px] uppercase tracking-wider font-semibold w-[25%]">Actions</th>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead className="text-xs font-medium text-muted-foreground">Service Engine</TableHead>
+                        <TableHead className="w-[30%] text-xs font-medium text-muted-foreground">Status</TableHead>
+                        <TableHead className="w-[25%] text-right text-xs font-medium text-muted-foreground">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {services.map((srv) => (
-                        <TableRow key={srv.id} className="border-b border-border/30 hover:bg-muted/10">
-                          <TableCell className="p-3 font-semibold text-foreground">
+                        <TableRow key={srv.id}>
+                          <TableCell className="py-3 font-medium text-foreground">
                             <div>{srv.name}</div>
-                            <div className="text-[10px] text-muted-foreground font-mono mt-0.5">({srv.serviceName})</div>
+                            <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">({srv.serviceName})</div>
                           </TableCell>
-                          <TableCell className="p-3">
+                          <TableCell className="py-3">
                             {srv.status === "running" && (
-                              <span className="flex items-center gap-1.5 text-xs text-primary font-bold">
-                                <span className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+                              <span className="flex items-center gap-1.5 text-xs font-semibold text-primary">
+                                <span className="h-2 w-2 rounded-full bg-primary" />
                                 Running
                               </span>
                             )}
                             {srv.status === "stopped" && (
-                              <span className="flex items-center gap-1.5 text-xs text-red-500 font-bold">
+                              <span className="flex items-center gap-1.5 text-xs font-semibold text-red-500">
                                 <span className="h-2 w-2 rounded-full bg-red-500" />
                                 Restarting...
                               </span>
                             )}
                           </TableCell>
-                          <TableCell className="p-3 text-right">
+                          <TableCell className="py-3 text-right">
                             <Button
                               variant="outline"
-                              size="xs"
+                              size="sm"
                               disabled={restartingServiceId !== null}
                               onClick={() => handleRestartService(srv.id)}
-                              className="cursor-pointer font-bold text-xs px-2.5 py-1"
+                              className="cursor-pointer gap-1.5"
                             >
                               {restartingServiceId === srv.id ? (
-                                <Loader2 className="h-3 w-3 animate-spin mr-1 text-primary" />
+                                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
                               ) : (
-                                <RefreshCw className="h-3 w-3 mr-1 text-muted-foreground" />
+                                <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
                               )}
                               Restart
                             </Button>
@@ -1214,9 +1148,9 @@ echo "admin:${newPassword || "new_password"}" | chpasswd`}
                     </TableBody>
                   </Table>
 
-                  <div className="p-4 bg-muted/10 border-t border-border/30 text-xs text-muted-foreground flex gap-2">
-                    <HelpCircle className="h-4.5 w-4.5 shrink-0 text-muted-foreground/80" />
-                    <span className="leading-relaxed">
+                  <div className="mx-4 mb-4 mt-2 flex gap-2 rounded-lg border border-border bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
+                    <HelpCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>
                       บริการเครือข่ายเหล่านี้ทำงานอยู่บนระบบปฏิบัติการหลักของบอร์ด การรีสตาร์ทบริการอาจทำให้ทราฟฟิกบางประเภทหยุดทำงานชั่วครู่
                     </span>
                   </div>
@@ -1226,47 +1160,27 @@ echo "admin:${newPassword || "new_password"}" | chpasswd`}
             </div>
 
           </div>
-
-          {/* Console integration preview for maintenance */}
-          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4 text-xs">
-            <div className="flex items-center gap-2 text-amber-500 font-semibold mb-2">
-              <Terminal className="h-4 w-4" />
-              <span>🧠 Backend Integration สําหรับ หน้า Maintenance (คำสั่งระดับ OS)</span>
-            </div>
-            <pre className="bg-muted p-3 rounded border border-border text-muted-foreground font-mono overflow-x-auto select-all leading-relaxed whitespace-pre-wrap text-[11px]">
-              {`# 1. การควบคุมรีบูตและปิดเครื่องของ Raspberry Pi 5 ผ่านสิทธิ์ Sudoers พิเศษ
-# พร้อมรับคำสั่ง: sudo reboot หรือ sudo poweroff
-
-# 2. การควบคุมการ Restart บริการเครือข่ายผ่าน Systemd Manager
-${restartingServiceId ? `sudo systemctl restart ${services.find(s => s.id === restartingServiceId)?.serviceName}` : "# รันเมื่อกด Restart บริการ: sudo systemctl restart <service_name>"}
-
-# 3. จัดการการดาวน์โหลดและเขียนทับฐานข้อมูล SQLite แบบ JSON
-# - การ Export: API ดึงข้อมูลตาราง ruleset, objects คอนฟิกมารวมเป็น JSON ให้ดาวน์โหลด
-# - การ Import: API เขียนทับข้อมูลเดิมในฐานข้อมูลแล้วเรียกใช้คำสั่ง Apply
-#   nft -f /etc/nftables.conf && systemctl restart isc-dhcp-server`}
-            </pre>
-          </div>
         </TabsContent>
       </Tabs>
 
       {/* Reboot System Confirmation Dialog */}
       <Dialog open={powerDialog === "reboot"} modal={false} onOpenChange={(open) => !open && setPowerDialog(null)}>
-        <DialogContent className="max-w-[400px] w-full rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up">
-          <DialogHeader className="pb-2 border-b border-border/40">
-            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
-              <ShieldAlert className="h-5 w-5 text-red-500" />
+        <DialogContent className="w-full max-w-[400px] gap-4 rounded-xl p-6">
+          <DialogHeader className="border-b border-border/50 pb-3">
+            <DialogTitle className="flex items-center gap-2 text-base font-semibold">
+              <ShieldAlert className="h-4 w-4 text-red-500" />
               ยืนยันการรีบูตระบบ
             </DialogTitle>
           </DialogHeader>
-          <div className="text-sm text-muted-foreground leading-relaxed py-2">
-            คุณต้องการสั่ง <span className="font-bold text-red-500">รีบูตเครื่อง (Reboot)</span> บอร์ด PiGate ใช่หรือไม่? การเชื่อมต่อเครือข่ายทั้งหมดผ่านพอร์ต WAN/LAN จะสิ้นสุดชั่วคราวจนกว่าระบบจะกลับมาทำงานอีกครั้ง
+          <div className="py-2 text-sm leading-relaxed text-muted-foreground">
+            คุณต้องการสั่ง <span className="font-semibold text-red-500">รีบูตเครื่อง (Reboot)</span> บอร์ด PiGate ใช่หรือไม่? การเชื่อมต่อเครือข่ายทั้งหมดผ่านพอร์ต WAN/LAN จะสิ้นสุดชั่วคราวจนกว่าระบบจะกลับมาทำงานอีกครั้ง
           </div>
           <div className="flex items-center justify-end gap-3 pt-2">
             <Button
               type="button"
               variant="ghost"
               onClick={() => setPowerDialog(null)}
-              className="cursor-pointer text-muted-foreground hover:bg-muted/30 font-bold"
+              className="cursor-pointer text-muted-foreground"
             >
               ยกเลิก
             </Button>
@@ -1274,7 +1188,7 @@ ${restartingServiceId ? `sudo systemctl restart ${services.find(s => s.id === re
               type="button"
               variant="destructive"
               onClick={handleConfirmReboot}
-              className="cursor-pointer font-bold"
+              className="cursor-pointer font-semibold"
             >
               ยืนยัน รีบูต
             </Button>
@@ -1284,28 +1198,29 @@ ${restartingServiceId ? `sudo systemctl restart ${services.find(s => s.id === re
 
       {/* Shutdown System Confirmation Dialog */}
       <Dialog open={powerDialog === "shutdown"} modal={false} onOpenChange={(open) => !open && setPowerDialog(null)}>
-        <DialogContent className="max-w-[400px] w-full rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up">
-          <DialogHeader className="pb-2 border-b border-border/40">
-            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
-              <ShieldAlert className="h-5 w-5 text-red-500" />
+        <DialogContent className="w-full max-w-[400px] gap-4 rounded-xl p-6">
+          <DialogHeader className="border-b border-border/50 pb-3">
+            <DialogTitle className="flex items-center gap-2 text-base font-semibold">
+              <ShieldAlert className="h-4 w-4 text-red-500" />
               ยืนยันการปิดเครื่อง
             </DialogTitle>
           </DialogHeader>
-          <div className="text-sm text-muted-foreground leading-relaxed py-2">
-            คุณต้องการสั่ง <span className="font-bold text-foreground">ปิดระบบ (Shutdown)</span> ใช่หรือไม่? ตัวเครื่องจะหยุดทำงานและระบบจะตัดการจ่ายกำลังไฟเลี้ยงบอร์ด
+          <div className="py-2 text-sm leading-relaxed text-muted-foreground">
+            คุณต้องการสั่ง <span className="font-semibold text-foreground">ปิดระบบ (Shutdown)</span> ใช่หรือไม่? ตัวเครื่องจะหยุดทำงานและระบบจะตัดการจ่ายกำลังไฟเลี้ยงบอร์ด
           </div>
           <div className="flex items-center justify-end gap-3 pt-2">
             <Button
               type="button"
               variant="ghost"
               onClick={() => setPowerDialog(null)}
-              className="cursor-pointer text-muted-foreground hover:bg-muted/30 font-bold"
+              className="cursor-pointer text-muted-foreground"
             >
               ยกเลิก
             </Button>
             <Button
               type="button"
-              className="cursor-pointer bg-destructive hover:bg-destructive/90 text-white font-bold"
+              variant="destructive"
+              className="cursor-pointer font-semibold"
               onClick={handleConfirmShutdown}
             >
               ยืนยัน ปิดเครื่อง
