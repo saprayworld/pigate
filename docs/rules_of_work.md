@@ -20,14 +20,15 @@
 * **เหตุผลสำคัญ:** ตัวจัดการแพ็กเกจของโครงการในปัจจุบันใช้ Yarn รุ่น 1 (Yarn v1) ซึ่ง**ไม่รองรับคำสั่ง `yarn dlx`** การพยายามรันติดตั้งผ่าน `yarn dlx` จะล้มเหลว ดังนั้นจึงกำหนดให้ใช้ `npx` เป็นมาตรฐานหลักแทน
 
 ### 1.3 การจัดการ Portal Components ภายใน Dialog/Modal (Portal inside Dialog Rules)
-* **ข้อกำหนด:** หากมีการใช้งานคอมโพเนนต์ที่เป็น Portal (เช่น Combobox, Select, Dropdown หรือ Popover ของ Base UI / Radix UI) **ภายใน Dialog หรือ Modal ของโครงการ** อาจเกิดปัญหาคลิกดรอปดาวน์แล้วโดนบล็อกเนื่องจาก Focus/Pointer Blocker ของ Radix Dialog มองว่าเป็นกิจกรรมนอกขอบเขต (Interact Outside)
+* **ข้อกำหนด:** หากมีการใช้งาน **input ฟิลด์แบบ Combobox** (Portal component ของ Base UI / Radix UI) **ภายใน Dialog หรือ Modal ของโครงการ** อาจเกิดปัญหาคลิกดรอปดาวน์แล้วโดนบล็อกเนื่องจาก Focus/Pointer Blocker ของ Radix Dialog มองว่าเป็นกิจกรรมนอกขอบเขต (Interact Outside)
 * **แนวทางปฏิบัติ:**
-  * กำหนดให้ใส่คุณสมบัติ `modal={false}` ให้กับคอมโพเนนต์ `<Dialog>` เช่น:
+  * กำหนดให้ใส่คุณสมบัติ `modal={false}` ให้กับคอมโพเนนต์ `<Dialog>` **เฉพาะเมื่อ Dialog นั้นมี input ฟิลด์แบบ Combobox เท่านั้น** เช่น:
     ```tsx
     <Dialog open={isModalOpen} modal={false} onOpenChange={setIsModalOpen}>
     ```
-  * การตั้งค่า `modal={false}` จะช่วยปิดกลไก Focus/Pointer Blocker ของ Radix Dialog ทำให้ผู้ใช้งานสามารถคลิกเลือกรายการใน Dropdown ของ Portal Components ได้ตามปกติ โดยไม่จำเป็นต้องใช้ container ref
-* **เหตุผล:** เพื่อให้กลไกการโฟกัสและการคลิกภายนอก (Interact Outside) ของ Dialog และ Portal ทำงานร่วมกันได้สมบูรณ์และลดความซับซ้อนของโค้ด
+  * การตั้งค่า `modal={false}` จะช่วยปิดกลไก Focus/Pointer Blocker ของ Radix Dialog ทำให้ผู้ใช้งานสามารถคลิกเลือกรายการใน Dropdown ของ Combobox ได้ตามปกติ โดยไม่จำเป็นต้องใช้ container ref
+  * Dialog ที่**ไม่มี** Combobox (รวมถึง Dialog ที่มีเพียง Select หรือ Popover ปกติ) ให้คงพฤติกรรม modal ค่า default ไว้ ไม่ต้องใส่ `modal={false}`
+* **เหตุผล:** เพื่อให้กลไกการโฟกัสและการคลิกภายนอก (Interact Outside) ของ Dialog และ Combobox ทำงานร่วมกันได้สมบูรณ์ โดยไม่ปิดกลไก modal ของ Dialog อื่นที่ไม่จำเป็น
 
 ---
 
