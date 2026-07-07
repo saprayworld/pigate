@@ -16,7 +16,7 @@ import {
   Loader2,
   Network
 } from "lucide-react"
-import { Card } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -24,6 +24,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
@@ -35,7 +36,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { type DNSZone, type DNSRecord, type NetworkInterface } from "@/data-mockup/mockData"
 import { dnsServerService } from "@/services/dnsServerService"
 import { interfaceService } from "@/services/interfaceService"
@@ -401,294 +402,302 @@ export default function DnsServer() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* 1. Header Area */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
-            <Globe className="h-7 w-7 text-primary fill-primary/10" />
-            Local DNS Server (ระบบตั้งชื่อโฮสต์ในเครือข่าย)
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            กำหนดโซนระบบชื่อโดเมนภายในเครือข่าย (Local DNS Zones) และสร้างระเบียนชื่อเครื่อง (DNS Records)
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Button
-            onClick={handleClearCache}
-            disabled={isClearingCache}
-            variant="outline"
-            className="cursor-pointer text-xs font-semibold gap-1.5 h-10 border-border bg-card/40 hover:bg-card text-muted-foreground hover:text-foreground"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${isClearingCache ? "animate-spin" : ""}`} />
-            Clear Cache
-          </Button>
-
-          {!isApplied && (
-            <Button
-              onClick={handleApplySettings}
-              disabled={isApplying}
-              className="cursor-pointer bg-amber-500 text-neutral-950 hover:bg-amber-400 font-bold gap-1.5 h-10 px-4 animate-pulse"
-            >
-              {isApplying ? (
-                <>
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                  Applying...
-                </>
-              ) : (
-                <>
-                  <Check className="h-4.5 w-4.5" />
-                  Apply DNS Zones
-                </>
+    <div className="space-y-4">
+      {/* 1. Listen Interfaces — real interfaces from Interface Service, independent of DHCP Server */}
+      <Card>
+        <CardHeader className="flex flex-col gap-3 space-y-0 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1">
+            <CardTitle className="flex items-center gap-2 text-base font-semibold">
+              <Network className="h-4 w-4 text-muted-foreground" />
+              DNS Server Listen Interfaces
+              {isSavingInterfaces && (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
               )}
-            </Button>
-          )}
-          {isApplied && (
-            <div className="hidden sm:flex items-center gap-1.5 text-xs text-primary bg-primary/10 border border-primary/20 px-3 py-2 rounded-lg font-semibold">
-              <CheckCircle2 className="h-4 w-4" />
-              DNS Server Synced
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* 1.1 Listen Interfaces — real interfaces from Interface Service, independent of DHCP Server */}
-      <Card className="bg-card/25 border border-border/50 p-4 space-y-3">
-        <div className="flex items-center justify-between pb-2 border-b border-border/40">
-          <h2 className="text-sm font-bold text-foreground flex items-center gap-1.5">
-            <Network className="h-4 w-4 text-primary" />
-            DNS Server Listen Interfaces
-          </h2>
-          {isSavingInterfaces && (
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-          )}
-        </div>
-        <p className="text-xs text-muted-foreground">
-          เลือก Interface จริงที่มีอยู่ในเครื่อง (ดึงจาก Interface Service) เพื่อใช้เป็น NS/auth-server ของ DNS Server — ค่านี้แยกอิสระจากการตั้งค่า DHCP Server
-        </p>
-        {availableInterfaces.length === 0 ? (
-          <p className="text-xs text-muted-foreground italic">ไม่พบ Interface ที่มี Role เป็น LAN ในระบบ</p>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {availableInterfaces.map(iface => {
-              const checked = selectedInterfaces.includes(iface.name)
-              return (
-                <label
-                  key={iface.id}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer text-xs font-mono transition-all ${
-                    checked
-                      ? "bg-primary/10 border-primary/40 text-foreground"
-                      : "bg-background/25 border-border/50 text-muted-foreground hover:bg-muted/15"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    disabled={isSavingInterfaces}
-                    onChange={(e) => handleToggleInterface(iface.name, e.target.checked)}
-                    className="cursor-pointer accent-primary"
-                  />
-                  {iface.name}
-                  {iface.alias && iface.alias !== iface.name && (
-                    <span className="text-muted-foreground/60">({iface.alias})</span>
-                  )}
-                </label>
-              )
-            })}
+            </CardTitle>
+            <CardDescription className="text-xs">
+              เลือก Interface จริงที่มีอยู่ในเครื่อง (ดึงจาก Interface Service) เพื่อใช้เป็น NS/auth-server ของ DNS Server — ค่านี้แยกอิสระจากการตั้งค่า DHCP Server
+            </CardDescription>
           </div>
-        )}
-      </Card>
-
-      {/* 2. Split Screen Zones / Records */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Side: Zones list */}
-        <Card className="lg:col-span-4 bg-card/25 border border-border/50 p-4 space-y-4">
-          <div className="flex items-center justify-between pb-2 border-b border-border/40">
-            <h2 className="text-sm font-bold text-foreground flex items-center gap-1.5">
-              <Database className="h-4 w-4 text-primary" />
-              DNS Zones ({zones.length})
-            </h2>
+          <div className="flex flex-wrap items-center gap-3">
             <Button
-              onClick={openCreateZoneModal}
-              size="xs"
-              className="cursor-pointer h-7 text-[11px] font-bold px-2.5 bg-primary text-primary-foreground hover:bg-primary/95"
+              onClick={handleClearCache}
+              disabled={isClearingCache}
+              variant="outline"
+              size="sm"
+              className="cursor-pointer gap-2"
             >
-              <Plus className="h-3.5 w-3.5 mr-0.5" />
-              Add Zone
+              <RefreshCw className={`h-4 w-4 ${isClearingCache ? "animate-spin" : ""}`} />
+              Clear Cache
             </Button>
-          </div>
-
-          <div className="relative">
-            <Search className="absolute left-2 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              type="text"
-              value={zoneSearchQuery}
-              onChange={(e) => setZoneSearchQuery(e.target.value)}
-              placeholder="ค้นหาโดเมน/โซน..."
-              className="pl-7 bg-background/50 placeholder:text-muted-foreground h-8 text-xs"
-            />
-          </div>
-
-          <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">
-            {filteredZones.map(zone => (
-              <div
-                key={zone.id}
-                onClick={() => setSelectedZoneId(zone.id)}
-                className={`group flex items-center justify-between p-3 rounded-lg border transition-all cursor-pointer ${
-                  selectedZoneId === zone.id
-                    ? "bg-primary/10 border-primary/40 text-foreground"
-                    : "bg-background/25 border-border/50 hover:bg-muted/15 text-muted-foreground hover:text-foreground"
-                }`}
+            {!isApplied && (
+              <Button
+                size="sm"
+                onClick={handleApplySettings}
+                disabled={isApplying}
+                className="animate-pulse cursor-pointer gap-1.5 bg-amber-500 font-semibold text-neutral-950 hover:bg-amber-400"
               >
-                <div className="space-y-1 select-none flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-semibold text-xs font-mono">{zone.zoneName}</span>
-                    <Badge variant={zone.isAuthoritative ? "default" : "secondary"} className="text-[9px] px-1 py-0 h-3.5 scale-90">
-                      {zone.isAuthoritative ? "Auth" : "Fwd"}
-                    </Badge>
-                  </div>
-                  {!zone.isAuthoritative && zone.forwardTo && (
-                    <p className="text-[10px] text-muted-foreground/60 font-mono">
-                      {"->"} {zone.forwardTo}
-                    </p>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-1.5 ml-2">
-                  <Switch
-                    checked={zone.enabled}
-                    onCheckedChange={(checked) => handleToggleZone(zone.id, checked)}
-                    className="scale-75 cursor-pointer data-[state=checked]:bg-primary"
-                  />
-                  <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-all">
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        openEditZoneModal(zone)
-                      }}
-                      className="cursor-pointer text-muted-foreground hover:text-foreground hover:bg-muted/40 h-6 w-6"
-                    >
-                      <Edit className="h-3 w-3" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleDeleteZone(zone.id, zone.zoneName)
-                      }}
-                      className="cursor-pointer text-muted-foreground hover:text-red-500 hover:bg-red-500/10 h-6 w-6"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            ))}
-
-            {filteredZones.length === 0 && (
-              <div className="text-center p-6 text-muted-foreground text-xs">
-                {zoneSearchQuery ? "ไม่พบโซนที่ค้นหา" : "ยังไม่มีการสร้าง DNS Zone"}
+                {isApplying ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    Applying...
+                  </>
+                ) : (
+                  <>
+                    <Check className="h-4 w-4" />
+                    Apply DNS Zones
+                  </>
+                )}
+              </Button>
+            )}
+            {isApplied && (
+              <div className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/10 px-3 text-xs font-medium text-primary">
+                <CheckCircle2 className="h-4 w-4" />
+                DNS Server Synced
               </div>
             )}
           </div>
+        </CardHeader>
+        <CardContent>
+          {availableInterfaces.length === 0 ? (
+            <p className="text-xs italic text-muted-foreground">ไม่พบ Interface ที่มี Role เป็น LAN ในระบบ</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {availableInterfaces.map(iface => {
+                const checked = selectedInterfaces.includes(iface.name)
+                return (
+                  <label
+                    key={iface.id}
+                    className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 font-mono text-xs transition ${
+                      checked
+                        ? "border-primary/40 bg-primary/10 text-foreground"
+                        : "border-border bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={isSavingInterfaces}
+                      onChange={(e) => handleToggleInterface(iface.name, e.target.checked)}
+                      className="h-4 w-4 cursor-pointer accent-primary"
+                    />
+                    {iface.name}
+                    {iface.alias && iface.alias !== iface.name && (
+                      <span className="text-muted-foreground/60">({iface.alias})</span>
+                    )}
+                  </label>
+                )
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* 2. Split Screen Zones / Records */}
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
+        {/* Left Side: Zones list */}
+        <Card className="lg:col-span-4">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0">
+            <CardTitle className="flex items-center gap-2 text-base font-semibold">
+              <Database className="h-4 w-4 text-muted-foreground" />
+              DNS Zones
+              <Badge variant="secondary" className="rounded-full px-2 py-0 text-xs font-semibold">
+                {zones.length}
+              </Badge>
+            </CardTitle>
+            <Button
+              onClick={openCreateZoneModal}
+              size="sm"
+              className="cursor-pointer gap-1.5 font-semibold"
+            >
+              <Plus className="h-4 w-4" />
+              Add Zone
+            </Button>
+          </CardHeader>
+
+          <CardContent className="space-y-3">
+            <div className="relative">
+              <Search className="pointer-events-none absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="text"
+                value={zoneSearchQuery}
+                onChange={(e) => setZoneSearchQuery(e.target.value)}
+                placeholder="ค้นหาโดเมน/โซน..."
+                className="h-9 pl-8 text-xs"
+              />
+            </div>
+
+            <div className="max-h-[480px] space-y-2 overflow-y-auto pr-1">
+              {filteredZones.map(zone => (
+                <div
+                  key={zone.id}
+                  onClick={() => setSelectedZoneId(zone.id)}
+                  className={`flex cursor-pointer items-center justify-between rounded-lg border p-3 transition ${
+                    selectedZoneId === zone.id
+                      ? "border-primary/40 bg-primary/10 text-foreground"
+                      : "border-border bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
+                >
+                  <div className="flex-1 select-none space-y-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-mono text-xs font-semibold">{zone.zoneName}</span>
+                      <Badge
+                        variant="outline"
+                        className={`rounded px-1.5 py-0 text-[10px] font-medium ${zone.isAuthoritative
+                          ? "border-primary/20 bg-primary/10 text-primary"
+                          : "border-border bg-muted text-muted-foreground"
+                          }`}
+                      >
+                        {zone.isAuthoritative ? "Auth" : "Fwd"}
+                      </Badge>
+                    </div>
+                    {!zone.isAuthoritative && zone.forwardTo && (
+                      <p className="font-mono text-[10px] text-muted-foreground/60">
+                        {"->"} {zone.forwardTo}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="ml-2 flex items-center gap-2">
+                    <Switch
+                      size="sm"
+                      checked={zone.enabled}
+                      onCheckedChange={(checked) => handleToggleZone(zone.id, checked)}
+                      className="cursor-pointer"
+                    />
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openEditZoneModal(zone)
+                        }}
+                        className="cursor-pointer text-muted-foreground hover:bg-muted hover:text-foreground"
+                        title="แก้ไขโซน"
+                      >
+                        <Edit className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleDeleteZone(zone.id, zone.zoneName)
+                        }}
+                        className="cursor-pointer text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
+                        title="ลบโซน"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {filteredZones.length === 0 && (
+                <div className="p-6 text-center text-xs text-muted-foreground">
+                  {zoneSearchQuery ? "ไม่พบโซนที่ค้นหา" : "ยังไม่มีการสร้าง DNS Zone"}
+                </div>
+              )}
+            </div>
+          </CardContent>
         </Card>
 
         {/* Right Side: DNS Records list for selected zone */}
-        <div className="lg:col-span-8 space-y-6">
+        <div className="space-y-4 lg:col-span-8">
           {selectedZone ? (
-            <Card className="bg-card/25 border border-border/50 p-6 space-y-4">
-              <div className="border-b border-border/40 pb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h2 className="text-md font-bold text-foreground flex items-center gap-2">
-                    <Server className="h-4.5 w-4.5 text-primary" />
-                    DNS Records ของโซน {selectedZone.zoneName}
-                  </h2>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {selectedZone.isAuthoritative 
-                      ? "โซน Authoritative (ระบุชื่อโฮสต์และค่าไอพีโดยตรง)" 
+            <Card>
+              <CardHeader className="flex flex-col gap-3 space-y-0 sm:flex-row sm:items-center sm:justify-between">
+                <div className="space-y-1">
+                  <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                    <Server className="h-4 w-4 text-muted-foreground" />
+                    DNS Records ของโซน <span className="font-mono">{selectedZone.zoneName}</span>
+                  </CardTitle>
+                  <CardDescription className="text-xs">
+                    {selectedZone.isAuthoritative
+                      ? "โซน Authoritative (ระบุชื่อโฮสต์และค่าไอพีโดยตรง)"
                       : `โซน Forward (ระบบจะทำการส่งต่อคิวรีทั้งหมดไปให้ ${selectedZone.forwardTo})`}
-                  </p>
+                  </CardDescription>
                 </div>
                 {selectedZone.isAuthoritative && (
                   <Button
                     onClick={openCreateRecModal}
                     size="sm"
-                    className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 font-bold gap-1 h-8 text-xs"
+                    className="cursor-pointer gap-1.5 font-semibold"
                   >
-                    <Plus className="h-3.5 w-3.5" />
+                    <Plus className="h-4 w-4" />
                     Add Record
                   </Button>
                 )}
-              </div>
+              </CardHeader>
 
-              {selectedZone.isAuthoritative ? (
-                <>
-                  <div className="relative">
-                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
-                    <Input
-                      type="text"
-                      value={recordSearchQuery}
-                      onChange={(e) => setRecordSearchQuery(e.target.value)}
-                      placeholder="ค้นหาชื่อระเบียน, ประเภท หรือข้อมูล..."
-                      className="pl-8 bg-background/50 placeholder:text-muted-foreground h-9 text-xs"
-                    />
-                  </div>
+              <CardContent className="space-y-4">
+                {selectedZone.isAuthoritative ? (
+                  <>
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        type="text"
+                        value={recordSearchQuery}
+                        onChange={(e) => setRecordSearchQuery(e.target.value)}
+                        placeholder="ค้นหาชื่อระเบียน, ประเภท หรือข้อมูล..."
+                        className="h-9 pl-8 text-xs"
+                      />
+                    </div>
 
-                  <div className="rounded-lg border border-border/50 overflow-hidden bg-background/20">
                     <Table>
                       <TableHeader>
-                        <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
-                          <th className="p-3 text-left text-[11px] uppercase tracking-wider font-semibold w-[25%]">Host Name</th>
-                          <th className="p-3 text-left text-[11px] uppercase tracking-wider font-semibold w-[15%]">Type</th>
-                          <th className="p-3 text-left text-[11px] uppercase tracking-wider font-semibold w-[40%]">Value</th>
-                          <th className="p-3 text-left text-[11px] uppercase tracking-wider font-semibold w-[10%]">TTL</th>
-                          <th className="p-3 w-[10%] text-right"></th>
+                        <TableRow className="hover:bg-transparent">
+                          <TableHead className="w-[25%] text-xs font-medium text-muted-foreground">Host Name</TableHead>
+                          <TableHead className="w-[15%] text-xs font-medium text-muted-foreground">Type</TableHead>
+                          <TableHead className="w-[40%] text-xs font-medium text-muted-foreground">Value</TableHead>
+                          <TableHead className="w-[10%] text-xs font-medium text-muted-foreground">TTL</TableHead>
+                          <TableHead className="w-[10%] text-right text-xs font-medium text-muted-foreground"></TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {filteredRecords.length === 0 ? (
                           <TableRow>
-                            <TableCell colSpan={5} className="p-8 text-center text-muted-foreground text-xs">
+                            <TableCell colSpan={5} className="py-8 text-center text-xs text-muted-foreground">
                               {recordSearchQuery ? "ไม่พบระเบียน DNS ตามข้อความค้นหา" : "ยังไม่มีข้อมูลระเบียน DNS ในโซนนี้"}
                             </TableCell>
                           </TableRow>
                         ) : (
                           filteredRecords.map((rec) => (
-                            <TableRow key={rec.id} className="border-b border-border/40 hover:bg-muted/15 font-mono text-xs">
-                              <TableCell className="p-3">
-                                <span className="text-foreground font-semibold font-sans">{rec.name}</span>
+                            <TableRow key={rec.id}>
+                              <TableCell className="py-3">
+                                <span className="text-xs font-medium text-foreground">{rec.name}</span>
                               </TableCell>
-                              <TableCell className="p-3">
-                                <Badge variant="outline" className="bg-primary/5 text-primary border-primary/20 text-[10px] py-0 px-1.5 font-bold font-sans">
+                              <TableCell className="py-3">
+                                <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0 text-[10px] font-medium text-primary">
                                   {rec.type}
                                 </Badge>
                               </TableCell>
-                              <TableCell className="p-3 font-semibold text-foreground truncate max-w-[200px]" title={rec.value}>
+                              <TableCell className="max-w-[200px] truncate py-3 font-mono text-xs font-medium text-foreground" title={rec.value}>
                                 {rec.value}
                               </TableCell>
-                              <TableCell className="p-3 text-muted-foreground">
+                              <TableCell className="py-3 font-mono text-xs text-muted-foreground">
                                 {rec.ttl}s
                               </TableCell>
-                              <TableCell className="p-3 text-right">
-                                <div className="flex items-center justify-end gap-1">
+                              <TableCell className="py-3 text-right">
+                                <div className="flex items-center justify-end gap-2">
                                   <Button
-                                    variant="ghost"
-                                    size="icon-xs"
+                                    variant="outline"
+                                    size="icon-sm"
                                     onClick={() => openEditRecModal(rec)}
-                                    className="cursor-pointer text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                                    className="cursor-pointer text-muted-foreground hover:text-foreground"
+                                    title="แก้ไขระเบียน"
                                   >
-                                    <Edit className="h-3.5 w-3.5" />
+                                    <Edit className="h-4 w-4" />
                                   </Button>
                                   <Button
                                     variant="ghost"
-                                    size="icon-xs"
+                                    size="icon-sm"
                                     onClick={() => handleDeleteRecord(rec.id, rec.name)}
-                                    className="cursor-pointer text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
+                                    className="cursor-pointer text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
+                                    title="ลบระเบียน"
                                   >
-                                    <Trash2 className="h-3.5 w-3.5" />
+                                    <Trash2 className="h-4 w-4" />
                                   </Button>
                                 </div>
                               </TableCell>
@@ -697,65 +706,67 @@ export default function DnsServer() {
                         )}
                       </TableBody>
                     </Table>
+                  </>
+                ) : (
+                  <div className="space-y-2 rounded-lg border border-dashed border-border p-8 text-center">
+                    <Globe className="mx-auto h-8 w-8 text-muted-foreground/60" />
+                    <p className="text-sm font-semibold text-foreground">โซนนี้ได้รับการตั้งค่าประเภทส่งต่อ (Forward Zone)</p>
+                    <p className="mx-auto max-w-md text-xs leading-relaxed text-muted-foreground">
+                      ระบบจะส่งคำขอความละเอียดชื่อระบบโดเมนทั้งหมดภายใต้โดเมน <strong className="text-foreground">{selectedZone.zoneName}</strong> ไปยัง
+                      ที่อยู่ IP <strong className="font-mono text-foreground">{selectedZone.forwardTo}</strong> โดยอัตโนมัติ
+                      คุณไม่จำเป็นต้องเพิ่มระเบียน DNS เอง
+                    </p>
                   </div>
-                </>
-              ) : (
-                <div className="p-8 text-center border border-dashed border-border/50 rounded-lg bg-background/10 space-y-2">
-                  <Globe className="h-8 w-8 text-muted-foreground/60 mx-auto" />
-                  <p className="text-sm font-semibold text-foreground">โซนนี้ได้รับการตั้งค่าประเภทส่งต่อ (Forward Zone)</p>
-                  <p className="text-xs text-muted-foreground max-w-md mx-auto leading-relaxed">
-                    ระบบจะส่งคำขอความละเอียดชื่อระบบโดเมนทั้งหมดภายใต้โดเมน <span className="font-semibold text-primary">{selectedZone.zoneName}</span> ไปยัง
-                    ที่อยู่ IP <span className="font-semibold text-cyan-400 font-mono">{selectedZone.forwardTo}</span> โดยอัตโนมัติ 
-                    คุณไม่จำเป็นต้องเพิ่มระเบียน DNS เอง
-                  </p>
-                </div>
-              )}
+                )}
+              </CardContent>
             </Card>
           ) : (
-            <Card className="p-8 text-center border border-dashed border-border/50 rounded-lg bg-card/10">
-              <Globe className="h-8 w-8 text-muted-foreground/50 mx-auto mb-2" />
-              <p className="text-sm text-muted-foreground">กรุณาเลือกโซนด้านซ้าย หรือกดสร้างโซนใหม่เพื่อจัดการระเบียน DNS</p>
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center gap-2 py-8 text-center">
+                <Globe className="h-8 w-8 text-muted-foreground/50" />
+                <p className="text-sm text-muted-foreground">กรุณาเลือกโซนด้านซ้าย หรือกดสร้างโซนใหม่เพื่อจัดการระเบียน DNS</p>
+              </CardContent>
             </Card>
           )}
         </div>
       </div>
 
-      {/* 3. Help alertbox */}
-      <Alert className="border-dashed border-border bg-card/10 text-xs">
-        <Info className="h-4 w-4 text-muted-foreground" />
-        <AlertTitle className="font-bold text-foreground mb-0.5">ระเบียนประเภทต่างๆ ของ DNS Server:</AlertTitle>
-        <AlertDescription className="text-muted-foreground leading-relaxed">
-          <ul className="list-disc pl-4 space-y-1">
-            <li><span className="font-semibold text-primary">A</span>: ชี้โดเมนย่อยไปที่ที่อยู่ IPv4 (เช่น router.pigate.local {"->"} 192.168.1.1)</li>
-            <li><span className="font-semibold text-primary">AAAA</span>: ชี้โดเมนย่อยไปที่ที่อยู่ IPv6</li>
-            <li><span className="font-semibold text-primary">CNAME</span>: ชื่อสมญา/ส่งต่อไปหาชื่อเครื่องอื่น (เช่น printer.pigate.local {"->"} hp-laser.pigate.local)</li>
-            <li><span className="font-semibold text-primary">MX</span>: ชี้เซิร์ฟเวอร์รับส่งอีเมลประจำโดเมน (ระบุรูปแบบ [Preference] [Host] เช่น `10 mail.example.com`)</li>
-            <li><span className="font-semibold text-primary">TXT</span>: ระบุข้อมูลข้อความทั่วไป เช่น SPF หรือคีย์ยืนยันตัวตน</li>
+      {/* 3. Info note */}
+      <div className="flex gap-2 rounded-lg border border-border bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" />
+        <div>
+          <strong className="text-foreground">ระเบียนประเภทต่างๆ ของ DNS Server:</strong>
+          <ul className="mt-1 list-disc space-y-1 pl-4">
+            <li><strong className="text-foreground">A</strong>: ชี้โดเมนย่อยไปที่ที่อยู่ IPv4 (เช่น router.pigate.local {"->"} 192.168.1.1)</li>
+            <li><strong className="text-foreground">AAAA</strong>: ชี้โดเมนย่อยไปที่ที่อยู่ IPv6</li>
+            <li><strong className="text-foreground">CNAME</strong>: ชื่อสมญา/ส่งต่อไปหาชื่อเครื่องอื่น (เช่น printer.pigate.local {"->"} hp-laser.pigate.local)</li>
+            <li><strong className="text-foreground">MX</strong>: ชี้เซิร์ฟเวอร์รับส่งอีเมลประจำโดเมน (ระบุรูปแบบ [Preference] [Host] เช่น 10 mail.example.com)</li>
+            <li><strong className="text-foreground">TXT</strong>: ระบุข้อมูลข้อความทั่วไป เช่น SPF หรือคีย์ยืนยันตัวตน</li>
           </ul>
-        </AlertDescription>
-      </Alert>
+        </div>
+      </div>
 
       {/* 4. Zone Add/Edit Dialog Modal */}
       <Dialog open={isZoneModalOpen} modal={false} onOpenChange={setIsZoneModalOpen}>
-        <DialogContent className="max-w-[450px] w-full rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up">
-          <DialogHeader className="pb-3 border-b border-border/40">
-            <DialogTitle className="text-lg font-bold text-foreground">
+        <DialogContent className="w-full max-w-[450px] gap-4 rounded-xl p-6">
+          <DialogHeader className="border-b border-border/50 pb-3">
+            <DialogTitle className="text-base font-semibold">
               {editingZone ? "แก้ไข DNS Zone" : "เพิ่ม DNS Zone ใหม่"}
             </DialogTitle>
           </DialogHeader>
 
           <form onSubmit={handleSaveZone} className="space-y-4 text-sm">
             {zoneError && (
-              <Alert variant="destructive" className="border-red-500/20 bg-red-500/5 py-2.5 px-3">
-                <AlertCircle className="h-4 w-4 text-red-400" />
-                <AlertDescription className="text-red-400 text-xs">{zoneError}</AlertDescription>
+              <Alert variant="destructive" className="px-3 py-2.5">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-xs">{zoneError}</AlertDescription>
               </Alert>
             )}
 
             {/* Field: Zone Name */}
             <div className="space-y-1.5">
-              <Label htmlFor="zone-name" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                Zone Name / Local Domain (ชื่อโซน/โดเมน) <span className="text-red-500">*</span>
+              <Label htmlFor="zone-name" className="block text-xs font-medium text-muted-foreground">
+                Zone Name / Local Domain (ชื่อโซน/โดเมน) <span className="text-destructive">*</span>
               </Label>
               <Input
                 id="zone-name"
@@ -764,14 +775,14 @@ export default function DnsServer() {
                 value={zoneName}
                 onChange={(e) => setZoneName(e.target.value)}
                 placeholder="เช่น office.local หรือ internal.net"
-                className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                className="h-9 font-mono text-sm"
               />
             </div>
 
             {/* Field: Authoritative Toggle */}
-            <div className="flex items-center justify-between bg-background/30 border border-border/40 rounded-lg p-3">
+            <div className="flex items-center justify-between rounded-lg border border-border bg-muted/50 p-3">
               <div className="space-y-0.5">
-                <Label className="text-xs font-bold text-foreground">เป็นโซนหลัก (Authoritative Zone)</Label>
+                <Label className="text-xs font-semibold text-foreground">เป็นโซนหลัก (Authoritative Zone)</Label>
                 <p className="text-[10px] text-muted-foreground">
                   เปิดหากต้องการกำหนด DNS Records เอง หรือปิดหากต้องการทำ DNS Forwarding
                 </p>
@@ -779,15 +790,15 @@ export default function DnsServer() {
               <Switch
                 checked={isAuthoritative}
                 onCheckedChange={setIsAuthoritative}
-                className="data-[state=checked]:bg-primary cursor-pointer scale-90"
+                className="cursor-pointer"
               />
             </div>
 
             {/* Field: Forward To (Conditional) */}
             {!isAuthoritative && (
-              <div className="space-y-1.5 animate-slide-in">
-                <Label htmlFor="forward-ip" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                  Forward To Upstream IP (ส่งต่อไปที่เซิร์ฟเวอร์) <span className="text-red-500">*</span>
+              <div className="animate-slide-in space-y-1.5">
+                <Label htmlFor="forward-ip" className="block text-xs font-medium text-muted-foreground">
+                  Forward To Upstream IP (ส่งต่อไปที่เซิร์ฟเวอร์) <span className="text-destructive">*</span>
                 </Label>
                 <Input
                   id="forward-ip"
@@ -796,14 +807,14 @@ export default function DnsServer() {
                   value={forwardTo}
                   onChange={(e) => setForwardTo(e.target.value)}
                   placeholder="เช่น 8.8.8.8 หรือ 1.1.1.1"
-                  className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                  className="h-9 font-mono text-sm"
                 />
               </div>
             )}
 
             {/* Field: Allowed Client IPs */}
             <div className="space-y-1.5">
-              <Label htmlFor="allowed-ips" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+              <Label htmlFor="allowed-ips" className="block text-xs font-medium text-muted-foreground">
                 Allowed Client IPs (กลุ่มไอพีที่อนุญาตคิวรี)
               </Label>
               <Input
@@ -812,24 +823,24 @@ export default function DnsServer() {
                 value={allowedIps}
                 onChange={(e) => setAllowedIps(e.target.value)}
                 placeholder="ระบุ any หรือคั่นด้วยลูกน้ำ เช่น 192.168.1.0/24"
-                className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                className="h-9 font-mono text-sm"
               />
             </div>
 
             {/* Action Buttons */}
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-border/40">
+            <div className="flex items-center justify-end gap-3 border-t border-border/50 pt-4">
               <Button
                 type="button"
                 variant="ghost"
                 onClick={() => setIsZoneModalOpen(false)}
-                className="cursor-pointer text-muted-foreground hover:bg-muted/30 h-9"
+                className="cursor-pointer text-muted-foreground"
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
                 disabled={isSaving}
-                className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/95 font-bold px-5 h-9"
+                className="cursor-pointer px-6 font-semibold"
               >
                 {isSaving ? "Saving..." : editingZone ? "Save Changes" : "Create Zone"}
               </Button>
@@ -840,24 +851,24 @@ export default function DnsServer() {
 
       {/* 5. Record Add/Edit Dialog Modal */}
       <Dialog open={isRecModalOpen} modal={false} onOpenChange={setIsRecModalOpen}>
-        <DialogContent className="max-w-[450px] w-full rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up">
-          <DialogHeader className="pb-3 border-b border-border/40">
-            <DialogTitle className="text-lg font-bold text-foreground">
+        <DialogContent className="w-full max-w-[450px] gap-4 rounded-xl p-6">
+          <DialogHeader className="border-b border-border/50 pb-3">
+            <DialogTitle className="text-base font-semibold">
               {editingRecord ? "แก้ไข DNS Record" : `เพิ่ม DNS Record ในโซน ${selectedZone?.zoneName}`}
             </DialogTitle>
           </DialogHeader>
 
           <form onSubmit={handleSaveRecord} className="space-y-4 text-sm">
             {recError && (
-              <Alert variant="destructive" className="border-red-500/20 bg-red-500/5 py-2.5 px-3">
-                <AlertCircle className="h-4 w-4 text-red-400" />
-                <AlertDescription className="text-red-400 text-xs">{recError}</AlertDescription>
+              <Alert variant="destructive" className="px-3 py-2.5">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-xs">{recError}</AlertDescription>
               </Alert>
             )}
 
             {/* Field: Host Name */}
             <div className="space-y-1.5">
-              <Label htmlFor="rec-name" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+              <Label htmlFor="rec-name" className="block text-xs font-medium text-muted-foreground">
                 Host Name (ชื่อโดเมนย่อย)
               </Label>
               <div className="flex items-center gap-1.5">
@@ -867,27 +878,27 @@ export default function DnsServer() {
                   value={recName}
                   onChange={(e) => setRecName(e.target.value)}
                   placeholder="@ หรือเว้นว่าง หรือโดเมนย่อย เช่น printer"
-                  className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs flex-1"
+                  className="h-9 flex-1 font-mono text-sm"
                 />
-                <span className="text-xs text-muted-foreground font-mono font-semibold">
+                <span className="font-mono text-xs font-semibold text-muted-foreground">
                   .{selectedZone?.zoneName}
                 </span>
               </div>
-              <p className="text-[10px] text-muted-foreground/60 italic">
+              <p className="mt-0.5 text-[10px] text-muted-foreground">
                 ใส่ @ หรือเว้นว่าง หากต้องการให้ชี้ไปที่ตัวโดเมนหลักโดยตรง ({selectedZone?.zoneName})
               </p>
             </div>
 
             {/* Field: Record Type */}
             <div className="space-y-1.5">
-              <Label htmlFor="rec-type" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+              <Label htmlFor="rec-type" className="block text-xs font-medium text-muted-foreground">
                 Record Type (ประเภทระเบียน)
               </Label>
               <select
                 id="rec-type"
                 value={recType}
                 onChange={(e) => setRecType(e.target.value)}
-                className="w-full bg-background border border-border rounded-lg h-9 px-2.5 text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
               >
                 <option value="A">A (Address)</option>
                 <option value="AAAA">AAAA (IPv6 Address)</option>
@@ -900,8 +911,8 @@ export default function DnsServer() {
 
             {/* Field: Value */}
             <div className="space-y-1.5">
-              <Label htmlFor="rec-val" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                Record Value (ข้อมูลระเบียน) <span className="text-red-500">*</span>
+              <Label htmlFor="rec-val" className="block text-xs font-medium text-muted-foreground">
+                Record Value (ข้อมูลระเบียน) <span className="text-destructive">*</span>
               </Label>
               <Input
                 id="rec-val"
@@ -910,22 +921,22 @@ export default function DnsServer() {
                 value={recValue}
                 onChange={(e) => setRecValue(e.target.value)}
                 placeholder={
-                  recType === "A" 
-                    ? "เช่น 192.168.1.15" 
+                  recType === "A"
+                    ? "เช่น 192.168.1.15"
                     : recType === "CNAME"
                       ? "เช่น pigate.local"
                       : recType === "MX"
                         ? "ระบุลำดับความสำคัญและชื่อเซิร์ฟเวอร์ เช่น 10 mail.example.com"
                         : "ค่าระเบียนตามประเภท"
                 }
-                className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                className="h-9 font-mono text-sm"
               />
             </div>
 
             {/* Field: TTL */}
             <div className="space-y-1.5">
-              <Label htmlFor="rec-ttl" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                TTL (Seconds)
+              <Label htmlFor="rec-ttl" className="block text-xs font-medium text-muted-foreground">
+                TTL (Seconds) <span className="text-destructive">*</span>
               </Label>
               <Input
                 id="rec-ttl"
@@ -935,24 +946,24 @@ export default function DnsServer() {
                 value={recTtl}
                 onChange={(e) => setRecTtl(e.target.value)}
                 placeholder="300"
-                className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                className="h-9 font-mono text-sm"
               />
             </div>
 
             {/* Action Buttons */}
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-border/40">
+            <div className="flex items-center justify-end gap-3 border-t border-border/50 pt-4">
               <Button
                 type="button"
                 variant="ghost"
                 onClick={() => setIsRecModalOpen(false)}
-                className="cursor-pointer text-muted-foreground hover:bg-muted/30 h-9"
+                className="cursor-pointer text-muted-foreground"
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
                 disabled={isSaving}
-                className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/95 font-bold px-5 h-9"
+                className="cursor-pointer px-6 font-semibold"
               >
                 {isSaving ? "Saving..." : editingRecord ? "Save Record" : "Create Record"}
               </Button>

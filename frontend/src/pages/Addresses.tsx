@@ -12,9 +12,10 @@ import {
   Layers,
   Trash,
   Loader2,
-  Lock
+  Lock,
+  Info
 } from "lucide-react"
-import { Card } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -33,11 +34,36 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { type AddressObject } from "@/data-mockup/mockData"
 import { addressService } from "@/services/addressService"
 import { useAlert } from "@/hooks/useAlert"
-import { isValidCidr, isValidIpRange } from "@/lib/utils"
+import { cn, isValidCidr, isValidIpRange } from "@/lib/utils"
+
+// Helper: Dashboard-style stat card (mirrors Dashboard's StatCard)
+function StatCard({
+  icon: Icon,
+  title,
+  value,
+}: {
+  icon: typeof BookOpen
+  title: string
+  value: number
+}) {
+  return (
+    <Card size="sm" className="gap-0">
+      <CardHeader className="space-y-0">
+        <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <Icon className="h-4 w-4 shrink-0" />
+          <span className="text-foreground">{title}</span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-3">
+        <p className="text-2xl font-bold tracking-tight text-foreground">{value}</p>
+      </CardContent>
+    </Card>
+  )
+}
 
 export default function Addresses() {
   const { alert, confirm } = useAlert()
@@ -274,258 +300,224 @@ export default function Addresses() {
     }
   }
 
+  const typeFilters: { value: typeof selectedTypeFilter; label: string }[] = [
+    { value: "all", label: "All" },
+    { value: "subnet", label: "Subnet" },
+    { value: "range", label: "IP Range" },
+    { value: "fqdn", label: "FQDN" },
+  ]
+
   return (
-    <div className="space-y-6">
-      {/* 1. Header Area */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
-            <BookOpen className="h-7 w-7 text-primary fill-primary/10" />
-            Addresses (วัตถุที่อยู่ไอพี)
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            กำหนดค่า IP Address, Subnet หรือ FQDN เพื่อนำไปอ้างอิงใช้ในนโยบายไฟร์วอลล์ซ้ำได้สะดวก
-          </p>
-        </div>
-        <div>
-          <Button onClick={openCreateModal} className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 font-bold gap-1.5">
-            <Plus className="h-4.5 w-4.5" />
-            Create New Address
-          </Button>
-        </div>
+    <div className="space-y-4">
+      {/* 1. Stats overview */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard icon={BookOpen} title="Total Objects" value={stats.total} />
+        <StatCard icon={Network} title="Subnets" value={stats.subnets} />
+        <StatCard icon={Layers} title="IP Ranges" value={stats.ranges} />
+        <StatCard icon={Globe} title="FQDNs" value={stats.fqdns} />
       </div>
 
-      {/* 2. Stats Dashboard Cards */}
-      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">ที่อยู่ไอพีทั้งหมด</div>
-          <div className="mt-2 text-2xl font-bold text-foreground font-mono">{stats.total}</div>
-        </Card>
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <Network className="h-3.5 w-3.5 text-primary" /> Subnets (IP/Netmask)
-          </div>
-          <div className="mt-2 text-2xl font-bold text-primary font-mono">{stats.subnets}</div>
-        </Card>
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <Layers className="h-3.5 w-3.5 text-amber-400" /> IP Ranges
-          </div>
-          <div className="mt-2 text-2xl font-bold text-amber-400 font-mono">{stats.ranges}</div>
-        </Card>
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <Globe className="h-3.5 w-3.5 text-cyan-400" /> FQDNs (Domains)
-          </div>
-          <div className="mt-2 text-2xl font-bold text-cyan-400 font-mono">{stats.fqdns}</div>
-        </Card>
-      </div>
-
-      {/* 3. Toolbar (Filters & Search) */}
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between bg-card/30 p-4 rounded-xl border border-border/60">
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Type filters */}
-          <div className="flex rounded-lg border border-border bg-card p-0.5 gap-0.5">
-            <button
-              onClick={() => setSelectedTypeFilter("all")}
-              className={`px-3 py-1 text-xs font-bold rounded-md transition ${selectedTypeFilter === "all"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                }`}
-            >
-              All
-            </button>
-            <button
-              onClick={() => setSelectedTypeFilter("subnet")}
-              className={`px-3 py-1 text-xs font-bold rounded-md transition ${selectedTypeFilter === "subnet"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                }`}
-            >
-              Subnet
-            </button>
-            <button
-              onClick={() => setSelectedTypeFilter("range")}
-              className={`px-3 py-1 text-xs font-bold rounded-md transition ${selectedTypeFilter === "range"
-                ? "bg-amber-500 text-neutral-950"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                }`}
-            >
-              IP Range
-            </button>
-            <button
-              onClick={() => setSelectedTypeFilter("fqdn")}
-              className={`px-3 py-1 text-xs font-bold rounded-md transition ${selectedTypeFilter === "fqdn"
-                ? "bg-cyan-500 text-neutral-950"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                }`}
-            >
-              FQDN
-            </button>
+      {/* 2. Address objects table */}
+      <Card>
+        <CardHeader className="flex flex-col gap-4 space-y-0 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1">
+            <CardTitle className="flex items-center gap-2 text-base font-semibold">
+              <BookOpen className="h-4 w-4 text-muted-foreground" />
+              Address Objects
+              <Badge variant="secondary" className="rounded-full px-2 py-0 text-xs font-semibold">
+                {stats.total}
+              </Badge>
+            </CardTitle>
+            <CardDescription className="text-xs">
+              กำหนดค่า IP Address, Subnet หรือ FQDN เพื่อนำไปอ้างอิงใช้ในนโยบายไฟร์วอลล์ซ้ำได้สะดวก
+            </CardDescription>
           </div>
 
-          {/* Bulk Action */}
-          {selectedIds.length > 0 && (
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={handleBulkDelete}
-              className="font-bold gap-1 h-8 px-3 ml-2"
-            >
-              <Trash className="h-3.5 w-3.5" />
-              Delete Selected ({selectedIds.length})
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Search */}
+            <div className="relative w-full sm:w-[220px]">
+              <Search className="pointer-events-none absolute top-2 left-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="ค้นหาชื่อ หรือที่อยู่ไอพี..."
+                className="h-8 pl-8 text-xs"
+              />
+            </div>
+            <Button size="sm" onClick={openCreateModal} className="cursor-pointer gap-1.5 font-semibold">
+              <Plus className="h-4 w-4" />
+              Create New Address
             </Button>
-          )}
-        </div>
+          </div>
+        </CardHeader>
 
-        {/* Search */}
-        <div className="relative w-full md:max-w-xs">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
-          <Input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="ค้นหาชื่อ หรือที่อยู่ไอพี..."
-            className="pl-8 bg-background/50 placeholder:text-muted-foreground h-9"
-          />
-        </div>
-      </div>
+        <CardContent className="space-y-4">
+          {/* Toolbar (Filters & bulk action) */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Type filters */}
+            <div className="flex w-fit gap-0.5 rounded-lg border border-border bg-muted p-0.5">
+              {typeFilters.map((f) => (
+                <button
+                  key={f.value}
+                  onClick={() => setSelectedTypeFilter(f.value)}
+                  className={cn(
+                    "cursor-pointer rounded-md px-3 py-1 text-xs font-medium transition",
+                    selectedTypeFilter === f.value
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
 
-      {/* 4. Table view */}
-      <Card className="bg-card/25 border border-border/50 overflow-hidden py-0">
-        <Table>
-          <TableHeader>
-            <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
-              <TableHead className="p-3 w-[5%]">
-                <input
-                  type="checkbox"
-                  checked={isAllSelected}
-                  onChange={(e) => handleSelectAll(e.target.checked)}
-                  className="rounded border-input bg-background text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer accent-primary"
-                />
-              </TableHead>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[25%] font-semibold">Name</th>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[15%] font-semibold">Type</th>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[35%] font-semibold">Details / Value</th>
-              <th className="p-3 text-left text-[11px] uppercase tracking-wider w-[12%] font-semibold">Ref. Policies</th>
-              <TableHead className="p-3 w-[8%] text-right"></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={6} className="p-12 text-center text-muted-foreground text-xs">
-                  <div className="flex flex-col items-center justify-center gap-2 py-4">
-                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                    <span>กำลังโหลดข้อมูล...</span>
-                  </div>
-                </TableCell>
+            {/* Bulk Action */}
+            {selectedIds.length > 0 && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleBulkDelete}
+                className="cursor-pointer gap-1.5"
+              >
+                <Trash className="h-3.5 w-3.5" />
+                Delete Selected ({selectedIds.length})
+              </Button>
+            )}
+          </div>
+
+          {/* Table view */}
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="w-[5%]">
+                  <input
+                    type="checkbox"
+                    checked={isAllSelected}
+                    onChange={(e) => handleSelectAll(e.target.checked)}
+                    className="h-4 w-4 cursor-pointer rounded border-input bg-background accent-primary"
+                  />
+                </TableHead>
+                <TableHead className="w-[25%] text-xs font-medium text-muted-foreground">Name</TableHead>
+                <TableHead className="w-[15%] text-xs font-medium text-muted-foreground">Type</TableHead>
+                <TableHead className="w-[35%] text-xs font-medium text-muted-foreground">Details / Value</TableHead>
+                <TableHead className="w-[12%] text-xs font-medium text-muted-foreground">Ref. Policies</TableHead>
+                <TableHead className="w-[8%] text-right text-xs font-medium text-muted-foreground"></TableHead>
               </TableRow>
-            ) : filteredAddresses.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6} className="p-8 text-center text-muted-foreground text-xs">
-                  ไม่พบวัตถุที่อยู่ไอพีตามที่ค้นหา
-                </TableCell>
-              </TableRow>
-            ) : (
-              filteredAddresses.map((addr) => (
-                <TableRow key={addr.id} className="border-b border-border/40 hover:bg-muted/15">
-                  <TableCell className="p-3">
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.includes(addr.id)}
-                      onChange={(e) => handleSelectRow(addr.id, e.target.checked)}
-                      className="rounded border-input bg-background text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer accent-primary"
-                    />
-                  </TableCell>
-                  <TableCell className="p-3 font-semibold text-foreground">{addr.name}</TableCell>
-                  <TableCell className="p-3">
-                    {addr.type === "subnet" && (
-                      <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px] px-2 py-0.5 rounded">
-                        Subnet
-                      </Badge>
-                    )}
-                    {addr.type === "range" && (
-                      <Badge variant="outline" className="bg-amber-500/10 text-amber-400 border-amber-500/20 text-[10px] px-2 py-0.5 rounded">
-                        IP Range
-                      </Badge>
-                    )}
-                    {addr.type === "fqdn" && (
-                      <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20 text-[10px] px-2 py-0.5 rounded">
-                        FQDN
-                      </Badge>
-                    )}
-                  </TableCell>
-                  <TableCell className="p-3 font-mono text-xs text-muted-foreground">{addr.value}</TableCell>
-                  <TableCell className="p-3">
-                    {addr.refPolicies.length === 0 ? (
-                      <span className="text-xs text-muted-foreground/45 italic">None</span>
-                    ) : (
-                      <div className="flex flex-wrap gap-1">
-                        {addr.refPolicies.map((p, i) => (
-                          <Badge
-                            key={i}
-                            variant="secondary"
-                            className="bg-muted text-muted-foreground font-mono text-[9px] px-1.5 py-0.2 rounded"
-                          >
-                            {p}
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
-                  </TableCell>
-                  <TableCell className="p-3 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      {addr.system ? (
-                        <span className="p-1 rounded text-muted-foreground/45 flex items-center justify-center" title="ระบบกำหนดไว้เริ่มต้น (แก้ไขไม่ได้)">
-                          <Lock className="h-3.5 w-3.5" />
-                        </span>
-                      ) : (
-                        <>
-                          <Button
-                            variant="ghost"
-                            size="icon-xs"
-                            onClick={() => openEditModal(addr)}
-                            className="cursor-pointer text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                            title="แก้ไขวัตถุ"
-                          >
-                            <Edit className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon-xs"
-                            onClick={() => handleDelete(addr.id, addr.name)}
-                            className="cursor-pointer text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
-                            title="ลบวัตถุ"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </>
-                      )}
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="py-12 text-center text-xs text-muted-foreground">
+                    <div className="flex flex-col items-center justify-center gap-2 py-4">
+                      <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                      <span>กำลังโหลดข้อมูล...</span>
                     </div>
                   </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+              ) : filteredAddresses.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="py-8 text-center text-xs text-muted-foreground">
+                    ไม่พบวัตถุที่อยู่ไอพีตามที่ค้นหา
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filteredAddresses.map((addr) => (
+                  <TableRow key={addr.id}>
+                    <TableCell className="py-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(addr.id)}
+                        onChange={(e) => handleSelectRow(addr.id, e.target.checked)}
+                        className="h-4 w-4 cursor-pointer rounded border-input bg-background accent-primary"
+                      />
+                    </TableCell>
+                    <TableCell className="py-3 font-mono text-sm font-medium text-foreground">{addr.name}</TableCell>
+                    <TableCell className="py-3">
+                      {addr.type === "subnet" && (
+                        <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                          Subnet
+                        </Badge>
+                      )}
+                      {addr.type === "range" && (
+                        <Badge variant="outline" className="rounded border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500">
+                          IP Range
+                        </Badge>
+                      )}
+                      {addr.type === "fqdn" && (
+                        <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                          FQDN
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="py-3 font-mono text-xs text-muted-foreground">{addr.value}</TableCell>
+                    <TableCell className="py-3">
+                      {addr.refPolicies.length === 0 ? (
+                        <span className="text-xs italic text-muted-foreground/45">None</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {addr.refPolicies.map((p, i) => (
+                            <Badge key={i} variant="secondary" className="rounded px-1.5 py-0.5 font-mono text-[10px]">
+                              {p}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="py-3 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        {addr.system ? (
+                          <span className="flex items-center justify-center p-1 text-muted-foreground/45" title="ระบบกำหนดไว้เริ่มต้น (แก้ไขไม่ได้)">
+                            <Lock className="h-4 w-4" />
+                          </span>
+                        ) : (
+                          <>
+                            <Button
+                              variant="outline"
+                              size="icon-sm"
+                              onClick={() => openEditModal(addr)}
+                              className="cursor-pointer text-muted-foreground hover:text-foreground"
+                              title="แก้ไขวัตถุ"
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={() => handleDelete(addr.id, addr.name)}
+                              className="cursor-pointer text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
+                              title="ลบวัตถุ"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
       </Card>
 
-      {/* 5. Warning / Help Box */}
-      <Alert className="border-dashed border-border bg-card/10">
-        <AlertCircle className="h-4 w-4 text-muted-foreground" />
-        <AlertTitle className="font-bold text-foreground mb-0.5">การนำไปใช้งาน:</AlertTitle>
-        <AlertDescription className="text-xs text-muted-foreground leading-relaxed">
-          วัตถุที่สร้างขึ้นในหน้านี้จะปรากฏให้เลือกในหน้าจอ <span className="font-semibold text-primary">"Firewall Policy"</span> ในช่อง ต้นทาง (Source) และ ปลายทาง (Destination)
+      {/* 3. Info note */}
+      <div className="flex gap-2 rounded-lg border border-border bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          <strong className="text-foreground">การนำไปใช้งาน:</strong>{" "}
+          วัตถุที่สร้างขึ้นในหน้านี้จะปรากฏให้เลือกในหน้าจอ <strong className="font-semibold text-primary">"Firewall Policy"</strong> ในช่อง ต้นทาง (Source) และ ปลายทาง (Destination)
           การแก้ไขค่าที่อยู่ไอพีของวัตถุใด ๆ จะมีผลปรับเปลี่ยนการบังคับใช้กฎไฟร์วอลล์ทั้งหมดที่เลือกใช้วัตถุนั้นทันทีโดยอัตโนมัติ
-        </AlertDescription>
-      </Alert>
+        </span>
+      </div>
 
-      {/* 6. Create / Edit Dialog */}
+      {/* 4. Create / Edit Dialog */}
       <Dialog open={isModalOpen} modal={false} onOpenChange={setIsModalOpen}>
-        <DialogContent ref={dialogContentRef} className="max-w-[500px] w-full rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up">
-          <DialogHeader className="pb-3 border-b border-border/40">
-            <DialogTitle className="text-lg font-bold text-foreground">
+        <DialogContent ref={dialogContentRef} className="w-full max-w-[500px] gap-4 rounded-xl p-6">
+          <DialogHeader className="border-b border-border/50 pb-3">
+            <DialogTitle className="text-base font-semibold">
               {editingObject ? "แก้ไขวัตถุที่อยู่ไอพี" : "สร้างวัตถุที่อยู่ไอพีใหม่"}
             </DialogTitle>
           </DialogHeader>
@@ -533,16 +525,16 @@ export default function Addresses() {
           {/* Form */}
           <form onSubmit={handleSave} className="space-y-4 text-sm">
             {formError && (
-              <Alert variant="destructive" className="border-red-500/20 bg-red-500/5 py-2.5 px-3">
-                <AlertCircle className="h-4 w-4 text-red-400" />
-                <AlertDescription className="text-red-400 text-xs">{formError}</AlertDescription>
+              <Alert variant="destructive" className="px-3 py-2.5">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-xs">{formError}</AlertDescription>
               </Alert>
             )}
 
             {/* Field: Name */}
             <div className="space-y-1.5">
-              <Label htmlFor="form-name" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                ชื่อวัตถุ (Name) <span className="text-red-500">*</span>
+              <Label htmlFor="form-name" className="block text-xs font-medium text-muted-foreground">
+                ชื่อวัตถุ (Name) <span className="text-destructive">*</span>
               </Label>
               <Input
                 id="form-name"
@@ -551,14 +543,14 @@ export default function Addresses() {
                 value={formName}
                 onChange={(e) => setFormName(e.target.value)}
                 placeholder="เช่น Web_Server_Subnet, Blocked_IPs"
-                className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono"
+                className="h-9 font-mono text-sm"
               />
-              <p className="text-[11px] text-muted-foreground italic">ห้ามเว้นวรรค ใช้ได้เฉพาะอักษรภาษาอังกฤษ ตัวเลข และ _</p>
+              <p className="mt-0.5 text-[10px] text-muted-foreground">ห้ามเว้นวรรค ใช้ได้เฉพาะอักษรภาษาอังกฤษ ตัวเลข และ _</p>
             </div>
 
             {/* Field: Type */}
             <div className="space-y-1.5">
-              <Label htmlFor="form-type" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+              <Label htmlFor="form-type" className="block text-xs font-medium text-muted-foreground">
                 ประเภทที่อยู่ (Type)
               </Label>
               <select
@@ -568,7 +560,7 @@ export default function Addresses() {
                   setFormType(e.target.value as "subnet" | "range" | "fqdn")
                   setFormValue("") // Reset value to avoid invalid placeholder confusion
                 }}
-                className="w-full bg-background border border-border rounded-lg h-9 px-2.5 text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
               >
                 <option value="subnet">Subnet (IP/Netmask)</option>
                 <option value="range">IP Range (ช่วงไอพี)</option>
@@ -578,8 +570,8 @@ export default function Addresses() {
 
             {/* Field: Value */}
             <div className="space-y-1.5">
-              <Label htmlFor="form-value" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                ค่าที่อยู่ไอพี (Value) <span className="text-red-500">*</span>
+              <Label htmlFor="form-value" className="block text-xs font-medium text-muted-foreground">
+                ค่าที่อยู่ไอพี (Value) <span className="text-destructive">*</span>
               </Label>
               <Input
                 id="form-value"
@@ -594,9 +586,9 @@ export default function Addresses() {
                       ? "เช่น 192.168.1.100 - 192.168.1.200"
                       : "เช่น google.com หรือ dev.pigate.local"
                 }
-                className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono"
+                className="h-9 font-mono text-sm"
               />
-              <p className="text-[11px] text-muted-foreground italic">
+              <p className="mt-0.5 text-[10px] text-muted-foreground">
                 {formType === "subnet" && "ระบุเป็น CIDR Format เช่น /24 หรือ /32 สำหรับไอพีเดี่ยว"}
                 {formType === "range" && "ระบุไอพีเริ่มต้น และไอพีสิ้นสุด คั่นกลางด้วยเครื่องหมาย -"}
                 {formType === "fqdn" && "ระบุชื่อโดเมน FQDN ที่ต้องการกรอง เช่น updates.raspberrypi.org"}
@@ -604,18 +596,18 @@ export default function Addresses() {
             </div>
 
             {/* Action Buttons */}
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-border/40">
+            <div className="flex items-center justify-end gap-3 border-t border-border/50 pt-4">
               <Button
                 type="button"
                 variant="ghost"
                 onClick={() => setIsModalOpen(false)}
-                className="cursor-pointer text-muted-foreground hover:bg-muted/30"
+                className="cursor-pointer text-muted-foreground"
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
-                className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/95 font-bold px-5"
+                className="cursor-pointer px-6 font-semibold"
               >
                 Save Object
               </Button>

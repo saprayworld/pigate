@@ -4,6 +4,7 @@ import { Loader2, Shield } from "lucide-react"
 import { authService } from "@/services/authService"
 import { ThemeProvider } from "@/components/ThemeProvider"
 import { AlertDialogProvider } from "@/components/AlertDialogProvider"
+import { TooltipProvider } from "@/components/ui/tooltip"
 import ShellLayout from "@/components/layout/ShellLayout"
 import Dashboard from "@/pages/Dashboard"
 import Interfaces from "@/pages/Interfaces"
@@ -101,75 +102,77 @@ export default function App() {
 
   return (
     <ThemeProvider defaultTheme="dark" storageKey="pigate-ui-theme">
-      <AlertDialogProvider>
-        <BrowserRouter>
+      <TooltipProvider>
+        <AlertDialogProvider>
+          <BrowserRouter>
 
-          <Routes>
-            {/* Public Login Route */}
-            <Route path="/login" element={<Login />} />
+            <Routes>
+              {/* Public Login Route */}
+              <Route path="/login" element={<Login />} />
 
-            {/* Force change password route */}
-            <Route
-              path="/change-password"
-              element={
-                <ChangePasswordRoute>
-                  <ForceChangePassword />
-                </ChangePasswordRoute>
-              }
-            />
+              {/* Force change password route */}
+              <Route
+                path="/change-password"
+                element={
+                  <ChangePasswordRoute>
+                    <ForceChangePassword />
+                  </ChangePasswordRoute>
+                }
+              />
 
-            <Route path="/api-docs" element={<ApiDocs />} />
+              <Route path="/api-docs" element={<ApiDocs />} />
 
-            {/* Protected Admin Routes under Shell Layout */}
-            <Route
-              path="/"
-              element={
-                <ProtectedRoute>
-                  <ShellLayout />
-                </ProtectedRoute>
-              }
-            >
-              {/* Index route redirects to /dashboard */}
-              <Route index element={<Navigate to="/dashboard" replace />} />
+              {/* Protected Admin Routes under Shell Layout */}
+              <Route
+                path="/"
+                element={
+                  <ProtectedRoute>
+                    <ShellLayout />
+                  </ProtectedRoute>
+                }
+              >
+                {/* Index route redirects to /dashboard */}
+                <Route index element={<Navigate to="/dashboard" replace />} />
 
-              <Route path="dashboard" element={<Dashboard />} />
+                <Route path="dashboard" element={<Dashboard />} />
 
-              {/* Network Routes */}
-              <Route path="network">
-                <Route path="interfaces" element={<Interfaces />} />
-                <Route path="dns" element={<DNS />} />
-                <Route path="dns-server" element={<DnsServer />} />
-                <Route path="routes" element={<StaticRoutes />} />
-                <Route path="dhcp" element={<DhcpServer />} />
-                <Route path="qos" element={<QoS />} />
+                {/* Network Routes */}
+                <Route path="network">
+                  <Route path="interfaces" element={<Interfaces />} />
+                  <Route path="dns" element={<DNS />} />
+                  <Route path="dns-server" element={<DnsServer />} />
+                  <Route path="routes" element={<StaticRoutes />} />
+                  <Route path="dhcp" element={<DhcpServer />} />
+                  <Route path="qos" element={<QoS />} />
+                </Route>
+
+                {/* Policy & Objects Routes */}
+                <Route path="policy">
+                  <Route path="firewall" element={<FirewallPolicy />} />
+                  <Route path="addresses" element={<Addresses />} />
+                  <Route path="services" element={<Services />} />
+                </Route>
+
+                {/* System Routes */}
+                <Route path="system">
+                  <Route path="settings" element={<SettingsMaintenance />} />
+                  <Route
+                    path="users"
+                    element={
+                      <SuperAdminRoute>
+                        <Users />
+                      </SuperAdminRoute>
+                    }
+                  />
+                </Route>
               </Route>
 
-              {/* Policy & Objects Routes */}
-              <Route path="policy">
-                <Route path="firewall" element={<FirewallPolicy />} />
-                <Route path="addresses" element={<Addresses />} />
-                <Route path="services" element={<Services />} />
-              </Route>
-
-              {/* System Routes */}
-              <Route path="system">
-                <Route path="settings" element={<SettingsMaintenance />} />
-                <Route
-                  path="users"
-                  element={
-                    <SuperAdminRoute>
-                      <Users />
-                    </SuperAdminRoute>
-                  }
-                />
-              </Route>
-            </Route>
-
-            {/* Fallback Catch-All Redirect */}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </BrowserRouter>
-      </AlertDialogProvider>
+              {/* Fallback Catch-All Redirect */}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </BrowserRouter>
+        </AlertDialogProvider>
+      </TooltipProvider>
     </ThemeProvider>
   )
 }

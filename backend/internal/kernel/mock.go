@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"pigate/internal/model"
@@ -213,7 +215,7 @@ func parseDhcpdLeases(filePath string) ([]model.ActiveDhcpLease, error) {
 		subParts := strings.SplitN(part, "{", 2)
 		ip := strings.TrimSpace(subParts[0])
 		body := subParts[1]
-		
+
 		var mac, hostname string
 		lines := strings.Split(body, "\n")
 		for _, line := range lines {
@@ -413,4 +415,106 @@ func (m *MockTimeManager) SetNTPServer(server string) error {
 	log.Printf("[MockTime] Simulating set NTP server to %q", server)
 	m.ntpServer = server
 	return nil
+}
+
+// MockSystemStats implements SystemStatsManager with simulated values that drift
+// over time, so the dashboard visibly moves during -mock development on WSL. The
+// CPU snapshot advances monotonically each call with a busy/idle mix that swings
+// gently, which the service's delta logic turns into a plausible usage%.
+type MockSystemStats struct {
+	mu       sync.Mutex
+	tick     uint64
+	totalJif uint64
+	idleJif  uint64
+}
+
+func NewMockSystemStats() *MockSystemStats {
+	return &MockSystemStats{}
+}
+
+// wave returns a smooth 0..1 oscillation offset by phase, driven by tick.
+func (m *MockSystemStats) wave(phase float64) float64 {
+	return (math.Sin(float64(m.tick)/6.0+phase) + 1) / 2
+}
+
+func (m *MockSystemStats) GetCPUSnapshot() (*model.CPUSnapshot, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tick++
+	// Each tick adds ~1000 jiffies total; the busy fraction swings ~10-45%.
+	busyFrac := 0.10 + 0.35*m.wave(0)
+	const step = 1000
+	m.totalJif += step
+	m.idleJif += uint64(float64(step) * (1 - busyFrac))
+	return &model.CPUSnapshot{Idle: m.idleJif, Total: m.totalJif}, nil
+}
+
+func (m *MockSystemStats) GetCPUInfo() (*model.CPUInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return &model.CPUInfo{
+		Cores:         4,
+		ModelName:     "Mock Cortex-A76 (simulated)",
+		FreqMHz:       round1(1500 + 900*m.wave(1)),
+		FreqAvailable: true,
+	}, nil
+}
+
+func (m *MockSystemStats) GetMemoryInfo() (*model.MemoryInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	const total = uint64(8) * 1024 * 1024 * 1024 // 8 GB
+	pct := 45 + 20*m.wave(2)
+	used := uint64(float64(total) * pct / 100.0)
+	return &model.MemoryInfo{UsedBytes: used, TotalBytes: total, Percent: round1(pct)}, nil
+}
+
+func (m *MockSystemStats) GetTemperature() (*model.TemperatureInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return &model.TemperatureInfo{
+		Celsius:         round1(52 + 10*m.wave(3)),
+		ThrottleCelsius: 80,
+		Available:       true,
+	}, nil
+}
+
+func (m *MockSystemStats) GetDiskUsage(path string) (*model.DiskUsage, error) {
+	const total = uint64(128) * 1024 * 1024 * 1024 // 128 GB
+	used := total * 32 / 100                       // ~32% used
+	return &model.DiskUsage{
+		Path:       path,
+		UsedBytes:  used,
+		TotalBytes: total,
+		Percent:    32.0,
+	}, nil
+}
+
+func (m *MockSystemStats) GetHostInfo() (*model.HostInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return &model.HostInfo{
+		OSName:        "PiGate Mock OS (simulated)",
+		BoardModel:    "Raspberry Pi 5 Model B (mock)",
+		KernelVersion: "6.6.31-mock",
+		// Fixed base + drift so the uptime advances during a session.
+		UptimeSeconds: int64(273153 + m.tick),
+	}, nil
+}
+
+func (m *MockSystemStats) GetNetCounters() (map[string]model.NetCounters, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Advance counters monotonically so the traffic collector sees positive
+	// deltas. rx grows faster than tx (typical download-heavy gateway). Counters
+	// are emitted for every interface the mock DB might mark WAN (eth0/eth1/
+	// wlan0) so the traffic chart moves regardless of which one is the WAN role.
+	rx := uint64(float64(m.tick) * (400_000 + 300_000*m.wave(4)))
+	tx := uint64(float64(m.tick) * (120_000 + 80_000*m.wave(5)))
+	return map[string]model.NetCounters{
+		"eth0":  {RxBytes: rx, TxBytes: tx},
+		"eth1":  {RxBytes: rx / 3, TxBytes: tx / 3},
+		"wlan0": {RxBytes: rx / 2, TxBytes: tx / 2},
+		"lo":    {RxBytes: rx * 4, TxBytes: rx * 4}, // must be excluded by collector
+	}, nil
 }

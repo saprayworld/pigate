@@ -44,7 +44,7 @@ function ApiDocs() {
                 <div className="flex items-center gap-3">
                     <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border bg-card text-sm font-medium">
                         {theme === 'dark' ? (
-                            <Moon className="w-4 h-4 text-indigo-400" />
+                            <Moon className="w-4 h-4 text-primary" />
                         ) : (
                             <Sun className="w-4 h-4 text-amber-500" />
                         )}

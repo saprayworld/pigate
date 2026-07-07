@@ -15,9 +15,10 @@ import {
   Network,
   Save,
   ArrowRightLeft,
-  Loader2
+  Loader2,
+  Activity
 } from "lucide-react"
-import { Card } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -25,6 +26,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
@@ -36,7 +38,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   type DhcpConfig,
   type DhcpReservation,
@@ -45,6 +47,38 @@ import {
 import { dhcpService } from "@/services/dhcpService"
 import { useAlert } from "@/hooks/useAlert"
 import { isValidIp } from "@/lib/utils"
+
+// Helper: Dashboard-style stat card (mirrors Dashboard's StatCard)
+function StatCard({
+  icon: Icon,
+  title,
+  value,
+  valueClassName = "",
+}: {
+  icon: typeof Server
+  title: string
+  value: string | number
+  valueClassName?: string
+}) {
+  return (
+    <Card size="sm" className="gap-0">
+      <CardHeader className="space-y-0">
+        <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <Icon className="h-4 w-4 shrink-0" />
+          <span className="text-foreground">{title}</span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-3">
+        <p
+          className={`truncate text-2xl font-bold tracking-tight text-foreground ${valueClassName}`}
+          title={typeof value === "string" ? value : undefined}
+        >
+          {value}
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
 
 export default function DhcpServer() {
   const { alert, confirm } = useAlert()
@@ -445,253 +479,243 @@ export default function DhcpServer() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* 1. Header Area */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
-            <Radio className="h-7 w-7 text-primary fill-primary/10" />
-            DHCP Server (ระบบจ่ายไอพีแอดเดรส)
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            กำหนดค่าการแจกจ่ายไอพีแอดเดรสอัตโนมัติภายในเครือข่าย และจัดการการจองไอพีคงที่ (Static Leases)
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {!isApplied && (
-            <Button
-              onClick={handleApplySettings}
-              disabled={isApplying}
-              className="cursor-pointer bg-amber-500 text-neutral-950 hover:bg-amber-400 font-bold gap-1.5 h-10 px-4 animate-pulse"
-            >
-              {isApplying ? (
-                <>
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                  Applying DHCP...
-                </>
-              ) : (
-                <>
-                  <Check className="h-4.5 w-4.5" />
-                  Apply DHCP Config
-                </>
-              )}
-            </Button>
-          )}
-          {isApplied && (
-            <div className="hidden sm:flex items-center gap-1.5 text-xs text-primary bg-primary/10 border border-primary/20 px-3 py-2 rounded-lg font-semibold">
-              <CheckCircle2 className="h-4 w-4" />
-              DHCP Service Active
-            </div>
-          )}
-        </div>
+    <div className="space-y-4">
+      {/* 1. Stats overview */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard
+          icon={Activity}
+          title="สถานะบริการ"
+          value={stats.status}
+          valueClassName={configs.some(c => c.enabled) ? "text-primary" : "text-muted-foreground"}
+        />
+        <StatCard icon={Radio} title="อินเตอร์เฟสหลัก" value={stats.activeInterfaces} valueClassName="font-mono text-lg leading-8" />
+        <StatCard icon={Network} title="การจองไอพีคงที่ (Static)" value={stats.reservationsCount} />
+        <StatCard icon={Server} title="ไอพีที่จ่ายใช้งานอยู่" value={stats.activeLeasesCount} />
       </div>
 
-      {/* 2. Stats Dashboard Cards */}
-      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">สถานะบริการ</div>
-          <div className={`mt-2 text-2xl font-bold font-mono ${configs.some(c => c.enabled) ? "text-primary" : "text-muted-foreground"}`}>
-            {stats.status}
+      {/* 2. IP Address Pools */}
+      <Card>
+        <CardHeader className="flex flex-col gap-4 space-y-0 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1">
+            <CardTitle className="flex items-center gap-2 text-base font-semibold">
+              <Server className="h-4 w-4 text-muted-foreground" />
+              IP Address Pools Configuration
+            </CardTitle>
+            <CardDescription className="text-xs">
+              การตั้งค่ากลุ่มจ่ายไอพีอัตโนมัติแยกตามอินเตอร์เฟส
+            </CardDescription>
           </div>
-        </Card>
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">อินเตอร์เฟสหลัก</div>
-          <div className="mt-2 text-sm font-bold text-foreground font-mono truncate" title={stats.activeInterfaces}>
-            {stats.activeInterfaces}
+          <div className="flex flex-wrap items-center gap-3">
+            {!isApplied && (
+              <Button
+                size="sm"
+                onClick={handleApplySettings}
+                disabled={isApplying}
+                className="animate-pulse cursor-pointer gap-1.5 bg-amber-500 font-semibold text-neutral-950 hover:bg-amber-400"
+              >
+                {isApplying ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    Applying DHCP...
+                  </>
+                ) : (
+                  <>
+                    <Check className="h-4 w-4" />
+                    Apply DHCP Config
+                  </>
+                )}
+              </Button>
+            )}
+            {isApplied && (
+              <div className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/10 px-3 text-xs font-medium text-primary">
+                <CheckCircle2 className="h-4 w-4" />
+                DHCP Service Active
+              </div>
+            )}
+            {availableInterfaces.length > 0 && (
+              <Button
+                size="sm"
+                onClick={openCreateConfigModal}
+                className="cursor-pointer gap-1.5 font-semibold"
+              >
+                <Plus className="h-4 w-4" />
+                Add DHCP Config
+              </Button>
+            )}
           </div>
-        </Card>
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <Network className="h-3.5 w-3.5 text-cyan-400" /> การจองไอพีคงที่ (Static)
-          </div>
-          <div className="mt-2 text-2xl font-bold text-cyan-400 font-mono">{stats.reservationsCount}</div>
-        </Card>
-        <Card className="bg-card/20 border border-border/50 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <Server className="h-3.5 w-3.5 text-amber-400" /> ไอพีที่จ่ายใช้งานอยู่
-          </div>
-          <div className="mt-2 text-2xl font-bold text-amber-400 font-mono">{stats.activeLeasesCount}</div>
-        </Card>
-      </div>
+        </CardHeader>
 
-      {/* 3. Config Cards Section */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
-            <Server className="h-5 w-5 text-primary" />
-            IP Address Pools Configuration (การตั้งค่ากลุ่มจ่ายไอพี)
-          </h2>
-          {availableInterfaces.length > 0 && (
-            <Button
-              onClick={openCreateConfigModal}
-              size="sm"
-              className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 font-bold gap-1 h-8 text-xs"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Add DHCP Config
-            </Button>
-          )}
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {configs.map((cfg) => (
-            <Card key={cfg.id} className="bg-card/25 border border-border/50 p-6 space-y-4 flex flex-col justify-between">
-              <div className="space-y-3">
-                <div className="flex items-center justify-between border-b border-border/40 pb-3">
-                  <div className="flex items-center gap-2">
-                    <Network className="h-5 w-5 text-primary" />
-                    <div>
-                      <h3 className="font-bold text-foreground text-sm">{cfg.interface}</h3>
-                      <p className="text-[11px] text-muted-foreground">DHCP Server Config</p>
+        <CardContent>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {configs.map((cfg) => (
+              <div key={cfg.id} className="flex flex-col justify-between gap-3 rounded-lg border border-border bg-muted/50 p-4">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between border-b border-border/50 pb-3">
+                    <div className="flex items-center gap-2">
+                      <Network className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <div>
+                        <div className="font-mono text-sm font-semibold text-foreground">{cfg.interface}</div>
+                        <p className="text-[11px] text-muted-foreground">DHCP Server Config</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        size="sm"
+                        checked={cfg.enabled}
+                        onCheckedChange={(checked) => handleToggleConfig(cfg.id!, checked)}
+                        className="cursor-pointer"
+                      />
+                      <Badge
+                        variant="outline"
+                        className={`rounded px-1.5 py-0 text-[10px] font-semibold ${cfg.enabled
+                          ? "border-primary/20 bg-primary/10 text-primary"
+                          : "border-border bg-muted text-muted-foreground"
+                          }`}
+                      >
+                        {cfg.enabled ? "ACTIVE" : "INACTIVE"}
+                      </Badge>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Switch
-                      checked={cfg.enabled}
-                      onCheckedChange={(checked) => handleToggleConfig(cfg.id!, checked)}
-                      className="data-[state=checked]:bg-primary scale-75 cursor-pointer"
-                    />
-                    <Badge variant={cfg.enabled ? "default" : "secondary"} className="text-[10px] px-1.5 font-bold">
-                      {cfg.enabled ? "ACTIVE" : "INACTIVE"}
-                    </Badge>
+
+                  {/* Config Details */}
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 text-xs">
+                    <div>
+                      <span className="block text-[10px] font-medium text-muted-foreground">IP Range</span>
+                      <span className="font-mono font-medium text-foreground">{cfg.startIp} - {cfg.endIp}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-medium text-muted-foreground">Subnet Mask</span>
+                      <span className="font-mono font-medium text-foreground">{cfg.netmask}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-medium text-muted-foreground">Gateway</span>
+                      <span className="font-mono font-medium text-foreground">{cfg.gateway || "—"}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-medium text-muted-foreground">Lease Time</span>
+                      <span className="font-mono font-medium text-foreground">{cfg.leaseTime}s ({Math.round(cfg.leaseTime / 3600)}h)</span>
+                    </div>
+                    <div className="col-span-2">
+                      <span className="block text-[10px] font-medium text-muted-foreground">DNS Servers</span>
+                      <span className="block truncate font-mono font-medium text-foreground">
+                        {cfg.dns1}{cfg.dns2 ? `, ${cfg.dns2}` : ""}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Config Details */}
-                <div className="grid grid-cols-2 gap-y-2.5 gap-x-4 text-xs font-mono">
-                  <div>
-                    <span className="text-muted-foreground block text-[10px] uppercase font-semibold tracking-wider font-sans">IP Range</span>
-                    <span className="text-foreground font-medium">{cfg.startIp} - {cfg.endIp}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[10px] uppercase font-semibold tracking-wider font-sans">Subnet Mask</span>
-                    <span className="text-foreground font-medium">{cfg.netmask}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[10px] uppercase font-semibold tracking-wider font-sans">Gateway</span>
-                    <span className="text-foreground font-medium">{cfg.gateway || "—"}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[10px] uppercase font-semibold tracking-wider font-sans">Lease Time</span>
-                    <span className="text-foreground font-medium">{cfg.leaseTime}s ({Math.round(cfg.leaseTime / 3600)}h)</span>
-                  </div>
-                  <div className="col-span-2">
-                    <span className="text-muted-foreground block text-[10px] uppercase font-semibold tracking-wider font-sans">DNS Servers</span>
-                    <span className="text-foreground font-medium truncate block">
-                      {cfg.dns1}{cfg.dns2 ? `, ${cfg.dns2}` : ""}
-                    </span>
-                  </div>
+                <div className="flex items-center justify-end gap-2 border-t border-border/50 pt-3">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => openEditConfigModal(cfg)}
+                    className="cursor-pointer gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    <Edit className="h-3.5 w-3.5" /> Edit
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleDeleteConfig(cfg.id!, cfg.interface)}
+                    className="cursor-pointer gap-1.5 text-xs text-red-500 hover:bg-red-500/10 hover:text-red-500"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Delete
+                  </Button>
                 </div>
               </div>
-
-              <div className="flex items-center justify-end gap-2 border-t border-border/30 pt-3 mt-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => openEditConfigModal(cfg)}
-                  className="cursor-pointer text-xs gap-1 hover:bg-muted/50 h-8 px-2"
-                >
-                  <Edit className="h-3.5 w-3.5" /> Edit
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleDeleteConfig(cfg.id!, cfg.interface)}
-                  className="cursor-pointer text-xs gap-1 text-red-400 hover:text-red-300 hover:bg-red-500/10 h-8 px-2"
-                >
-                  <Trash2 className="h-3.5 w-3.5" /> Delete
-                </Button>
+            ))}
+            {configs.length === 0 && (
+              <div className="col-span-full flex flex-col items-center justify-center rounded-lg border border-dashed border-border p-6 text-center">
+                <span className="text-sm text-muted-foreground">ยังไม่มีอินเตอร์เฟสเปิดจ่าย DHCP config</span>
               </div>
-            </Card>
-          ))}
-          {configs.length === 0 && (
-            <Card className="border border-dashed border-border p-6 flex flex-col items-center justify-center text-center col-span-full">
-              <span className="text-muted-foreground text-sm">ยังไม่มีอินเตอร์เฟสเปิดจ่าย DHCP config</span>
-            </Card>
-          )}
-        </div>
-      </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
-      {/* 4. Reservations & Leases split view */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* 3. Reservations & Leases split view */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* Left: Reservations */}
-        <Card className="bg-card/25 border border-border/50 p-6 space-y-4">
-          <div className="border-b border-border/40 pb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="text-md font-bold text-foreground flex items-center gap-2">
-              <Network className="h-4.5 w-4.5 text-cyan-400" />
-              MAC / IP Reservation (จองไอพีแอดเดรสคงที่)
-            </h2>
+        <Card>
+          <CardHeader className="flex flex-col gap-3 space-y-0 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                <Network className="h-4 w-4 text-muted-foreground" />
+                MAC / IP Reservation
+              </CardTitle>
+              <CardDescription className="text-xs">จองไอพีแอดเดรสคงที่ให้อุปกรณ์ตาม MAC Address</CardDescription>
+            </div>
             <Button
               onClick={openCreateResModal}
               size="sm"
-              className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 font-bold gap-1 h-8 text-xs"
+              className="cursor-pointer gap-1.5 font-semibold"
             >
-              <Plus className="h-3.5 w-3.5" />
+              <Plus className="h-4 w-4" />
               Add Reservation
             </Button>
-          </div>
+          </CardHeader>
 
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
-            <Input
-              type="text"
-              value={resSearchQuery}
-              onChange={(e) => setResSearchQuery(e.target.value)}
-              placeholder="ค้นหา Device Name, MAC หรือ IP Address..."
-              className="pl-8 bg-background/50 placeholder:text-muted-foreground h-9"
-            />
-          </div>
+          <CardContent className="space-y-4">
+            <div className="relative">
+              <Search className="pointer-events-none absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="text"
+                value={resSearchQuery}
+                onChange={(e) => setResSearchQuery(e.target.value)}
+                placeholder="ค้นหา Device Name, MAC หรือ IP Address..."
+                className="h-9 pl-8"
+              />
+            </div>
 
-          <div className="rounded-lg border border-border/50 overflow-hidden bg-background/20">
             <Table>
               <TableHeader>
-                <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
-                  <th className="p-3 text-left text-[11px] uppercase tracking-wider font-semibold">Device Name</th>
-                  <th className="p-3 text-left text-[11px] uppercase tracking-wider font-semibold">MAC Address</th>
-                  <th className="p-3 text-left text-[11px] uppercase tracking-wider font-semibold">Reserved IP</th>
-                  <th className="p-3 w-[15%] text-right"></th>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="text-xs font-medium text-muted-foreground">Device Name</TableHead>
+                  <TableHead className="text-xs font-medium text-muted-foreground">MAC Address</TableHead>
+                  <TableHead className="text-xs font-medium text-muted-foreground">Reserved IP</TableHead>
+                  <TableHead className="w-[15%] text-right text-xs font-medium text-muted-foreground"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredReservations.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={4} className="p-8 text-center text-muted-foreground text-xs">
+                    <TableCell colSpan={4} className="py-8 text-center text-xs text-muted-foreground">
                       {resSearchQuery ? "ไม่พบประวัติการจองตามที่ค้นหา" : "ยังไม่มีประวัติการจอง IP สำหรับอุปกรณ์คงที่"}
                     </TableCell>
                   </TableRow>
                 ) : (
                   filteredReservations.map((res) => (
-                    <TableRow key={res.id} className="border-b border-border/40 hover:bg-muted/15">
-                      <TableCell className="p-3">
-                        <span className="font-semibold text-foreground text-xs">{res.deviceName}</span>
+                    <TableRow key={res.id}>
+                      <TableCell className="py-3">
+                        <span className="text-xs font-medium text-foreground">{res.deviceName}</span>
                       </TableCell>
-                      <TableCell className="p-3 font-mono text-xs text-muted-foreground">
+                      <TableCell className="py-3 font-mono text-xs text-muted-foreground">
                         {res.macAddress}
                       </TableCell>
-                      <TableCell className="p-3 font-mono text-xs">
-                        <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20 text-xs px-2 py-0.5 rounded font-mono font-medium">
+                      <TableCell className="py-3">
+                        <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-2 py-0.5 font-mono text-xs font-medium text-primary">
                           {res.ipAddress}
                         </Badge>
                       </TableCell>
-                      <TableCell className="p-3 text-right">
-                        <div className="flex items-center justify-end gap-1">
+                      <TableCell className="py-3 text-right">
+                        <div className="flex items-center justify-end gap-2">
                           <Button
-                            variant="ghost"
-                            size="icon-xs"
+                            variant="outline"
+                            size="icon-sm"
                             onClick={() => openEditResModal(res)}
-                            className="cursor-pointer text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                            className="cursor-pointer text-muted-foreground hover:text-foreground"
                             title="แก้ไขการจอง"
                           >
-                            <Edit className="h-3.5 w-3.5" />
+                            <Edit className="h-4 w-4" />
                           </Button>
                           <Button
                             variant="ghost"
-                            size="icon-xs"
+                            size="icon-sm"
                             onClick={() => handleDeleteReservation(res.id, res.deviceName)}
-                            className="cursor-pointer text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
+                            className="cursor-pointer text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
                             title="ลบการจอง"
                           >
-                            <Trash2 className="h-3.5 w-3.5" />
+                            <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
                       </TableCell>
@@ -700,55 +724,58 @@ export default function DhcpServer() {
                 )}
               </TableBody>
             </Table>
-          </div>
+          </CardContent>
         </Card>
 
         {/* Right: Active Leases */}
-        <Card className="bg-card/25 border border-border/50 p-6 space-y-4">
-          <div className="border-b border-border/40 pb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="text-md font-bold text-foreground flex items-center gap-2">
-              <Server className="h-4.5 w-4.5 text-amber-400" />
-              Active DHCP Leases (อุปกรณ์ที่เชื่อมต่อในระบบขณะนี้)
-            </h2>
+        <Card>
+          <CardHeader className="flex flex-col gap-3 space-y-0 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                <Server className="h-4 w-4 text-muted-foreground" />
+                Active DHCP Leases
+              </CardTitle>
+              <CardDescription className="text-xs">อุปกรณ์ที่ได้รับไอพีและเชื่อมต่อในระบบขณะนี้</CardDescription>
+            </div>
             <Button
               onClick={handleRefreshLeases}
               disabled={isRefreshingLeases}
               variant="outline"
               size="sm"
-              className="cursor-pointer font-bold gap-1.5 h-8 text-xs border-border bg-card/40 hover:bg-card text-muted-foreground hover:text-foreground"
+              className="cursor-pointer gap-2"
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${isRefreshingLeases ? "animate-spin" : ""}`} />
+              <RefreshCw className={`h-4 w-4 ${isRefreshingLeases ? "animate-spin" : ""}`} />
               Refresh
             </Button>
-          </div>
+          </CardHeader>
 
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
-            <Input
-              type="text"
-              value={leaseSearchQuery}
-              onChange={(e) => setLeaseSearchQuery(e.target.value)}
-              placeholder="ค้นหา Hostname, IP, MAC หรือ Interface..."
-              className="pl-8 bg-background/50 placeholder:text-muted-foreground h-9"
-            />
-          </div>
+          <CardContent className="space-y-4">
+            <div className="relative">
+              <Search className="pointer-events-none absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="text"
+                value={leaseSearchQuery}
+                onChange={(e) => setLeaseSearchQuery(e.target.value)}
+                placeholder="ค้นหา Hostname, IP, MAC หรือ Interface..."
+                className="h-9 pl-8"
+              />
+            </div>
 
-          <div className="rounded-lg border border-border/50 overflow-hidden bg-background/20">
             <Table>
               <TableHeader>
-                <TableRow className="border-b border-border/50 bg-muted/20 font-semibold text-muted-foreground hover:bg-muted/20">
-                  <th className="p-3 text-left text-[11px] uppercase tracking-wider font-semibold">IP Address</th>
-                  <th className="p-3 text-left text-[11px] uppercase tracking-wider font-semibold">MAC Address</th>
-                  <th className="p-3 text-left text-[11px] uppercase tracking-wider font-semibold">Hostname</th>
-                  <th className="p-3 text-left text-[11px] uppercase tracking-wider font-semibold">Iface</th>
-                  <th className="p-3 text-left text-[11px] uppercase tracking-wider font-semibold">Expires</th>
-                  <th className="p-3 w-[15%] text-right"></th>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="text-xs font-medium text-muted-foreground">IP Address</TableHead>
+                  <TableHead className="text-xs font-medium text-muted-foreground">MAC Address</TableHead>
+                  <TableHead className="text-xs font-medium text-muted-foreground">Hostname</TableHead>
+                  <TableHead className="text-xs font-medium text-muted-foreground">Iface</TableHead>
+                  <TableHead className="text-xs font-medium text-muted-foreground">Expires</TableHead>
+                  <TableHead className="w-[15%] text-right text-xs font-medium text-muted-foreground"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredLeases.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="p-8 text-center text-muted-foreground text-xs">
+                    <TableCell colSpan={6} className="py-8 text-center text-xs text-muted-foreground">
                       ไม่พบอุปกรณ์เชื่อมต่อในระบบขณะนี้
                     </TableCell>
                   </TableRow>
@@ -756,27 +783,27 @@ export default function DhcpServer() {
                   filteredLeases.map((lease) => {
                     const isReserved = reservations.some(r => r.macAddress === lease.macAddress)
                     return (
-                      <TableRow key={lease.id} className="border-b border-border/40 hover:bg-muted/15">
-                        <TableCell className="p-3">
-                          <span className="font-mono text-xs font-semibold text-foreground">{lease.ipAddress}</span>
+                      <TableRow key={lease.id}>
+                        <TableCell className="py-3">
+                          <span className="font-mono text-xs font-medium text-foreground">{lease.ipAddress}</span>
                         </TableCell>
-                        <TableCell className="p-3 font-mono text-xs text-muted-foreground">
+                        <TableCell className="py-3 font-mono text-xs text-muted-foreground">
                           {lease.macAddress}
                         </TableCell>
-                        <TableCell className="p-3">
-                          <span className="font-semibold text-foreground text-xs truncate max-w-[90px] block" title={lease.hostname}>
+                        <TableCell className="py-3">
+                          <span className="block max-w-[90px] truncate text-xs font-medium text-foreground" title={lease.hostname}>
                             {lease.hostname}
                           </span>
                         </TableCell>
-                        <TableCell className="p-3 text-xs text-muted-foreground font-mono">
+                        <TableCell className="py-3 font-mono text-xs text-muted-foreground">
                           {lease.interface || "—"}
                         </TableCell>
-                        <TableCell className="p-3 text-[11px] text-muted-foreground font-mono">
+                        <TableCell className="py-3 font-mono text-[11px] text-muted-foreground">
                           {lease.expiresIn}
                         </TableCell>
-                        <TableCell className="p-3 text-right">
+                        <TableCell className="py-3 text-right">
                           {isReserved ? (
-                            <Badge className="bg-primary/10 text-primary border border-primary/20 text-[9px] px-1.5 py-0.5 rounded font-semibold font-mono">
+                            <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0 font-mono text-[10px] font-semibold text-primary">
                               Reserved
                             </Badge>
                           ) : (
@@ -784,10 +811,10 @@ export default function DhcpServer() {
                               variant="ghost"
                               size="sm"
                               onClick={() => handleConvertLeaseToReservation(lease)}
-                              className="cursor-pointer text-[10px] text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 font-medium py-0.5 px-1.5 h-6 gap-0.5"
+                              className="h-7 cursor-pointer gap-1 px-2 text-[11px] font-medium text-primary hover:bg-primary/10 hover:text-primary"
                               title="จองไอพีนี้"
                             >
-                              <ArrowRightLeft className="h-2.5 w-2.5" />
+                              <ArrowRightLeft className="h-3 w-3" />
                               Reserve
                             </Button>
                           )}
@@ -798,40 +825,40 @@ export default function DhcpServer() {
                 )}
               </TableBody>
             </Table>
-          </div>
+          </CardContent>
         </Card>
       </div>
 
-      {/* 5. Alert Help Box */}
-      <Alert className="border-dashed border-border bg-card/10">
-        <Info className="h-4 w-4 text-muted-foreground" />
-        <AlertTitle className="font-bold text-foreground mb-0.5">ระบบ DHCP Server (Dynamic Host Configuration Protocol):</AlertTitle>
-        <AlertDescription className="text-xs text-muted-foreground leading-relaxed">
+      {/* 4. Info note */}
+      <div className="flex gap-2 rounded-lg border border-border bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          <strong className="text-foreground">ระบบ DHCP Server (Dynamic Host Configuration Protocol):</strong>{" "}
           มีหน้าที่ในการแจกจ่ายข้อมูลการเชื่อมต่อเครือข่าย ได้แก่ IP Address, Netmask, Gateway และ DNS Server โดยอัตโนมัติ
           การจ่าย IP แบบหลายอินเตอร์เฟสช่วยให้ PiGate ทำงานแยกเครือข่าย (LAN Segment) ได้ เช่น eth0 และ eth1 โดยไม่เกี่ยวข้องกัน
-        </AlertDescription>
-      </Alert>
+        </span>
+      </div>
 
-      {/* 6. Config Pool Add/Edit Modal Dialog */}
+      {/* 5. Config Pool Add/Edit Modal Dialog */}
       <Dialog open={isConfigModalOpen} modal={false} onOpenChange={setIsConfigModalOpen}>
-        <DialogContent ref={dialogContentRef} className="max-w-[500px] w-full rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up">
-          <DialogHeader className="pb-3 border-b border-border/40">
-            <DialogTitle className="text-lg font-bold text-foreground">
+        <DialogContent ref={dialogContentRef} className="w-full max-w-[500px] gap-4 rounded-xl p-6">
+          <DialogHeader className="border-b border-border/50 pb-3">
+            <DialogTitle className="text-base font-semibold">
               {editingConfig ? `แก้ไขการตั้งค่า DHCP (${formInterface})` : "สร้างการตั้งค่า DHCP บนอินเตอร์เฟสใหม่"}
             </DialogTitle>
           </DialogHeader>
 
           <form onSubmit={handleSaveConfig} className="space-y-4 text-sm">
             {configError && (
-              <Alert variant="destructive" className="border-red-500/20 bg-red-500/5 py-2.5 px-3">
-                <AlertCircle className="h-4 w-4 text-red-400" />
-                <AlertDescription className="text-red-400 text-xs">{configError}</AlertDescription>
+              <Alert variant="destructive" className="px-3 py-2.5">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-xs">{configError}</AlertDescription>
               </Alert>
             )}
 
             {/* Field: Interface Selection */}
             <div className="space-y-1.5">
-              <Label htmlFor="modal-dhcp-iface" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+              <Label htmlFor="modal-dhcp-iface" className="block text-xs font-medium text-muted-foreground">
                 Interface (อินเตอร์เฟส)
               </Label>
               {editingConfig ? (
@@ -840,14 +867,14 @@ export default function DhcpServer() {
                   type="text"
                   disabled
                   value={formInterface}
-                  className="bg-muted border border-border rounded-lg h-9 px-2.5 text-xs text-muted-foreground"
+                  className="h-9 font-mono text-sm"
                 />
               ) : (
                 <select
                   id="modal-dhcp-iface"
                   value={formInterface}
                   onChange={(e) => setFormInterface(e.target.value)}
-                  className="w-full bg-background border border-border rounded-lg h-9 px-2.5 text-xs text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                  className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
                 >
                   {availableInterfaces.map(iface => (
                     <option key={iface} value={iface}>{iface}</option>
@@ -859,8 +886,8 @@ export default function DhcpServer() {
             {/* IP Pool Range Grid */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label htmlFor="modal-start-ip" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                  Starting IP Address
+                <Label htmlFor="modal-start-ip" className="block text-xs font-medium text-muted-foreground">
+                  Starting IP Address <span className="text-destructive">*</span>
                 </Label>
                 <Input
                   id="modal-start-ip"
@@ -869,12 +896,12 @@ export default function DhcpServer() {
                   value={formStartIp}
                   onChange={(e) => setFormStartIp(e.target.value)}
                   placeholder="เช่น 192.168.1.100"
-                  className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                  className="h-9 font-mono text-sm"
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="modal-end-ip" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                  Ending IP Address
+                <Label htmlFor="modal-end-ip" className="block text-xs font-medium text-muted-foreground">
+                  Ending IP Address <span className="text-destructive">*</span>
                 </Label>
                 <Input
                   id="modal-end-ip"
@@ -883,7 +910,7 @@ export default function DhcpServer() {
                   value={formEndIp}
                   onChange={(e) => setFormEndIp(e.target.value)}
                   placeholder="เช่น 192.168.1.200"
-                  className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                  className="h-9 font-mono text-sm"
                 />
               </div>
             </div>
@@ -891,8 +918,8 @@ export default function DhcpServer() {
             {/* Gateway & Netmask Grid */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label htmlFor="modal-gateway-ip" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                  Default Gateway
+                <Label htmlFor="modal-gateway-ip" className="block text-xs font-medium text-muted-foreground">
+                  Default Gateway <span className="text-destructive">*</span>
                 </Label>
                 <Input
                   id="modal-gateway-ip"
@@ -901,12 +928,12 @@ export default function DhcpServer() {
                   value={formGateway}
                   onChange={(e) => setFormGateway(e.target.value)}
                   placeholder="เช่น 192.168.1.1"
-                  className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                  className="h-9 font-mono text-sm"
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="modal-netmask-ip" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                  Subnet Mask
+                <Label htmlFor="modal-netmask-ip" className="block text-xs font-medium text-muted-foreground">
+                  Subnet Mask <span className="text-destructive">*</span>
                 </Label>
                 <Input
                   id="modal-netmask-ip"
@@ -915,7 +942,7 @@ export default function DhcpServer() {
                   value={formNetmask}
                   onChange={(e) => setFormNetmask(e.target.value)}
                   placeholder="255.255.255.0"
-                  className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                  className="h-9 font-mono text-sm"
                 />
               </div>
             </div>
@@ -923,7 +950,7 @@ export default function DhcpServer() {
             {/* DNS Grid */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label htmlFor="modal-dns-1" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                <Label htmlFor="modal-dns-1" className="block text-xs font-medium text-muted-foreground">
                   DNS Server 1
                 </Label>
                 <Input
@@ -932,11 +959,11 @@ export default function DhcpServer() {
                   value={formDns1}
                   onChange={(e) => setFormDns1(e.target.value)}
                   placeholder="8.8.8.8"
-                  className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                  className="h-9 font-mono text-sm"
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="modal-dns-2" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
+                <Label htmlFor="modal-dns-2" className="block text-xs font-medium text-muted-foreground">
                   DNS Server 2
                 </Label>
                 <Input
@@ -945,15 +972,15 @@ export default function DhcpServer() {
                   value={formDns2}
                   onChange={(e) => setFormDns2(e.target.value)}
                   placeholder="1.1.1.1"
-                  className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                  className="h-9 font-mono text-sm"
                 />
               </div>
             </div>
 
             {/* Lease Time */}
             <div className="space-y-1.5">
-              <Label htmlFor="modal-lease-time" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                Lease Time (Seconds)
+              <Label htmlFor="modal-lease-time" className="block text-xs font-medium text-muted-foreground">
+                Lease Time (Seconds) <span className="text-destructive">*</span>
               </Label>
               <Input
                 id="modal-lease-time"
@@ -963,24 +990,24 @@ export default function DhcpServer() {
                 value={formLeaseTime}
                 onChange={(e) => setFormLeaseTime(e.target.value)}
                 placeholder="86400 (24 ชั่วโมง)"
-                className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                className="h-9 font-mono text-sm"
               />
             </div>
 
             {/* Action Buttons */}
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-border/40">
+            <div className="flex items-center justify-end gap-3 border-t border-border/50 pt-4">
               <Button
                 type="button"
                 variant="ghost"
                 onClick={() => setIsConfigModalOpen(false)}
-                className="cursor-pointer text-muted-foreground hover:bg-muted/30 h-9"
+                className="cursor-pointer text-muted-foreground"
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
                 disabled={isSavingConfig}
-                className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/95 font-bold px-5 h-9"
+                className="cursor-pointer gap-2 px-6 font-semibold"
               >
                 {isSavingConfig ? (
                   <>
@@ -999,27 +1026,27 @@ export default function DhcpServer() {
         </DialogContent>
       </Dialog>
 
-      {/* 7. Reservation Add/Edit Modal Dialog */}
+      {/* 6. Reservation Add/Edit Modal Dialog */}
       <Dialog open={isResModalOpen} modal={false} onOpenChange={setIsResModalOpen}>
-        <DialogContent ref={dialogContentRef} className="max-w-[450px] w-full rounded-xl border border-border bg-card p-6 gap-4 animate-scale-up">
-          <DialogHeader className="pb-3 border-b border-border/40">
-            <DialogTitle className="text-lg font-bold text-foreground">
+        <DialogContent ref={dialogContentRef} className="w-full max-w-[450px] gap-4 rounded-xl p-6">
+          <DialogHeader className="border-b border-border/50 pb-3">
+            <DialogTitle className="text-base font-semibold">
               {editingReservation ? "แก้ไขการจองไอพี (Edit Reservation)" : "จองไอพีสำหรับอุปกรณ์ใหม่ (Add Reservation)"}
             </DialogTitle>
           </DialogHeader>
 
           <form onSubmit={handleSaveReservation} className="space-y-4 text-sm">
             {resError && (
-              <Alert variant="destructive" className="border-red-500/20 bg-red-500/5 py-2.5 px-3">
-                <AlertCircle className="h-4 w-4 text-red-400" />
-                <AlertDescription className="text-red-400 text-xs">{resError}</AlertDescription>
+              <Alert variant="destructive" className="px-3 py-2.5">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-xs">{resError}</AlertDescription>
               </Alert>
             )}
 
             {/* Field: Device Name */}
             <div className="space-y-1.5">
-              <Label htmlFor="res-name" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                Device Name (ชื่ออุปกรณ์) <span className="text-red-500">*</span>
+              <Label htmlFor="res-name" className="block text-xs font-medium text-muted-foreground">
+                Device Name (ชื่ออุปกรณ์) <span className="text-destructive">*</span>
               </Label>
               <Input
                 id="res-name"
@@ -1028,14 +1055,14 @@ export default function DhcpServer() {
                 value={resDeviceName}
                 onChange={(e) => setResDeviceName(e.target.value)}
                 placeholder="เช่น Printer-Office, CEO-iPad"
-                className="bg-background/50 placeholder:text-muted-foreground h-9 text-xs"
+                className="h-9 text-sm"
               />
             </div>
 
             {/* Field: MAC Address */}
             <div className="space-y-1.5">
-              <Label htmlFor="res-mac" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                MAC Address <span className="text-red-500">*</span>
+              <Label htmlFor="res-mac" className="block text-xs font-medium text-muted-foreground">
+                MAC Address <span className="text-destructive">*</span>
               </Label>
               <Input
                 id="res-mac"
@@ -1044,17 +1071,17 @@ export default function DhcpServer() {
                 value={resMacAddress}
                 onChange={(e) => setResMacAddress(e.target.value)}
                 placeholder="เช่น A1:B2:C3:D4:E5:F6"
-                className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                className="h-9 font-mono text-sm"
               />
-              <p className="text-[11px] text-muted-foreground italic">
+              <p className="mt-0.5 text-[10px] text-muted-foreground">
                 รูปแบบตัวเลขฐานสิบหก 12 ตัวแบ่งด้วยโคลอน (Colon-separated)
               </p>
             </div>
 
             {/* Field: Reserved IP */}
             <div className="space-y-1.5">
-              <Label htmlFor="res-ip" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-                Reserved IP Address <span className="text-red-500">*</span>
+              <Label htmlFor="res-ip" className="block text-xs font-medium text-muted-foreground">
+                Reserved IP Address <span className="text-destructive">*</span>
               </Label>
               <Input
                 id="res-ip"
@@ -1063,27 +1090,24 @@ export default function DhcpServer() {
                 value={resIpAddress}
                 onChange={(e) => setResIpAddress(e.target.value)}
                 placeholder="เช่น 192.168.1.15"
-                className="bg-background/50 placeholder:text-muted-foreground h-9 font-mono text-xs"
+                className="h-9 font-mono text-sm"
               />
-              <p className="text-[11px] text-muted-foreground italic">
+              <p className="mt-0.5 text-[10px] text-muted-foreground">
                 แนะนำให้เลือกไอพีที่อยู่นอกกลุ่ม DHCP IP Pool เพื่อหลีกเลี่ยงไอพีชนกัน
               </p>
             </div>
 
             {/* Action Buttons */}
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-border/40">
+            <div className="flex items-center justify-end gap-3 border-t border-border/50 pt-4">
               <Button
                 type="button"
                 variant="ghost"
                 onClick={() => setIsResModalOpen(false)}
-                className="cursor-pointer text-muted-foreground hover:bg-muted/30 h-9"
+                className="cursor-pointer text-muted-foreground"
               >
                 Cancel
               </Button>
-              <Button
-                type="submit"
-                className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/95 font-bold px-5 h-9"
-              >
+              <Button type="submit" className="cursor-pointer px-6 font-semibold">
                 {editingReservation ? "Save Changes" : "Create Reservation"}
               </Button>
             </div>

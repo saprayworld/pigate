@@ -42,7 +42,7 @@
   * ระบบยืนยันสิทธิ์เซสชันย้อนกลับ `/api/auth/session` พร้อมระบบบังคับเปลี่ยนรหัสผ่านครั้งแรก (IsInitial check) บล็อกการเข้าถึง endpoint อื่นและบังคับนำไปสู่หน้า `/change-password`
 * **REST API Endpoints ทั้งหมด (10 กลุ่ม) [สำเร็จ]:**
   * **Authentication:** POST /auth/login, POST /auth/logout, GET /auth/session
-  * **Dashboard:** GET /dashboard/stats, GET /dashboard/performance, GET /dashboard/logs, POST /dashboard/logs/clear, GET /dashboard/logs/stream (SSE)
+  * **Dashboard:** GET /dashboard/stats, GET /dashboard/performance, GET /dashboard/traffic, GET /dashboard/logs, POST /dashboard/logs/clear, GET /dashboard/logs/stream (SSE), GET /system/info
   * **Network Interfaces:** GET, PUT, PATCH, DELETE /interfaces, POST /interfaces/{id}/toggle, POST /interfaces/{id}/reset, GET /interfaces/{id}/scan, GET /interfaces/{id}/wifi-status
   * **Firewall Policies:** GET, POST /policies, PUT, DELETE /policies/{id}, PUT /policies/reorder, POST /policies/{id}/toggle-log, POST /policies/{id}/toggle-status, POST /policies/apply
   * **Address Objects:** GET, POST /addresses, PUT, DELETE /addresses/{id}, POST /addresses/bulk-delete
@@ -129,7 +129,7 @@
 > **ข้อจำกัดในการทดสอบระดับ Kernel Integration (Kernel Mode Limitations):**
 > * การเข้าถึงเพื่อจัดการ IP Address, Routing Table, และ nftables ผ่าน Netlink จะต้องใช้สิทธิ์ของระบบปฏิบัติการระดับสูง (`root` หรือการตั้งค่า Linux Capabilities ในแบบ `cap_net_admin,cap_net_raw+ep`)
 > * ในระหว่างการพัฒนาบนเครื่องคอมพิวเตอร์ทั่วไป (Development PC) จะเปิดใช้งานโหมดจำลอง (`-mock=true`) เพื่อเก็บสเตตทำงานทั้งหมดไว้บน SQLite และ Memory เสมอ โดยข้อมูลแลน/Wi-Fi (eth0, wlan0) จะไม่ถูก Seeding ในโหมดจริงเพื่อป้องกันการทับซ้อนกับการ์ดจริงของเครื่องเซิร์ฟเวอร์
-> * ฟีเจอร์ที่ยังเป็นการจำลอง (Mock) อยู่: **Firewall Rule Counters**, **Firewall Log Streaming** (อ่านจาก In-Memory Ring Buffer ที่ seed ข้อมูลตัวอย่าง ยังไม่ได้อ่าน Kernel Log จริง), **รายการ/รีสตาร์ท System Services**, **Power Control (Reboot/Shutdown)** และค่า **Dashboard บางส่วน** (Total Traffic, CPU/RAM/Temp ยังเป็นค่าจำลอง — ส่วน DHCP Lease Count และสถานะ Wi-Fi เป็นข้อมูลจริงแล้ว)
+> * ฟีเจอร์ที่ยังเป็นการจำลอง (Mock) อยู่: **Firewall Rule Counters**, **Firewall Log Streaming** (อ่านจาก In-Memory Ring Buffer ที่ seed ข้อมูลตัวอย่าง ยังไม่ได้อ่าน Kernel Log จริง), **รายการ/รีสตาร์ท System Services** และ **Power Control (Reboot/Shutdown)** — ส่วนค่า **Dashboard System Status** (CPU/RAM/Temp/Storage/Uptime/OS/Bandwidth) เป็นข้อมูลจริงแล้ว (อ่านจาก `/proc`, `/sys`, `statfs`, netlink) เช่นเดียวกับ DHCP Lease Count และสถานะ Wi-Fi
 
 > [!WARNING]
 > **งานคุณภาพโค้ดที่ค้างอยู่ (ดู [docs/ref/todo/](ref/todo/)):**
@@ -158,8 +158,10 @@
   * เรียกใช้ข้อมูล Hit packet และ byte counters จาก `expr.Counter` บน nftables rules นำเสนอเป็นข้อมูล Telemetry เรียลไทม์ผ่าน API ไปแสดงผลในตารางกฎหน้าเว็บโดยไม่ต้องสั่งเขียนบันทึกลง SD card ของบอร์ด
 * [ ] **พัฒนาระบบล็อกความปลอดภัยสตรีมสด (Firewall Logs Stream):**
   * พัฒนาตัวอ่านข้อมูล Kernel Logs (`/dev/kmsg` หรือ Journald) ที่มีข้อความ Prefix เป็น `[PiGate]` นำเข้าสู่ In-Memory Ring Buffer และจัดส่งเป็นสตรีมข้อมูลสด (Server-Sent Events) ไปแสดงบนหน้า Dashboard ของแอดมิน
-* [ ] **พัฒนาข้อมูล Dashboard จริง (Real Dashboard Metrics):**
-  * แทนที่ค่าจำลอง Total Traffic In/Out และ CPU/RAM/Temperature ด้วยข้อมูลจริงจากระบบ (เช่น interface statistics ผ่าน Netlink และ `/proc` / `/sys/class/thermal`) — ปัจจุบัน DHCP Lease Count และสถานะ Wi-Fi เป็นข้อมูลจริงแล้ว
+* [x] **พัฒนาข้อมูล Dashboard จริง (Real Dashboard Metrics):** _(เสร็จแล้ว)_
+  * แทนที่ค่าจำลอง Total Traffic In/Out และ CPU/RAM/Temperature/Storage/Uptime/OS ด้วยข้อมูลจริงจากระบบผ่าน `SystemStatsManager` (อ่าน `/proc/stat`, `/proc/meminfo`, `/proc/cpuinfo`, `/sys/class/thermal`, `/sys/.../cpufreq`, `statfs`, `/etc/os-release`, `/proc/uptime`, `/proc/device-tree/model` และ netlink interface counters — ไม่มี shell exec)
+  * CPU usage คำนวณจาก background sampler (2 snapshots), traffic history เก็บใน RAM ring buffer (288 buckets × 5 นาที = 24 ชม., ไม่เขียน SQLite), ค่า optional (temp/freq/board) degrade เป็น `available:false`/omit บนเครื่องที่ไม่มี sysfs node (เช่น WSL/x86)
+  * เส้น API: `GET /api/dashboard/performance` (อัปเกรด), `GET /api/system/info` (ใหม่), `GET /api/dashboard/traffic` (ใหม่), `GET /api/dashboard/stats` (traffic จริง)
 * [ ] **พัฒนาระบบจัดการ System Services จริง:**
   * แทนที่รายการ Services จำลอง (`HandleGetSystemServices` / `HandleRestartService`) ด้วยการอ่านสถานะและสั่ง restart unit จริงผ่าน systemd D-Bus
 * [ ] **พัฒนาระบบ Power Control จริง (Reboot/Shutdown):**

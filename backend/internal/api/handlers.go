@@ -40,6 +40,7 @@ type Server struct {
 	timeService       *service.TimeService
 	userService       *service.UserService
 	backupService     *service.BackupService
+	systemStatus      *service.SystemStatusService
 }
 
 func NewServer(
@@ -61,6 +62,7 @@ func NewServer(
 	timeService *service.TimeService,
 	userService *service.UserService,
 	backupService *service.BackupService,
+	systemStatus *service.SystemStatusService,
 ) *Server {
 	return &Server{
 		repo:              repo,
@@ -81,6 +83,7 @@ func NewServer(
 		timeService:       timeService,
 		userService:       userService,
 		backupService:     backupService,
+		systemStatus:      systemStatus,
 	}
 }
 
@@ -267,26 +270,38 @@ func (s *Server) HandleGetDashboardStats(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	trafficIn, trafficOut := s.systemStatus.GetTrafficTotals()
+
 	stats := model.DashboardStats{
-		FirewallStatus:  "Active",
-		TotalTrafficIn:  "8.7 GB",
-		TotalTrafficOut: "3.7 GB",
-		DhcpLeasesCount: len(leases),
-		WifiStatus:      wifiStatus,
-		WifiSSID:        wifiSSID,
+		FirewallStatus:       "Active",
+		TotalTrafficInBytes:  trafficIn,
+		TotalTrafficOutBytes: trafficOut,
+		DhcpLeasesCount:      len(leases),
+		WifiStatus:           wifiStatus,
+		WifiSSID:             wifiSSID,
 	}
 
 	s.writeJSON(w, http.StatusOK, stats)
 }
 
+// HandleGetPerformanceMetrics returns real host telemetry (CPU/mem/temp/storage)
+// composed by SystemStatusService. The flat cpu/memory/temp fields are retained
+// for backward-compatibility; *Detail objects carry the richer data.
 func (s *Server) HandleGetPerformanceMetrics(w http.ResponseWriter, r *http.Request) {
-	// Simulated values reflecting typical board states
-	metrics := model.PerformanceMetrics{
-		CPU:    15.4,
-		Memory: 42.1,
-		Temp:   48.5,
-	}
-	s.writeJSON(w, http.StatusOK, metrics)
+	s.writeJSON(w, http.StatusOK, s.systemStatus.GetSystemMetrics())
+}
+
+// HandleGetSystemInfo returns hostname / version / OS / uptime / system time for
+// the Dashboard's System Information card.
+func (s *Server) HandleGetSystemInfo(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, http.StatusOK, s.systemStatus.GetSystemInfo())
+}
+
+// HandleGetTrafficHistory returns the RAM-buffered rx/tx history for the
+// Bandwidth chart. Buckets accumulate since boot (fewer buckets right after a
+// reboot is expected; the frontend copes).
+func (s *Server) HandleGetTrafficHistory(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, http.StatusOK, s.systemStatus.GetTrafficHistory())
 }
 
 func (s *Server) HandleGetRecentLogs(w http.ResponseWriter, r *http.Request) {

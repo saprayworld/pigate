@@ -13,19 +13,74 @@ export interface TrafficData {
   outbound: number;
 }
 
+export interface CpuDetail {
+  usagePercent: number;
+  cores: number;
+  modelName: string;
+  freqMhz: number;
+  freqAvailable: boolean;
+}
+
+export interface MemDetail {
+  usedBytes: number;
+  totalBytes: number;
+  percent: number;
+}
+
+export interface TempDetail {
+  celsius: number;
+  throttleCelsius: number;
+  available: boolean;
+}
+
+export interface StorageDetail {
+  path: string;
+  usedBytes: number;
+  totalBytes: number;
+  percent: number;
+}
+
 export interface PerformanceMetrics {
+  // Flat fields retained for backward-compatibility.
   cpu: number;
   memory: number;
   temp: number;
+  // Richer detail objects used by the redesigned dashboard.
+  cpuDetail: CpuDetail;
+  memDetail: MemDetail;
+  tempDetail: TempDetail;
+  storage: StorageDetail;
 }
 
 export interface DashboardStats {
   firewallStatus: string;
-  totalTrafficIn: string;
-  totalTrafficOut: string;
+  totalTrafficInBytes: number;
+  totalTrafficOutBytes: number;
   dhcpLeasesCount: number;
   wifiStatus: string;
   wifiSSID: string;
+}
+
+export interface SystemInfo {
+  hostname: string;
+  version: string;
+  osName: string;
+  boardModel?: string;
+  kernelVersion?: string;
+  uptimeSeconds: number;
+  systemTime: string;
+  timezone: string;
+}
+
+export interface TrafficBucket {
+  ts: string;
+  rxBytes: number;
+  txBytes: number;
+}
+
+export interface TrafficHistory {
+  interfaces: string[];
+  buckets: TrafficBucket[];
 }
 
 const LOGS_STORAGE_KEY = "pigate_dashboard_logs";
@@ -64,8 +119,8 @@ export const dashboardService = {
       }
       return {
         firewallStatus: "Active",
-        totalTrafficIn: "8.7 GB",
-        totalTrafficOut: "3.7 GB",
+        totalTrafficInBytes: 9_345_678_901,
+        totalTrafficOutBytes: 3_987_654_321,
         dhcpLeasesCount: leaseCount,
         wifiStatus: "wlan0 Master",
         wifiSSID: "PiGate-Secure",
@@ -86,14 +141,86 @@ export const dashboardService = {
       await new Promise((resolve) => setTimeout(resolve, 150));
       // Generate randomized values matching typical loads
       const cpu = Math.round((12 + Math.random() * 10) * 10) / 10;
-      const memory = Math.round((14.5 + Math.random() * 1) * 10) / 10;
+      const memPct = Math.round((45 + Math.random() * 15) * 10) / 10;
       const temp = Math.round((47.5 + Math.random() * 2) * 10) / 10;
-      return { cpu, memory, temp };
+      const totalMem = 8 * 1024 ** 3;
+      return {
+        cpu,
+        memory: memPct,
+        temp,
+        cpuDetail: {
+          usagePercent: cpu,
+          cores: 4,
+          modelName: "Cortex-A76 (mock)",
+          freqMhz: 2400,
+          freqAvailable: true,
+        },
+        memDetail: {
+          usedBytes: Math.round((totalMem * memPct) / 100),
+          totalBytes: totalMem,
+          percent: memPct,
+        },
+        tempDetail: { celsius: temp, throttleCelsius: 80, available: true },
+        storage: {
+          path: "/",
+          usedBytes: Math.round(128 * 1024 ** 3 * 0.32),
+          totalBytes: 128 * 1024 ** 3,
+          percent: 32,
+        },
+      };
     }
 
     const response = await fetch(`${API_BASE_URL}/dashboard/performance`);
     if (!response.ok) {
       throw new Error(`Failed to fetch performance metrics: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  // Get host identity for the System Information card
+  getSystemInfo: async (): Promise<SystemInfo> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return {
+        hostname: "PiGate-RPI5",
+        version: "mock",
+        osName: "Raspberry Pi OS (64-bit) (mock)",
+        boardModel: "Raspberry Pi 5 Model B (mock)",
+        kernelVersion: "6.6.31-mock",
+        uptimeSeconds: 273153,
+        systemTime: new Date().toISOString(),
+        timezone: "Asia/Bangkok",
+      };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/system/info`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch system info: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  // Get WAN bandwidth history (RAM ring buffer of 5-minute buckets)
+  getTrafficHistory: async (): Promise<TrafficHistory> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const now = Date.now();
+      const buckets: TrafficBucket[] = [];
+      for (let i = 47; i >= 0; i--) {
+        const ts = new Date(now - i * 5 * 60 * 1000);
+        const load = 0.5 + Math.sin((i / 48) * Math.PI * 2) * 0.5;
+        buckets.push({
+          ts: ts.toISOString(),
+          rxBytes: Math.round((2 + load * 8) * 1024 ** 2),
+          txBytes: Math.round((0.5 + load * 2) * 1024 ** 2),
+        });
+      }
+      return { interfaces: ["eth0"], buckets };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/dashboard/traffic`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch traffic history: ${response.statusText}`);
     }
     return response.json();
   },

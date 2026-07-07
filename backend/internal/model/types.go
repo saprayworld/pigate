@@ -126,37 +126,37 @@ type PolicyRuleInput struct {
 
 // NetworkInterface represents hardware or virtual network cards configuration
 type NetworkInterface struct {
-	ID                   string       `json:"id"`
-	Name                 string       `json:"name"`  // e.g. "eth0", "wlan0"
-	Alias                string       `json:"alias"` // e.g. "LAN_Internal"
-	Role                 string       `json:"role"`  // "LAN", "WAN"
-	Type                 string       `json:"type"`  // "ethernet", "wireless"
-	Subtype              string       `json:"subtype"` // e.g. "device", "veth", "bridge", "vlan"
-	AddressingMode       string       `json:"addressingMode"`
-	IP                   string       `json:"ip"`
-	Netmask              string       `json:"netmask"`
-	Gateway              string       `json:"gateway"`
-	Metric               *int         `json:"metric,omitempty"` // nil = auto (static: 100, dhcp: dhcpcd default); sets default-route priority for WAN failover
-	MacAddress           string       `json:"macAddress"`
-	AdminAccess          []string     `json:"adminAccess"` // PING, HTTP, HTTPS, SSH
-	Status               string       `json:"status"`      // "up", "down"
-	Speed                string       `json:"speed"`       // e.g. "1000 Mbps"
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`    // e.g. "eth0", "wlan0"
+	Alias          string   `json:"alias"`   // e.g. "LAN_Internal"
+	Role           string   `json:"role"`    // "LAN", "WAN"
+	Type           string   `json:"type"`    // "ethernet", "wireless"
+	Subtype        string   `json:"subtype"` // e.g. "device", "veth", "bridge", "vlan"
+	AddressingMode string   `json:"addressingMode"`
+	IP             string   `json:"ip"`
+	Netmask        string   `json:"netmask"`
+	Gateway        string   `json:"gateway"`
+	Metric         *int     `json:"metric,omitempty"` // nil = auto (static: 100, dhcp: dhcpcd default); sets default-route priority for WAN failover
+	MacAddress     string   `json:"macAddress"`
+	AdminAccess    []string `json:"adminAccess"` // PING, HTTP, HTTPS, SSH
+	Status         string   `json:"status"`      // "up", "down"
+	Speed          string   `json:"speed"`       // e.g. "1000 Mbps"
 
-	WifiSSID             *string      `json:"wifiSSID,omitempty"`
-	WifiPassword         *string      `json:"wifiPassword,omitempty"`
-	WifiSecurity         *string      `json:"wifiSecurity,omitempty"`
-	MacMode              *string      `json:"macMode,omitempty"` // "hardware", "randomized", "laa"
-	RealMacAddress       *string      `json:"realMacAddress,omitempty"`
-	RandomizedMac        *string      `json:"randomizedMac,omitempty"`
-	LaaMacAddress        *string      `json:"laaMacAddress,omitempty"`
-	RandomizeOnReconnect *bool        `json:"randomizeOnReconnect,omitempty"`
-	FailoverEnabled      *bool        `json:"failoverEnabled,omitempty"`
-	BackupSSID           *string      `json:"backupSsid,omitempty"`
-	BackupWifiPassword   *string      `json:"backupWifiPassword,omitempty"`
-	BackupWifiSecurity   *string      `json:"backupWifiSecurity,omitempty"`
-	IPCheckTimeout       *int         `json:"ipCheckTimeout,omitempty"`
-	PrimaryMaxRetries    *int         `json:"primaryMaxRetries,omitempty"`
-	FailoverCooldown     *int         `json:"failoverCooldown,omitempty"`
+	WifiSSID             *string `json:"wifiSSID,omitempty"`
+	WifiPassword         *string `json:"wifiPassword,omitempty"`
+	WifiSecurity         *string `json:"wifiSecurity,omitempty"`
+	MacMode              *string `json:"macMode,omitempty"` // "hardware", "randomized", "laa"
+	RealMacAddress       *string `json:"realMacAddress,omitempty"`
+	RandomizedMac        *string `json:"randomizedMac,omitempty"`
+	LaaMacAddress        *string `json:"laaMacAddress,omitempty"`
+	RandomizeOnReconnect *bool   `json:"randomizeOnReconnect,omitempty"`
+	FailoverEnabled      *bool   `json:"failoverEnabled,omitempty"`
+	BackupSSID           *string `json:"backupSsid,omitempty"`
+	BackupWifiPassword   *string `json:"backupWifiPassword,omitempty"`
+	BackupWifiSecurity   *string `json:"backupWifiSecurity,omitempty"`
+	IPCheckTimeout       *int    `json:"ipCheckTimeout,omitempty"`
+	PrimaryMaxRetries    *int    `json:"primaryMaxRetries,omitempty"`
+	FailoverCooldown     *int    `json:"failoverCooldown,omitempty"`
 }
 
 // WifiScanResult represents SSID scanner results
@@ -170,9 +170,9 @@ type WifiScanResult struct {
 
 // WifiConnectionStatus represents the current real-time state of a Wi-Fi connection
 type WifiConnectionStatus struct {
-	State     string `json:"state"` // e.g. "COMPLETED", "DISCONNECTED", "SCANNING", etc.
-	SSID      string `json:"ssid"`  // Connected network name
-	BSSID     string `json:"bssid"` // MAC address of the connected AP
+	State     string `json:"state"`     // e.g. "COMPLETED", "DISCONNECTED", "SCANNING", etc.
+	SSID      string `json:"ssid"`      // Connected network name
+	BSSID     string `json:"bssid"`     // MAC address of the connected AP
 	ActiveMac string `json:"activeMac"` // The currently active/effective MAC address of the interface
 	Freq      int    `json:"freq"`      // Frequency in MHz (e.g. 5180)
 	KeyMgmt   string `json:"keyMgmt"`   // Security protocol (e.g. "WPA3", "WPA2", "Open")
@@ -291,30 +291,144 @@ type FirewallLog struct {
 	Reason string `json:"reason"`
 }
 
-// PerformanceMetrics represents hardware state logs
-type PerformanceMetrics struct {
+// DashboardStats represents widgets counters. TotalTraffic{In,Out}Bytes are the
+// cumulative rx/tx byte totals observed since boot (RAM-only, reset on reboot);
+// the frontend formats them for display.
+type DashboardStats struct {
+	FirewallStatus       string `json:"firewallStatus"`
+	TotalTrafficInBytes  uint64 `json:"totalTrafficInBytes"`
+	TotalTrafficOutBytes uint64 `json:"totalTrafficOutBytes"`
+	DhcpLeasesCount      int    `json:"dhcpLeasesCount"`
+	WifiStatus           string `json:"wifiStatus"`
+	WifiSSID             string `json:"wifiSSID"`
+}
+
+// =============================================================================
+// System Status / Telemetry Types (Dashboard)
+//
+// These back the real System Information / System Status widgets. All values
+// are read-only host telemetry (/proc, /sys, statfs, netlink counters) — no
+// method that produces them ever mutates system state. Fields flagged as
+// "optional/available" degrade gracefully on environments (WSL, x86) that lack
+// the relevant sysfs node, rather than failing the whole response.
+// =============================================================================
+
+// CPUSnapshot holds raw cumulative CPU jiffies from the aggregate "cpu" line of
+// /proc/stat. Usage% is derived by the service layer from the delta between two
+// snapshots taken a few seconds apart (a single snapshot has no meaning).
+type CPUSnapshot struct {
+	Idle  uint64 // idle + iowait jiffies
+	Total uint64 // sum of all jiffie fields (user, nice, system, idle, iowait, ...)
+}
+
+// CPUInfo describes static CPU identity plus the current scaling frequency.
+// FreqAvailable is false when /sys cpufreq is absent (common on WSL / VMs).
+type CPUInfo struct {
+	Cores         int     `json:"cores"`
+	ModelName     string  `json:"modelName"`
+	FreqMHz       float64 `json:"freqMhz"`
+	FreqAvailable bool    `json:"freqAvailable"`
+}
+
+// MemoryInfo is RAM usage derived from /proc/meminfo (used = total - available).
+// Its JSON shape doubles as the `memDetail` object in the performance response.
+type MemoryInfo struct {
+	UsedBytes  uint64  `json:"usedBytes"`
+	TotalBytes uint64  `json:"totalBytes"`
+	Percent    float64 `json:"percent"`
+}
+
+// TemperatureInfo is the SoC temperature. Available=false when no thermal zone
+// exists (WSL / x86 dev boxes); Celsius is meaningless in that case.
+type TemperatureInfo struct {
+	Celsius         float64 `json:"celsius"`
+	ThrottleCelsius float64 `json:"throttleCelsius"`
+	Available       bool    `json:"available"`
+}
+
+// DiskUsage is filesystem usage for a mount path (from unix.Statfs). Its JSON
+// shape doubles as the `storage` object in the performance response.
+type DiskUsage struct {
+	Path       string  `json:"path"`
+	UsedBytes  uint64  `json:"usedBytes"`
+	TotalBytes uint64  `json:"totalBytes"`
+	Percent    float64 `json:"percent"`
+}
+
+// HostInfo carries OS / board / kernel / uptime identity. BoardModel and
+// KernelVersion are best-effort; an empty string means "unavailable" and the
+// API omits the corresponding field.
+type HostInfo struct {
+	OSName        string
+	BoardModel    string
+	KernelVersion string
+	UptimeSeconds int64
+}
+
+// NetCounters holds cumulative rx/tx byte counters for one interface, read from
+// netlink LinkAttrs.Statistics.
+type NetCounters struct {
+	RxBytes uint64
+	TxBytes uint64
+}
+
+// CPUDetail is the `cpuDetail` object in the performance response: static CPU
+// identity plus the live usage percentage computed by the sampler.
+type CPUDetail struct {
+	UsagePercent  float64 `json:"usagePercent"`
+	Cores         int     `json:"cores"`
+	ModelName     string  `json:"modelName"`
+	FreqMHz       float64 `json:"freqMhz"`
+	FreqAvailable bool    `json:"freqAvailable"`
+}
+
+// SystemMetrics is the /api/dashboard/performance response. The flat cpu/memory/
+// temp fields are retained for backward-compatibility with the current
+// dashboardService.ts; the *Detail objects carry the richer new data.
+type SystemMetrics struct {
 	CPU    float64 `json:"cpu"`
 	Memory float64 `json:"memory"`
 	Temp   float64 `json:"temp"`
+
+	CPUDetail  CPUDetail       `json:"cpuDetail"`
+	MemDetail  MemoryInfo      `json:"memDetail"`
+	TempDetail TemperatureInfo `json:"tempDetail"`
+	Storage    DiskUsage       `json:"storage"`
 }
 
-// DashboardStats represents widgets counters
-type DashboardStats struct {
-	FirewallStatus  string `json:"firewallStatus"`
-	TotalTrafficIn  string `json:"totalTrafficIn"`
-	TotalTrafficOut string `json:"totalTrafficOut"`
-	DhcpLeasesCount int    `json:"dhcpLeasesCount"`
-	WifiStatus      string `json:"wifiStatus"`
-	WifiSSID        string `json:"wifiSSID"`
+// SystemInfo is the /api/system/info response (System Information card).
+// BoardModel/KernelVersion are omitted when unreadable (e.g. WSL).
+type SystemInfo struct {
+	Hostname      string `json:"hostname"`
+	Version       string `json:"version"`
+	OSName        string `json:"osName"`
+	BoardModel    string `json:"boardModel,omitempty"`
+	KernelVersion string `json:"kernelVersion,omitempty"`
+	UptimeSeconds int64  `json:"uptimeSeconds"`
+	SystemTime    string `json:"systemTime"`
+	Timezone      string `json:"timezone"`
+}
+
+// TrafficBucket is one time-bucketed rx/tx delta in the bandwidth history.
+type TrafficBucket struct {
+	Ts      string `json:"ts"` // RFC3339 bucket start (device local time)
+	RxBytes uint64 `json:"rxBytes"`
+	TxBytes uint64 `json:"txBytes"`
+}
+
+// TrafficHistory is the /api/dashboard/traffic response.
+type TrafficHistory struct {
+	Interfaces []string        `json:"interfaces"`
+	Buckets    []TrafficBucket `json:"buckets"`
 }
 
 // DNSConfig represents system-wide DNS settings
 type DNSConfig struct {
-	Mode         string               `json:"mode"` // "wan", "static"
-	PrimaryDNS   string               `json:"primaryDns"`
-	SecondaryDNS string               `json:"secondaryDns"`
-	LocalDomain  string               `json:"localDomain"`
-	DynamicDNS   []DynamicDNSServer   `json:"dynamicDnsServers"`
+	Mode         string             `json:"mode"` // "wan", "static"
+	PrimaryDNS   string             `json:"primaryDns"`
+	SecondaryDNS string             `json:"secondaryDns"`
+	LocalDomain  string             `json:"localDomain"`
+	DynamicDNS   []DynamicDNSServer `json:"dynamicDnsServers"`
 }
 
 // DNSConfigInput represents payload to update DNS configuration
@@ -341,18 +455,18 @@ type DynamicDNSServer struct {
 // Phase 2: IngressRateMbps/IngressCeilMbps (Client Upload) via IFB device.
 // A value of 0 for Rate/Ceil means unlimited (no shaping applied).
 type QosRule struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Interface        string `json:"interface"`        // e.g. "eth0"
-	MatchSrcIP       string `json:"matchSrcIp"`       // CIDR e.g. "172.24.25.0/24", empty = match all
-	MatchDstIP       string `json:"matchDstIp"`       // CIDR e.g. "0.0.0.0/0", empty = match all
-	EgressRateMbps   int    `json:"egressRateMbps"`   // Client Download guaranteed rate, 0 = unlimited
-	EgressCeilMbps   int    `json:"egressCeilMbps"`   // Client Download burst ceiling, 0 = unlimited
-	IngressRateMbps  int    `json:"ingressRateMbps"`  // Client Upload rate via IFB (Phase 2), 0 = unlimited
-	IngressCeilMbps  int    `json:"ingressCeilMbps"`  // Client Upload burst ceiling via IFB (Phase 2)
-	Priority         int    `json:"priority"`         // Filter priority (lower = matched first)
-	Status           bool   `json:"status"`           // true = enabled, false = disabled
-	Description      string `json:"description"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Interface       string `json:"interface"`       // e.g. "eth0"
+	MatchSrcIP      string `json:"matchSrcIp"`      // CIDR e.g. "172.24.25.0/24", empty = match all
+	MatchDstIP      string `json:"matchDstIp"`      // CIDR e.g. "0.0.0.0/0", empty = match all
+	EgressRateMbps  int    `json:"egressRateMbps"`  // Client Download guaranteed rate, 0 = unlimited
+	EgressCeilMbps  int    `json:"egressCeilMbps"`  // Client Download burst ceiling, 0 = unlimited
+	IngressRateMbps int    `json:"ingressRateMbps"` // Client Upload rate via IFB (Phase 2), 0 = unlimited
+	IngressCeilMbps int    `json:"ingressCeilMbps"` // Client Upload burst ceiling via IFB (Phase 2)
+	Priority        int    `json:"priority"`        // Filter priority (lower = matched first)
+	Status          bool   `json:"status"`          // true = enabled, false = disabled
+	Description     string `json:"description"`
 }
 
 // QosRuleInput is the create/update payload for QosRule.

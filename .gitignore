@@ -35,6 +35,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# claude
+.claude
+
 # pigate
 /pigate
 /backend/pigate
@@ -44,3 +47,4 @@ next-env.d.ts
 pigate.db
 pigate.db-shm
 pigate.db-wal
+pigate.db.*

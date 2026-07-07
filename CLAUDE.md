@@ -70,7 +70,7 @@ Startup sequence in `cmd/pigate/main.go` matters: DB init → kernel manager sel
 ### Frontend styling rules (`docs/rules_of_work.md`)
 - No hardcoded Tailwind color classes for brand/status colors (e.g. `text-emerald-500`) — always go through theme variables (`text-primary`, `bg-primary/10`, etc.) declared in `src/index.css`.
 - Flat design only: no `shadow-*` or `backdrop-blur-*` classes anywhere.
-- Dialogs/Modals containing portal components (Combobox, Select, Popover) must use `<Dialog modal={false}>` to avoid Radix's focus/pointer blocker breaking dropdown clicks.
+- Dialogs/Modals must use `<Dialog modal={false}>` **only when they contain a Combobox input field** (Radix's focus/pointer blocker breaks its dropdown clicks); Dialogs without a Combobox keep the default modal behavior.
 - Dark/light mode must both be supported; use the semantic color variables, not raw palette classes.
 
 ## Documentation map (`docs/`)
