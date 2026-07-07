@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom"
-import { EllipsisVerticalIcon, Settings, LogOut, Moon, Sun } from "lucide-react"
+import { EllipsisVerticalIcon, Settings, LogOut, Moon, Sun, Power, RefreshCw } from "lucide-react"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Switch } from "@/components/ui/switch"
@@ -10,6 +10,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
@@ -18,13 +21,17 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
+import { usePowerControl } from "@/hooks/usePowerControl"
 import { authService } from "@/services/authService"
 import { useTheme } from "@/hooks/useTheme"
+import { useAlert } from "@/hooks/useAlert"
 
 export function NavUser() {
   const { isMobile } = useSidebar()
   const navigate = useNavigate()
   const { theme, setTheme } = useTheme()
+  const { confirm } = useAlert()
+  const power = usePowerControl()
 
   const role = authService.getRole()
   const username = authService.getUsername() || "admin"
@@ -36,6 +43,22 @@ export function NavUser() {
     // Clears session token, role, username and the must-change flag.
     void authService.logout()
     navigate("/login")
+  }
+
+  const handleReboot = async () => {
+    const ok = await confirm(
+      "ยืนยันการรีบูตระบบ",
+      "คุณต้องการสั่งรีบูตเครื่อง (Restart) บอร์ด PiGate ใช่หรือไม่? การเชื่อมต่อเครือข่ายทั้งหมดผ่านพอร์ต WAN/LAN จะสิ้นสุดชั่วคราวจนกว่าระบบจะกลับมาทำงานอีกครั้ง"
+    )
+    if (ok) await power.reboot()
+  }
+
+  const handleShutdown = async () => {
+    const ok = await confirm(
+      "ยืนยันการปิดเครื่อง",
+      "คุณต้องการสั่งปิดระบบ (Shutdown) ใช่หรือไม่? ตัวเครื่องจะหยุดทำงานและระบบจะตัดการจ่ายกำลังไฟเลี้ยงบอร์ด"
+    )
+    if (ok) await power.shutdown()
   }
 
   return (
@@ -110,6 +133,34 @@ export function NavUser() {
               />
             </DropdownMenuItem>
             <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+                System
+              </DropdownMenuLabel>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <Power className="size-4" />
+                  <span>Power</span>
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="min-w-40">
+                  <DropdownMenuItem
+                    onSelect={() => void handleReboot()}
+                    className="text-red-500 focus:bg-destructive/10 focus:text-destructive dark:text-red-400"
+                  >
+                    <RefreshCw className="size-4" />
+                    Restart
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => void handleShutdown()}
+                    className="text-red-500 focus:bg-destructive/10 focus:text-destructive dark:text-red-400"
+                  >
+                    <Power className="size-4" />
+                    Shutdown
+                  </DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
             <DropdownMenuItem
               onClick={handleLogout}
               className="text-red-500 focus:bg-destructive/10 focus:text-destructive dark:text-red-400"
@@ -120,6 +171,7 @@ export function NavUser() {
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>
+      {power.overlay}
     </SidebarMenu>
   )
 }

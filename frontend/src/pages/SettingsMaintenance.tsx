@@ -52,6 +52,7 @@ import {
   type NetworkServiceStatus
 } from "@/data-mockup/mockData"
 import { systemService, type SystemHostnameSettings, type ImportResult } from "@/services/systemService"
+import { usePowerControl } from "@/hooks/usePowerControl"
 import { authService } from "@/services/authService"
 import { useAlert } from "@/hooks/useAlert"
 import { buildTimeZoneOptions } from "@/lib/timezones"
@@ -123,10 +124,10 @@ export default function SettingsMaintenance() {
   })
   const [hostnameFeedback, setHostnameFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null)
 
-  // Power control States
+  // Power control — action state/overlays are shared with the sidebar user menu
+  // via usePowerControl; this page owns only the confirmation dialog toggle.
   const [powerDialog, setPowerDialog] = useState<"reboot" | "shutdown" | null>(null)
-  const [powerStatus, setPowerStatus] = useState<"idle" | "rebooting" | "shutting-down" | "powered-off">("idle")
-  const [rebootCountdown, setRebootCountdown] = useState(5)
+  const power = usePowerControl()
 
   // Backup & Restore States
   const [importFile, setImportFile] = useState<File | null>(null)
@@ -302,60 +303,16 @@ export default function SettingsMaintenance() {
     }
   }
 
-  // Reboot Action
-  const handleConfirmReboot = async () => {
+  // Reboot / Shutdown — close the confirm dialog then hand off to the shared
+  // power controller (drives the backend + full-screen status overlays).
+  const handleConfirmReboot = () => {
     setPowerDialog(null)
-    setPowerStatus("rebooting")
-    try {
-      await systemService.reboot()
-    } catch (err) {
-      await alert("ข้อผิดพลาด", "Failed to reboot system: " + getErrorMessage(err))
-      setPowerStatus("idle")
-      return
-    }
-
-    let count = 5
-    setRebootCountdown(count)
-
-    const interval = setInterval(() => {
-      count -= 1
-      setRebootCountdown(count)
-      if (count <= 0) {
-        clearInterval(interval)
-        setPowerStatus("idle")
-      }
-    }, 1000)
+    void power.reboot()
   }
 
-  // Shutdown Action
-  const handleConfirmShutdown = async () => {
+  const handleConfirmShutdown = () => {
     setPowerDialog(null)
-    setPowerStatus("shutting-down")
-    try {
-      await systemService.shutdown()
-      setTimeout(() => {
-        setPowerStatus("powered-off")
-      }, 3000)
-    } catch (err) {
-      await alert("ข้อผิดพลาด", "Failed to shutdown system: " + getErrorMessage(err))
-      setPowerStatus("idle")
-    }
-  }
-
-  // Simulated Power On
-  const handlePowerOn = () => {
-    setPowerStatus("rebooting")
-    let count = 3
-    setRebootCountdown(count)
-
-    const interval = setInterval(() => {
-      count -= 1
-      setRebootCountdown(count)
-      if (count <= 0) {
-        clearInterval(interval)
-        setPowerStatus("idle")
-      }
-    }, 1000)
+    void power.shutdown()
   }
 
   // Build the download filename per the backup naming convention:
@@ -530,67 +487,12 @@ export default function SettingsMaintenance() {
     )
   }
 
-  // --- Render Reboot / Shutdown Full-Screen Overlays ---
-  if (powerStatus === "rebooting") {
-    return (
-      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background text-foreground font-mono">
-        <div className="space-y-6 text-center max-w-md p-6">
-          <Loader2 className="mx-auto h-16 w-16 text-primary animate-spin" />
-          <h2 className="text-2xl font-bold tracking-wider text-primary">REBOOTING PIGATE SYSTEM</h2>
-          <p className="text-muted-foreground text-sm leading-relaxed">
-            กำลังรีสตาร์ทบริการ Linux Kernel และตัวประมวลผลเครือข่าย PiGate... กรุณารอสักครู่
-          </p>
-          <div className="text-5xl font-extrabold text-foreground font-mono tabular-nums">
-            {rebootCountdown > 0 ? rebootCountdown : "OK"}
-          </div>
-          <div className="text-[11px] text-muted-foreground/60 border border-border bg-muted p-2 rounded">
-            systemctl daemon-reexec && reboot
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (powerStatus === "shutting-down") {
-    return (
-      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background text-foreground font-mono">
-        <div className="space-y-6 text-center max-w-md p-6">
-          <Loader2 className="mx-auto h-16 w-16 text-red-500 animate-spin" />
-          <h2 className="text-2xl font-bold tracking-wider text-red-500">SHUTTING DOWN SYSTEM</h2>
-          <p className="text-muted-foreground text-sm leading-relaxed">
-            กำลังสั่งหยุดโปรเซสเครือข่าย, ถอนการเชื่อมต่อดิสก์ และปิดไฟเลี้ยงบอร์ด Raspberry Pi 5...
-          </p>
-          <div className="text-[11px] text-muted-foreground/60 border border-border bg-muted p-2 rounded">
-            systemctl poweroff -i
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (powerStatus === "powered-off") {
-    return (
-      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background text-muted-foreground font-mono">
-        <div className="space-y-6 text-center max-w-md p-6 border border-border bg-card rounded-xl p-8">
-          <Power className="mx-auto h-14 w-14 text-muted-foreground" />
-          <h2 className="text-xl font-bold tracking-wider text-muted-foreground">SYSTEM OFFLINE</h2>
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            บอร์ด PiGate ปิดการใช้งานแล้วอย่างปลอดภัย ไฟแสดงสถานะบนบอร์ดเป็นสีแดงทึบ คุณสามารถถอดสายไฟออกได้ทันที
-          </p>
-          <Button
-            onClick={handlePowerOn}
-            className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 font-bold w-full gap-2 mt-4"
-          >
-            <Power className="h-4 w-4" />
-            Power On (เปิดเครื่องจำลอง)
-          </Button>
-        </div>
-      </div>
-    )
-  }
+  // Reboot / shutdown / powered-off full-screen overlays are rendered by the
+  // shared usePowerControl().overlay (see the end of this component's tree).
 
   return (
     <div className="space-y-4">
+      {power.overlay}
       {/* Tabs selection */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="grid grid-cols-2 max-w-[320px]">
