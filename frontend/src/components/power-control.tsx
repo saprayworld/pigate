@@ -1,7 +1,5 @@
 import { Power, Loader2 } from "lucide-react"
 
-import { Button } from "@/components/ui/button"
-
 export type PowerStatus = "idle" | "rebooting" | "shutting-down" | "powered-off"
 
 // Full-screen status overlays shown while the board is rebooting / shutting
@@ -10,7 +8,6 @@ export type PowerStatus = "idle" | "rebooting" | "shutting-down" | "powered-off"
 export function PowerStatusOverlay({
   status,
   countdown,
-  onPowerOn,
 }: {
   status: PowerStatus
   countdown: number
