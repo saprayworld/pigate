@@ -25,11 +25,11 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -375,16 +375,17 @@ export default function Users() {
         </CardContent>
       </Card>
 
-      {/* Create / Edit Dialog — modal={false} required for the native role select
-          per rules_of_work.md (portal-in-dialog interaction). */}
-      <Dialog open={isModalOpen} modal={false} onOpenChange={setIsModalOpen}>
-        <DialogContent className="w-full max-w-[480px] gap-4 rounded-xl p-6">
-          <DialogHeader className="border-b border-border/50 pb-3">
-            <DialogTitle className="text-base font-semibold">
+      {/* Create / Edit Drawer — no modal={false} needed; the native role select
+          works fine under the default modal behavior (see rules_of_work.md §1.3). */}
+      <Drawer direction="right" open={isModalOpen} onOpenChange={setIsModalOpen}>
+        <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[480px]">
+          <DrawerHeader className="border-b border-border/50">
+            <DrawerTitle className="text-base font-semibold">
               {editingUser ? `แก้ไขผู้ใช้: ${editingUser.username}` : "สร้างผู้ใช้ใหม่"}
-            </DialogTitle>
-          </DialogHeader>
+            </DrawerTitle>
+          </DrawerHeader>
 
+          <div className="flex-1 overflow-y-auto p-4">
           <form onSubmit={handleSave} className="space-y-4 text-sm">
             {formError && (
               <Alert variant="destructive" className="px-3 py-2.5">
@@ -498,8 +499,9 @@ export default function Users() {
               </Button>
             </div>
           </form>
-        </DialogContent>
-      </Dialog>
+          </div>
+        </DrawerContent>
+      </Drawer>
     </div>
   )
 }

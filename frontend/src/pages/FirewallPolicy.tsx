@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { getErrorMessage } from "@/lib/errors"
 import {
   Flame,
@@ -40,11 +40,11 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertTitle, AlertDescription, AlertAction } from "@/components/ui/alert"
@@ -408,9 +408,6 @@ export default function FirewallPolicy() {
   const destAnchor = useComboboxAnchor()
   const serviceAnchor = useComboboxAnchor()
 
-  // Ref for DialogContent to container-portal the combobox popups
-  const dialogContentRef = useRef<HTMLDivElement | null>(null)
-
   // Form Fields
   const [formName, setFormName] = useState<string>("")
   const [formInInterface, setFormInInterface] = useState<string>("ALL")
@@ -771,15 +768,19 @@ export default function FirewallPolicy() {
         </span>
       </div>
 
-      <Dialog open={isModalOpen} modal={false} onOpenChange={setIsModalOpen}>
-        <DialogContent ref={dialogContentRef} className="w-full gap-4 rounded-xl p-6 md:max-w-[85vw] lg:max-w-[960px]">
-          <DialogHeader className="border-b border-border/50 pb-3">
-            <DialogTitle className="text-base font-semibold">
+      {/* modal={false} is required here (unlike other Drawers): the base-ui
+          Combobox chip popups are blocked by vaul's pointer overlay otherwise —
+          see rules_of_work.md §1.3. */}
+      <Drawer direction="right" open={isModalOpen} modal={false} onOpenChange={setIsModalOpen}>
+        <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[960px]">
+          <DrawerHeader className="border-b border-border/50">
+            <DrawerTitle className="text-base font-semibold">
               {editingRule ? "แก้ไขนโยบายความปลอดภัย" : "สร้างนโยบายความปลอดภัยใหม่"}
-            </DialogTitle>
-          </DialogHeader>
+            </DrawerTitle>
+          </DrawerHeader>
 
           {/* Form */}
+          <div className="flex-1 overflow-y-auto p-4">
           <form onSubmit={handleSaveForm} className="space-y-4 text-sm">
             {/* Row 1: Name & Service/Port */}
             <div className="grid gap-4 sm:grid-cols-2">
@@ -1005,8 +1006,9 @@ export default function FirewallPolicy() {
               </Button>
             </div>
           </form>
-        </DialogContent>
-      </Dialog>
+          </div>
+        </DrawerContent>
+      </Drawer>
     </div>
   )
 }

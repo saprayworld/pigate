@@ -29,11 +29,11 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -747,14 +747,15 @@ export default function DnsServer() {
       </div>
 
       {/* 4. Zone Add/Edit Dialog Modal */}
-      <Dialog open={isZoneModalOpen} modal={false} onOpenChange={setIsZoneModalOpen}>
-        <DialogContent className="w-full max-w-[450px] gap-4 rounded-xl p-6">
-          <DialogHeader className="border-b border-border/50 pb-3">
-            <DialogTitle className="text-base font-semibold">
+      <Drawer direction="right" open={isZoneModalOpen} onOpenChange={setIsZoneModalOpen}>
+        <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[450px]">
+          <DrawerHeader className="border-b border-border/50">
+            <DrawerTitle className="text-base font-semibold">
               {editingZone ? "แก้ไข DNS Zone" : "เพิ่ม DNS Zone ใหม่"}
-            </DialogTitle>
-          </DialogHeader>
+            </DrawerTitle>
+          </DrawerHeader>
 
+          <div className="flex-1 overflow-y-auto p-4">
           <form onSubmit={handleSaveZone} className="space-y-4 text-sm">
             {zoneError && (
               <Alert variant="destructive" className="px-3 py-2.5">
@@ -846,18 +847,20 @@ export default function DnsServer() {
               </Button>
             </div>
           </form>
-        </DialogContent>
-      </Dialog>
+          </div>
+        </DrawerContent>
+      </Drawer>
 
-      {/* 5. Record Add/Edit Dialog Modal */}
-      <Dialog open={isRecModalOpen} modal={false} onOpenChange={setIsRecModalOpen}>
-        <DialogContent className="w-full max-w-[450px] gap-4 rounded-xl p-6">
-          <DialogHeader className="border-b border-border/50 pb-3">
-            <DialogTitle className="text-base font-semibold">
+      {/* 5. Record Add/Edit Drawer */}
+      <Drawer direction="right" open={isRecModalOpen} onOpenChange={setIsRecModalOpen}>
+        <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[450px]">
+          <DrawerHeader className="border-b border-border/50">
+            <DrawerTitle className="text-base font-semibold">
               {editingRecord ? "แก้ไข DNS Record" : `เพิ่ม DNS Record ในโซน ${selectedZone?.zoneName}`}
-            </DialogTitle>
-          </DialogHeader>
+            </DrawerTitle>
+          </DrawerHeader>
 
+          <div className="flex-1 overflow-y-auto p-4">
           <form onSubmit={handleSaveRecord} className="space-y-4 text-sm">
             {recError && (
               <Alert variant="destructive" className="px-3 py-2.5">
@@ -969,8 +972,9 @@ export default function DnsServer() {
               </Button>
             </div>
           </form>
-        </DialogContent>
-      </Dialog>
+          </div>
+        </DrawerContent>
+      </Drawer>
     </div>
   )
 }

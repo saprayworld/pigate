@@ -19,16 +19,34 @@
   ```
 * **เหตุผลสำคัญ:** ตัวจัดการแพ็กเกจของโครงการในปัจจุบันใช้ Yarn รุ่น 1 (Yarn v1) ซึ่ง**ไม่รองรับคำสั่ง `yarn dlx`** การพยายามรันติดตั้งผ่าน `yarn dlx` จะล้มเหลว ดังนั้นจึงกำหนดให้ใช้ `npx` เป็นมาตรฐานหลักแทน
 
-### 1.3 การจัดการ Portal Components ภายใน Dialog/Modal (Portal inside Dialog Rules)
-* **ข้อกำหนด:** หากมีการใช้งาน **input ฟิลด์แบบ Combobox** (Portal component ของ Base UI / Radix UI) **ภายใน Dialog หรือ Modal ของโครงการ** อาจเกิดปัญหาคลิกดรอปดาวน์แล้วโดนบล็อกเนื่องจาก Focus/Pointer Blocker ของ Radix Dialog มองว่าเป็นกิจกรรมนอกขอบเขต (Interact Outside)
+### 1.3 การเลือกใช้ Drawer กับ Dialog และการจัดการ Portal Components ข้างใน
+
+#### 1.3.1 Drawer สำหรับฟอร์มจัดการข้อมูล, Dialog สำหรับการยืนยัน
+* **ข้อกำหนด:** ฟอร์ม **เพิ่ม / แก้ไข / ตั้งค่า** ข้อมูลทุกหน้า (create / edit / config) **ต้องเปิดเป็น `<Drawer direction="right">`** (vaul, เลื่อนเข้าจากขวาของจอ) ไม่ใช่ `<Dialog>` กลางจอ เพื่อ UX ที่สม่ำเสมอและได้พื้นที่แนวตั้งเต็มจอสำหรับฟอร์มยาว
+* **สงวน `<Dialog>` ไว้สำหรับ "การยืนยัน (confirmation)" เท่านั้น** เช่น `useAlert().alert/confirm` (`AlertDialogProvider.tsx`) และ dialog ยืนยัน Reboot/Shutdown ใน `SettingsMaintenance.tsx` — อย่าเปลี่ยนพวกนี้เป็น Drawer
+* **รูปแบบมาตรฐาน** (คุมด้วย `open`/`onOpenChange` state เดิม ไม่ต้องใช้ `DrawerTrigger`):
+  ```tsx
+  <Drawer direction="right" open={isModalOpen} onOpenChange={setIsModalOpen}>
+    <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[500px]">
+      <DrawerHeader className="border-b border-border/50">
+        <DrawerTitle className="text-base font-semibold">…</DrawerTitle>
+      </DrawerHeader>
+      <div className="flex-1 overflow-y-auto p-4">
+        <form onSubmit={handleSave} className="space-y-4 text-sm">…</form>
+      </div>
+    </DrawerContent>
+  </Drawer>
+  ```
+  * **การ override ความกว้าง ต้องใช้ variant prefix เต็ม** `data-[vaul-drawer-direction=right]:sm:max-w-[NNNpx]` เท่านั้น — ถ้าใส่ `sm:max-w-[NNNpx]` เฉย ๆ จะโดน selector ค่า default (`…direction=right]:sm:max-w-sm`) ทับแบบเงียบ ๆ เพราะ specificity สูงกว่า
+  * **ต้องห่อ `<form>` ด้วย `<div className="flex-1 overflow-y-auto p-4">`** เพราะ `DrawerContent` เป็น flex-col เต็มความสูงจอ ไม่มี padding/scroll ในตัวเหมือน `DialogContent` เดิม — ถ้าไม่ห่อ ฟอร์มยาวจะล้นจอและปุ่ม Save หลุดออกนอกจอ
+  * ปุ่ม Cancel/Save คงไว้ท้าย `<form>` (ปุ่ม `type="submit"` ต้องอยู่ใน form) ไม่ต้องย้ายไป `DrawerFooter`
+
+#### 1.3.2 กติกา `modal={false}` (Portal/Combobox inside overlay)
+* vaul Drawer สร้างอยู่บน Radix Dialog จึงมี Focus/Pointer Blocker แบบเดียวกัน — หากมี **input ฟิลด์แบบ Combobox** (Portal component ของ Base UI) อยู่ข้างใน การคลิกดรอปดาวน์อาจโดนบล็อกเพราะ overlay มองว่าเป็น Interact Outside
 * **แนวทางปฏิบัติ:**
-  * กำหนดให้ใส่คุณสมบัติ `modal={false}` ให้กับคอมโพเนนต์ `<Dialog>` **เฉพาะเมื่อ Dialog นั้นมี input ฟิลด์แบบ Combobox เท่านั้น** เช่น:
-    ```tsx
-    <Dialog open={isModalOpen} modal={false} onOpenChange={setIsModalOpen}>
-    ```
-  * การตั้งค่า `modal={false}` จะช่วยปิดกลไก Focus/Pointer Blocker ของ Radix Dialog ทำให้ผู้ใช้งานสามารถคลิกเลือกรายการใน Dropdown ของ Combobox ได้ตามปกติ โดยไม่จำเป็นต้องใช้ container ref
-  * Dialog ที่**ไม่มี** Combobox (รวมถึง Dialog ที่มีเพียง Select หรือ Popover ปกติ) ให้คงพฤติกรรม modal ค่า default ไว้ ไม่ต้องใส่ `modal={false}`
-* **เหตุผล:** เพื่อให้กลไกการโฟกัสและการคลิกภายนอก (Interact Outside) ของ Dialog และ Combobox ทำงานร่วมกันได้สมบูรณ์ โดยไม่ปิดกลไก modal ของ Dialog อื่นที่ไม่จำเป็น
+  * ใส่ `modal={false}` ให้ `<Drawer>` (หรือ `<Dialog>`) **เฉพาะเมื่อข้างในมี Combobox เท่านั้น** ในโปรเจกต์ปัจจุบันมีที่เดียวคือ `FirewallPolicy.tsx` (Combobox chips ×3)
+  * Drawer/Dialog ที่ข้างในมีเพียง **native `<select>` หรือ shadcn `Select` (Radix) ปกติ ไม่ต้องใส่ `modal={false}`** — ทดสอบจริงแล้ว (2026-07-08) ว่า dropdown เหล่านี้คลิกได้ตามปกติภายใต้ modal ค่า default
+* **เหตุผล:** ปิดกลไก Pointer Blocker เฉพาะจุดที่จำเป็นจริง ๆ เพื่อไม่ให้เสียพฤติกรรม modal (คลิกนอก/Esc/scroll-lock) ของ overlay ที่เหลือโดยไม่จำเป็น
 
 ---
 
