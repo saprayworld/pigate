@@ -127,8 +127,11 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("PUT /api/system/password", s.HandleChangePassword)
 	authRoute("GET /api/system/services", s.HandleGetSystemServices)
 	authRoute("POST /api/system/services/{id}/restart", s.HandleRestartService)
-	authRoute("POST /api/system/reboot", s.HandleReboot)
-	authRoute("POST /api/system/shutdown", s.HandleShutdown)
+	// Reboot/shutdown physically power-cycle the board — super_admin only, made
+	// explicit here (same as config export/import) rather than relying on
+	// RoleReadOnlyMiddleware to block the POST for lower roles.
+	superAdminRoute("POST /api/system/reboot", s.HandleReboot)
+	superAdminRoute("POST /api/system/shutdown", s.HandleShutdown)
 	// Export/Import handle real Wi-Fi passwords and (optionally) user credential
 	// hashes, so both are super_admin only — a read-only admin must not be able
 	// to exfiltrate secrets via a backup.

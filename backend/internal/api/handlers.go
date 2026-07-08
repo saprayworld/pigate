@@ -41,6 +41,7 @@ type Server struct {
 	userService       *service.UserService
 	backupService     *service.BackupService
 	systemStatus      *service.SystemStatusService
+	powerService      *service.PowerService
 }
 
 func NewServer(
@@ -63,6 +64,7 @@ func NewServer(
 	userService *service.UserService,
 	backupService *service.BackupService,
 	systemStatus *service.SystemStatusService,
+	powerService *service.PowerService,
 ) *Server {
 	return &Server{
 		repo:              repo,
@@ -84,6 +86,7 @@ func NewServer(
 		userService:       userService,
 		backupService:     backupService,
 		systemStatus:      systemStatus,
+		powerService:      powerService,
 	}
 }
 
@@ -1653,12 +1656,48 @@ func (s *Server) HandleRestartService(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// HandleReboot restarts the physical host. super_admin only (see router). The
+// service delays the actual login1 D-Bus call ~1s so this 200 reaches the
+// browser before logind stops pigate.service.
 func (s *Server) HandleReboot(w http.ResponseWriter, r *http.Request) {
+	username, _ := r.Context().Value(UserContextKey).(string)
+	s.logPowerEvent("REBOOT", username)
+	if err := s.powerService.Reboot(username); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Failed to reboot: "+err.Error())
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
+// HandleShutdown powers off the physical host. super_admin only (see router).
+// Same delayed-flush behavior as HandleReboot.
 func (s *Server) HandleShutdown(w http.ResponseWriter, r *http.Request) {
+	username, _ := r.Context().Value(UserContextKey).(string)
+	s.logPowerEvent("SHUTDOWN", username)
+	if err := s.powerService.Shutdown(username); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Failed to shutdown: "+err.Error())
+		return
+	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// logPowerEvent records a power action in the in-memory ring buffer so it shows
+// up in Recent Logs right before the board goes down. The ring buffer is not
+// persisted, so the entry is lost after reboot — acceptable for an audit hint.
+func (s *Server) logPowerEvent(action, username string) {
+	if username == "" {
+		username = "unknown"
+	}
+	s.logs.Add(model.FirewallLog{
+		ID:     "log-power-" + time.Now().Format("150405.000"),
+		Time:   time.Now().Format("15:04:05"),
+		Action: "EVENT",
+		Src:    username,
+		Dest:   "localhost",
+		Port:   "-",
+		Proto:  "SYSTEM",
+		Reason: "Power " + action + " requested by " + username,
+	})
 }
 
 // HandleExportConfig streams a full, typed configuration backup (schema v2).

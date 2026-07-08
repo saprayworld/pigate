@@ -369,6 +369,25 @@ func (m *MockHostnameManager) SetHostname(name string) error {
 	return nil
 }
 
+// MockPowerManager implements PowerManager for local testing. It MUST NOT have
+// any side effect — dev machines run with -mock=true and a real reboot/poweroff
+// here would take down the developer's own workstation. It only logs.
+type MockPowerManager struct{}
+
+func NewMockPowerManager() *MockPowerManager {
+	return &MockPowerManager{}
+}
+
+func (m *MockPowerManager) Reboot() error {
+	log.Printf("[MockPower] Simulating system reboot (no-op)")
+	return nil
+}
+
+func (m *MockPowerManager) PowerOff() error {
+	log.Printf("[MockPower] Simulating system power-off (no-op)")
+	return nil
+}
+
 // MockTimeManager implements TimeManager in-memory for local testing. It keeps
 // the last-applied timezone/NTP/server values and simulates a synced clock.
 type MockTimeManager struct {

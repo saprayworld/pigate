@@ -26,7 +26,7 @@ export function PowerStatusOverlay({
             {countdown > 0 ? countdown : "OK"}
           </div>
           <div className="text-[11px] text-muted-foreground/60 border border-border bg-muted p-2 rounded">
-            systemctl daemon-reexec && reboot
+            dbus: login1.Reboot
           </div>
         </div>
       </div>
@@ -43,7 +43,7 @@ export function PowerStatusOverlay({
             กำลังสั่งหยุดโปรเซสเครือข่าย, ถอนการเชื่อมต่อดิสก์ และปิดไฟเลี้ยงบอร์ด Raspberry Pi 5...
           </p>
           <div className="text-[11px] text-muted-foreground/60 border border-border bg-muted p-2 rounded">
-            systemctl poweroff -i
+            dbus: login1.PowerOff
           </div>
         </div>
       </div>

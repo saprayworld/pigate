@@ -103,7 +103,7 @@ The following table summarizes the development status of each feature in the PiG
 | **Setting (Overall)** | Completed | Partial | Password change, time, hostname, and export/import are fully functional. The system services list/restart panel is still mock. |
 | **Import/Export** | Completed | Completed | Typed JSON backup (schema v2) with SHA-256 integrity, optional user accounts, and optional passphrase encryption (AES-256-GCM + Argon2id); import uses validate → pre-import snapshot → single-transaction wipe & restore → kernel re-apply (startup order). Cross-machine safe (raw routes, interface match-by-name), `super_admin`-only, with actor lock-out guard. Accepts legacy v1 files. |
 | **User System** | Completed | Completed | Multi-user management (create/edit/delete/enable-disable) with `super_admin` / `admin_readonly` roles, per-request DB-backed session validation, role-based authorization middleware, session-based auth, login rate limiting, and first-time login password change enforcement. |
-| **Power Control (Shutdown/Restart)** | Mock | Mock | Remote power actions (system shutdown or reboot) executed via API. |
+| **Power Control (Shutdown/Restart)** | Completed | Completed | Real board reboot/power-off via `systemd-logind` (`org.freedesktop.login1`) D-Bus — no shell exec. `super_admin`-only, authorized by a Polkit rule (see `install.sh`); the command is delayed ~1s so the HTTP 200 flushes before logind stops `pigate.service`, and shutdown is graceful (SQLite closes cleanly). Safe under `-mock=true` (no-op mock manager). |
 
 ---
 

@@ -1857,19 +1857,39 @@ paths:
     post:
       tags:
         - System & Maintenance
-      summary: Reboot the Raspberry Pi 5 board host
+      summary: Reboot the Raspberry Pi 5 board host — super_admin only
+      security:
+        - BearerAuth: []
+      description: |
+        Restarts the physical board via org.freedesktop.login1 (systemd-logind)
+        over D-Bus — no shell execution. Restricted to super_admin; a read-only
+        admin receives 403. Responds 200 immediately, then the board begins a
+        graceful reboot ~1 second later, so the client should expect the
+        connection to drop shortly after the response.
       responses:
         '200':
-          description: Reboot command received, board restarting
+          description: Reboot accepted; board restarts within ~1 second
+        '403':
+          description: Forbidden — caller is not super_admin
 
   /system/shutdown:
     post:
       tags:
         - System & Maintenance
-      summary: Shutdown/halt the Raspberry Pi 5 board host
+      summary: Shutdown/halt the Raspberry Pi 5 board host — super_admin only
+      security:
+        - BearerAuth: []
+      description: |
+        Powers off the physical board via org.freedesktop.login1 (systemd-logind)
+        over D-Bus — no shell execution. Restricted to super_admin; a read-only
+        admin receives 403. Responds 200 immediately, then the board begins a
+        graceful power-off ~1 second later. Powering the board back on requires
+        physical intervention.
       responses:
         '200':
-          description: Shutdown command received, board halting
+          description: Shutdown accepted; board halts within ~1 second
+        '403':
+          description: Forbidden — caller is not super_admin
 
   /system/config/export:
     get:
