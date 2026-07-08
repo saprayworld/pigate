@@ -55,6 +55,7 @@ import { systemService, type SystemHostnameSettings, type ImportResult } from "@
 import { usePowerControl } from "@/hooks/usePowerControl"
 import { authService } from "@/services/authService"
 import { useAlert } from "@/hooks/useAlert"
+import { useHostname } from "@/hooks/useHostname"
 import { buildTimeZoneOptions } from "@/lib/timezones"
 import { cn } from "@/lib/utils"
 
@@ -88,6 +89,8 @@ interface ParsedBackupFile {
 
 export default function SettingsMaintenance() {
   const { alert, confirm } = useAlert()
+  // Keeps the sidebar brand line in sync when hostname is saved here.
+  const { setHostname: setSharedHostname } = useHostname()
   // --- States ---
   const [activeTab, setActiveTab] = useState("settings")
 
@@ -297,6 +300,8 @@ export default function SettingsMaintenance() {
 
     try {
       await systemService.updateHostname(hostnameSettings)
+      // Optimistically sync the sidebar brand line without a page refresh.
+      setSharedHostname(hostnameSettings.hostname)
       setHostnameFeedback({ type: "success", message: "บันทึกการตั้งค่า Hostname สำเร็จ! (การเชื่อมต่อ WAN อาจสะดุดชั่วขณะหากเปิด/แก้ไขการ share hostname)" })
     } catch (err) {
       setHostnameFeedback({ type: "error", message: getErrorMessage(err) || "ไม่สามารถบันทึกการตั้งค่า Hostname ได้" })

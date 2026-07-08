@@ -17,6 +17,7 @@ import {
 
 import { NavUser } from "@/components/nav-user"
 import { authService } from "@/services/authService"
+import { useHostname } from "@/hooks/useHostname"
 import {
   Sidebar,
   SidebarContent,
@@ -36,6 +37,7 @@ type NavGroup = { title?: string; items: NavItem[] }
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const location = useLocation()
   const isSuperAdmin = authService.getRole() === "super_admin"
+  const { hostname } = useHostname()
 
   const groups: NavGroup[] = [
     {
@@ -88,7 +90,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </div>
                 <div className="grid flex-1 text-left text-xs leading-tight">
                   <span className="truncate text-sm font-bold tracking-wider">PiGate</span>
-                  <span className="truncate text-xs text-muted-foreground font-mono">home-000002.pigate.lan</span>
+                  <span className="truncate text-xs text-muted-foreground font-mono">{hostname}</span>
                 </div>
               </NavLink>
             </SidebarMenuButton>
