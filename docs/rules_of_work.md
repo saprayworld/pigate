@@ -41,12 +41,15 @@
   * **ต้องห่อ `<form>` ด้วย `<div className="flex-1 overflow-y-auto p-4">`** เพราะ `DrawerContent` เป็น flex-col เต็มความสูงจอ ไม่มี padding/scroll ในตัวเหมือน `DialogContent` เดิม — ถ้าไม่ห่อ ฟอร์มยาวจะล้นจอและปุ่ม Save หลุดออกนอกจอ
   * ปุ่ม Cancel/Save คงไว้ท้าย `<form>` (ปุ่ม `type="submit"` ต้องอยู่ใน form) ไม่ต้องย้ายไป `DrawerFooter`
 
-#### 1.3.2 กติกา `modal={false}` (Portal/Combobox inside overlay)
-* vaul Drawer สร้างอยู่บน Radix Dialog จึงมี Focus/Pointer Blocker แบบเดียวกัน — หากมี **input ฟิลด์แบบ Combobox** (Portal component ของ Base UI) อยู่ข้างใน การคลิกดรอปดาวน์อาจโดนบล็อกเพราะ overlay มองว่าเป็น Interact Outside
-* **แนวทางปฏิบัติ:**
-  * ใส่ `modal={false}` ให้ `<Drawer>` (หรือ `<Dialog>`) **เฉพาะเมื่อข้างในมี Combobox เท่านั้น** ในโปรเจกต์ปัจจุบันมีที่เดียวคือ `FirewallPolicy.tsx` (Combobox chips ×3)
-  * Drawer/Dialog ที่ข้างในมีเพียง **native `<select>` หรือ shadcn `Select` (Radix) ปกติ ไม่ต้องใส่ `modal={false}`** — ทดสอบจริงแล้ว (2026-07-08) ว่า dropdown เหล่านี้คลิกได้ตามปกติภายใต้ modal ค่า default
-* **เหตุผล:** ปิดกลไก Pointer Blocker เฉพาะจุดที่จำเป็นจริง ๆ เพื่อไม่ให้เสียพฤติกรรม modal (คลิกนอก/Esc/scroll-lock) ของ overlay ที่เหลือโดยไม่จำเป็น
+#### 1.3.2 กติกา Combobox inside overlay (portal เข้า DrawerContent — ไม่ใช้ `modal={false}` แล้ว)
+* vaul Drawer สร้างอยู่บน Radix Dialog จึงมี Focus/Pointer Blocker — หากมี **input ฟิลด์แบบ Combobox** (Portal component ของ Base UI) อยู่ข้างในแล้ว popup ถูก portal ไปที่ `<body>` (ค่า default) การคลิกดรอปดาวน์จะโดนบล็อกเพราะ overlay มองว่าเป็น Interact Outside
+* **แนวทางปฏิบัติ (อัปเดต 2026-07-08 — แทนกติกา `modal={false}` เดิม):**
+  * **portal popup ของ Combobox เข้าไปใน DrawerContent** แทนการปิด modal: ผูก ref กับ `<DrawerContent ref={drawerContentRef}>` แล้วส่ง `container={drawerContentRef}` ให้ `<ComboboxContent>` (prop นี้ส่งต่อไปยัง Base UI `Portal`) — popup จะอยู่ใน subtree ของ Dialog จึงไม่โดนทั้ง pointer blocker และ outside-click dismiss โดยคง modal behavior เต็ม (overlay/scroll-lock/คลิกนอกเพื่อปิด)
+  * ใส่ `data-vaul-no-drag` บน `<ComboboxContent>` กันการลาก popup ไปโดน drag ของ vaul
+  * ใส่ `onEscapeKeyDown` guard บน `DrawerContent`: ถ้ามี `[data-slot="combobox-content"]` เปิดอยู่ ให้ `e.preventDefault()` — ไม่งั้นกด Esc ขณะ popup เปิดจะปิดทั้ง Drawer (Base UI กับ Radix ไม่ประสาน escape-layer กัน)
+  * ตัวอย่างจริง: `FirewallPolicy.tsx` (Combobox chips ×3) — ทดสอบจริงแล้ว (2026-07-08) ผ่านทั้งคลิกเลือก/พิมพ์กรอง/ลบ chip/Esc/คลิกนอก
+  * Drawer/Dialog ที่ข้างในมีเพียง **native `<select>` หรือ shadcn `Select` (Radix) ปกติ ไม่ต้องทำอะไรพิเศษ** — ทดสอบจริงแล้ว (2026-07-08) ว่า dropdown เหล่านี้คลิกได้ตามปกติภายใต้ modal ค่า default
+* **เหตุผล:** คงพฤติกรรม modal (คลิกนอก/Esc/scroll-lock) ของ overlay ไว้ครบทุกหน้า แทนที่จะปิด pointer blocker ทั้งใบด้วย `modal={false}` แบบเดิม
 
 ---
 

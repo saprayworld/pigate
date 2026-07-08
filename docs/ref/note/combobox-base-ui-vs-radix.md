@@ -76,7 +76,20 @@ Base UI เฉพาะ component นี้
 - `<ComboboxContent anchor={anchor}>` → `<ComboboxEmpty>` + `<ComboboxList>{(opt) => <ComboboxItem>}</ComboboxList>`
 - ต้องการ: พิมพ์แล้วกรอง items, keyboard nav, highlighted item, empty state "ไม่พบข้อมูล"
 
-## 6. ทางเลือกสำหรับงานต่อ (ยังไม่ตัดสิน)
+## 6. ผลสรุป (resolved 2026-07-08): Option D — portal เข้า DrawerContent
+
+สุดท้ายไม่ได้เลือก A/B/C แต่พบทางที่ถูกกว่า: **คง Base UI Combobox ไว้ และ portal
+popup เข้าไปใน DrawerContent** ผ่าน `container` prop ของ Base UI `Portal`
+(เพิ่ม prop `container` ให้ `ComboboxContent` ใน `ui/combobox.tsx` แล้วส่ง ref ของ
+`DrawerContent` จากหน้าเพจ) — popup อยู่ใน subtree ของ Radix Dialog จึงไม่โดน
+pointer blocker / outside-click dismiss → **ถอด `modal={false}` ออกจาก FirewallPolicy
+ได้** โดยไม่ต้องเปลี่ยน primitive ใด ๆ
+
+สิ่งที่ต้องทำคู่กัน: `data-vaul-no-drag` บน popup และ `onEscapeKeyDown` guard บน
+`DrawerContent` (กัน Esc ปิดทั้ง Drawer ขณะ popup เปิด — Base UI/Radix ไม่ประสาน
+escape-layer กัน) รายละเอียดกติกาปัจจุบันดู `rules_of_work.md` §1.3.2
+
+## 6-เดิม. ทางเลือกที่เคยพิจารณา (เก็บไว้เป็นประวัติ)
 
 **Option A — คง Base UI ไว้ (แนะนำ):**
 ไม่เปลี่ยน combobox (เป็น shadcn-canonical อยู่แล้ว) และคง `modal={false}` ที่

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react"
+import { useState, useMemo, useEffect, useRef } from "react"
 import { getErrorMessage } from "@/lib/errors"
 import {
   Flame,
@@ -408,6 +408,11 @@ export default function FirewallPolicy() {
   const destAnchor = useComboboxAnchor()
   const serviceAnchor = useComboboxAnchor()
 
+  // Portal target for Combobox popups: rendering them inside the DrawerContent
+  // keeps them within the (Radix) Dialog subtree, so the modal Drawer's pointer
+  // blocker and outside-click dismissal don't swallow their interactions.
+  const drawerContentRef = useRef<HTMLDivElement | null>(null)
+
   // Form Fields
   const [formName, setFormName] = useState<string>("")
   const [formInInterface, setFormInInterface] = useState<string>("ALL")
@@ -768,11 +773,21 @@ export default function FirewallPolicy() {
         </span>
       </div>
 
-      {/* modal={false} is required here (unlike other Drawers): the base-ui
-          Combobox chip popups are blocked by vaul's pointer overlay otherwise —
-          see rules_of_work.md §1.3. */}
-      <Drawer direction="right" open={isModalOpen} modal={false} onOpenChange={setIsModalOpen}>
-        <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[960px]">
+      {/* The base-ui Combobox popups are portaled into the DrawerContent
+          (container={drawerContentRef}) so they live inside the Dialog subtree —
+          this keeps the default modal behavior working; no modal={false} needed. */}
+      <Drawer direction="right" open={isModalOpen} onOpenChange={setIsModalOpen}>
+        <DrawerContent
+          ref={drawerContentRef}
+          onEscapeKeyDown={(e) => {
+            // When a Combobox popup is open, Escape should close only the popup
+            // (base-ui handles that); block Radix from also closing the Drawer.
+            if (document.querySelector('[data-slot="combobox-content"]')) {
+              e.preventDefault()
+            }
+          }}
+          className="data-[vaul-drawer-direction=right]:sm:max-w-[960px]"
+        >
           <DrawerHeader className="border-b border-border/50">
             <DrawerTitle className="text-base font-semibold">
               {editingRule ? "แก้ไขนโยบายความปลอดภัย" : "สร้างนโยบายความปลอดภัยใหม่"}
@@ -823,7 +838,7 @@ export default function FirewallPolicy() {
                       )}
                     </ComboboxValue>
                   </ComboboxChips>
-                  <ComboboxContent anchor={serviceAnchor} className="w-[var(--anchor-width)] overflow-hidden rounded-lg border border-border bg-popover">
+                  <ComboboxContent anchor={serviceAnchor} container={drawerContentRef} data-vaul-no-drag className="w-[var(--anchor-width)] overflow-hidden rounded-lg border border-border bg-popover">
                     <ComboboxEmpty className="p-2 text-center text-xs text-muted-foreground">ไม่พบข้อมูล</ComboboxEmpty>
                     <ComboboxList className="max-h-48 overflow-y-auto p-1">
                       {(opt: string) => (
@@ -902,7 +917,7 @@ export default function FirewallPolicy() {
                       )}
                     </ComboboxValue>
                   </ComboboxChips>
-                  <ComboboxContent anchor={sourceAnchor} className="w-[var(--anchor-width)] overflow-hidden rounded-lg border border-border bg-popover">
+                  <ComboboxContent anchor={sourceAnchor} container={drawerContentRef} data-vaul-no-drag className="w-[var(--anchor-width)] overflow-hidden rounded-lg border border-border bg-popover">
                     <ComboboxEmpty className="p-2 text-center text-xs text-muted-foreground">ไม่พบข้อมูล</ComboboxEmpty>
                     <ComboboxList className="max-h-48 overflow-y-auto p-1">
                       {(opt: string) => (
@@ -940,7 +955,7 @@ export default function FirewallPolicy() {
                       )}
                     </ComboboxValue>
                   </ComboboxChips>
-                  <ComboboxContent anchor={destAnchor} className="w-[var(--anchor-width)] overflow-hidden rounded-lg border border-border bg-popover">
+                  <ComboboxContent anchor={destAnchor} container={drawerContentRef} data-vaul-no-drag className="w-[var(--anchor-width)] overflow-hidden rounded-lg border border-border bg-popover">
                     <ComboboxEmpty className="p-2 text-center text-xs text-muted-foreground">ไม่พบข้อมูล</ComboboxEmpty>
                     <ComboboxList className="max-h-48 overflow-y-auto p-1">
                       {(opt: string) => (
