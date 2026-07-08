@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { getErrorMessage } from "@/lib/errors"
 import {
   BookOpen,
@@ -27,11 +27,11 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -116,8 +116,6 @@ export default function Addresses() {
     }
     initialLoad()
   }, [alert])
-
-  const dialogContentRef = useRef<HTMLDivElement | null>(null)
 
   // --- Statistics ---
   const stats = useMemo(() => {
@@ -513,16 +511,17 @@ export default function Addresses() {
         </span>
       </div>
 
-      {/* 4. Create / Edit Dialog */}
-      <Dialog open={isModalOpen} modal={false} onOpenChange={setIsModalOpen}>
-        <DialogContent ref={dialogContentRef} className="w-full max-w-[500px] gap-4 rounded-xl p-6">
-          <DialogHeader className="border-b border-border/50 pb-3">
-            <DialogTitle className="text-base font-semibold">
+      {/* 4. Create / Edit Drawer */}
+      <Drawer direction="right" open={isModalOpen} onOpenChange={setIsModalOpen}>
+        <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[500px]">
+          <DrawerHeader className="border-b border-border/50">
+            <DrawerTitle className="text-base font-semibold">
               {editingObject ? "แก้ไขวัตถุที่อยู่ไอพี" : "สร้างวัตถุที่อยู่ไอพีใหม่"}
-            </DialogTitle>
-          </DialogHeader>
+            </DrawerTitle>
+          </DrawerHeader>
 
           {/* Form */}
+          <div className="flex-1 overflow-y-auto p-4">
           <form onSubmit={handleSave} className="space-y-4 text-sm">
             {formError && (
               <Alert variant="destructive" className="px-3 py-2.5">
@@ -613,8 +612,9 @@ export default function Addresses() {
               </Button>
             </div>
           </form>
-        </DialogContent>
-      </Dialog>
+          </div>
+        </DrawerContent>
+      </Drawer>
     </div>
   )
 }

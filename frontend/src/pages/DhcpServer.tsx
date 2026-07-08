@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { getErrorMessage } from "@/lib/errors"
 import {
   Radio,
@@ -31,11 +31,11 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -122,8 +122,6 @@ export default function DhcpServer() {
   const [isApplied, setIsApplied] = useState(true)
   const [isSavingConfig, setIsSavingConfig] = useState(false)
   const [isRefreshingLeases, setIsRefreshingLeases] = useState(false)
-
-  const dialogContentRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     // isLoading already starts true; avoid a synchronous setState in the effect body
@@ -840,14 +838,15 @@ export default function DhcpServer() {
       </div>
 
       {/* 5. Config Pool Add/Edit Modal Dialog */}
-      <Dialog open={isConfigModalOpen} modal={false} onOpenChange={setIsConfigModalOpen}>
-        <DialogContent ref={dialogContentRef} className="w-full max-w-[500px] gap-4 rounded-xl p-6">
-          <DialogHeader className="border-b border-border/50 pb-3">
-            <DialogTitle className="text-base font-semibold">
+      <Drawer direction="right" open={isConfigModalOpen} onOpenChange={setIsConfigModalOpen}>
+        <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[500px]">
+          <DrawerHeader className="border-b border-border/50">
+            <DrawerTitle className="text-base font-semibold">
               {editingConfig ? `แก้ไขการตั้งค่า DHCP (${formInterface})` : "สร้างการตั้งค่า DHCP บนอินเตอร์เฟสใหม่"}
-            </DialogTitle>
-          </DialogHeader>
+            </DrawerTitle>
+          </DrawerHeader>
 
+          <div className="flex-1 overflow-y-auto p-4">
           <form onSubmit={handleSaveConfig} className="space-y-4 text-sm">
             {configError && (
               <Alert variant="destructive" className="px-3 py-2.5">
@@ -1023,18 +1022,20 @@ export default function DhcpServer() {
               </Button>
             </div>
           </form>
-        </DialogContent>
-      </Dialog>
+          </div>
+        </DrawerContent>
+      </Drawer>
 
-      {/* 6. Reservation Add/Edit Modal Dialog */}
-      <Dialog open={isResModalOpen} modal={false} onOpenChange={setIsResModalOpen}>
-        <DialogContent ref={dialogContentRef} className="w-full max-w-[450px] gap-4 rounded-xl p-6">
-          <DialogHeader className="border-b border-border/50 pb-3">
-            <DialogTitle className="text-base font-semibold">
+      {/* 6. Reservation Add/Edit Drawer */}
+      <Drawer direction="right" open={isResModalOpen} onOpenChange={setIsResModalOpen}>
+        <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[450px]">
+          <DrawerHeader className="border-b border-border/50">
+            <DrawerTitle className="text-base font-semibold">
               {editingReservation ? "แก้ไขการจองไอพี (Edit Reservation)" : "จองไอพีสำหรับอุปกรณ์ใหม่ (Add Reservation)"}
-            </DialogTitle>
-          </DialogHeader>
+            </DrawerTitle>
+          </DrawerHeader>
 
+          <div className="flex-1 overflow-y-auto p-4">
           <form onSubmit={handleSaveReservation} className="space-y-4 text-sm">
             {resError && (
               <Alert variant="destructive" className="px-3 py-2.5">
@@ -1112,8 +1113,9 @@ export default function DhcpServer() {
               </Button>
             </div>
           </form>
-        </DialogContent>
-      </Dialog>
+          </div>
+        </DrawerContent>
+      </Drawer>
     </div>
   )
 }

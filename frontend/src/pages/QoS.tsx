@@ -28,11 +28,11 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -626,14 +626,15 @@ export default function QoS() {
       </div>
 
       {/* 4. Create / Edit Modal Dialog */}
-      <Dialog open={isModalOpen} modal={false} onOpenChange={setIsModalOpen}>
-        <DialogContent className="w-full max-w-[500px] gap-4 rounded-xl p-6">
-          <DialogHeader className="border-b border-border/50 pb-3">
-            <DialogTitle className="text-base font-semibold">
+      <Drawer direction="right" open={isModalOpen} onOpenChange={setIsModalOpen}>
+        <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[500px]">
+          <DrawerHeader className="border-b border-border/50">
+            <DrawerTitle className="text-base font-semibold">
               {editingRule ? "แก้ไขกฎ QoS" : "เพิ่มกฎ QoS ใหม่"}
-            </DialogTitle>
-          </DialogHeader>
+            </DrawerTitle>
+          </DrawerHeader>
 
+          <div className="flex-1 overflow-y-auto p-4">
           {formError && (
             <Alert variant="destructive" className="px-3 py-2.5">
               <AlertCircle className="h-4 w-4" />
@@ -847,8 +848,9 @@ export default function QoS() {
               </Button>
             </div>
           </form>
-        </DialogContent>
-      </Dialog>
+          </div>
+        </DrawerContent>
+      </Drawer>
     </div>
   )
 }
