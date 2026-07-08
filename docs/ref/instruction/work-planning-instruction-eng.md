@@ -6,8 +6,8 @@
 > so every document reads consistently.
 >
 > Example plans written to this standard:
-> `docs/ref/todo/power-control-device-plan.md`,
-> `docs/ref/todo/sidebar-dynamic-hostname-plan.md`
+> `docs/ref/complete/power-control-device-plan.md`,
+> `docs/ref/complete/sidebar-dynamic-hostname-plan.md`
 
 ---
 

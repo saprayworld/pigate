@@ -5,8 +5,8 @@
 > **ครอบคลุมผลกระทบทั้งระบบ** และมีโครงสร้างเดียวกัน อ่านต่อกันได้ทุกฉบับ
 >
 > ตัวอย่างแผนงานที่เขียนตามมาตรฐานนี้:
-> `docs/ref/todo/power-control-device-plan.md`,
-> `docs/ref/todo/sidebar-dynamic-hostname-plan.md`
+> `docs/ref/complete/power-control-device-plan.md`,
+> `docs/ref/complete/sidebar-dynamic-hostname-plan.md`
 
 ---
 
