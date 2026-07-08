@@ -129,7 +129,7 @@
 > **ข้อจำกัดในการทดสอบระดับ Kernel Integration (Kernel Mode Limitations):**
 > * การเข้าถึงเพื่อจัดการ IP Address, Routing Table, และ nftables ผ่าน Netlink จะต้องใช้สิทธิ์ของระบบปฏิบัติการระดับสูง (`root` หรือการตั้งค่า Linux Capabilities ในแบบ `cap_net_admin,cap_net_raw+ep`)
 > * ในระหว่างการพัฒนาบนเครื่องคอมพิวเตอร์ทั่วไป (Development PC) จะเปิดใช้งานโหมดจำลอง (`-mock=true`) เพื่อเก็บสเตตทำงานทั้งหมดไว้บน SQLite และ Memory เสมอ โดยข้อมูลแลน/Wi-Fi (eth0, wlan0) จะไม่ถูก Seeding ในโหมดจริงเพื่อป้องกันการทับซ้อนกับการ์ดจริงของเครื่องเซิร์ฟเวอร์
-> * ฟีเจอร์ที่ยังเป็นการจำลอง (Mock) อยู่: **Firewall Rule Counters**, **Firewall Log Streaming** (อ่านจาก In-Memory Ring Buffer ที่ seed ข้อมูลตัวอย่าง ยังไม่ได้อ่าน Kernel Log จริง), **รายการ/รีสตาร์ท System Services** และ **Power Control (Reboot/Shutdown)** — ส่วนค่า **Dashboard System Status** (CPU/RAM/Temp/Storage/Uptime/OS/Bandwidth) เป็นข้อมูลจริงแล้ว (อ่านจาก `/proc`, `/sys`, `statfs`, netlink) เช่นเดียวกับ DHCP Lease Count และสถานะ Wi-Fi
+> * ฟีเจอร์ที่ยังเป็นการจำลอง (Mock) อยู่: **Firewall Rule Counters**, **Firewall Log Streaming** (อ่านจาก In-Memory Ring Buffer ที่ seed ข้อมูลตัวอย่าง ยังไม่ได้อ่าน Kernel Log จริง) และ **รายการ/รีสตาร์ท System Services** — ส่วน **Power Control (Reboot/Shutdown)** ทำงานจริงแล้วผ่าน `org.freedesktop.login1` D-Bus — ส่วนค่า **Dashboard System Status** (CPU/RAM/Temp/Storage/Uptime/OS/Bandwidth) เป็นข้อมูลจริงแล้ว (อ่านจาก `/proc`, `/sys`, `statfs`, netlink) เช่นเดียวกับ DHCP Lease Count และสถานะ Wi-Fi
 
 > [!WARNING]
 > **งานคุณภาพโค้ดที่ค้างอยู่ (ดู [docs/ref/todo/](ref/todo/)):**
@@ -164,8 +164,8 @@
   * เส้น API: `GET /api/dashboard/performance` (อัปเกรด), `GET /api/system/info` (ใหม่), `GET /api/dashboard/traffic` (ใหม่), `GET /api/dashboard/stats` (traffic จริง)
 * [ ] **พัฒนาระบบจัดการ System Services จริง:**
   * แทนที่รายการ Services จำลอง (`HandleGetSystemServices` / `HandleRestartService`) ด้วยการอ่านสถานะและสั่ง restart unit จริงผ่าน systemd D-Bus
-* [ ] **พัฒนาระบบ Power Control จริง (Reboot/Shutdown):**
-  * เชื่อม `POST /api/system/reboot` และ `/api/system/shutdown` เข้ากับ `org.freedesktop.login1` (systemd-logind) ผ่าน D-Bus พร้อม Polkit rule — ปัจจุบัน handler ตอบ 200 เฉยๆ โดยไม่ทำงานจริง
+* [x] **พัฒนาระบบ Power Control จริง (Reboot/Shutdown):**
+  * เชื่อม `POST /api/system/reboot` และ `/api/system/shutdown` เข้ากับ `org.freedesktop.login1` (systemd-logind) ผ่าน D-Bus พร้อม Polkit rule แล้ว (super_admin เท่านั้น, หน่วง ~1 วินาทีก่อนสั่งจริงเพื่อ flush HTTP response, mock mode เป็น no-op)
 
 ### 3.1.1 งานปรับปรุงคุณภาพโค้ด (Code Quality Tasks — ดูแผนใน [docs/ref/todo/](ref/todo/))
 * [ ] **รวมศูนย์ Systemd D-Bus Call:** refactor ฟังก์ชัน `IsServiceActiveViaDBus` / `StartServiceViaDBus` / `StopServiceViaDBus` / `RestartServiceViaDBus` ที่ซ้ำกันใน `real_network.go` และ `dns.go` ไปไว้ไฟล์เดียว (`dbus_systemd.go`) — แผนที่ [systemd-dbus-call-design.md](ref/todo/systemd-dbus-call-design.md)

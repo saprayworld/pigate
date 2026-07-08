@@ -251,15 +251,23 @@ polkit.addRule(function(action, subject) {
         }
     }
 
-    // ดักจับ action ของ org.freedesktop.hostname1 และ org.freedesktop.timedate1
-    // แยกต่างหาก (คนละ action id กับ systemd1.manage-units ด้านบน) เพื่ออนุญาตให้
-    // pigate ตั้งชื่อเครื่องผ่าน hostnamed และตั้งเขตเวลา/NTP/เวลาผ่าน timedated
-    // โดยไม่ต้อง exec `hostnamectl` / `timedatectl`
+    // ดักจับ action ของ org.freedesktop.hostname1, org.freedesktop.timedate1 และ
+    // org.freedesktop.login1 แยกต่างหาก (คนละ action id กับ systemd1.manage-units
+    // ด้านบน) เพื่ออนุญาตให้ pigate ตั้งชื่อเครื่องผ่าน hostnamed, ตั้งเขตเวลา/NTP/เวลา
+    // ผ่าน timedated และสั่ง reboot/shutdown ผ่าน logind โดยไม่ต้อง exec
+    // `hostnamectl` / `timedatectl` / `reboot` / `shutdown`
+    //
+    // *-multiple-sessions จำเป็นเผื่อกรณีมี user session อื่นค้างอยู่ (เช่น SSH) —
+    // logind จะสลับไปตรวจ action ตัวนี้แทน reboot/power-off ปกติ
     if ((action.id == "org.freedesktop.hostname1.set-static-hostname" ||
          action.id == "org.freedesktop.hostname1.set-hostname" ||
          action.id == "org.freedesktop.timedate1.set-timezone" ||
          action.id == "org.freedesktop.timedate1.set-ntp" ||
-         action.id == "org.freedesktop.timedate1.set-time") &&
+         action.id == "org.freedesktop.timedate1.set-time" ||
+         action.id == "org.freedesktop.login1.reboot" ||
+         action.id == "org.freedesktop.login1.reboot-multiple-sessions" ||
+         action.id == "org.freedesktop.login1.power-off" ||
+         action.id == "org.freedesktop.login1.power-off-multiple-sessions") &&
         subject.user == "pigate") {
         return polkit.Result.YES;
     }

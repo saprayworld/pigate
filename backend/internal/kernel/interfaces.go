@@ -154,3 +154,13 @@ type TimeManager interface {
 	// server clears the drop-in back to distro defaults.
 	SetNTPServer(server string) error
 }
+
+// PowerManager abstracts host power control via org.freedesktop.login1
+// (systemd-logind) over D-Bus. Both operations are irreversible: Reboot
+// restarts the board and PowerOff halts it (requiring physical intervention
+// to power back on). logind performs a graceful shutdown, stopping services
+// (including pigate.service) so SQLite closes cleanly on its own.
+type PowerManager interface {
+	Reboot() error
+	PowerOff() error
+}

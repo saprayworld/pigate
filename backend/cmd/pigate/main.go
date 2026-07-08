@@ -84,6 +84,7 @@ func main() {
 	var hostnameMgr kernel.HostnameManager
 	var timeMgr kernel.TimeManager
 	var sysStats kernel.SystemStatsManager
+	var powerMgr kernel.PowerManager
 	dns := kernel.NewDNSManager(*mockOS)
 
 	if *mockOS || *mockFromReal {
@@ -99,6 +100,7 @@ func main() {
 		hostnameMgr = kernel.NewMockHostnameManager()
 		timeMgr = kernel.NewMockTimeManager()
 		sysStats = kernel.NewMockSystemStats()
+		powerMgr = kernel.NewMockPowerManager()
 	} else {
 		// Real kernel integrations via netlink — used on Raspberry Pi 5 production.
 		// Requires: sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
@@ -112,6 +114,7 @@ func main() {
 		hostnameMgr = kernel.NewRealHostnameManager()
 		timeMgr = kernel.NewRealTimeManager()
 		sysStats = kernel.NewRealSystemStats()
+		powerMgr = kernel.NewRealPowerManager()
 	}
 
 	// 5. Instantiate Server & Router
@@ -127,6 +130,7 @@ func main() {
 	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcd, ifaceService)
 	timeService := service.NewTimeService(repo, timeMgr)
 	userService := service.NewUserService(repo)
+	powerService := service.NewPowerService(powerMgr)
 	systemStatusService := service.NewSystemStatusService(sysStats, repo, hostnameService, timeService, version)
 
 	// Netlink monitor is created here (but started later, after startup config is
@@ -141,7 +145,7 @@ func main() {
 		netlinkMonitor,
 	)
 
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService)
 
 	// Apply config form database to kernel
 
