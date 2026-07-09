@@ -37,8 +37,8 @@ export function PowerStatusOverlay({
     return (
       <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background text-foreground font-mono">
         <div className="space-y-6 text-center max-w-md p-6">
-          <Loader2 className="mx-auto h-16 w-16 text-red-500 animate-spin" />
-          <h2 className="text-2xl font-bold tracking-wider text-red-500">SHUTTING DOWN SYSTEM</h2>
+          <Loader2 className="mx-auto h-16 w-16 text-destructive animate-spin" />
+          <h2 className="text-2xl font-bold tracking-wider text-destructive">SHUTTING DOWN SYSTEM</h2>
           <p className="text-muted-foreground text-sm leading-relaxed">
             กำลังสั่งหยุดโปรเซสเครือข่าย, ถอนการเชื่อมต่อดิสก์ และปิดไฟเลี้ยงบอร์ด Raspberry Pi 5...
           </p>

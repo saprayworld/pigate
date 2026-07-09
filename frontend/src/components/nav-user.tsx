@@ -121,9 +121,9 @@ export function NavUser() {
             >
               <div className="flex items-center gap-2">
                 {theme === "dark" ? (
-                  <Moon className="size-4 text-indigo-400" />
+                  <Moon className="size-4 text-primary" />
                 ) : (
-                  <Sun className="size-4 text-amber-500" />
+                  <Sun className="size-4 text-warning" />
                 )}
                 <span>Dark Mode</span>
               </div>
@@ -145,14 +145,14 @@ export function NavUser() {
                 <DropdownMenuSubContent className="min-w-40">
                   <DropdownMenuItem
                     onSelect={() => void handleReboot()}
-                    className="text-red-500 focus:bg-destructive/10 focus:text-destructive dark:text-red-400"
+                    className="text-destructive focus:bg-destructive/10 focus:text-destructive"
                   >
                     <RefreshCw className="size-4" />
                     Restart
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onSelect={() => void handleShutdown()}
-                    className="text-red-500 focus:bg-destructive/10 focus:text-destructive dark:text-red-400"
+                    className="text-destructive focus:bg-destructive/10 focus:text-destructive"
                   >
                     <Power className="size-4" />
                     Shutdown
@@ -163,7 +163,7 @@ export function NavUser() {
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onClick={handleLogout}
-              className="text-red-500 focus:bg-destructive/10 focus:text-destructive dark:text-red-400"
+              className="text-destructive focus:bg-destructive/10 focus:text-destructive"
             >
               <LogOut className="size-4" />
               Sign Out

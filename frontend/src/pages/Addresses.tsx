@@ -439,7 +439,7 @@ export default function Addresses() {
                         </Badge>
                       )}
                       {addr.type === "range" && (
-                        <Badge variant="outline" className="rounded border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500">
+                        <Badge variant="outline" className="rounded border-warning/20 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
                           IP Range
                         </Badge>
                       )}
@@ -484,7 +484,7 @@ export default function Addresses() {
                               variant="ghost"
                               size="icon-sm"
                               onClick={() => handleDelete(addr.id, addr.name)}
-                              className="cursor-pointer text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
+                              className="cursor-pointer text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                               title="ลบวัตถุ"
                             >
                               <Trash2 className="h-4 w-4" />

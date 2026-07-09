@@ -69,8 +69,8 @@ import { isValidIp } from "@/lib/utils"
 // Helper: Signal strength color
 function signalColor(signal: number): string {
   if (signal >= 70) return "text-primary"
-  if (signal >= 40) return "text-amber-500"
-  return "text-red-500"
+  if (signal >= 40) return "text-warning"
+  return "text-destructive"
 }
 
 // Helper: Signal bar fill for visual indicator
@@ -86,8 +86,8 @@ function SignalBar({ signal }: { signal: number }) {
             ? signal >= 70
               ? "bg-primary"
               : signal >= 40
-                ? "bg-amber-500"
-                : "bg-red-500"
+                ? "bg-warning"
+                : "bg-destructive"
             : "bg-muted-foreground/20"
             }`}
           style={{ height: `${((i + 1) / bars) * 100}%` }}
@@ -672,7 +672,7 @@ export default function Interfaces() {
                                 Connected
                               </Badge>
                             ) : wifiLiveStatuses[iface.id]?.state === "SCANNING" ? (
-                              <Badge variant="outline" className="rounded border-amber-500/20 bg-amber-500/10 px-1.5 py-0 text-[10px] font-semibold text-amber-500">
+                              <Badge variant="outline" className="rounded border-warning/20 bg-warning/10 px-1.5 py-0 text-[10px] font-semibold text-warning">
                                 Scanning
                               </Badge>
                             ) : wifiLiveStatuses[iface.id]?.state === "ASSOCIATING" ||
@@ -680,11 +680,11 @@ export default function Interfaces() {
                               wifiLiveStatuses[iface.id]?.state === "ASSOCIATED" ||
                               wifiLiveStatuses[iface.id]?.state === "4WAY_HANDSHAKE" ||
                               wifiLiveStatuses[iface.id]?.state === "GROUP_HANDSHAKE" ? (
-                              <Badge variant="outline" className="rounded border-amber-500/20 bg-amber-500/10 px-1.5 py-0 text-[10px] font-semibold text-amber-500">
+                              <Badge variant="outline" className="rounded border-warning/20 bg-warning/10 px-1.5 py-0 text-[10px] font-semibold text-warning">
                                 Connecting
                               </Badge>
                             ) : (
-                              <Badge variant="outline" className="rounded border-red-500/20 bg-red-500/10 px-1.5 py-0 text-[10px] font-semibold text-red-500">
+                              <Badge variant="outline" className="rounded border-destructive/20 bg-destructive/10 px-1.5 py-0 text-[10px] font-semibold text-destructive">
                                 Disconnected
                               </Badge>
                             )
@@ -723,7 +723,7 @@ export default function Interfaces() {
                     {/* Role */}
                     <TableCell className="py-3">
                       {iface.role === "WAN" ? (
-                        <Badge variant="outline" className="rounded border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-500">
+                        <Badge variant="outline" className="rounded border-destructive/20 bg-destructive/10 px-2 py-0.5 text-[10px] font-semibold text-destructive">
                           WAN
                         </Badge>
                       ) : (
@@ -779,11 +779,11 @@ export default function Interfaces() {
                           UP
                         </Badge>
                       ) : iface.status === "offline" ? (
-                        <Badge variant="outline" className="animate-pulse rounded border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-500">
+                        <Badge variant="outline" className="animate-pulse rounded border-warning/20 bg-warning/10 px-2 py-0.5 text-[10px] font-semibold text-warning">
                           OFFLINE
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className="rounded border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-500">
+                        <Badge variant="outline" className="rounded border-destructive/20 bg-destructive/10 px-2 py-0.5 text-[10px] font-semibold text-destructive">
                           DOWN
                         </Badge>
                       )}
@@ -798,7 +798,7 @@ export default function Interfaces() {
                               variant="ghost"
                               size="icon-sm"
                               onClick={() => handleResetInterface(iface.id, iface.name)}
-                              className="cursor-pointer text-amber-500 hover:bg-amber-500/10 hover:text-amber-500"
+                              className="cursor-pointer text-warning hover:bg-warning/10 hover:text-warning"
                               title="รีเซ็ตการตั้งค่าเป็นค่าเริ่มต้น"
                             >
                               <RotateCcw className="h-4 w-4" />
@@ -807,7 +807,7 @@ export default function Interfaces() {
                               variant="ghost"
                               size="icon-sm"
                               onClick={() => handleDeleteInterface(iface.id, iface.name)}
-                              className="cursor-pointer text-red-500 hover:bg-red-500/10 hover:text-red-500"
+                              className="cursor-pointer text-destructive hover:bg-destructive/10 hover:text-destructive"
                               title="ลบอินเทอร์เฟซออกจากฐานข้อมูล"
                             >
                               <Trash2 className="h-4 w-4" />
@@ -1116,7 +1116,7 @@ export default function Interfaces() {
                                 {wifi.security !== "Open" ? (
                                   <Lock className="h-3 w-3 text-muted-foreground" />
                                 ) : (
-                                  <Unlock className="h-3 w-3 text-amber-500" />
+                                  <Unlock className="h-3 w-3 text-warning" />
                                 )}
                                 {formSSID === wifi.ssid && (
                                   <Check className="h-3 w-3 text-primary" />

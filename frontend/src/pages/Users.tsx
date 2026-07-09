@@ -305,7 +305,7 @@ export default function Users() {
                           </Badge>
                         )}
                         {u.isInitial && (
-                          <Badge variant="outline" className="rounded border-amber-500/20 bg-amber-500/10 px-1.5 py-0 text-[10px] text-amber-500">
+                          <Badge variant="outline" className="rounded border-warning/20 bg-warning/10 px-1.5 py-0 text-[10px] text-warning">
                             ต้องตั้งรหัสผ่าน
                           </Badge>
                         )}
@@ -330,7 +330,7 @@ export default function Users() {
                           Active
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className="rounded border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-500">
+                        <Badge variant="outline" className="rounded border-destructive/20 bg-destructive/10 px-2 py-0.5 text-[11px] font-medium text-destructive">
                           Disabled
                         </Badge>
                       )}
@@ -360,7 +360,7 @@ export default function Users() {
                           size="icon-sm"
                           disabled={isSelf(u) || busyId === u.id}
                           onClick={() => handleDelete(u)}
-                          className="cursor-pointer text-muted-foreground hover:bg-red-500/10 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="cursor-pointer text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40"
                           title={isSelf(u) ? "ไม่สามารถลบบัญชีของตัวเองได้" : "ลบผู้ใช้"}
                         >
                           <Trash2 className="h-4 w-4" />

@@ -441,8 +441,8 @@ export default function StaticRoutes() {
           </CardTitle>
           <div className="flex flex-wrap items-center gap-3">
             {enableEditSystemRoute && (
-              <div className="flex h-8 items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 text-xs font-medium select-none">
-                <span className="text-red-500">แก้ไขเส้นทางระบบ</span>
+              <div className="flex h-8 items-center gap-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 text-xs font-medium select-none">
+                <span className="text-destructive">แก้ไขเส้นทางระบบ</span>
                 <Switch
                   checked={uiEditSystemRouteActive}
                   onCheckedChange={handleToggleEditSystemMode}
@@ -626,16 +626,16 @@ export default function StaticRoutes() {
                               Default Gateway
                             </Badge>
                           ) : route.type === "customgateway" ? (
-                            <Badge variant="outline" className="rounded border-amber-500/20 bg-amber-500/10 px-1.5 py-0 font-mono text-[10px] font-medium text-amber-500">
+                            <Badge variant="outline" className="rounded border-warning/20 bg-warning/10 px-1.5 py-0 font-mono text-[10px] font-medium text-warning">
                               Custom Gateway
                             </Badge>
                           ) : (
-                            <Badge variant="outline" className="rounded border-amber-500/20 bg-amber-500/10 px-1.5 py-0 font-mono text-[10px] font-medium text-amber-500">
+                            <Badge variant="outline" className="rounded border-warning/20 bg-warning/10 px-1.5 py-0 font-mono text-[10px] font-medium text-warning">
                               Custom
                             </Badge>
                           )}
                           {route.kernelOnly && (
-                            <Badge variant="outline" className="rounded border-red-500/20 bg-red-500/10 px-1.5 py-0 font-mono text-[10px] font-medium text-red-500">
+                            <Badge variant="outline" className="rounded border-destructive/20 bg-destructive/10 px-1.5 py-0 font-mono text-[10px] font-medium text-destructive">
                               Kernel Only
                             </Badge>
                           )}
@@ -654,7 +654,7 @@ export default function StaticRoutes() {
                                 </span>
                               )}
                               {route.src && (
-                                <span className="animate-fade-in rounded border border-amber-500/20 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-amber-500">
+                                <span className="animate-fade-in rounded border border-warning/20 bg-warning/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-warning">
                                   src: {route.src}
                                 </span>
                               )}
@@ -708,7 +708,7 @@ export default function StaticRoutes() {
                           size="icon-sm"
                           disabled={isRouteActionDisabled(route)}
                           onClick={() => handleDelete(route.id, route.destination)}
-                          className="cursor-pointer text-muted-foreground hover:bg-red-500/10 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-25"
+                          className="cursor-pointer text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-25"
                           title={getDeleteTitle(route)}
                         >
                           <Trash2 className="h-4 w-4" />
