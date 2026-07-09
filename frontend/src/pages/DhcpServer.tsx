@@ -509,7 +509,7 @@ export default function DhcpServer() {
                 size="sm"
                 onClick={handleApplySettings}
                 disabled={isApplying}
-                className="animate-pulse cursor-pointer gap-1.5 bg-amber-500 font-semibold text-neutral-950 hover:bg-amber-400"
+                className="animate-pulse cursor-pointer gap-1.5 bg-warning font-semibold text-warning-foreground hover:bg-warning/90"
               >
                 {isApplying ? (
                   <>
@@ -615,7 +615,7 @@ export default function DhcpServer() {
                     variant="ghost"
                     size="sm"
                     onClick={() => handleDeleteConfig(cfg.id!, cfg.interface)}
-                    className="cursor-pointer gap-1.5 text-xs text-red-500 hover:bg-red-500/10 hover:text-red-500"
+                    className="cursor-pointer gap-1.5 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
                   >
                     <Trash2 className="h-3.5 w-3.5" /> Delete
                   </Button>
@@ -710,7 +710,7 @@ export default function DhcpServer() {
                             variant="ghost"
                             size="icon-sm"
                             onClick={() => handleDeleteReservation(res.id, res.deviceName)}
-                            className="cursor-pointer text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
+                            className="cursor-pointer text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                             title="ลบการจอง"
                           >
                             <Trash2 className="h-4 w-4" />

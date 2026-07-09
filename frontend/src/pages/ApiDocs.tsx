@@ -46,7 +46,7 @@ function ApiDocs() {
                         {theme === 'dark' ? (
                             <Moon className="w-4 h-4 text-primary" />
                         ) : (
-                            <Sun className="w-4 h-4 text-amber-500" />
+                            <Sun className="w-4 h-4 text-warning" />
                         )}
                         <span className="text-xs hidden sm:inline">Dark Mode</span>
                         <Switch

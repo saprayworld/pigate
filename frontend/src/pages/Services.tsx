@@ -383,7 +383,7 @@ export default function Services() {
                           </Badge>
                         )}
                         {svc.protocol === "UDP" && (
-                          <Badge variant="outline" className="rounded border-amber-500/20 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-amber-500">
+                          <Badge variant="outline" className="rounded border-warning/20 bg-warning/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-warning">
                             UDP
                           </Badge>
                         )}
@@ -405,7 +405,7 @@ export default function Services() {
                             System
                           </Badge>
                         ) : (
-                          <Badge variant="outline" className="rounded border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500">
+                          <Badge variant="outline" className="rounded border-warning/20 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
                             Custom
                           </Badge>
                         )}
@@ -431,7 +431,7 @@ export default function Services() {
                                 variant="ghost"
                                 size="icon-sm"
                                 onClick={() => handleDelete(svc.id, svc.name)}
-                                className="cursor-pointer text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
+                                className="cursor-pointer text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                                 title="ลบวัตถุบริการ"
                               >
                                 <Trash2 className="h-4 w-4" />

@@ -220,7 +220,7 @@ function SortableRow({ rule, index, interfaces, onEdit, onDelete, onToggleStatus
             "rounded px-2 py-0.5 text-[10px] font-bold",
             rule.action === "ACCEPT"
               ? "border-primary/20 bg-primary/10 text-primary"
-              : "border-red-500/20 bg-red-500/10 text-red-500"
+              : "border-destructive/20 bg-destructive/10 text-destructive"
           )}
         >
           {rule.action}
@@ -266,7 +266,7 @@ function SortableRow({ rule, index, interfaces, onEdit, onDelete, onToggleStatus
             variant="ghost"
             size="icon-sm"
             onClick={() => onDelete(rule.id)}
-            className="cursor-pointer text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
+            className="cursor-pointer text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
             title="ลบกฎ"
           >
             <Trash2 className="h-4 w-4" />
@@ -743,7 +743,7 @@ export default function FirewallPolicy() {
                   <TableCell className="py-3 italic">ALL</TableCell>
                   <TableCell className="py-3 italic">ALL</TableCell>
                   <TableCell className="py-3">
-                    <Badge variant="outline" className="rounded border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[10px] font-bold text-red-500">
+                    <Badge variant="outline" className="rounded border-destructive/20 bg-destructive/10 px-2 py-0.5 text-[10px] font-bold text-destructive">
                       DROP
                     </Badge>
                   </TableCell>
@@ -978,7 +978,7 @@ export default function FirewallPolicy() {
                 <Tabs value={formAction} onValueChange={(val) => setFormAction(val as "ACCEPT" | "DROP")} className="w-full">
                   <TabsList className="grid w-full grid-cols-2">
                     <TabsTrigger value="ACCEPT" className="font-bold data-active:text-primary dark:data-active:text-primary">ACCEPT</TabsTrigger>
-                    <TabsTrigger value="DROP" className="font-bold data-active:text-red-500 dark:data-active:text-red-400">DROP</TabsTrigger>
+                    <TabsTrigger value="DROP" className="font-bold data-active:text-destructive">DROP</TabsTrigger>
                   </TabsList>
                 </Tabs>
               </div>

@@ -54,8 +54,8 @@ export function SiteHeader() {
 
   const tempColor =
     temp !== null && temp >= 70
-      ? "text-red-500"
-      : "text-amber-500 dark:text-amber-400"
+      ? "text-destructive"
+      : "text-warning"
 
   return (
     <header className="flex h-[48px] shrink-0 items-center gap-2 border-b transition-[width,height] ease-linear">
@@ -70,7 +70,7 @@ export function SiteHeader() {
               variant="outline"
               className="flex h-7 items-center gap-1.5 rounded-full border-border bg-card/60 px-3 text-xs font-normal hover:bg-card/60"
             >
-              <Thermometer className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
+              <Thermometer className="h-3.5 w-3.5 text-warning" />
               <span className="hidden text-muted-foreground lg:inline">Temp</span>
               <span className={cn("font-semibold", tempColor)}>
                 {temp !== null ? `${temp}°C` : "—"}

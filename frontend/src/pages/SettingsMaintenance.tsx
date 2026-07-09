@@ -1028,8 +1028,8 @@ export default function SettingsMaintenance() {
                               </span>
                             )}
                             {srv.status === "stopped" && (
-                              <span className="flex items-center gap-1.5 text-xs font-semibold text-red-500">
-                                <span className="h-2 w-2 rounded-full bg-red-500" />
+                              <span className="flex items-center gap-1.5 text-xs font-semibold text-destructive">
+                                <span className="h-2 w-2 rounded-full bg-destructive" />
                                 Restarting...
                               </span>
                             )}
@@ -1075,12 +1075,12 @@ export default function SettingsMaintenance() {
         <DialogContent className="w-full max-w-[400px] gap-4 rounded-xl p-6">
           <DialogHeader className="border-b border-border/50 pb-3">
             <DialogTitle className="flex items-center gap-2 text-base font-semibold">
-              <ShieldAlert className="h-4 w-4 text-red-500" />
+              <ShieldAlert className="h-4 w-4 text-destructive" />
               ยืนยันการรีบูตระบบ
             </DialogTitle>
           </DialogHeader>
           <div className="py-2 text-sm leading-relaxed text-muted-foreground">
-            คุณต้องการสั่ง <span className="font-semibold text-red-500">รีบูตเครื่อง (Reboot)</span> บอร์ด PiGate ใช่หรือไม่? การเชื่อมต่อเครือข่ายทั้งหมดผ่านพอร์ต WAN/LAN จะสิ้นสุดชั่วคราวจนกว่าระบบจะกลับมาทำงานอีกครั้ง
+            คุณต้องการสั่ง <span className="font-semibold text-destructive">รีบูตเครื่อง (Reboot)</span> บอร์ด PiGate ใช่หรือไม่? การเชื่อมต่อเครือข่ายทั้งหมดผ่านพอร์ต WAN/LAN จะสิ้นสุดชั่วคราวจนกว่าระบบจะกลับมาทำงานอีกครั้ง
           </div>
           <div className="flex items-center justify-end gap-3 pt-2">
             <Button
@@ -1108,7 +1108,7 @@ export default function SettingsMaintenance() {
         <DialogContent className="w-full max-w-[400px] gap-4 rounded-xl p-6">
           <DialogHeader className="border-b border-border/50 pb-3">
             <DialogTitle className="flex items-center gap-2 text-base font-semibold">
-              <ShieldAlert className="h-4 w-4 text-red-500" />
+              <ShieldAlert className="h-4 w-4 text-destructive" />
               ยืนยันการปิดเครื่อง
             </DialogTitle>
           </DialogHeader>

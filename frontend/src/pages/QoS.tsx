@@ -383,7 +383,7 @@ export default function QoS() {
                             </div>
                             <span className={cn(
                               "flex items-center gap-0.5 text-xs font-semibold",
-                              isIngress ? "text-amber-500" : "text-primary"
+                              isIngress ? "text-warning" : "text-primary"
                             )}>
                               {isIngress ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
                               {cls.ceil}
@@ -566,7 +566,7 @@ export default function QoS() {
 
                     <TableCell className="py-3">
                       {rule.ingressRateMbps > 0 ? (
-                        <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-500">
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-warning">
                           <ArrowDown className="h-3.5 w-3.5" />
                           <span>{rule.ingressRateMbps} Mbps</span>
                           {rule.ingressCeilMbps > rule.ingressRateMbps && (
@@ -600,7 +600,7 @@ export default function QoS() {
                         <Button
                           variant="ghost"
                           size="icon-sm"
-                          className="cursor-pointer text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
+                          className="cursor-pointer text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                           onClick={() => handleDeleteRule(rule)}
                           title="ลบกฎ QoS"
                         >
@@ -775,7 +775,7 @@ export default function QoS() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <Label htmlFor="qos-ingress-rate" className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
-                    <ArrowDown className="h-3 w-3 text-amber-500" />
+                    <ArrowDown className="h-3 w-3 text-warning" />
                     Ingress Rate (Mbps)
                   </Label>
                   <Input
