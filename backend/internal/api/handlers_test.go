@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"pigate/internal/db"
 	"pigate/internal/kernel"
 	"pigate/internal/logs"
@@ -493,6 +495,34 @@ func TestForcePasswordChangeFlow(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("Expected 200 OK for stats after changing password, got %d", rec.Code)
+	}
+}
+
+// TestChangePasswordRejectsWeakPassword verifies the server-side password policy
+// is enforced on the self-service change-password endpoint — an API caller that
+// bypasses the frontend length check must still be rejected, and the current
+// password must remain unchanged.
+func TestChangePasswordRejectsWeakPassword(t *testing.T) {
+	handler, repo := setupTestServer(t)
+
+	// A new password shorter than the minimum (8) must be rejected with 400.
+	changePayload := model.ChangePasswordRequest{CurrentPassword: "pigate", NewPassword: "short"}
+	changeBody, _ := json.Marshal(changePayload)
+	req := httptest.NewRequest("PUT", "/api/system/password", bytes.NewBuffer(changeBody))
+	req.Header.Set("Authorization", "Bearer mock_session_id_test_token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("Expected 400 for a too-short new password, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	// The original password must still work — the weak change was not persisted.
+	user, err := repo.GetUserByUsername("pigate")
+	if err != nil || user == nil {
+		t.Fatalf("Failed to reload user: %v", err)
+	}
+	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte("pigate")) != nil {
+		t.Error("Original password should remain valid after a rejected weak change")
 	}
 }
 

@@ -1651,6 +1651,14 @@ func (s *Server) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enforce the shared password policy server-side. The frontend already checks
+	// length, but an API caller could bypass the UI, so re-validate here using the
+	// same rule as user creation/reset (single source of truth in the service).
+	if err := service.ValidatePassword(req.NewPassword); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	// Resolve the authenticated user from context (set by AuthMiddleware) so a
 	// user only ever changes their own password — never a hardcoded account.
 	username, _ := r.Context().Value(UserContextKey).(string)
