@@ -276,18 +276,21 @@ format เวลา RFC3339 → HH:MM:SS ก่อนแสดง (ดู §5.5)
 
 ## 6. Checklist สรุป (Definition of Done)
 
-- [ ] `kernel/interfaces.go` — เพิ่ม `TrafficLogManager`
-- [ ] `kernel/real_traffic_log.go` — NFLOG listener + packet parser (ไฟล์ใหม่) + unit test parser (IPv4/IPv6/payload สั้น)
-- [ ] `kernel/mock.go` — `MockTrafficLog` generator
-- [ ] `kernel/real_firewall.go` — log ฝั่ง forward (policy + final drop) ชี้ group 100 + snaplen; input chain ไม่แตะ
-- [ ] `go.mod` — เพิ่ม `florianl/go-nflog/v2` (pin ใน go.sum)
-- [ ] `cmd/pigate/main.go` — buffer 500, เลือก real/mock, start watcher ใต้ monitorCtx, ลบ seed ปลอม
-- [ ] `api/handlers.go` + `router.go` — `GET /api/logs/traffic` (filter action/q/limit)
-- [ ] `docs/openapi.yaml` + `frontend/public/openapi.yaml` — sync
-- [ ] `frontend/src/services/trafficLogService.ts` + `pages/ForwardTraffic.tsx` (ไฟล์ใหม่, semantic colors, dark/light)
-- [ ] `app-sidebar.tsx` — group ใหม่ "Log & Report" (Forward Traffic + System Events) + `App.tsx` route group `logs/*`
-- [ ] ย้าย Event Logs: ลบ `/system/logs` (เมนู+route ของ PR #16) → `/logs/events` label "System Events"
-- [ ] `pages/Dashboard.tsx` — format เวลา RFC3339 ใน Recent Logs
-- [ ] `README.md` (แถวใหม่ + แก้หมายเหตุ Dashboard) + `docs/project_status.md:~160`
-- [ ] ทดสอบ: mock end-to-end (log ไหลเข้าหน้าใหม่ + Dashboard), filter/pause, `-disable-edit` GET ได้/clear โดนบล็อก, เมนู/route ใหม่ทั้งสองหน้าเปิดได้และ `/system/logs` เดิมไม่ค้าง, build/test/lint ผ่านสองฝั่ง
-- [ ] บอร์ดจริง: apply rules ไม่หลุดจากเครื่อง, เปิด Log บน policy แล้ว event จริงโผล่, ทราฟฟิกหนักไม่ทำ CPU/RAM บวม (ดูลำดับปลอดภัย §5.8)
+> **สถานะ: เสร็จแล้ว (PR #18)** — โค้ด/เอกสาร/ทดสอบ mock ครบทุกข้อ
+> เหลือเพียงการทดสอบบนบอร์ดจริง (ข้อสุดท้าย) ที่ต้องเข้าถึงเครื่องกายภาพ
+
+- [x] `kernel/interfaces.go` — เพิ่ม `TrafficLogManager`
+- [x] `kernel/real_traffic_log.go` — NFLOG listener + packet parser (ไฟล์ใหม่) + unit test parser (IPv4/IPv6/payload สั้น)
+- [x] `kernel/mock.go` — `MockTrafficLog` generator
+- [x] `kernel/real_firewall.go` — log ฝั่ง forward (policy + final drop) ชี้ group 100 + snaplen; input chain ไม่แตะ
+- [x] `go.mod` — เพิ่ม `florianl/go-nflog/v2` (pin ใน go.sum)
+- [x] `cmd/pigate/main.go` — buffer 500, เลือก real/mock, start watcher ใต้ monitorCtx, ลบ seed ปลอม
+- [x] `api/handlers.go` + `router.go` — `GET /api/logs/traffic` (filter action/q/limit)
+- [x] `docs/openapi.yaml` + `frontend/public/openapi.yaml` — sync
+- [x] `frontend/src/services/trafficLogService.ts` + `pages/ForwardTraffic.tsx` (ไฟล์ใหม่, semantic colors, dark/light)
+- [x] `app-sidebar.tsx` — group ใหม่ "Log & Report" (Forward Traffic + System Events) + `App.tsx` route group `logs/*`
+- [x] ย้าย Event Logs: ลบ `/system/logs` (เมนู+route ของ PR #16) → `/logs/events` label "System Events"
+- [x] `pages/Dashboard.tsx` — format เวลา RFC3339 ใน Recent Logs
+- [x] `README.md` (แถวใหม่ + แก้หมายเหตุ Dashboard) + `docs/project_status.md:~160`
+- [x] ทดสอบ: mock end-to-end (log ไหลเข้าหน้าใหม่ + Dashboard), filter/pause, `-disable-edit` GET ได้/clear โดนบล็อก, เมนู/route ใหม่ทั้งสองหน้าเปิดได้และ `/system/logs` เดิมไม่ค้าง, build/test/lint ผ่านสองฝั่ง
+- [ ] บอร์ดจริง: apply rules ไม่หลุดจากเครื่อง, เปิด Log บน policy แล้ว event จริงโผล่, ทราฟฟิกหนักไม่ทำ CPU/RAM บวม (ดูลำดับปลอดภัย §5.8) — **ยังไม่ได้ทดสอบ** (ต้องเข้าถึงเครื่องกายภาพ + `setcap`)
