@@ -516,15 +516,12 @@ func (rf *RealFirewall) ApplyRules(
 		}
 	}
 
-	// Final Drop Log in forward
+	// Final Drop Log in forward — also to the NFLOG group (see forwardLogExpr).
 	conn.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: forwardChain,
 		Exprs: []expr.Any{
-			&expr.Log{
-				Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
-				Data: []byte("[PiGate] FWD DROP  : "),
-			},
+			forwardLogExpr("[PiGate] FWD DROP  : "),
 		},
 	})
 
@@ -566,6 +563,20 @@ func (rf *RealFirewall) ApplyRules(
 
 	log.Printf("[RealFirewall] Successfully applied firewall rules to Linux kernel")
 	return nil
+}
+
+// forwardLogExpr builds the nftables log expression used by the forward chain.
+// Unlike the input-chain logs (which stay on printk / dmesg), forward-chain logs
+// are directed to NFLOG group ForwardNflogGroup so the in-app listener can read
+// them (real_traffic_log.go). The prefix travels in NFULA_PREFIX; snaplen copies
+// only enough bytes to parse the IP + transport headers, not the whole payload.
+func forwardLogExpr(logPrefix string) *expr.Log {
+	return &expr.Log{
+		Key:     (1 << unix.NFTA_LOG_GROUP) | (1 << unix.NFTA_LOG_PREFIX) | (1 << unix.NFTA_LOG_SNAPLEN),
+		Group:   ForwardNflogGroup,
+		Snaplen: ForwardNflogSnaplen,
+		Data:    []byte(logPrefix),
+	}
 }
 
 // padInterfaceName pads interface name string to exactly 16 bytes for Netlink comparison
@@ -857,11 +868,11 @@ func buildRuleExpressions(
 	exprs = append(exprs, &expr.Counter{})
 
 	// 7. Add Log (if enabled)
+	// Forward-chain logs go to NFLOG group ForwardNflogGroup (not printk) so the
+	// in-app NFLOG listener (real_traffic_log.go) can read them into the ring
+	// buffer for the Forward Traffic page. Snaplen keeps only the headers we parse.
 	if logEnabled {
-		exprs = append(exprs, &expr.Log{
-			Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
-			Data: []byte(logPrefix),
-		})
+		exprs = append(exprs, forwardLogExpr(logPrefix))
 	}
 
 	// 8. Add Verdict

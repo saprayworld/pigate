@@ -22,6 +22,7 @@ import DnsServer from "@/pages/DnsServer"
 import ForceChangePassword from "@/pages/ForceChangePassword"
 import QoS from "@/pages/QoS"
 import EventLogs from "@/pages/EventLogs"
+import ForwardTraffic from "@/pages/ForwardTraffic"
 import { SizeIndicator, TailwindIndicator } from "./components/tailwindIndicator"
 
 // A simple authentication route guard
@@ -157,10 +158,15 @@ export default function App() {
                     <Route path="services" element={<Services />} />
                   </Route>
 
+                  {/* Log & Report Routes */}
+                  <Route path="logs">
+                    <Route path="traffic" element={<ForwardTraffic />} />
+                    <Route path="events" element={<EventLogs />} />
+                  </Route>
+
                   {/* System Routes */}
                   <Route path="system">
                     <Route path="settings" element={<SettingsMaintenance />} />
-                    <Route path="logs" element={<EventLogs />} />
                     <Route
                       path="users"
                       element={

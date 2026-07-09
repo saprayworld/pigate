@@ -14,6 +14,7 @@ import {
   Server,
   Users,
   ScrollText,
+  ArrowRightLeft,
 } from "lucide-react"
 
 import { NavUser } from "@/components/nav-user"
@@ -64,10 +65,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       ],
     },
     {
+      title: "Log & Report",
+      items: [
+        { path: "/logs/traffic", label: "Forward Traffic", icon: ArrowRightLeft },
+        { path: "/logs/events", label: "System Events", icon: ScrollText },
+      ],
+    },
+    {
       title: "System",
       items: [
         { path: "/system/settings", label: "Settings & Maintenance", icon: Settings },
-        { path: "/system/logs", label: "Event Logs", icon: ScrollText },
         // User Management is super_admin only; the backend enforces access, this
         // just hides an unusable link from read-only admins.
         ...(isSuperAdmin

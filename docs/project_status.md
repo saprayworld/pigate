@@ -156,8 +156,11 @@
   * Local DNS Resolution / FQDN สำหรับ client ภายในเครือข่ายผ่าน `dnsmasq` (`/etc/dnsmasq.d/pigate-dns.conf`) รองรับ Zone/Record และ Authoritative Zone — ดูรายละเอียดที่ [dnsmasq-design.md](ref/complete/dnsmasq-design.md)
 * [ ] **ติดตั้งระบบสถิติกฎไฟร์วอลล์จริง (Live Rule Counters Telemetry):**
   * เรียกใช้ข้อมูล Hit packet และ byte counters จาก `expr.Counter` บน nftables rules นำเสนอเป็นข้อมูล Telemetry เรียลไทม์ผ่าน API ไปแสดงผลในตารางกฎหน้าเว็บโดยไม่ต้องสั่งเขียนบันทึกลง SD card ของบอร์ด
-* [ ] **พัฒนาระบบล็อกความปลอดภัยสตรีมสด (Firewall Logs Stream):**
-  * พัฒนาตัวอ่านข้อมูล Kernel Logs (`/dev/kmsg` หรือ Journald) ที่มีข้อความ Prefix เป็น `[PiGate]` นำเข้าสู่ In-Memory Ring Buffer และจัดส่งเป็นสตรีมข้อมูลสด (Server-Sent Events) ไปแสดงบนหน้า Dashboard ของแอดมิน
+* [x] **พัฒนาระบบล็อกทราฟฟิกที่วิ่งผ่าน (Forward Traffic Log) [สำเร็จ]:**
+  * เปลี่ยนปลายทาง log ของ forward chain (PASS/DROP) จาก printk/dmesg → **NFLOG group 100** แล้วเปิด listener ฝั่ง Go ด้วย `github.com/florianl/go-nflog` (pure Go, ไม่มี CGO, ต่อยอด `mdlayher/netlink` ที่ pin อยู่แล้ว) — parse header IPv4/IPv6 + TCP/UDP เป็น `model.FirewallLog` เข้า In-Memory Ring Buffer (capacity 500) เท่านั้น **ไม่เขียน SQLite** (ถนอม SD card, ตาม §8 ของ tech_stack_design)
+  * เลือกทาง NFLOG แทน `/dev/kmsg` (ต้องเพิ่ม `cap_syslog` + parse text ที่ไม่ stable) และแทน journald (ต้องใช้ CGO) — คง CAP_NET_ADMIN เดิม; callback ฝั่ง Go non-blocking + ทิ้ง event ส่วนเกินตอน burst; mock mode ใช้ generator ล้วน (ไม่เปิด socket)
+  * หน้าใหม่ **Log & Report › Forward Traffic** (filter PASS/DROP, ค้น src/dest/port/reason, pause/resume polling 5 วิ, clear) + Dashboard Recent Logs กลายเป็นข้อมูลจริงจาก buffer เดียวกันโดยอัตโนมัติ; เส้น API ใหม่ `GET /api/logs/traffic`
+  * _(ยังไม่ทำในเฟสนี้: log ของ input chain ยังยิงเข้า dmesg ตามเดิม, ไม่ทำ SSE/persist/remote syslog)_
 * [x] **พัฒนาข้อมูล Dashboard จริง (Real Dashboard Metrics):** _(เสร็จแล้ว)_
   * แทนที่ค่าจำลอง Total Traffic In/Out และ CPU/RAM/Temperature/Storage/Uptime/OS ด้วยข้อมูลจริงจากระบบผ่าน `SystemStatsManager` (อ่าน `/proc/stat`, `/proc/meminfo`, `/proc/cpuinfo`, `/sys/class/thermal`, `/sys/.../cpufreq`, `statfs`, `/etc/os-release`, `/proc/uptime`, `/proc/device-tree/model` และ netlink interface counters — ไม่มี shell exec)
   * CPU usage คำนวณจาก background sampler (2 snapshots), traffic history เก็บใน RAM ring buffer (288 buckets × 5 นาที = 24 ชม., ไม่เขียน SQLite), ค่า optional (temp/freq/board) degrade เป็น `available:false`/omit บนเครื่องที่ไม่มี sysfs node (เช่น WSL/x86)

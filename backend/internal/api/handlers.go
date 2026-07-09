@@ -350,6 +350,46 @@ func (s *Server) HandleClearLogs(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// HandleGetTrafficLogs returns forward-chain packet logs (newest first) from the
+// RAM ring buffer, filtered in memory by the query params below. It reads the
+// same buffer as the Dashboard Recent Logs widget; it never touches SQLite.
+//
+//	action  PASS | DROP        (case-insensitive; empty = all)
+//	q       substring matched against src/dest/port/proto/reason (case-insensitive)
+//	limit   max rows to return (default 100, capped at the buffer capacity)
+func (s *Server) HandleGetTrafficLogs(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	action := strings.ToUpper(strings.TrimSpace(query.Get("action")))
+	needle := strings.ToLower(strings.TrimSpace(query.Get("q")))
+
+	all := s.logs.GetAll() // already newest-first
+	limit := 100
+	if v, err := strconv.Atoi(query.Get("limit")); err == nil && v > 0 {
+		limit = v
+	}
+	if limit > len(all) {
+		limit = len(all)
+	}
+
+	filtered := make([]model.FirewallLog, 0, limit)
+	for _, entry := range all {
+		if len(filtered) >= limit {
+			break
+		}
+		if action != "" && strings.ToUpper(entry.Action) != action {
+			continue
+		}
+		if needle != "" {
+			hay := strings.ToLower(entry.Src + " " + entry.Dest + " " + entry.Port + " " + entry.Proto + " " + entry.Reason)
+			if !strings.Contains(hay, needle) {
+				continue
+			}
+		}
+		filtered = append(filtered, entry)
+	}
+	s.writeJSON(w, http.StatusOK, filtered)
+}
+
 // HandleGetSystemEvents returns central event log entries (newest first) with
 // optional category/severity/q filters and limit/offset paging.
 func (s *Server) HandleGetSystemEvents(w http.ResponseWriter, r *http.Request) {

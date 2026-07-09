@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/rand"
 	"os"
 	"strings"
 	"sync"
@@ -536,4 +537,53 @@ func (m *MockSystemStats) GetNetCounters() (map[string]model.NetCounters, error)
 		"wlan0": {RxBytes: rx / 2, TxBytes: tx / 2},
 		"lo":    {RxBytes: rx * 4, TxBytes: rx * 4}, // must be excluded by collector
 	}, nil
+}
+
+// MockTrafficLog implements TrafficLogManager for local/mock testing. It
+// synthesizes forward-traffic events on a timer (no netlink socket is ever
+// opened — safe to run on a dev workstation) so the Forward Traffic page and
+// the Dashboard Recent Logs widget have a live feed without a real kernel.
+type MockTrafficLog struct{}
+
+func NewMockTrafficLog() *MockTrafficLog {
+	return &MockTrafficLog{}
+}
+
+func (m *MockTrafficLog) WatchForwardTraffic(ctx context.Context, cb func(model.FirewallLog)) error {
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	ticker := time.NewTicker(4 * time.Second)
+	defer ticker.Stop()
+
+	type sample struct {
+		action string
+		dest   string
+		port   string
+		proto  string
+		reason string
+	}
+	samples := []sample{
+		{"PASS", "8.8.8.8", "53", "UDP", "Allowed (forward)"},
+		{"PASS", "142.250.80.46", "443", "TCP", "Allowed (forward)"},
+		{"PASS", "1.1.1.1", "443", "TCP", "Allowed (forward)"},
+		{"DROP", "185.220.101.4", "23", "TCP", "Blocked (forward)"},
+		{"DROP", "45.13.104.9", "3389", "TCP", "Blocked (forward)"},
+		{"PASS", "140.82.113.3", "22", "TCP", "Allowed (forward)"},
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			s := samples[rng.Intn(len(samples))]
+			cb(model.FirewallLog{
+				Action: s.action,
+				Src:    fmt.Sprintf("192.168.1.%d", 100+rng.Intn(50)),
+				Dest:   s.dest,
+				Port:   s.port,
+				Proto:  s.proto,
+				Reason: s.reason,
+			})
+		}
+	}
 }
