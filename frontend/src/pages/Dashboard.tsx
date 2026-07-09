@@ -233,14 +233,14 @@ function aggregateHourly(hist: TrafficHistory | null): Bucket[] {
 
 const statusMeter: Record<Status, string> = {
   normal: "bg-primary",
-  warning: "bg-amber-500",
-  critical: "bg-red-500",
+  warning: "bg-warning",
+  critical: "bg-destructive",
 }
 
 const statusBadge: Record<Status, string> = {
   normal: "bg-primary/10 text-primary border-primary/20",
-  warning: "bg-amber-500/10 text-amber-500 border-amber-500/20",
-  critical: "bg-red-500/10 text-red-500 border-red-500/20",
+  warning: "bg-warning/10 text-warning border-warning/20",
+  critical: "bg-destructive/10 text-destructive border-destructive/20",
 }
 
 const statusLabel: Record<Status, string> = {
@@ -258,9 +258,9 @@ interface AlertItem {
 }
 
 const alertStyle: Record<AlertLevel, { badge: string; icon: typeof Info }> = {
-  WARN: { badge: "bg-amber-500/10 text-amber-500 border-amber-500/20", icon: TriangleAlert },
+  WARN: { badge: "bg-warning/10 text-warning border-warning/20", icon: TriangleAlert },
   INFO: { badge: "bg-primary/10 text-primary border-primary/20", icon: Info },
-  ERR: { badge: "bg-red-500/10 text-red-500 border-red-500/20", icon: ShieldAlert },
+  ERR: { badge: "bg-destructive/10 text-destructive border-destructive/20", icon: ShieldAlert },
 }
 
 function logsToAlerts(logs: FirewallLog[]): AlertItem[] {
