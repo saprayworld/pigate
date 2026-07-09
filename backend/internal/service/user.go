@@ -54,7 +54,11 @@ func validateUsername(username string) error {
 	return nil
 }
 
-func validatePassword(password string) error {
+// ValidatePassword enforces the shared password policy. It is exported so the
+// API layer (e.g. the self-service change-password handler) can apply the exact
+// same rule as user creation/reset — keeping one source of truth rather than
+// relying on frontend-only checks that an API caller could bypass.
+func ValidatePassword(password string) error {
 	if len(password) < minPasswordLength {
 		return fmt.Errorf("รหัสผ่านต้องมีอย่างน้อย %d ตัวอักษร", minPasswordLength)
 	}
@@ -75,7 +79,7 @@ func (s *UserService) Create(req model.CreateUserRequest) (*model.User, error) {
 	if err := validateUsername(req.Username); err != nil {
 		return nil, err
 	}
-	if err := validatePassword(req.Password); err != nil {
+	if err := ValidatePassword(req.Password); err != nil {
 		return nil, err
 	}
 	if err := validateRole(req.Role); err != nil {
@@ -170,7 +174,7 @@ func (s *UserService) Update(actorUsername, id string, req model.UpdateUserReque
 
 	// Optional password reset.
 	if req.Password != nil {
-		if err := validatePassword(*req.Password); err != nil {
+		if err := ValidatePassword(*req.Password); err != nil {
 			return err
 		}
 		hash, err := bcrypt.GenerateFromPassword([]byte(*req.Password), 10)
