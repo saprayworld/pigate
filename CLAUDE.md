@@ -83,4 +83,5 @@ Startup sequence in `cmd/pigate/main.go` matters: DB init → kernel manager sel
 
 ## Project conventions
 - Do not create git commits unless the user explicitly asks.
+- **Git workflow**: pushing directly to `main` is reserved for documentation-only changes (`docs/`, README, CLAUDE.md — the owner intentionally bypasses branch protection for these). Any code change (backend/frontend) must be made on a separate feature branch (`feat/...`, `fix/...`) and merged into `main` via a pull request.
 - Never read or expose `.env` files, secrets, keys, or credentials; use placeholder values in examples.
