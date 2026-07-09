@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,6 +43,7 @@ type Server struct {
 	backupService     *service.BackupService
 	systemStatus      *service.SystemStatusService
 	powerService      *service.PowerService
+	eventLog          *service.EventLogService
 }
 
 func NewServer(
@@ -65,6 +67,7 @@ func NewServer(
 	backupService *service.BackupService,
 	systemStatus *service.SystemStatusService,
 	powerService *service.PowerService,
+	eventLog *service.EventLogService,
 ) *Server {
 	return &Server{
 		repo:              repo,
@@ -87,6 +90,7 @@ func NewServer(
 		backupService:     backupService,
 		systemStatus:      systemStatus,
 		powerService:      powerService,
+		eventLog:          eventLog,
 	}
 }
 
@@ -118,6 +122,28 @@ func generateRandomToken() string {
 	return hex.EncodeToString(b)
 }
 
+// logLoginFailed records a failed login attempt. Only the attempted username is
+// logged — never the password field (see plan §5.4).
+func (s *Server) logLoginFailed(username, reason string) {
+	if s.eventLog == nil {
+		return
+	}
+	s.eventLog.Log(model.EventCategoryAuth, "login.failed", model.EventSeverityWarning,
+		username, username, "Login failed for "+username+" ("+reason+")")
+}
+
+// logEvent records a system event with the authenticated user from the request
+// context as actor. Handlers call it only after the operation succeeded (except
+// login.failed, which logs directly via s.eventLog). Nil-safe so tests that
+// build a Server without an EventLogService keep working.
+func (s *Server) logEvent(r *http.Request, category, action, severity, target, msg string) {
+	if s.eventLog == nil {
+		return
+	}
+	actor, _ := r.Context().Value(UserContextKey).(string)
+	s.eventLog.Log(category, action, severity, actor, target, msg)
+}
+
 // =========================================================================
 // AUTHENTICATION HANDLERS
 // =========================================================================
@@ -135,6 +161,7 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if user == nil {
+		s.logLoginFailed(req.Username, "unknown username")
 		s.writeError(w, http.StatusUnauthorized, "Invalid username or password")
 		return
 	}
@@ -142,6 +169,7 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	// Verify Password hash using Bcrypt
 	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password))
 	if err != nil {
+		s.logLoginFailed(req.Username, "wrong password")
 		s.writeError(w, http.StatusUnauthorized, "Invalid username or password")
 		return
 	}
@@ -150,12 +178,18 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	// account existence to a wrong-password attempt. This is an internal admin
 	// box, so a clear message for the legitimate owner is acceptable.
 	if user.Status == model.StatusDisabled {
+		s.logLoginFailed(req.Username, "account disabled")
 		s.writeError(w, http.StatusUnauthorized, "บัญชีนี้ถูกปิดใช้งาน")
 		return
 	}
 
 	token := "session_id_" + generateRandomToken()
 	AddSession(token, user.Username)
+
+	if s.eventLog != nil {
+		s.eventLog.Log(model.EventCategoryAuth, "login.success", model.EventSeverityInfo,
+			user.Username, user.Username, "User "+user.Username+" logged in")
+	}
 
 	// Set secure cookie
 	http.SetCookie(w, &http.Cookie{
@@ -316,6 +350,57 @@ func (s *Server) HandleClearLogs(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// HandleGetSystemEvents returns central event log entries (newest first) with
+// optional category/severity/q filters and limit/offset paging.
+func (s *Server) HandleGetSystemEvents(w http.ResponseWriter, r *http.Request) {
+	if s.eventLog == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Event log service not available")
+		return
+	}
+
+	query := r.URL.Query()
+	category := query.Get("category")
+	severity := query.Get("severity")
+	q := query.Get("q")
+
+	limit := 50
+	if v, err := strconv.Atoi(query.Get("limit")); err == nil && v > 0 {
+		limit = v
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	offset := 0
+	if v, err := strconv.Atoi(query.Get("offset")); err == nil && v > 0 {
+		offset = v
+	}
+
+	events, total, err := s.eventLog.Query(category, severity, q, limit, offset)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"events": events,
+		"total":  total,
+	})
+}
+
+// HandleClearSystemEvents wipes the audit trail. super_admin only (see router);
+// EventLogService.Clear immediately re-logs who performed the wipe.
+func (s *Server) HandleClearSystemEvents(w http.ResponseWriter, r *http.Request) {
+	if s.eventLog == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Event log service not available")
+		return
+	}
+	actor, _ := r.Context().Value(UserContextKey).(string)
+	if err := s.eventLog.Clear(actor); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, true)
+}
+
 // =========================================================================
 // INTERFACES HANDLERS
 // =========================================================================
@@ -455,6 +540,8 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	s.logEvent(r, model.EventCategoryNetwork, "network.interface_changed", model.EventSeverityInfo,
+		iface.Name, "Interface "+iface.Name+" configuration updated")
 	maskInterfacePasswords(iface)
 	s.writeJSON(w, http.StatusOK, iface)
 }
@@ -584,6 +671,8 @@ func (s *Server) HandlePatchInterface(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	s.logEvent(r, model.EventCategoryNetwork, "network.interface_changed", model.EventSeverityInfo,
+		iface.Name, "Interface "+iface.Name+" configuration updated")
 	maskInterfacePasswords(iface)
 	s.writeJSON(w, http.StatusOK, iface)
 }
@@ -613,6 +702,8 @@ func (s *Server) HandleToggleInterface(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryNetwork, "network.interface_changed", model.EventSeverityInfo,
+		iface.Name, "Interface "+iface.Name+" toggled "+nextStatus)
 	maskInterfacePasswords(iface)
 	s.writeJSON(w, http.StatusOK, iface)
 }
@@ -742,6 +833,8 @@ func (s *Server) HandleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.policy_created", model.EventSeverityInfo,
+		rule.Name, "Firewall policy \""+rule.Name+"\" created")
 	s.writeJSON(w, http.StatusOK, rule)
 }
 
@@ -777,15 +870,23 @@ func (s *Server) HandleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.policy_updated", model.EventSeverityInfo,
+		rule.Name, "Firewall policy \""+rule.Name+"\" updated")
 	s.writeJSON(w, http.StatusOK, rule)
 }
 
 func (s *Server) HandleDeletePolicy(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	target := id
+	if p, _ := s.firewallService.GetPolicyByID(id); p != nil {
+		target = p.Name
+	}
 	if err := s.firewallService.DeletePolicy(id); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.policy_deleted", model.EventSeverityInfo,
+		target, "Firewall policy \""+target+"\" deleted")
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -835,6 +936,8 @@ func (s *Server) HandleApplyPolicies(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "OS Firewall update failed: "+err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.applied", model.EventSeverityInfo,
+		"nftables", "Firewall policies applied to kernel")
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -1040,6 +1143,8 @@ func (s *Server) HandleCreateRoute(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryRoute, "route.created", model.EventSeverityInfo,
+		route.Destination, "Static route to "+route.Destination+" created")
 	s.writeJSON(w, http.StatusOK, route)
 }
 
@@ -1096,15 +1201,23 @@ func (s *Server) HandleUpdateRoute(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryRoute, "route.updated", model.EventSeverityInfo,
+		route.Destination, "Static route to "+route.Destination+" updated")
 	s.writeJSON(w, http.StatusOK, route)
 }
 
 func (s *Server) HandleDeleteRoute(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	target := id
+	if rt, _ := s.repo.GetRouteByID(id); rt != nil {
+		target = rt.Destination
+	}
 	if err := s.routingService.RemoveConfigRoute(id); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryRoute, "route.deleted", model.EventSeverityInfo,
+		target, "Static route to "+target+" deleted")
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -1153,6 +1266,8 @@ func (s *Server) HandleApplyRoutes(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "OS routing configuration update failed: "+err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryRoute, "route.applied", model.EventSeverityInfo,
+		"routing", "Static routes applied to kernel")
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -1188,6 +1303,8 @@ func (s *Server) HandleUpdateDHCPConfig(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDhcp, "dhcp.config_changed", model.EventSeverityInfo,
+		cfg.Interface, "DHCP server config for "+cfg.Interface+" updated")
 	s.writeJSON(w, http.StatusOK, cfg)
 }
 
@@ -1287,6 +1404,8 @@ func (s *Server) HandleApplyDHCP(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDhcp, "dhcp.applied", model.EventSeverityInfo,
+		"dnsmasq", "DHCP server configuration applied")
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -1414,6 +1533,9 @@ func (s *Server) HandleUpdateSystemTime(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	s.logEvent(r, model.EventCategorySystem, "system.time_changed", model.EventSeverityInfo,
+		settings.Timezone, "System time settings updated (timezone "+settings.Timezone+")")
+
 	// Return the fresh state (config + live status) so the UI can refresh.
 	updated, err := s.timeService.Get()
 	if err != nil {
@@ -1442,6 +1564,9 @@ func (s *Server) HandleSetManualTime(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	s.logEvent(r, model.EventCategorySystem, "system.time_changed", model.EventSeverityInfo,
+		"clock", "System clock set manually")
 
 	settings, err := s.timeService.Get()
 	if err != nil {
@@ -1476,6 +1601,8 @@ func (s *Server) HandleUpdateHostname(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategorySystem, "system.hostname_changed", model.EventSeverityInfo,
+		settings.Hostname, "Hostname changed to "+settings.Hostname)
 	s.writeJSON(w, http.StatusOK, settings)
 }
 
@@ -1512,6 +1639,8 @@ func (s *Server) HandleUpdateDNSConfig(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[HandleUpdateDNSConfig] Warning: failed to regenerate DNS server config after System DNS update: %v", err)
 	}
 
+	s.logEvent(r, model.EventCategoryDns, "dns.config_changed", model.EventSeverityInfo,
+		"system-dns", "System DNS settings updated (mode "+input.Mode+")")
 	s.writeJSON(w, http.StatusOK, input)
 }
 
@@ -1553,6 +1682,8 @@ func (s *Server) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.logEvent(r, model.EventCategoryAuth, "auth.password_changed", model.EventSeverityInfo,
+		username, "User "+username+" changed their password")
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -1591,6 +1722,8 @@ func (s *Server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		s.writeUserServiceError(w, err)
 		return
 	}
+	s.logEvent(r, model.EventCategoryUser, "user.created", model.EventSeverityInfo,
+		user.Username, "User "+user.Username+" created (role "+user.Role+")")
 	s.writeJSON(w, http.StatusCreated, user)
 }
 
@@ -1606,6 +1739,12 @@ func (s *Server) HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		s.writeUserServiceError(w, err)
 		return
 	}
+	target := id
+	if u, _ := s.repo.GetUserByID(id); u != nil {
+		target = u.Username
+	}
+	s.logEvent(r, model.EventCategoryUser, "user.updated", model.EventSeverityInfo,
+		target, "User "+target+" updated")
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -1620,9 +1759,13 @@ func (s *Server) HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		s.writeUserServiceError(w, err)
 		return
 	}
+	targetName := id
 	if target != nil {
 		RemoveSessionsForUser(target.Username)
+		targetName = target.Username
 	}
+	s.logEvent(r, model.EventCategoryUser, "user.deleted", model.EventSeverityWarning,
+		targetName, "User "+targetName+" deleted")
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -1634,8 +1777,12 @@ func (s *Server) HandleToggleUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// If the account is now disabled, purge its sessions immediately.
-	if u, _ := s.repo.GetUserByID(id); u != nil && u.Status == model.StatusDisabled {
-		RemoveSessionsForUser(u.Username)
+	if u, _ := s.repo.GetUserByID(id); u != nil {
+		if u.Status == model.StatusDisabled {
+			RemoveSessionsForUser(u.Username)
+		}
+		s.logEvent(r, model.EventCategoryUser, "user.toggled", model.EventSeverityInfo,
+			u.Username, "User "+u.Username+" status changed to "+u.Status)
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -1659,9 +1806,13 @@ func (s *Server) HandleRestartService(w http.ResponseWriter, r *http.Request) {
 // HandleReboot restarts the physical host. super_admin only (see router). The
 // service delays the actual login1 D-Bus call ~1s so this 200 reaches the
 // browser before logind stops pigate.service.
+//
+// The event MUST be flushed synchronously before powerService fires: once
+// logind starts stopping pigate.service, anything still queued in the batch
+// writer is lost — the exact failure mode of the old RAM-only logPowerEvent.
 func (s *Server) HandleReboot(w http.ResponseWriter, r *http.Request) {
 	username, _ := r.Context().Value(UserContextKey).(string)
-	s.logPowerEvent("REBOOT", username)
+	s.logPowerEvent(r, "system.reboot", "Reboot", username)
 	if err := s.powerService.Reboot(username); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to reboot: "+err.Error())
 		return
@@ -1670,10 +1821,10 @@ func (s *Server) HandleReboot(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleShutdown powers off the physical host. super_admin only (see router).
-// Same delayed-flush behavior as HandleReboot.
+// Same log-then-flush-then-power ordering as HandleReboot.
 func (s *Server) HandleShutdown(w http.ResponseWriter, r *http.Request) {
 	username, _ := r.Context().Value(UserContextKey).(string)
-	s.logPowerEvent("SHUTDOWN", username)
+	s.logPowerEvent(r, "system.shutdown", "Shutdown", username)
 	if err := s.powerService.Shutdown(username); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to shutdown: "+err.Error())
 		return
@@ -1681,23 +1832,20 @@ func (s *Server) HandleShutdown(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// logPowerEvent records a power action in the in-memory ring buffer so it shows
-// up in Recent Logs right before the board goes down. The ring buffer is not
-// persisted, so the entry is lost after reboot — acceptable for an audit hint.
-func (s *Server) logPowerEvent(action, username string) {
+// logPowerEvent persists a power action (critical severity) and flushes it to
+// SQLite before returning, so it survives the imminent process shutdown.
+func (s *Server) logPowerEvent(r *http.Request, action, verb, username string) {
+	if s.eventLog == nil {
+		return
+	}
 	if username == "" {
 		username = "unknown"
 	}
-	s.logs.Add(model.FirewallLog{
-		ID:     "log-power-" + time.Now().Format("150405.000"),
-		Time:   time.Now().Format("15:04:05"),
-		Action: "EVENT",
-		Src:    username,
-		Dest:   "localhost",
-		Port:   "-",
-		Proto:  "SYSTEM",
-		Reason: "Power " + action + " requested by " + username,
-	})
+	s.logEvent(r, model.EventCategorySystem, action, model.EventSeverityCritical,
+		"host", verb+" requested by "+username)
+	if err := s.eventLog.Flush(); err != nil {
+		log.Printf("[Power] Failed to flush event log before power action: %v", err)
+	}
 }
 
 // HandleExportConfig streams a full, typed configuration backup (schema v2).
@@ -1722,6 +1870,8 @@ func (s *Server) HandleExportConfig(w http.ResponseWriter, r *http.Request) {
 		sanitizeFilenamePart(backup.Meta.Hostname),
 		time.Now().Format("20060102-150405"))
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	s.logEvent(r, model.EventCategoryConfig, "config.exported", model.EventSeverityWarning,
+		filename, "Configuration exported")
 	s.writeJSON(w, http.StatusOK, backup)
 }
 
@@ -1776,6 +1926,8 @@ func (s *Server) HandleImportConfig(w http.ResponseWriter, r *http.Request) {
 		RemoveSessionsForUser(uname)
 	}
 
+	s.logEvent(r, model.EventCategoryConfig, "config.imported", model.EventSeverityWarning,
+		"database", "Configuration imported and re-applied")
 	s.writeJSON(w, http.StatusOK, result)
 }
 
@@ -2128,6 +2280,8 @@ func (s *Server) HandleApplyDNSServer(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDns, "dns.server_applied", model.EventSeverityInfo,
+		"dnsmasq", "DNS server zones/records applied")
 	s.writeJSON(w, http.StatusOK, true)
 }
 

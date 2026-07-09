@@ -57,9 +57,12 @@ func main() {
 	// 2. Initialize in-memory logs circular buffer (Ring Buffer)
 	ringBuffer := logs.NewRingBuffer(50)
 
-	// Seed some initial firewall log mock entries for visual display on dashboard
-	ringBuffer.Add(model.FirewallLog{ID: "log-init-1", Time: "14:31:02", Action: "DROP", Src: "185.220.101.4", Dest: "10.0.0.45", Port: "445", Proto: "TCP", Reason: "Blocked Port (SMB)"})
-	ringBuffer.Add(model.FirewallLog{ID: "log-init-2", Time: "14:31:15", Action: "PASS", Src: "192.168.1.105", Dest: "8.8.8.8", Port: "53", Proto: "UDP", Reason: "DNS request"})
+	// Seed firewall log mock entries so the Dashboard "Recent Logs" widget isn't
+	// empty in mock mode. Real mode starts with an empty buffer (no fake data).
+	if *mockOS {
+		ringBuffer.Add(model.FirewallLog{ID: "log-init-1", Time: "14:31:02", Action: "DROP", Src: "185.220.101.4", Dest: "10.0.0.45", Port: "445", Proto: "TCP", Reason: "Blocked Port (SMB)"})
+		ringBuffer.Add(model.FirewallLog{ID: "log-init-2", Time: "14:31:15", Action: "PASS", Src: "192.168.1.105", Dest: "8.8.8.8", Port: "53", Proto: "UDP", Reason: "DNS request"})
+	}
 
 	// 3. Initialize SQLite DB & run migrations
 	sqliteDB, err := db.InitDB(*dbPath, *mockOS)
@@ -133,6 +136,11 @@ func main() {
 	powerService := service.NewPowerService(powerMgr)
 	systemStatusService := service.NewSystemStatusService(sysStats, repo, hostnameService, timeService, version)
 
+	// Central event log: every subsystem funnels audit events through this one
+	// service (RAM queue + async batch writer to SQLite; see event_log.go).
+	eventLogService := service.NewEventLogService(repo)
+	dhcpServerService.SetEventLog(eventLogService)
+
 	// Netlink monitor is created here (but started later, after startup config is
 	// applied) so it can be injected into the BackupService, which pauses it
 	// around a config import.
@@ -145,7 +153,7 @@ func main() {
 		netlinkMonitor,
 	)
 
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService)
 
 	// Apply config form database to kernel
 
@@ -175,6 +183,10 @@ func main() {
 	monitorCtx, cancelMonitor := context.WithCancel(context.Background())
 	defer cancelMonitor()
 	netlinkMonitor.Start(monitorCtx)
+
+	// Start the event log batch writer (flushes queued events to SQLite in
+	// batches to preserve the SD card).
+	eventLogService.Start(monitorCtx)
 
 	// Start the dashboard telemetry sampler (CPU usage + WAN traffic history).
 	// Shares the monitor context so it stops on shutdown.
@@ -226,6 +238,11 @@ func main() {
 	}
 
 	handler := api.RegisterRoutes(server)
+
+	// Record the boot event — the persisted counterpart of system.reboot /
+	// system.shutdown, proving the box came back up.
+	eventLogService.Log(model.EventCategorySystem, "system.boot", model.EventSeverityInfo,
+		model.EventActorSystem, "host", "PiGate backend started (version "+version+")")
 
 	// 7. Start HTTP API listener
 	address := ":" + strconv.Itoa(*port)

@@ -331,6 +331,86 @@ paths:
                 example: keep-alive
 
   # =========================================================================
+  # CENTRAL EVENT LOG (audit trail)
+  # =========================================================================
+
+  /logs/events:
+    get:
+      tags:
+        - Event Log
+      summary: Get central system/audit events (newest first)
+      description: |
+        Central event log covering security events (login success/failed,
+        password changed, user CRUD), network/firewall/route/DHCP/DNS changes,
+        config import/export, and reboot/shutdown. Persisted in SQLite across
+        reboots. Available to any authenticated role.
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+            enum: [auth, user, network, firewall, route, dhcp, dns, qos, system, config]
+          description: Filter by event category
+        - name: severity
+          in: query
+          schema:
+            type: string
+            enum: [info, warning, error, critical]
+          description: Filter by severity
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: Case-insensitive text search across message, action, actor, and target
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+          description: Page size (max 200)
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+          description: Pagination offset
+      responses:
+        '200':
+          description: Matching events plus total count for pagination
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SystemEvent'
+                  total:
+                    type: integer
+                    example: 1234
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /logs/events/clear:
+    post:
+      tags:
+        - Event Log
+      summary: Clear the entire event log (super_admin only)
+      description: |
+        Destroys the audit trail, so it is restricted to super_admin and blocked
+        in -disable-edit mode. The first row of the emptied table is always a
+        `config.logs_cleared` event recording who performed the wipe.
+      responses:
+        '200':
+          description: Event log cleared (a logs_cleared audit event is written immediately)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Caller is not super_admin
+
+  # =========================================================================
   # NETWORK INTERFACES
   # =========================================================================
   /interfaces:
@@ -2300,6 +2380,45 @@ components:
                 example: Not Found
 
   schemas:
+    # --- Central Event Log Schemas ---
+    SystemEvent:
+      type: object
+      description: A single audit/event log entry, persisted to SQLite across reboots.
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 42
+        time:
+          type: string
+          format: date-time
+          description: Event timestamp in RFC3339 UTC (frontend converts to local time)
+          example: "2026-07-09T04:12:33Z"
+        category:
+          type: string
+          enum: [auth, user, network, firewall, route, dhcp, dns, qos, system, config]
+          example: auth
+        action:
+          type: string
+          description: Machine-readable action identifier
+          example: login.failed
+        severity:
+          type: string
+          enum: [info, warning, error, critical]
+          example: warning
+        actor:
+          type: string
+          description: Username that performed the action, or "system"
+          example: pigate
+        target:
+          type: string
+          description: Object affected by the action (user/interface/policy name, MAC, ...)
+          example: wlan0
+        message:
+          type: string
+          description: Human-readable message for the UI
+          example: Login failed for pigate (wrong password)
+
     # --- User Management Schemas ---
     User:
       type: object

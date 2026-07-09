@@ -390,6 +390,22 @@ func migrate(db *sql.DB) error {
 			description       TEXT NOT NULL DEFAULT '',
 			created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,
+
+		// Central audit/event log. Rows are inserted in async batches by
+		// EventLogService and pruned to a fixed cap — deliberately excluded from
+		// config backup/restore (history, not configuration).
+		`CREATE TABLE IF NOT EXISTS system_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts TEXT NOT NULL,
+			category TEXT NOT NULL,
+			action TEXT NOT NULL,
+			severity TEXT NOT NULL,
+			actor TEXT,
+			target TEXT,
+			message TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_system_events_category ON system_events(category);`,
+		`CREATE INDEX IF NOT EXISTS idx_system_events_severity ON system_events(severity);`,
 	}
 
 	for _, query := range queries {

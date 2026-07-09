@@ -41,6 +41,12 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("POST /api/dashboard/logs/clear", s.HandleClearLogs)
 	authRoute("GET /api/dashboard/logs/stream", s.HandleLogStream)
 
+	// 2.1 Central Event Log (audit trail). Reads are open to any logged-in role;
+	// clearing destroys the audit trail so it is explicitly super_admin only
+	// (and blocked entirely in -disable-edit mode like every other POST).
+	authRoute("GET /api/logs/events", s.HandleGetSystemEvents)
+	superAdminRoute("POST /api/logs/events/clear", s.HandleClearSystemEvents)
+
 	// 3. Network Interfaces
 	authRoute("GET /api/interfaces", s.HandleGetInterfaces)
 	authRoute("PUT /api/interfaces/{id}", s.HandleUpdateInterface)

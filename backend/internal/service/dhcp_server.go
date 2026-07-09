@@ -11,8 +11,9 @@ import (
 )
 
 type DhcpServerService struct {
-	repo    *db.Repository
-	manager kernel.DhcpManager
+	repo     *db.Repository
+	manager  kernel.DhcpManager
+	eventLog *EventLogService
 }
 
 func NewDhcpServerService(repo *db.Repository, manager kernel.DhcpManager) *DhcpServerService {
@@ -20,6 +21,12 @@ func NewDhcpServerService(repo *db.Repository, manager kernel.DhcpManager) *Dhcp
 		repo:    repo,
 		manager: manager,
 	}
+}
+
+// SetEventLog injects the central event log (wired in main.go after both
+// services exist). Nil is tolerated — lease events are then simply not logged.
+func (s *DhcpServerService) SetEventLog(eventLog *EventLogService) {
+	s.eventLog = eventLog
 }
 
 // ApplyAll applies all enabled DHCP configurations and MAC reservations from DB to dnsmasq
@@ -107,7 +114,7 @@ func (s *DhcpServerService) findInterfaceForIP(ipStr string, cfgs []model.DhcpCo
 func (s *DhcpServerService) StartLeaseWatcher(ctx context.Context) error {
 	callback := func(event string, lease model.ActiveDhcpLease) {
 		log.Printf("[DhcpServerService] D-Bus lease event: %s, MAC: %s, IP: %s", event, lease.MacAddress, lease.IPAddress)
-		
+
 		var dbErr error
 		if event == "added" || event == "updated" {
 			// Find configured interface matching the subnet
@@ -115,9 +122,23 @@ func (s *DhcpServerService) StartLeaseWatcher(ctx context.Context) error {
 			if err == nil {
 				lease.Interface = s.findInterfaceForIP(lease.IPAddress, cfgs)
 			}
+			// dnsmasq also fires lease events on every renew (half the lease
+			// time, per client) — logging those would flood the event table.
+			// Only log when the MAC is new or its IP actually changed.
+			existing, _ := s.repo.GetDHCPLeaseByMAC(lease.MacAddress)
 			dbErr = s.repo.UpsertDHCPLease(lease)
+			if dbErr == nil && s.eventLog != nil && (existing == nil || existing.IPAddress != lease.IPAddress) {
+				s.eventLog.Log(model.EventCategoryDhcp, "dhcp.lease.add", model.EventSeverityInfo,
+					model.EventActorSystem, lease.MacAddress,
+					"DHCP lease "+lease.IPAddress+" assigned to "+lease.MacAddress+" ("+lease.Hostname+")")
+			}
 		} else if event == "deleted" {
 			dbErr = s.repo.DeleteDHCPLease(lease.MacAddress)
+			if dbErr == nil && s.eventLog != nil {
+				s.eventLog.Log(model.EventCategoryDhcp, "dhcp.lease.remove", model.EventSeverityInfo,
+					model.EventActorSystem, lease.MacAddress,
+					"DHCP lease "+lease.IPAddress+" released by "+lease.MacAddress)
+			}
 		}
 
 		if dbErr != nil {
