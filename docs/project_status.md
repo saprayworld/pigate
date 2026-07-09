@@ -166,6 +166,10 @@
   * แทนที่รายการ Services จำลอง (`HandleGetSystemServices` / `HandleRestartService`) ด้วยการอ่านสถานะและสั่ง restart unit จริงผ่าน systemd D-Bus
 * [x] **พัฒนาระบบ Power Control จริง (Reboot/Shutdown):**
   * เชื่อม `POST /api/system/reboot` และ `/api/system/shutdown` เข้ากับ `org.freedesktop.login1` (systemd-logind) ผ่าน D-Bus พร้อม Polkit rule แล้ว (super_admin เท่านั้น, หน่วง ~1 วินาทีก่อนสั่งจริงเพื่อ flush HTTP response, mock mode เป็น no-op)
+* [x] **พัฒนาระบบ Central Event Log (audit trail) [สำเร็จ]:**
+  * `EventLogService` เป็นจุดบันทึกเหตุการณ์กลางทั้งระบบ: login success/failed, password changed, user CRUD, network/firewall/route/DHCP/DNS changes, DHCP lease add/remove, config export/import และ reboot/shutdown/boot — persist ลง SQLite ข้าม reboot ด้วย async batch writer แบบถนอม SD card (flush ทุก 10 events / 10 วินาที, cap 10,000 แถว, synchronous flush ก่อนสั่ง power)
+  * เส้น API: `GET /api/logs/events` (filter/paging, ทุก role), `POST /api/logs/events/clear` (super_admin เท่านั้น, ทิ้ง audit row `config.logs_cleared` เสมอ) + หน้า UI ใหม่ System › Event Logs — ดูรายละเอียดที่ [central-event-log-system-plan.md](ref/complete/central-event-log-system-plan.md)
+  * เหลือเฉพาะการทดสอบคู่ event `system.reboot`/`system.boot` บนบอร์ดจริง
 
 ### 3.1.1 งานปรับปรุงคุณภาพโค้ด (Code Quality Tasks — ดูแผนใน [docs/ref/todo/](ref/todo/))
 * [ ] **รวมศูนย์ Systemd D-Bus Call:** refactor ฟังก์ชัน `IsServiceActiveViaDBus` / `StartServiceViaDBus` / `StopServiceViaDBus` / `RestartServiceViaDBus` ที่ซ้ำกันใน `real_network.go` และ `dns.go` ไปไว้ไฟล์เดียว (`dbus_systemd.go`) — แผนที่ [systemd-dbus-call-design.md](ref/todo/systemd-dbus-call-design.md)

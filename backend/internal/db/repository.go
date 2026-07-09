@@ -1339,6 +1339,120 @@ func (r *Repository) ClearDHCPLeases() error {
 	return err
 }
 
+func (r *Repository) GetDHCPLeaseByMAC(macAddress string) (*model.ActiveDhcpLease, error) {
+	row := r.db.QueryRow("SELECT mac_address, ip_address FROM dhcp_leases WHERE mac_address = ?", macAddress)
+	var lease model.ActiveDhcpLease
+	if err := row.Scan(&lease.MacAddress, &lease.IPAddress); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &lease, nil
+}
+
+// =========================================================================
+// SYSTEM EVENTS (central audit/event log)
+// =========================================================================
+
+// InsertSystemEvents writes a batch of events in a single transaction. Called
+// only by the EventLogService batch writer to keep SD card writes low.
+func (r *Repository) InsertSystemEvents(events []model.SystemEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(`INSERT INTO system_events (ts, category, action, severity, actor, target, message)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+	for _, ev := range events {
+		if _, err := stmt.Exec(ev.Time, ev.Category, ev.Action, ev.Severity, ev.Actor, ev.Target, ev.Message); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// systemEventWhere builds the WHERE clause shared by Get/Count. q matches the
+// message, action, actor, and target columns (case-insensitive LIKE).
+func systemEventWhere(category, severity, q string) (string, []interface{}) {
+	clauses := []string{}
+	args := []interface{}{}
+	if category != "" {
+		clauses = append(clauses, "category = ?")
+		args = append(args, category)
+	}
+	if severity != "" {
+		clauses = append(clauses, "severity = ?")
+		args = append(args, severity)
+	}
+	if q != "" {
+		like := "%" + q + "%"
+		clauses = append(clauses, "(message LIKE ? OR action LIKE ? OR actor LIKE ? OR target LIKE ?)")
+		args = append(args, like, like, like, like)
+	}
+	if len(clauses) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+// GetSystemEvents returns events newest-first with optional filters and paging.
+func (r *Repository) GetSystemEvents(category, severity, q string, limit, offset int) ([]model.SystemEvent, error) {
+	where, args := systemEventWhere(category, severity, q)
+	args = append(args, limit, offset)
+	rows, err := r.db.Query(`SELECT id, ts, category, action, severity, actor, target, message
+		FROM system_events`+where+` ORDER BY id DESC LIMIT ? OFFSET ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := []model.SystemEvent{}
+	for rows.Next() {
+		var ev model.SystemEvent
+		var actor, target sql.NullString
+		if err := rows.Scan(&ev.ID, &ev.Time, &ev.Category, &ev.Action, &ev.Severity, &actor, &target, &ev.Message); err != nil {
+			return nil, err
+		}
+		ev.Actor = actor.String
+		ev.Target = target.String
+		events = append(events, ev)
+	}
+	return events, rows.Err()
+}
+
+// CountSystemEvents returns the total number of events matching the filters.
+func (r *Repository) CountSystemEvents(category, severity, q string) (int, error) {
+	where, args := systemEventWhere(category, severity, q)
+	var count int
+	err := r.db.QueryRow("SELECT COUNT(*) FROM system_events"+where, args...).Scan(&count)
+	return count, err
+}
+
+// PruneSystemEvents deletes the oldest rows so at most `keep` remain. A no-op
+// when the table holds fewer rows (the subquery yields NULL and matches nothing).
+func (r *Repository) PruneSystemEvents(keep int) error {
+	_, err := r.db.Exec(`DELETE FROM system_events WHERE id <= (
+		SELECT id FROM system_events ORDER BY id DESC LIMIT 1 OFFSET ?)`, keep)
+	return err
+}
+
+// ClearSystemEvents wipes the whole event table. The caller (EventLogService)
+// must immediately log who cleared it — deleting an audit trail leaves a trace.
+func (r *Repository) ClearSystemEvents() error {
+	_, err := r.db.Exec("DELETE FROM system_events")
+	return err
+}
+
 func (r *Repository) GetDHCPReservations() ([]model.DhcpReservation, error) {
 	rows, err := r.db.Query("SELECT id, device_name, mac_address, ip_address FROM dhcp_reservations")
 	if err != nil {

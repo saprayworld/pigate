@@ -291,6 +291,44 @@ type FirewallLog struct {
 	Reason string `json:"reason"`
 }
 
+// SystemEvent is a single audit/event log entry, persisted to SQLite via the
+// EventLogService batch writer (never written row-by-row — SD card wear).
+type SystemEvent struct {
+	ID       int64  `json:"id"`
+	Time     string `json:"time"`     // RFC3339 UTC
+	Category string `json:"category"` // see EventCategory* constants
+	Action   string `json:"action"`   // e.g. "login.failed", "dhcp.lease.add"
+	Severity string `json:"severity"` // see EventSeverity* constants
+	Actor    string `json:"actor"`    // username or "system"
+	Target   string `json:"target"`   // affected object (user/interface/policy name)
+	Message  string `json:"message"`  // human-readable message for the UI
+}
+
+// SystemEvent categories
+const (
+	EventCategoryAuth     = "auth"
+	EventCategoryUser     = "user"
+	EventCategoryNetwork  = "network"
+	EventCategoryFirewall = "firewall"
+	EventCategoryRoute    = "route"
+	EventCategoryDhcp     = "dhcp"
+	EventCategoryDns      = "dns"
+	EventCategoryQos      = "qos"
+	EventCategorySystem   = "system"
+	EventCategoryConfig   = "config"
+)
+
+// SystemEvent severities
+const (
+	EventSeverityInfo     = "info"
+	EventSeverityWarning  = "warning"
+	EventSeverityError    = "error"
+	EventSeverityCritical = "critical"
+)
+
+// EventActorSystem is the actor recorded for events not initiated by a logged-in user.
+const EventActorSystem = "system"
+
 // DashboardStats represents widgets counters. TotalTraffic{In,Out}Bytes are the
 // cumulative rx/tx byte totals observed since boot (RAM-only, reset on reboot);
 // the frontend formats them for display.

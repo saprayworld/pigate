@@ -313,18 +313,18 @@ gen mock events ในหน่วยความจำ)
 
 ## 6. Checklist สรุป (Definition of Done)
 
-- [ ] `model/types.go` — เพิ่ม `SystemEvent` + const category/severity
-- [ ] `db/connection.go` — ตาราง `system_events` + index
-- [ ] `db/repository.go` — Insert (batch) / Get (filter+paging) / Count / Prune / Clear
-- [ ] `service/event_log.go` — EventLogService: RAM buffer + batch writer + Flush + retention (ไฟล์ใหม่)
-- [ ] `service/event_log_test.go` — test batch/flush/prune (ไฟล์ใหม่)
-- [ ] `cmd/pigate/main.go` — สร้าง+Start service, ส่งเข้า NewServer + DhcpServerService, log `system.boot`, ย้าย seed ปลอมไปใต้ `if *mockOS`
-- [ ] `api/handlers.go` — helper `logEvent` + hook 13 กลุ่มตามตาราง §3 Step 6 + แทนที่ `logPowerEvent` (Flush ก่อนสั่ง power)
-- [ ] `service/dhcp_server.go` — log lease add/remove (ไม่ log renew)
-- [ ] `api/router.go` — `GET /api/logs/events` (authRoute), `POST /api/logs/events/clear` (superAdminRoute)
-- [ ] `docs/openapi.yaml` + `frontend/public/openapi.yaml` — sync spec ใหม่
-- [ ] `frontend/src/services/logService.ts` — API client + mock branch (ไฟล์ใหม่)
-- [ ] `frontend/src/pages/EventLogs.tsx` — ตาราง+filter+paging+clear (ไฟล์ใหม่, shadcn only, semantic colors, dark/light)
-- [ ] `frontend/src/App.tsx` + `app-sidebar.tsx` — route + เมนู System › Event Logs
-- [ ] `README.md` Feature Status — เพิ่มแถว Event Log
-- [ ] ทดสอบ: mock end-to-end, persist ข้าม restart, role 403, build/test/lint ผ่านทั้งสองฝั่ง, ทดสอบ reboot คู่ boot event บนบอร์ดจริง
+- [x] `model/types.go` — เพิ่ม `SystemEvent` + const category/severity
+- [x] `db/connection.go` — ตาราง `system_events` + index
+- [x] `db/repository.go` — Insert (batch) / Get (filter+paging) / Count / Prune / Clear
+- [x] `service/event_log.go` — EventLogService: RAM buffer + batch writer + Flush + retention (ไฟล์ใหม่)
+- [x] `service/event_log_test.go` — test batch/flush/prune (ไฟล์ใหม่)
+- [x] `cmd/pigate/main.go` — สร้าง+Start service, ส่งเข้า NewServer + DhcpServerService, log `system.boot`, ย้าย seed ปลอมไปใต้ `if *mockOS`
+- [x] `api/handlers.go` — helper `logEvent` + hook 13 กลุ่มตามตาราง §3 Step 6 + แทนที่ `logPowerEvent` (Flush ก่อนสั่ง power)
+- [x] `service/dhcp_server.go` — log lease add/remove (ไม่ log renew)
+- [x] `api/router.go` — `GET /api/logs/events` (authRoute), `POST /api/logs/events/clear` (superAdminRoute)
+- [x] `docs/openapi.yaml` + `frontend/public/openapi.yaml` — sync spec ใหม่
+- [x] `frontend/src/services/logService.ts` — API client + mock branch (ไฟล์ใหม่)
+- [x] `frontend/src/pages/EventLogs.tsx` — ตาราง+filter+paging+clear (ไฟล์ใหม่, shadcn only, semantic colors, dark/light)
+- [x] `frontend/src/App.tsx` + `app-sidebar.tsx` — route + เมนู System › Event Logs
+- [x] `README.md` Feature Status — เพิ่มแถว Event Log
+- [x] ทดสอบ: mock end-to-end, persist ข้าม restart, role 403, build/test/lint ผ่านทั้งสองฝั่ง, ทดสอบ reboot คู่ boot event บนบอร์ดจริง **(ค้างไว้ — รอเข้าถึงบอร์ดจริง)**
