@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -34,10 +35,51 @@ const (
 
 // RealTrafficLog implements TrafficLogManager by subscribing to NFLOG group
 // ForwardNflogGroup and parsing each event's packet header into a FirewallLog.
-type RealTrafficLog struct{}
+type RealTrafficLog struct {
+	ifaces *ifaceNameResolver
+}
 
 func NewRealTrafficLog() *RealTrafficLog {
-	return &RealTrafficLog{}
+	return &RealTrafficLog{ifaces: newIfaceNameResolver()}
+}
+
+// ifaceNameResolver maps a kernel interface index (as carried by NFLOG's
+// indev/outdev attributes) to its name, caching successful lookups so a traffic
+// burst does not issue a net.InterfaceByIndex syscall per packet. Indexes are
+// effectively stable for the life of an interface, so caching is safe.
+type ifaceNameResolver struct {
+	mu    sync.RWMutex
+	cache map[uint32]string
+}
+
+func newIfaceNameResolver() *ifaceNameResolver {
+	return &ifaceNameResolver{cache: make(map[uint32]string)}
+}
+
+// name returns the interface name for the given index pointer. A nil/zero index
+// (attribute absent — e.g. locally generated traffic) yields "-". Failed lookups
+// fall back to "if<idx>" and are not cached, so a later successful resolve wins.
+func (r *ifaceNameResolver) name(index *uint32) string {
+	if index == nil || *index == 0 {
+		return "-"
+	}
+	idx := *index
+
+	r.mu.RLock()
+	cached, ok := r.cache[idx]
+	r.mu.RUnlock()
+	if ok {
+		return cached
+	}
+
+	iface, err := net.InterfaceByIndex(int(idx))
+	if err != nil {
+		return fmt.Sprintf("if%d", idx)
+	}
+	r.mu.Lock()
+	r.cache[idx] = iface.Name
+	r.mu.Unlock()
+	return iface.Name
 }
 
 // WatchForwardTraffic opens the NFLOG socket, then decouples the netlink read
@@ -78,7 +120,7 @@ func (r *RealTrafficLog) WatchForwardTraffic(ctx context.Context, cb func(model.
 	}()
 
 	hook := func(attr nflog.Attribute) int {
-		entry, ok := parseNflogAttr(attr)
+		entry, ok := parseNflogAttr(attr, r.ifaces.name)
 		if !ok {
 			return 0
 		}
@@ -107,12 +149,15 @@ func (r *RealTrafficLog) WatchForwardTraffic(ctx context.Context, cb func(model.
 
 // parseNflogAttr turns one NFLOG event into a FirewallLog. Time and ID are left
 // blank — main.go stamps the timestamp when it pushes into the ring buffer.
-// Returns ok=false when there is no packet payload to parse.
-func parseNflogAttr(attr nflog.Attribute) (model.FirewallLog, bool) {
+// resolveIface maps NFLOG indev/outdev indices to interface names (see
+// ifaceNameResolver). Returns ok=false when there is no packet payload to parse.
+func parseNflogAttr(attr nflog.Attribute, resolveIface func(*uint32) string) (model.FirewallLog, bool) {
 	if attr.Payload == nil {
 		return model.FirewallLog{}, false
 	}
 	entry := parsePacketHeader(*attr.Payload)
+	entry.InIface = resolveIface(attr.InDev)
+	entry.OutIface = resolveIface(attr.OutDev)
 
 	action, reason := "PASS", "Forwarded"
 	if attr.Prefix != nil {

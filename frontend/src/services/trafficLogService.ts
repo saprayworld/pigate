@@ -15,6 +15,8 @@ export interface TrafficLog {
   dest: string;
   port: string;
   proto: string;
+  inIface: string; // ingress interface name ("-" if unknown)
+  outIface: string; // egress interface name ("-" if unknown)
   reason: string;
 }
 
@@ -30,12 +32,12 @@ export interface TrafficLogQuery {
 // ---------------------------------------------------------------------------
 
 const MOCK_SAMPLES: Array<Omit<TrafficLog, "id" | "time">> = [
-  { action: "PASS", src: "192.168.1.105", dest: "8.8.8.8", port: "53", proto: "UDP", reason: "Allowed (forward)" },
-  { action: "PASS", src: "192.168.1.112", dest: "142.250.80.46", port: "443", proto: "TCP", reason: "Allowed (forward)" },
-  { action: "DROP", src: "192.168.1.133", dest: "185.220.101.4", port: "23", proto: "TCP", reason: "Blocked (forward)" },
-  { action: "PASS", src: "192.168.1.108", dest: "1.1.1.1", port: "443", proto: "TCP", reason: "Allowed (forward)" },
-  { action: "DROP", src: "192.168.1.140", dest: "45.13.104.9", port: "3389", proto: "TCP", reason: "Blocked (forward)" },
-  { action: "PASS", src: "192.168.1.101", dest: "140.82.113.3", port: "22", proto: "TCP", reason: "Allowed (forward)" },
+  { action: "PASS", src: "192.168.1.105", dest: "8.8.8.8", port: "53", proto: "UDP", inIface: "eth0", outIface: "eth1", reason: "Allowed (forward)" },
+  { action: "PASS", src: "192.168.1.112", dest: "142.250.80.46", port: "443", proto: "TCP", inIface: "eth0", outIface: "eth1", reason: "Allowed (forward)" },
+  { action: "DROP", src: "192.168.1.133", dest: "185.220.101.4", port: "23", proto: "TCP", inIface: "eth0", outIface: "eth1", reason: "Blocked (forward)" },
+  { action: "PASS", src: "192.168.1.108", dest: "1.1.1.1", port: "443", proto: "TCP", inIface: "wlan0", outIface: "eth1", reason: "Allowed (forward)" },
+  { action: "DROP", src: "192.168.1.140", dest: "45.13.104.9", port: "3389", proto: "TCP", inIface: "wlan0", outIface: "eth1", reason: "Blocked (forward)" },
+  { action: "PASS", src: "192.168.1.101", dest: "140.82.113.3", port: "22", proto: "TCP", inIface: "eth0", outIface: "eth1", reason: "Allowed (forward)" },
 ];
 
 let mockLogs: TrafficLog[] | null = null;
@@ -67,6 +69,8 @@ function advanceMockLogs() {
     dest: s.dest,
     port: s.port,
     proto: s.proto,
+    inIface: s.inIface,
+    outIface: s.outIface,
     action: s.action,
     reason: s.reason,
   });
@@ -91,7 +95,7 @@ export const trafficLogService = {
           (l) =>
             (!wantAction || l.action === wantAction) &&
             (!needle ||
-              [l.src, l.dest, l.port, l.proto, l.reason].some((s) =>
+              [l.src, l.dest, l.port, l.proto, l.inIface, l.outIface, l.reason].some((s) =>
                 s.toLowerCase().includes(needle)
               ))
         )

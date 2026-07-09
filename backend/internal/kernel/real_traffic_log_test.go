@@ -12,6 +12,21 @@ func nflogAttrFixture(payload *[]byte, prefix *string) nflog.Attribute {
 	return nflog.Attribute{Payload: payload, Prefix: prefix}
 }
 
+// stubResolveIface is a deterministic interface-index resolver for tests, so
+// parseNflogAttr can be exercised without touching real kernel interfaces.
+func stubResolveIface(index *uint32) string {
+	if index == nil {
+		return "-"
+	}
+	switch *index {
+	case 2:
+		return "eth0"
+	case 3:
+		return "eth1"
+	}
+	return "-"
+}
+
 // ipv4Packet builds a minimal 20-byte IPv4 header (IHL=5, no options) followed
 // by an optional transport header, for parser fixtures.
 func ipv4Packet(proto byte, src, dst [4]byte, transport []byte) []byte {
@@ -144,7 +159,7 @@ func TestParseNflogAttr(t *testing.T) {
 
 	t.Run("DROP prefix", func(t *testing.T) {
 		prefix := "[PiGate] FWD DROP  : "
-		entry, ok := parseNflogAttr(nflogAttrFixture(&payload, &prefix))
+		entry, ok := parseNflogAttr(nflogAttrFixture(&payload, &prefix), stubResolveIface)
 		if !ok {
 			t.Fatal("expected ok=true")
 		}
@@ -155,7 +170,7 @@ func TestParseNflogAttr(t *testing.T) {
 
 	t.Run("ACCEPT prefix", func(t *testing.T) {
 		prefix := "[PiGate] FWD ACCEPT: "
-		entry, ok := parseNflogAttr(nflogAttrFixture(&payload, &prefix))
+		entry, ok := parseNflogAttr(nflogAttrFixture(&payload, &prefix), stubResolveIface)
 		if !ok {
 			t.Fatal("expected ok=true")
 		}
@@ -166,8 +181,37 @@ func TestParseNflogAttr(t *testing.T) {
 
 	t.Run("nil payload", func(t *testing.T) {
 		prefix := "[PiGate] FWD DROP  : "
-		if _, ok := parseNflogAttr(nflogAttrFixture(nil, &prefix)); ok {
+		if _, ok := parseNflogAttr(nflogAttrFixture(nil, &prefix), stubResolveIface); ok {
 			t.Error("expected ok=false for nil payload")
+		}
+	})
+
+	t.Run("resolves indev/outdev to interface names", func(t *testing.T) {
+		prefix := "[PiGate] FWD ACCEPT: "
+		in, out := uint32(2), uint32(3)
+		attr := nflogAttrFixture(&payload, &prefix)
+		attr.InDev = &in
+		attr.OutDev = &out
+		entry, ok := parseNflogAttr(attr, stubResolveIface)
+		if !ok {
+			t.Fatal("expected ok=true")
+		}
+		if entry.InIface != "eth0" {
+			t.Errorf("InIface = %q, want eth0", entry.InIface)
+		}
+		if entry.OutIface != "eth1" {
+			t.Errorf("OutIface = %q, want eth1", entry.OutIface)
+		}
+	})
+
+	t.Run("absent indev/outdev yields dash", func(t *testing.T) {
+		prefix := "[PiGate] FWD DROP  : "
+		entry, ok := parseNflogAttr(nflogAttrFixture(&payload, &prefix), stubResolveIface)
+		if !ok {
+			t.Fatal("expected ok=true")
+		}
+		if entry.InIface != "-" || entry.OutIface != "-" {
+			t.Errorf("InIface/OutIface = %q/%q, want -/-", entry.InIface, entry.OutIface)
 		}
 	})
 }

@@ -355,7 +355,7 @@ func (s *Server) HandleClearLogs(w http.ResponseWriter, r *http.Request) {
 // same buffer as the Dashboard Recent Logs widget; it never touches SQLite.
 //
 //	action  PASS | DROP        (case-insensitive; empty = all)
-//	q       substring matched against src/dest/port/proto/reason (case-insensitive)
+//	q       substring matched against src/dest/port/proto/interface/reason (case-insensitive)
 //	limit   max rows to return (default 100, capped at the buffer capacity)
 func (s *Server) HandleGetTrafficLogs(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
@@ -380,7 +380,7 @@ func (s *Server) HandleGetTrafficLogs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if needle != "" {
-			hay := strings.ToLower(entry.Src + " " + entry.Dest + " " + entry.Port + " " + entry.Proto + " " + entry.Reason)
+			hay := strings.ToLower(entry.Src + " " + entry.Dest + " " + entry.Port + " " + entry.Proto + " " + entry.InIface + " " + entry.OutIface + " " + entry.Reason)
 			if !strings.Contains(hay, needle) {
 				continue
 			}

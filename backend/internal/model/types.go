@@ -281,14 +281,16 @@ type NetworkServiceStatus struct {
 
 // FirewallLog represents live packet filter block logs
 type FirewallLog struct {
-	ID     string `json:"id"`
-	Time   string `json:"time"`
-	Action string `json:"action"` // "PASS", "DROP"
-	Src    string `json:"src"`
-	Dest   string `json:"dest"`
-	Port   string `json:"port"`
-	Proto  string `json:"proto"`
-	Reason string `json:"reason"`
+	ID       string `json:"id"`
+	Time     string `json:"time"`
+	Action   string `json:"action"` // "PASS", "DROP"
+	Src      string `json:"src"`
+	Dest     string `json:"dest"`
+	Port     string `json:"port"`
+	Proto    string `json:"proto"`
+	InIface  string `json:"inIface"`  // ingress interface name (NFLOG indev), "-" if unknown
+	OutIface string `json:"outIface"` // egress interface name (NFLOG outdev), "-" if unknown
+	Reason   string `json:"reason"`
 }
 
 // SystemEvent is a single audit/event log entry, persisted to SQLite via the

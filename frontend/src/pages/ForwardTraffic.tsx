@@ -199,7 +199,7 @@ export default function ForwardTraffic() {
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="ค้นหา src / dest / port / reason..."
+                placeholder="ค้นหา src / dest / port / interface / reason..."
                 className="h-9 pl-8 text-xs"
               />
             </div>
@@ -239,6 +239,7 @@ export default function ForwardTraffic() {
                     <TableHead>Dest</TableHead>
                     <TableHead className="w-20">Port</TableHead>
                     <TableHead className="w-20">Proto</TableHead>
+                    <TableHead className="w-32">Interface</TableHead>
                     <TableHead>Reason</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -255,6 +256,11 @@ export default function ForwardTraffic() {
                       <TableCell className="font-mono text-xs">{l.dest}</TableCell>
                       <TableCell className="font-mono text-xs">{l.port}</TableCell>
                       <TableCell className="text-xs">{l.proto}</TableCell>
+                      <TableCell className="whitespace-nowrap font-mono text-xs">
+                        {l.inIface}
+                        <span className="mx-1 text-muted-foreground">→</span>
+                        {l.outIface}
+                      </TableCell>
                       <TableCell className="text-xs text-muted-foreground">{l.reason}</TableCell>
                     </TableRow>
                   ))}

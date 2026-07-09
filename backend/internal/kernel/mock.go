@@ -559,15 +559,17 @@ func (m *MockTrafficLog) WatchForwardTraffic(ctx context.Context, cb func(model.
 		dest   string
 		port   string
 		proto  string
+		in     string
+		out    string
 		reason string
 	}
 	samples := []sample{
-		{"PASS", "8.8.8.8", "53", "UDP", "Allowed (forward)"},
-		{"PASS", "142.250.80.46", "443", "TCP", "Allowed (forward)"},
-		{"PASS", "1.1.1.1", "443", "TCP", "Allowed (forward)"},
-		{"DROP", "185.220.101.4", "23", "TCP", "Blocked (forward)"},
-		{"DROP", "45.13.104.9", "3389", "TCP", "Blocked (forward)"},
-		{"PASS", "140.82.113.3", "22", "TCP", "Allowed (forward)"},
+		{"PASS", "8.8.8.8", "53", "UDP", "eth0", "eth1", "Allowed (forward)"},
+		{"PASS", "142.250.80.46", "443", "TCP", "eth0", "eth1", "Allowed (forward)"},
+		{"PASS", "1.1.1.1", "443", "TCP", "wlan0", "eth1", "Allowed (forward)"},
+		{"DROP", "185.220.101.4", "23", "TCP", "eth0", "eth1", "Blocked (forward)"},
+		{"DROP", "45.13.104.9", "3389", "TCP", "wlan0", "eth1", "Blocked (forward)"},
+		{"PASS", "140.82.113.3", "22", "TCP", "eth0", "eth1", "Allowed (forward)"},
 	}
 
 	for {
@@ -577,12 +579,14 @@ func (m *MockTrafficLog) WatchForwardTraffic(ctx context.Context, cb func(model.
 		case <-ticker.C:
 			s := samples[rng.Intn(len(samples))]
 			cb(model.FirewallLog{
-				Action: s.action,
-				Src:    fmt.Sprintf("192.168.1.%d", 100+rng.Intn(50)),
-				Dest:   s.dest,
-				Port:   s.port,
-				Proto:  s.proto,
-				Reason: s.reason,
+				Action:   s.action,
+				Src:      fmt.Sprintf("192.168.1.%d", 100+rng.Intn(50)),
+				Dest:     s.dest,
+				Port:     s.port,
+				Proto:    s.proto,
+				InIface:  s.in,
+				OutIface: s.out,
+				Reason:   s.reason,
 			})
 		}
 	}

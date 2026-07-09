@@ -2756,6 +2756,8 @@ components:
         - dest
         - port
         - proto
+        - inIface
+        - outIface
         - reason
       properties:
         id:
@@ -2780,6 +2782,14 @@ components:
         proto:
           type: string
           example: TCP
+        inIface:
+          type: string
+          description: Ingress interface name (NFLOG indev); "-" if unknown.
+          example: eth0
+        outIface:
+          type: string
+          description: Egress interface name (NFLOG outdev); "-" if unknown.
+          example: eth1
         reason:
           type: string
           example: Blocked Port (SMB)
