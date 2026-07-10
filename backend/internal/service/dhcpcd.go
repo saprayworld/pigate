@@ -46,6 +46,27 @@ func (s *DhcpcdService) stopDhcpcd(ifaceName string) error {
 	return nil
 }
 
+// applyDhcpcdDecision starts or stops the per-interface dhcpcd client based on the
+// interface's live link flags. Callers must have already filtered to DHCP-mode
+// interfaces. Shared by HandleLinkUpdate (flags from the netlink event),
+// SyncActiveInterfaces (flags read from the kernel at startup), and SyncInterface
+// (flags read from the kernel after a configuration Save) so the decision lives in
+// one place.
+func (s *DhcpcdService) applyDhcpcdDecision(name string, isWifi, isUp, isRunning bool) {
+	switch {
+	case !isUp:
+		log.Printf("[DhcpcdService] %s is DOWN. Stopping dhcpcd.", name)
+		_ = s.stopDhcpcd(name)
+	case isWifi && !isRunning:
+		// Wi-Fi is up but not yet associated to an AP; wait for the RUNNING flag
+		// (delivered by a later link event) before requesting a lease.
+		log.Printf("[DhcpcdService] Wi-Fi %s is UP but not running (waiting for connection).", name)
+	default:
+		log.Printf("[DhcpcdService] %s is UP. Starting dhcpcd.", name)
+		_ = s.startDhcpcd(name)
+	}
+}
+
 func (s *DhcpcdService) HandleLinkUpdate(update netlink.LinkUpdate) {
 	attrs := update.Attrs()
 	if attrs == nil {
@@ -84,32 +105,7 @@ func (s *DhcpcdService) HandleLinkUpdate(update netlink.LinkUpdate) {
 	isUp := flags&net.FlagUp != 0
 	isRunning := flags&net.FlagRunning != 0
 
-	if isWifi {
-		// Wi-Fi logic:
-		// - down (not up): stop dhcpcd
-		// - up: do nothing (waiting for SSID connection)
-		// - running: start dhcpcd
-		if !isUp {
-			log.Printf("[DhcpcdService] Wi-Fi interface %s is DOWN. Stopping dhcpcd.", name)
-			_ = s.stopDhcpcd(name)
-		} else if isRunning {
-			log.Printf("[DhcpcdService] Wi-Fi interface %s is UP and RUNNING (SSID connected). Starting dhcpcd.", name)
-			_ = s.startDhcpcd(name)
-		} else {
-			log.Printf("[DhcpcdService] Wi-Fi interface %s is UP but not running (waiting for connection).", name)
-		}
-	} else {
-		// Ethernet logic:
-		// - down: stop dhcpcd
-		// - up: start dhcpcd
-		if !isUp {
-			log.Printf("[DhcpcdService] Ethernet interface %s is DOWN. Stopping dhcpcd.", name)
-			_ = s.stopDhcpcd(name)
-		} else {
-			log.Printf("[DhcpcdService] Ethernet interface %s is UP. Starting dhcpcd.", name)
-			_ = s.startDhcpcd(name)
-		}
-	}
+	s.applyDhcpcdDecision(name, isWifi, isUp, isRunning)
 }
 
 // SyncActiveInterfaces checks all managed interfaces and starts/stops dhcpcd based on their current actual state
@@ -146,24 +142,67 @@ func (s *DhcpcdService) SyncActiveInterfaces() {
 		isRunning := attrs.Flags&net.FlagRunning != 0
 		isWifi := iface.Type == "wireless" || strings.HasPrefix(iface.Name, "w")
 
-		if isWifi {
-			if !isUp {
-				log.Printf("[DhcpcdService] Sync: Wi-Fi %s is DOWN. Stopping dhcpcd.", iface.Name)
-				_ = s.stopDhcpcd(iface.Name)
-			} else if isRunning {
-				log.Printf("[DhcpcdService] Sync: Wi-Fi %s is UP and RUNNING. Starting dhcpcd.", iface.Name)
-				_ = s.startDhcpcd(iface.Name)
-			} else {
-				log.Printf("[DhcpcdService] Sync: Wi-Fi %s is UP but not running (waiting for connection).", iface.Name)
-			}
-		} else {
-			if !isUp {
-				log.Printf("[DhcpcdService] Sync: Ethernet %s is DOWN. Stopping dhcpcd.", iface.Name)
-				_ = s.stopDhcpcd(iface.Name)
-			} else {
-				log.Printf("[DhcpcdService] Sync: Ethernet %s is UP. Starting dhcpcd.", iface.Name)
-				_ = s.startDhcpcd(iface.Name)
-			}
+		s.applyDhcpcdDecision(iface.Name, isWifi, isUp, isRunning)
+	}
+}
+
+// SyncInterface reconciles the dhcpcd client for a single interface based on its
+// current addressing mode and live kernel link flags. It is meant to be called after
+// a configuration Save (e.g. an addressing-mode change): a Static->DHCP switch on an
+// interface that is already up produces no netlink Link event, so without this the
+// dhcpcd client would not start until the next link event (the user had to toggle the
+// interface off/on manually).
+func (s *DhcpcdService) SyncInterface(name string) {
+	ifaces, err := s.ifaceService.GetDataLayerInterface()
+	if err != nil {
+		log.Printf("[DhcpcdService] SyncInterface: failed to get data layer interfaces: %v", err)
+		return
+	}
+
+	var targetIface *model.NetworkInterface
+	for _, iface := range ifaces {
+		if iface.Name == name {
+			targetIface = &iface
+			break
 		}
 	}
+	if targetIface == nil {
+		// Not a managed interface (no data-layer entry), skip.
+		return
+	}
+
+	// Switching to a non-DHCP mode: release any dhcpcd lease that was running for this
+	// interface. HandleLinkUpdate/SyncActiveInterfaces intentionally skip non-DHCP
+	// interfaces (a static interface flapping should not spam stop calls), so the
+	// "static -> stop" transition is handled only here, on the explicit mode change.
+	// stopDhcpcd is safe in mock mode (the mock manager is a no-op).
+	if targetIface.AddressingMode != "dhcp" {
+		log.Printf("[DhcpcdService] SyncInterface: %s is not DHCP. Stopping dhcpcd (releasing any lease).", name)
+		_ = s.stopDhcpcd(name)
+		return
+	}
+
+	// DHCP mode needs the live link flags to decide. Reading them touches the real
+	// kernel, so guard mock mode (mirrors SyncActiveInterfaces): the mock kernel has no
+	// real link to query and the mock dhcpcd manager is a no-op anyway.
+	if s.repo.IsMockMode() {
+		log.Printf("[DhcpcdService] SyncInterface: [Mock] Simulating DHCP sync for interface %s", name)
+		return
+	}
+
+	link, err := netlink.LinkByName(name)
+	if err != nil {
+		log.Printf("[DhcpcdService] SyncInterface: interface %s not found in kernel: %v", name, err)
+		return
+	}
+	attrs := link.Attrs()
+	if attrs == nil {
+		return
+	}
+
+	isUp := attrs.Flags&net.FlagUp != 0
+	isRunning := attrs.Flags&net.FlagRunning != 0
+	isWifi := targetIface.Type == "wireless" || strings.HasPrefix(name, "w")
+
+	s.applyDhcpcdDecision(name, isWifi, isUp, isRunning)
 }

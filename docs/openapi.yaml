@@ -486,6 +486,9 @@ paths:
         if the masked placeholder "••••••••" is sent, the existing stored password is preserved.
         Wi-Fi passwords are only updated if non-empty and not masked, or if security is explicitly "Open".
         If adminAccess changes, firewall rules are automatically re-synced.
+        The dhcpcd client is reconciled to the saved addressing mode: switching to DHCP on an up
+        interface (re)starts dhcpcd immediately (Wi-Fi once associated), and switching to static
+        releases any running lease — no manual interface toggle is required.
       parameters:
         - name: id
           in: path
@@ -519,6 +522,9 @@ paths:
         sending the full interface payload.
         Password masking rules are identical to PUT.
         If adminAccess changes, firewall rules are automatically re-synced.
+        The dhcpcd client is reconciled to the saved addressing mode: switching to DHCP on an up
+        interface (re)starts dhcpcd immediately (Wi-Fi once associated), and switching to static
+        releases any running lease — no manual interface toggle is required.
       parameters:
         - name: id
           in: path

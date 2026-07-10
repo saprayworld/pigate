@@ -31,6 +31,7 @@ type Server struct {
 	logs              *logs.RingBuffer
 	disableEdit       bool
 	interfaceService  *service.InterfaceService
+	dhcpcdService     *service.DhcpcdService
 	routingService    *service.RoutingService
 	firewallService   *service.FirewallService
 	dnsService        *service.DNSService
@@ -55,6 +56,7 @@ func NewServer(
 	l *logs.RingBuffer,
 	disableEdit bool,
 	ifaceService *service.InterfaceService,
+	dhcpcdService *service.DhcpcdService,
 	routingService *service.RoutingService,
 	fwService *service.FirewallService,
 	dnsService *service.DNSService,
@@ -78,6 +80,7 @@ func NewServer(
 		logs:              l,
 		disableEdit:       disableEdit,
 		interfaceService:  ifaceService,
+		dhcpcdService:     dhcpcdService,
 		routingService:    routingService,
 		firewallService:   fwService,
 		dnsService:        dnsService,
@@ -575,6 +578,12 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reconcile the dhcpcd client for the (possibly changed) addressing mode. A
+	// Static->DHCP switch on an already-up interface fires no netlink Link event, so
+	// without this dhcpcd would not start until the interface is toggled. Non-fatal:
+	// the config is already persisted, a dhcpcd hiccup must not turn Save into a 500.
+	s.dhcpcdService.SyncInterface(iface.Name)
+
 	if adminAccessChanged {
 		if err := s.syncFirewallRules(); err != nil {
 			s.writeError(w, http.StatusInternalServerError, "OS Firewall update failed: "+err.Error())
@@ -707,6 +716,12 @@ func (s *Server) HandlePatchInterface(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Reconcile the dhcpcd client for the (possibly changed) addressing mode. A
+	// Static->DHCP switch on an already-up interface fires no netlink Link event, so
+	// without this dhcpcd would not start until the interface is toggled. Non-fatal:
+	// the config is already persisted, a dhcpcd hiccup must not turn Save into a 500.
+	s.dhcpcdService.SyncInterface(iface.Name)
 
 	if adminAccessChanged {
 		if err := s.syncFirewallRules(); err != nil {
