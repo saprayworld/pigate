@@ -202,5 +202,9 @@ re-run install.sh**, ตาราง Feature Status เพิ่มแถว HTT
     login ผ่าน https ได้ cookie `Secure` / ผ่าน http (fallback) ไม่มี `Secure` — ✅ ยืนยันด้วย curl แล้ว
 - [x] ทดสอบ cert: boot แรกสร้าง cert + event log; boot ซ้ำไม่สร้างซ้ำ (generated=false); regenerate เมื่อ invalid/expired (unit test)
 - [x] ทดสอบ fallback: ตั้ง `-tls-dir` ชี้ที่เขียนไม่ได้ (`/proc/...`) → HTTP เสิร์ฟเต็มรูปแบบ + warning + event log — ✅
-- [ ] ทดสอบเครื่องจริง (physical access): re-run install.sh → https เข้าได้, http redirect,
-    DB เก่าถูก migrate เติม HTTPS, WAN ที่มีแค่ PING ไม่ถูกแตะ — **ค้างไว้ให้เจ้าของทดสอบบนบอร์ดจริง**
+- [x] ทดสอบเครื่องจริง (physical access): re-run install.sh → https เข้าได้, http redirect,
+    DB เก่าถูก migrate เติม HTTPS, WAN ที่มีแค่ PING ไม่ถูกแตะ — ✅ เจ้าของทดสอบบนบอร์ดจริงผ่านแล้ว
+
+---
+
+> **สถานะ:** ✅ เสร็จสมบูรณ์ — merge เข้า `main` ผ่าน PR #28 (commit `be252d2`) และทดสอบบนบอร์ดจริงผ่านแล้ว 2026-07-10
