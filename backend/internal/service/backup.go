@@ -289,6 +289,24 @@ func (s *BackupService) resolveInterfaces(backup []model.NetworkInterface) ([]mo
 	for _, b := range backup {
 		dev, ok := byName[b.Name]
 		if !ok {
+			// VLAN sub-interfaces are not present in the kernel until they are
+			// re-created at reapply time (InitApplyConfigurationAtStartup), so a VLAN
+			// row absent from the device must NOT be dropped — keep it verbatim as long
+			// as its parent interface exists here. Without this, restoring onto a fresh
+			// board would silently lose every VLAN.
+			if b.Subtype == "vlan" {
+				parentName := ""
+				if b.VlanParent != nil {
+					parentName = *b.VlanParent
+				}
+				if _, parentOK := byName[parentName]; parentName == "" || !parentOK {
+					warnings = append(warnings, fmt.Sprintf("VLAN %q from backup skipped: parent %q is not present on this device", b.Name, parentName))
+					continue
+				}
+				changed = true
+				merged = append(merged, b)
+				continue
+			}
 			warnings = append(warnings, fmt.Sprintf("interface %q from backup is not present on this device — skipped", b.Name))
 			continue
 		}

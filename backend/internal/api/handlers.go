@@ -597,6 +597,39 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, iface)
 }
 
+// HandleCreateVlan creates an 802.1Q VLAN sub-interface (POST /api/interfaces/vlan).
+func (s *Server) HandleCreateVlan(w http.ResponseWriter, r *http.Request) {
+	var input model.CreateVlanInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	iface, err := s.interfaceService.CreateVlanInterface(input)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrVlanExists):
+			s.writeError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, service.ErrVlanInvalid):
+			s.writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	// The new interface carries adminAccess rules that must reach nftables, same as the
+	// admin-access-changed path in HandleUpdateInterface.
+	if err := s.syncFirewallRules(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "OS Firewall update failed: "+err.Error())
+		return
+	}
+
+	s.logEvent(r, model.EventCategoryNetwork, "network.interface_created", model.EventSeverityInfo,
+		iface.Name, "VLAN interface "+iface.Name+" created")
+	s.writeJSON(w, http.StatusCreated, iface)
+}
+
 func (s *Server) HandlePatchInterface(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	iface, err := s.interfaceService.GetDataLayerInterfaceByID(id)
@@ -811,6 +844,25 @@ func (s *Server) HandleDeleteInterface(w http.ResponseWriter, r *http.Request) {
 	iface, err := s.interfaceService.GetDataLayerInterfaceByID(id)
 	if err != nil || iface == nil {
 		s.writeError(w, http.StatusNotFound, "Interface not found")
+		return
+	}
+
+	// VLAN sub-interfaces are deleted differently: they are removed via netlink (link +
+	// DB row) and CAN be deleted while up — that is the only way to tear a VLAN down, and
+	// unlike a physical port there is no offline state to wait for. The kernel layer still
+	// guards against deleting a non-vlan link, so the offline check is skipped only here.
+	if iface.Subtype == "vlan" {
+		if err := s.interfaceService.DeleteVlanInterface(id); err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := s.syncFirewallRules(); err != nil {
+			s.writeError(w, http.StatusInternalServerError, "OS Firewall update failed: "+err.Error())
+			return
+		}
+		s.logEvent(r, model.EventCategoryNetwork, "network.interface_deleted", model.EventSeverityInfo,
+			iface.Name, "VLAN interface "+iface.Name+" deleted")
+		s.writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
 		return
 	}
 

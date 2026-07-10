@@ -265,6 +265,9 @@ export interface NetworkInterface {
   status: "up" | "down" | "offline"
   managed?: boolean           // computed: false = exists in kernel but has no config row (unmanaged); undefined = treat as managed
   speed: string               // e.g. "1000 Mbps", "72 Mbps"
+  // VLAN (802.1Q) sub-interface fields — present only when subtype === "vlan"
+  vlanParent?: string         // parent interface name, e.g. "eth0"
+  vlanId?: number             // 802.1Q VLAN ID, 1–4094
   // Wi-Fi specific
   wifiSSID?: string
   wifiPassword?: string       // masked

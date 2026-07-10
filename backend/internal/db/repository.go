@@ -1648,10 +1648,11 @@ func (r *Repository) GetInterfaces() ([]model.NetworkInterface, error) {
 }
 
 func (r *Repository) GetInterfacesFromDB() ([]model.NetworkInterface, error) {
-	rows, err := r.db.Query(`SELECT 
+	rows, err := r.db.Query(`SELECT
 		id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, metric, mac_address, admin_access, status, speed,
 		mac_mode, real_mac_address, randomized_mac, laa_mac_address, randomize_on_reconnect,
-		connected_ssid, wifi_password, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, backup_wifi_security, ip_check_timeout, primary_max_retries, failover_cooldown
+		connected_ssid, wifi_password, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, backup_wifi_security, ip_check_timeout, primary_max_retries, failover_cooldown,
+		vlan_parent, vlan_id
 		FROM network_interfaces`)
 	if err != nil {
 		return nil, err
@@ -1670,6 +1671,7 @@ func (r *Repository) GetInterfacesFromDB() ([]model.NetworkInterface, error) {
 			&iface.MacMode, &iface.RealMacAddress, &iface.RandomizedMac, &iface.LaaMacAddress, &reconnectInt,
 			&iface.WifiSSID, &iface.WifiPassword, &iface.WifiSecurity, &failoverInt, &iface.BackupSSID, &iface.BackupWifiPassword,
 			&iface.BackupWifiSecurity, &iface.IPCheckTimeout, &iface.PrimaryMaxRetries, &iface.FailoverCooldown,
+			&iface.VlanParent, &iface.VlanID,
 		)
 		if err != nil {
 			return nil, err
@@ -1690,10 +1692,11 @@ func (r *Repository) GetInterfacesFromDB() ([]model.NetworkInterface, error) {
 }
 
 func (r *Repository) GetInterfaceByID(id string) (*model.NetworkInterface, error) {
-	row := r.db.QueryRow(`SELECT 
+	row := r.db.QueryRow(`SELECT
 		id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, metric, mac_address, admin_access, status, speed,
 		mac_mode, real_mac_address, randomized_mac, laa_mac_address, randomize_on_reconnect,
-		connected_ssid, wifi_password, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, backup_wifi_security, ip_check_timeout, primary_max_retries, failover_cooldown
+		connected_ssid, wifi_password, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, backup_wifi_security, ip_check_timeout, primary_max_retries, failover_cooldown,
+		vlan_parent, vlan_id
 		FROM network_interfaces WHERE id = ?`, id)
 	var iface model.NetworkInterface
 	var adminAccessStr string
@@ -1705,6 +1708,7 @@ func (r *Repository) GetInterfaceByID(id string) (*model.NetworkInterface, error
 		&iface.MacMode, &iface.RealMacAddress, &iface.RandomizedMac, &iface.LaaMacAddress, &reconnectInt,
 		&iface.WifiSSID, &iface.WifiPassword, &iface.WifiSecurity, &failoverInt, &iface.BackupSSID, &iface.BackupWifiPassword,
 		&iface.BackupWifiSecurity, &iface.IPCheckTimeout, &iface.PrimaryMaxRetries, &iface.FailoverCooldown,
+		&iface.VlanParent, &iface.VlanID,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1753,15 +1757,20 @@ func (r *Repository) UpdateInterface(iface model.NetworkInterface) error {
 
 	rows, err := res.RowsAffected()
 	if err == nil && rows == 0 {
-		// Insert since it does not exist in the database
+		// Insert since it does not exist in the database.
+		// vlan_parent/vlan_id are set only on this INSERT path (VLAN creation); the
+		// UPDATE branch above intentionally omits them because they are immutable
+		// after creation (change VLAN ID/parent = delete + recreate).
 		_, err = r.db.Exec(`INSERT INTO network_interfaces (
 			id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, metric, mac_address, admin_access, status, speed,
 			mac_mode, real_mac_address, randomized_mac, laa_mac_address, randomize_on_reconnect,
-			connected_ssid, wifi_password, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, backup_wifi_security, ip_check_timeout, primary_max_retries, failover_cooldown
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			connected_ssid, wifi_password, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, backup_wifi_security, ip_check_timeout, primary_max_retries, failover_cooldown,
+			vlan_parent, vlan_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			iface.ID, iface.Name, iface.Alias, iface.Role, iface.Type, iface.Subtype, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.Metric, iface.MacAddress, adminAccessStr, iface.Status, iface.Speed,
 			iface.MacMode, iface.RealMacAddress, iface.RandomizedMac, iface.LaaMacAddress, reconInt,
-			iface.WifiSSID, iface.WifiPassword, iface.WifiSecurity, foInt, iface.BackupSSID, iface.BackupWifiPassword, iface.BackupWifiSecurity, iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown)
+			iface.WifiSSID, iface.WifiPassword, iface.WifiSecurity, foInt, iface.BackupSSID, iface.BackupWifiPassword, iface.BackupWifiSecurity, iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown,
+			iface.VlanParent, iface.VlanID)
 		return err
 	}
 	log.Printf("[DB] Interface updated successfully")
@@ -1838,10 +1847,10 @@ func (r *Repository) CreateInterfaceForTest(iface model.NetworkInterface) error 
 	}
 	_, err := r.db.Exec(`INSERT INTO network_interfaces (
 		id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, metric, mac_address, admin_access, status, speed,
-		mac_mode, real_mac_address, randomize_on_reconnect, failover_enabled
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		mac_mode, real_mac_address, randomize_on_reconnect, failover_enabled, vlan_parent, vlan_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		iface.ID, iface.Name, iface.Alias, iface.Role, iface.Type, iface.Subtype, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.Metric, iface.MacAddress, adminAccessStr, iface.Status, iface.Speed,
-		iface.MacMode, iface.RealMacAddress, reconInt, foInt)
+		iface.MacMode, iface.RealMacAddress, reconInt, foInt, iface.VlanParent, iface.VlanID)
 	return err
 }
 

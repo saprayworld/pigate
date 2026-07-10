@@ -476,6 +476,79 @@ paths:
                 items:
                   $ref: '#/components/schemas/NetworkInterface'
 
+  /interfaces/vlan:
+    post:
+      tags:
+        - Network Interfaces
+      summary: Create an 802.1Q VLAN sub-interface
+      description: |
+        Creates a VLAN (802.1Q) sub-interface on top of an existing ethernet parent via
+        Netlink (no shell execution). The resulting link is always named
+        "<parent>.<vlanId>" (e.g. "eth0.100"). The parent must be an existing, non-VLAN
+        ethernet interface (wireless parents are rejected). The VLAN is persisted to the
+        database and re-created automatically on every boot, so it survives reboots.
+        Requires super_admin (blocked for read-only users and in -disable-edit mode).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - parent
+                - vlanId
+              properties:
+                parent:
+                  type: string
+                  description: Parent ethernet interface name (must exist, non-VLAN)
+                  example: eth0
+                vlanId:
+                  type: integer
+                  minimum: 1
+                  maximum: 4094
+                  example: 100
+                alias:
+                  type: string
+                  example: vlan100
+                role:
+                  type: string
+                  enum: [LAN, WAN]
+                  example: LAN
+                addressingMode:
+                  type: string
+                  enum: [dhcp, static]
+                  example: static
+                ip:
+                  type: string
+                  example: 192.168.100.1
+                netmask:
+                  type: string
+                  example: "24"
+                gateway:
+                  type: string
+                  example: ""
+                adminAccess:
+                  type: array
+                  items:
+                    type: string
+                    enum: [HTTPS, HTTP, PING, SSH]
+                  example: [PING, HTTP, SSH]
+      responses:
+        '201':
+          description: VLAN interface created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NetworkInterface'
+        '400':
+          description: Invalid input (bad VLAN ID, missing/invalid parent, wireless parent, etc.)
+        '403':
+          description: Forbidden (read-only user or -disable-edit mode)
+        '409':
+          description: A VLAN with that name already exists (in the kernel or database)
+        '500':
+          description: Internal server error (kernel link creation or DB write failed)
+
   /interfaces/{id}:
     put:
       tags:
@@ -604,7 +677,12 @@ paths:
       tags:
         - Network Interfaces
       summary: Delete an interface
-      description: Deletes an interface. Only offline interfaces can be deleted. Active interfaces will return a 400 Bad Request error.
+      description: >-
+        Deletes an interface. For physical interfaces, only offline interfaces can be
+        deleted — active interfaces return a 400 Bad Request. VLAN sub-interfaces
+        (subtype='vlan') are an exception: they are removed via Netlink (kernel link +
+        database row) and can be deleted while up, since that is the only way to tear a
+        VLAN down. The kernel layer additionally guards against deleting a non-VLAN link.
       parameters:
         - name: id
           in: path
@@ -2900,6 +2978,22 @@ components:
           type: string
           description: Link speed string from kernel (e.g. "1000 Mbps")
           example: "1000 Mbps"
+        vlanParent:
+          type: string
+          nullable: true
+          description: >-
+            Parent interface name for an 802.1Q VLAN sub-interface. Present only when
+            subtype='vlan'. Immutable after creation.
+          example: eth0
+        vlanId:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 4094
+          description: >-
+            802.1Q VLAN ID for a VLAN sub-interface. Present only when subtype='vlan'.
+            Immutable after creation.
+          example: 100
         # Optional Wireless-only Fields (present when type=wireless)
         wifiSSID:
           type: string

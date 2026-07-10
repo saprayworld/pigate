@@ -143,6 +143,11 @@ type NetworkInterface struct {
 	Managed        bool     `json:"managed"`     // true = has a config row in DB (pigate has configured it); computed, not persisted
 	Speed          string   `json:"speed"`       // e.g. "1000 Mbps"
 
+	// VLAN (802.1Q) sub-interface fields. Non-nil only for rows with Subtype == "vlan".
+	// Immutable after creation (changing VLAN ID/parent means delete + recreate).
+	VlanParent *string `json:"vlanParent,omitempty"` // parent interface name, e.g. "eth0"
+	VlanID     *int    `json:"vlanId,omitempty"`     // 802.1Q VLAN ID, 1–4094
+
 	WifiSSID             *string `json:"wifiSSID,omitempty"`
 	WifiPassword         *string `json:"wifiPassword,omitempty"`
 	WifiSecurity         *string `json:"wifiSecurity,omitempty"`
@@ -158,6 +163,20 @@ type NetworkInterface struct {
 	IPCheckTimeout       *int    `json:"ipCheckTimeout,omitempty"`
 	PrimaryMaxRetries    *int    `json:"primaryMaxRetries,omitempty"`
 	FailoverCooldown     *int    `json:"failoverCooldown,omitempty"`
+}
+
+// CreateVlanInput represents input parameters to create an 802.1Q VLAN sub-interface.
+// The resulting link name is always "<Parent>.<VlanID>" (e.g. "eth0.100").
+type CreateVlanInput struct {
+	Parent         string   `json:"parent"`         // parent interface name (must be an existing ethernet, non-vlan)
+	VlanID         int      `json:"vlanId"`         // 802.1Q VLAN ID, 1–4094
+	Alias          string   `json:"alias"`          // display alias
+	Role           string   `json:"role"`           // "LAN" | "WAN"
+	AddressingMode string   `json:"addressingMode"` // "dhcp" | "static"
+	IP             string   `json:"ip"`             // static IP (when static)
+	Netmask        string   `json:"netmask"`        // CIDR prefix length (when static)
+	Gateway        string   `json:"gateway"`        // gateway (optional, when static)
+	AdminAccess    []string `json:"adminAccess"`    // PING, HTTP, HTTPS, SSH
 }
 
 // WifiScanResult represents SSID scanner results

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -9,6 +10,14 @@ import (
 	"pigate/internal/db"
 	"pigate/internal/kernel"
 	"pigate/internal/model"
+)
+
+// Sentinel errors so the API layer can map VLAN failures to the right HTTP status:
+// ErrVlanExists -> 409 Conflict, ErrVlanInvalid -> 400 Bad Request. Any other error
+// returned by the VLAN methods is an internal failure (500).
+var (
+	ErrVlanExists  = errors.New("vlan interface already exists")
+	ErrVlanInvalid = errors.New("invalid vlan configuration")
 )
 
 type InterfaceService struct {
@@ -40,6 +49,27 @@ func (s *InterfaceService) InitApplyConfigurationAtStartup() error {
 	ifaces, err := s.repo.GetInterfacesFromDB()
 	if err != nil {
 		return fmt.Errorf("failed to load interfaces from DB: %w", err)
+	}
+
+	// Recreate VLAN sub-interfaces that are configured in the DB but missing from the
+	// kernel (e.g. after a reboot — VLAN links are not persistent, they only live in
+	// the running kernel). This is the fix for issue #20: without it, VLANs saved in
+	// the DB would silently disappear on every reboot. A recreate failure (e.g. the
+	// parent interface is absent) is logged and skipped, never a fatal startup error.
+	for _, iface := range ifaces {
+		if iface.Subtype != "vlan" || kernelMap[iface.Name] {
+			continue
+		}
+		if iface.VlanParent == nil || iface.VlanID == nil {
+			log.Printf("[Startup] Warning: VLAN %s is missing parent/id metadata; skipping recreate.", iface.Name)
+			continue
+		}
+		log.Printf("[Startup] Recreating missing VLAN %s (parent=%s, id=%d)...", iface.Name, *iface.VlanParent, *iface.VlanID)
+		if err := s.network.CreateVlan(*iface.VlanParent, *iface.VlanID); err != nil {
+			log.Printf("[Startup] Warning: failed to recreate VLAN %s: %v", iface.Name, err)
+			continue
+		}
+		kernelMap[iface.Name] = true
 	}
 
 	for _, iface := range ifaces {
@@ -482,5 +512,164 @@ func (s *InterfaceService) SetInterfaceState(iface model.NetworkInterface, up bo
 
 // FlushInterfaceConfig flushes configuration of the specified interface from the database.
 func (s *InterfaceService) FlushInterfaceConfig(id string) error {
+	return s.repo.DeleteInterface(id)
+}
+
+// CreateVlanInterface creates an 802.1Q VLAN sub-interface (link name "<parent>.<id>"),
+// brings it up, persists it to the DB (so it is re-created on every boot), and applies
+// its IP/mode. The parent must be an existing non-VLAN ethernet interface. Returns the
+// created interface. Duplicate names yield ErrVlanExists; bad input yields ErrVlanInvalid.
+func (s *InterfaceService) CreateVlanInterface(input model.CreateVlanInput) (*model.NetworkInterface, error) {
+	if input.VlanID < 1 || input.VlanID > 4094 {
+		return nil, fmt.Errorf("%w: VLAN ID must be between 1 and 4094, got %d", ErrVlanInvalid, input.VlanID)
+	}
+	parent := strings.TrimSpace(input.Parent)
+	if parent == "" {
+		return nil, fmt.Errorf("%w: parent interface is required", ErrVlanInvalid)
+	}
+
+	kernelIfaces, err := s.GetKernelInterfaces()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load kernel interfaces: %w", err)
+	}
+
+	var parentIface *model.NetworkInterface
+	for i := range kernelIfaces {
+		if kernelIfaces[i].Name == parent {
+			parentIface = &kernelIfaces[i]
+			break
+		}
+	}
+	if parentIface == nil {
+		return nil, fmt.Errorf("%w: parent interface %q does not exist", ErrVlanInvalid, parent)
+	}
+	if parentIface.Type != "ethernet" {
+		return nil, fmt.Errorf("%w: VLAN parent must be an ethernet interface (%q is %s)", ErrVlanInvalid, parent, parentIface.Type)
+	}
+	if parentIface.Subtype == "vlan" {
+		return nil, fmt.Errorf("%w: cannot create a VLAN on top of another VLAN (%q)", ErrVlanInvalid, parent)
+	}
+
+	name := fmt.Sprintf("%s.%d", parent, input.VlanID)
+
+	// Reject duplicates in both the kernel and the DB.
+	for _, k := range kernelIfaces {
+		if k.Name == name {
+			return nil, fmt.Errorf("%w: %q already exists in the kernel", ErrVlanExists, name)
+		}
+	}
+	dbIfaces, err := s.repo.GetInterfacesFromDB()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load DB interfaces: %w", err)
+	}
+	for _, d := range dbIfaces {
+		if d.Name == name {
+			return nil, fmt.Errorf("%w: %q already exists in the database", ErrVlanExists, name)
+		}
+	}
+
+	// Normalise and validate config fields.
+	mode := input.AddressingMode
+	if mode == "" {
+		mode = "dhcp"
+	}
+	if mode != "dhcp" && mode != "static" {
+		return nil, fmt.Errorf("%w: addressing mode must be dhcp or static", ErrVlanInvalid)
+	}
+	role := input.Role
+	if role == "" {
+		role = "LAN"
+	}
+	if role != "LAN" && role != "WAN" {
+		return nil, fmt.Errorf("%w: role must be LAN or WAN", ErrVlanInvalid)
+	}
+
+	ip, netmask, gateway := "0.0.0.0", "24", ""
+	if mode == "static" {
+		if net.ParseIP(input.IP) == nil {
+			return nil, fmt.Errorf("%w: a valid IP address is required for static mode", ErrVlanInvalid)
+		}
+		ip, netmask, gateway = input.IP, input.Netmask, input.Gateway
+		if netmask == "" {
+			netmask = "24"
+		}
+	}
+
+	adminAccess := input.AdminAccess
+	if len(adminAccess) == 0 {
+		if role == "WAN" {
+			adminAccess = []string{"PING"}
+		} else {
+			adminAccess = []string{"PING", "HTTP", "SSH"}
+		}
+	}
+	alias := strings.TrimSpace(input.Alias)
+	if alias == "" {
+		alias = name
+	}
+
+	vlanParent := parent
+	vlanID := input.VlanID
+	iface := model.NetworkInterface{
+		ID:             "iface-" + name,
+		Name:           name,
+		Alias:          alias,
+		Role:           role,
+		Type:           "ethernet",
+		Subtype:        "vlan",
+		AddressingMode: mode,
+		IP:             ip,
+		Netmask:        netmask,
+		Gateway:        gateway,
+		MacAddress:     parentIface.MacAddress,
+		AdminAccess:    adminAccess,
+		Status:         "up",
+		Speed:          parentIface.Speed,
+		VlanParent:     &vlanParent,
+		VlanID:         &vlanID,
+	}
+
+	// Create the kernel link, then bring it up.
+	if err := s.network.CreateVlan(parent, vlanID); err != nil {
+		return nil, fmt.Errorf("failed to create vlan link: %w", err)
+	}
+	if err := s.network.ToggleInterface(name, true); err != nil {
+		log.Printf("[Interface] Warning: failed to bring up new VLAN %s: %v", name, err)
+	}
+
+	// Persist the config row (source of truth for boot-time recreate). Roll back the
+	// kernel link if persistence fails so we don't leave an orphan interface behind.
+	if err := s.repo.UpdateInterface(iface); err != nil {
+		if delErr := s.network.DeleteVlan(name); delErr != nil {
+			log.Printf("[Interface] Warning: failed to roll back VLAN %s after DB error: %v", name, delErr)
+		}
+		return nil, fmt.Errorf("failed to persist vlan config: %w", err)
+	}
+
+	// Apply IP/mode. A route failure (e.g. no carrier yet) is non-fatal: the link and
+	// config are already saved and will be re-applied on toggle/boot, same as startup.
+	if err := s.network.ConfigureInterface(name, mode, ip, netmask, gateway, 0); err != nil {
+		log.Printf("[Interface] Warning: failed to apply IP config to new VLAN %s: %v", name, err)
+	}
+
+	return &iface, nil
+}
+
+// DeleteVlanInterface removes a VLAN sub-interface: it deletes the kernel link (guarded
+// by a link-type check inside the kernel layer) and then removes the DB config row.
+func (s *InterfaceService) DeleteVlanInterface(id string) error {
+	iface, err := s.repo.GetInterfaceByID(id)
+	if err != nil {
+		return fmt.Errorf("failed to load interface: %w", err)
+	}
+	if iface == nil {
+		return fmt.Errorf("interface %q not found", id)
+	}
+	if iface.Subtype != "vlan" {
+		return fmt.Errorf("interface %q is not a vlan", iface.Name)
+	}
+	if err := s.network.DeleteVlan(iface.Name); err != nil {
+		return fmt.Errorf("failed to delete vlan link: %w", err)
+	}
 	return s.repo.DeleteInterface(id)
 }
