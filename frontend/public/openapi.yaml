@@ -644,6 +644,12 @@ paths:
       tags:
         - Network Interfaces
       summary: Toggle interface status UP or DOWN (ifconfig up/down)
+      description: >-
+        Toggles the interface's administrative state. On the UP leg the interface is
+        brought up and its stored configuration (static IP, default gateway route, and
+        metric) is reapplied from the database, so a static gateway/metric that was
+        deferred while the link was down is restored. Status is persisted with a targeted
+        update; toggling an unmanaged interface (no database row) does not create one.
       parameters:
         - name: id
           in: path
@@ -2876,6 +2882,14 @@ components:
           type: string
           enum: [up, down]
           example: up
+        managed:
+          type: boolean
+          description: >-
+            Computed field (not persisted): true when the interface has a configuration
+            row in the database (pigate has configured it). false marks an interface that
+            exists in the kernel but is unmanaged — e.g. one never configured, or one whose
+            config was removed via Reset. Purely informational; does not change any behavior.
+          example: true
         speed:
           type: string
           description: Link speed string from kernel (e.g. "1000 Mbps")
