@@ -42,6 +42,7 @@ import { staticRouteService } from "@/services/staticRouteService"
 import { interfaceService } from "@/services/interfaceService"
 import { useAlert } from "@/hooks/useAlert"
 import { isValidIp, isValidCidr } from "@/lib/utils"
+import { ifaceLabel, formatIfaceLabel } from "@/lib/ifaceLabel"
 
 // Helper: Dashboard-style stat card (mirrors Dashboard's StatCard)
 function StatCard({
@@ -677,7 +678,7 @@ export default function StaticRoutes() {
                     </TableCell>
                     <TableCell className="py-3">
                       <Badge variant="secondary" className="rounded px-2 py-0.5 font-mono text-xs">
-                        {route.interface}
+                        {formatIfaceLabel(route.interface, interfaces)}
                       </Badge>
                     </TableCell>
                     <TableCell className="py-3 font-mono text-xs text-foreground">{route.metric}</TableCell>
@@ -804,7 +805,7 @@ export default function StaticRoutes() {
                 >
                   {interfaces.map((iface) => (
                     <option key={iface.id} value={iface.name}>
-                      {iface.name} ({iface.alias || iface.role})
+                      {ifaceLabel(iface)}
                     </option>
                   ))}
                   {interfaces.length === 0 && (

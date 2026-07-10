@@ -573,8 +573,22 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 		iface.Metric = updates.Metric
 	}
 
+	// Mirror the service-side alias normalization on our copy so the response body
+	// matches what is persisted (ApplyInterfaceConfig receives the struct by value).
+	iface.Alias = strings.TrimSpace(iface.Alias)
+	if iface.Alias == "" {
+		iface.Alias = iface.Name
+	}
+
 	if err := s.interfaceService.ApplyInterfaceConfig(*iface); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		switch {
+		case errors.Is(err, service.ErrAliasConflict):
+			s.writeError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, service.ErrAliasInvalid):
+			s.writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 
@@ -608,9 +622,9 @@ func (s *Server) HandleCreateVlan(w http.ResponseWriter, r *http.Request) {
 	iface, err := s.interfaceService.CreateVlanInterface(input)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrVlanExists):
+		case errors.Is(err, service.ErrVlanExists), errors.Is(err, service.ErrAliasConflict):
 			s.writeError(w, http.StatusConflict, err.Error())
-		case errors.Is(err, service.ErrVlanInvalid):
+		case errors.Is(err, service.ErrVlanInvalid), errors.Is(err, service.ErrAliasInvalid):
 			s.writeError(w, http.StatusBadRequest, err.Error())
 		default:
 			s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -745,8 +759,22 @@ func (s *Server) HandlePatchInterface(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Mirror the service-side alias normalization on our copy so the response body
+	// matches what is persisted (ApplyInterfaceConfig receives the struct by value).
+	iface.Alias = strings.TrimSpace(iface.Alias)
+	if iface.Alias == "" {
+		iface.Alias = iface.Name
+	}
+
 	if err := s.interfaceService.ApplyInterfaceConfig(*iface); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		switch {
+		case errors.Is(err, service.ErrAliasConflict):
+			s.writeError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, service.ErrAliasInvalid):
+			s.writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 

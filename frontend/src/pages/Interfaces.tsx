@@ -65,6 +65,7 @@ import {
 import { interfaceService } from "@/services/interfaceService"
 import { useAlert } from "@/hooks/useAlert"
 import { isValidIp } from "@/lib/utils"
+import { ifaceLabel } from "@/lib/ifaceLabel"
 
 
 
@@ -551,6 +552,14 @@ export default function Interfaces() {
       setVlanError("ชื่อ Alias ต้องใช้ภาษาอังกฤษ ตัวเลข หรือเครื่องหมาย _ เท่านั้น (ห้ามเว้นวรรค)")
       return
     }
+    if (vlanAlias && interfaces.some((i) => i.alias.toLowerCase() === vlanAlias.toLowerCase())) {
+      setVlanError(`มีชื่อ Alias "${vlanAlias}" อยู่ในระบบแล้ว`)
+      return
+    }
+    if (vlanAlias && interfaces.some((i) => i.name.toLowerCase() === vlanAlias.toLowerCase())) {
+      setVlanError(`"${vlanAlias}" เป็นชื่อจริงของ interface อื่น ใช้เป็น Alias ไม่ได้`)
+      return
+    }
     if (vlanMode === "static") {
       if (!isValidIp(vlanIp)) {
         setVlanError("กรุณากรอก IP Address ให้ถูกต้อง (เช่น 192.168.100.1)")
@@ -592,20 +601,33 @@ export default function Interfaces() {
 
     if (!editingIface) return
 
-    // Validation: Alias
-    const aliasRegex = /^[a-zA-Z0-9_]+$/
-    if (!aliasRegex.test(formAlias)) {
-      setFormError("ชื่อ Alias ต้องใช้ภาษาอังกฤษ ตัวเลข หรือเครื่องหมาย _ เท่านั้น (ห้ามเว้นวรรค)")
-      return
-    }
+    // Validation: Alias — mirrors the server rules. Empty = default to the OS
+    // name (normalized server-side); alias == own name is always legal (e.g. the
+    // VLAN default "eth0.100" contains a dot the pattern would reject).
+    if (formAlias !== "" && formAlias !== editingIface.name) {
+      const aliasRegex = /^[a-zA-Z0-9_]+$/
+      if (!aliasRegex.test(formAlias)) {
+        setFormError("ชื่อ Alias ต้องใช้ภาษาอังกฤษ ตัวเลข หรือเครื่องหมาย _ เท่านั้น (ห้ามเว้นวรรค)")
+        return
+      }
 
-    // Duplicate alias check
-    const isDuplicate = interfaces.some(
-      i => i.alias.toLowerCase() === formAlias.toLowerCase() && i.id !== editingIface.id
-    )
-    if (isDuplicate) {
-      setFormError(`มีชื่อ Alias "${formAlias}" อยู่ในระบบแล้ว`)
-      return
+      // Duplicate alias check (case-insensitive)
+      const isDuplicate = interfaces.some(
+        i => i.alias.toLowerCase() === formAlias.toLowerCase() && i.id !== editingIface.id
+      )
+      if (isDuplicate) {
+        setFormError(`มีชื่อ Alias "${formAlias}" อยู่ในระบบแล้ว`)
+        return
+      }
+
+      // Alias must not equal another interface's OS name — labels would be ambiguous
+      const collidesName = interfaces.some(
+        i => i.name.toLowerCase() === formAlias.toLowerCase() && i.id !== editingIface.id
+      )
+      if (collidesName) {
+        setFormError(`"${formAlias}" เป็นชื่อจริงของ interface อื่น ใช้เป็น Alias ไม่ได้`)
+        return
+      }
     }
 
     // Validation for Static mode
@@ -786,8 +808,12 @@ export default function Interfaces() {
 
                     {/* Name (Alias) */}
                     <TableCell className="py-3">
-                      <div className="font-medium text-foreground">{iface.name}</div>
-                      <div className="mt-0.5 text-xs text-muted-foreground">({iface.alias})</div>
+                      <div className="font-medium text-foreground">
+                        {iface.alias && iface.alias !== iface.name ? iface.alias : iface.name}
+                      </div>
+                      {iface.alias && iface.alias !== iface.name && (
+                        <div className="mt-0.5 text-xs text-muted-foreground">({iface.name})</div>
+                      )}
                       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                         <Badge variant="secondary" className="rounded px-1.5 py-0 font-mono text-[10px] font-medium capitalize">
                           {iface.subtype || iface.type}
@@ -1055,8 +1081,7 @@ export default function Interfaces() {
           <DrawerHeader className="border-b border-border/50">
             <DrawerTitle className="flex items-center gap-2 text-base font-semibold">
               {editingIface && getInterfaceIcon(editingIface.type, editingIface.subtype, "h-4 w-4")}
-              Edit Interface: {editingIface?.name}
-              <span className="text-sm font-normal text-muted-foreground">({editingIface?.alias})</span>
+              Edit Interface: {editingIface ? ifaceLabel(editingIface) : ""}
               {editingIface && (
                 <Badge variant="secondary" className="ml-1 rounded px-1.5 py-0 font-mono text-[10px] font-medium capitalize">
                   {editingIface.subtype || editingIface.type}
@@ -1610,7 +1635,7 @@ export default function Interfaces() {
                     ) : (
                       vlanParentOptions.map((p) => (
                         <SelectItem key={p.id} value={p.name}>
-                          {p.name} {p.alias && p.alias !== p.name ? `(${p.alias})` : ""}
+                          {ifaceLabel(p)}
                         </SelectItem>
                       ))
                     )}

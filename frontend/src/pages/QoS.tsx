@@ -42,6 +42,7 @@ import { interfaceService } from "@/services/interfaceService"
 import { type NetworkInterface } from "@/data-mockup/mockData"
 import { useAlert } from "@/hooks/useAlert"
 import { cn, isValidCidr } from "@/lib/utils"
+import { ifaceLabel, formatIfaceLabel } from "@/lib/ifaceLabel"
 
 export default function QoS() {
   const { alert: showAlert, confirm } = useAlert()
@@ -339,13 +340,13 @@ export default function QoS() {
                 <div className="space-y-1">
                   <CardTitle className="flex items-center gap-2 text-sm font-medium">
                     <Network className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span className="font-mono uppercase text-foreground">{iface.name}</span>
+                    <span className="font-mono text-foreground">{ifaceLabel(iface)}</span>
                     <Badge variant="outline" className="rounded px-1.5 py-0 text-[10px] font-normal uppercase text-muted-foreground">
                       {iface.role}
                     </Badge>
                   </CardTitle>
                   <CardDescription className="max-w-[180px] truncate text-[11px]">
-                    {iface.alias || iface.type}
+                    {iface.type}
                   </CardDescription>
                 </div>
                 <Badge
@@ -534,7 +535,7 @@ export default function QoS() {
 
                     <TableCell className="py-3">
                       <Badge variant="secondary" className="rounded px-2 py-0.5 font-mono text-xs">
-                        {rule.interface}
+                        {formatIfaceLabel(rule.interface, interfaces)}
                       </Badge>
                     </TableCell>
 
@@ -672,7 +673,7 @@ export default function QoS() {
                 >
                   {interfaces.map((iface) => (
                     <option key={iface.id} value={iface.name}>
-                      {iface.name.toUpperCase()} ({iface.alias || iface.role})
+                      {ifaceLabel(iface)}
                     </option>
                   ))}
                 </select>

@@ -85,6 +85,22 @@ export const interfaceService = {
       }
 
       const target = current[targetIndex];
+
+      // Mirror the server-side alias rules (empty -> OS name, unique
+      // case-insensitive, must not be another interface's OS name).
+      if (updates.alias !== undefined) {
+        const alias = updates.alias.trim() === "" ? target.name : updates.alias.trim();
+        const lower = alias.toLowerCase();
+        const conflict = current.some(
+          (i) => i.id !== id &&
+            (i.alias.toLowerCase() === lower || i.name.toLowerCase() === lower)
+        );
+        if (conflict) {
+          throw new Error(`interface alias already in use: "${alias}"`);
+        }
+        updates = { ...updates, alias };
+      }
+
       const updatedIface: NetworkInterface = {
         ...target,
         ...updates,
@@ -269,12 +285,19 @@ export const interfaceService = {
       if (parent.type !== "ethernet" || parent.subtype === "vlan") {
         throw new Error(`Parent ${input.parent} must be a non-VLAN ethernet interface`)
       }
+      const vlanAlias = (input.alias || name).trim() || name
+      if (vlanAlias !== name) {
+        const lower = vlanAlias.toLowerCase()
+        if (current.some((i) => i.alias.toLowerCase() === lower || i.name.toLowerCase() === lower)) {
+          throw new Error(`interface alias already in use: "${vlanAlias}"`)
+        }
+      }
       const mode = input.addressingMode || "dhcp"
       const role = input.role || "LAN"
       const newIface: NetworkInterface = {
         id: `iface-${name}`,
         name,
-        alias: input.alias || name,
+        alias: vlanAlias,
         role,
         type: "ethernet",
         subtype: "vlan",

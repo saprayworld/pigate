@@ -47,6 +47,8 @@ import {
 import { dhcpService } from "@/services/dhcpService"
 import { useAlert } from "@/hooks/useAlert"
 import { isValidIp } from "@/lib/utils"
+import { formatIfaceLabel, type IfaceLabelSource } from "@/lib/ifaceLabel"
+import { interfaceService } from "@/services/interfaceService"
 
 // Helper: Dashboard-style stat card (mirrors Dashboard's StatCard)
 function StatCard({
@@ -86,6 +88,8 @@ export default function DhcpServer() {
   // --- State ---
   const [configs, setConfigs] = useState<DhcpConfig[]>([])
   const [availableInterfaces, setAvailableInterfaces] = useState<string[]>([])
+  // Interface objects for alias-first labels; option values stay OS names.
+  const [ifaceObjects, setIfaceObjects] = useState<IfaceLabelSource[]>([])
   const [reservations, setReservations] = useState<DhcpReservation[]>([])
   const [activeLeases, setActiveLeases] = useState<ActiveDhcpLease[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -127,16 +131,18 @@ export default function DhcpServer() {
     // isLoading already starts true; avoid a synchronous setState in the effect body
     const initialLoad = async () => {
       try {
-        const [cfgs, res, leases, avIface] = await Promise.all([
+        const [cfgs, res, leases, avIface, allIfaces] = await Promise.all([
           dhcpService.getConfigs(),
           dhcpService.getReservations(),
           dhcpService.getActiveLeases(),
-          dhcpService.getAvailableInterfaces()
+          dhcpService.getAvailableInterfaces(),
+          interfaceService.getAll()
         ])
         setConfigs(cfgs || [])
         setReservations(res || [])
         setActiveLeases(leases || [])
         setAvailableInterfaces(avIface || [])
+        setIfaceObjects(allIfaces || [])
       } catch (err) {
         console.error(err)
         await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูล DHCP ได้: " + getErrorMessage(err))
@@ -552,7 +558,7 @@ export default function DhcpServer() {
                     <div className="flex items-center gap-2">
                       <Network className="h-4 w-4 shrink-0 text-muted-foreground" />
                       <div>
-                        <div className="font-mono text-sm font-semibold text-foreground">{cfg.interface}</div>
+                        <div className="font-mono text-sm font-semibold text-foreground">{formatIfaceLabel(cfg.interface, ifaceObjects)}</div>
                         <p className="text-[11px] text-muted-foreground">DHCP Server Config</p>
                       </div>
                     </div>
@@ -842,7 +848,7 @@ export default function DhcpServer() {
         <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[500px]">
           <DrawerHeader className="border-b border-border/50">
             <DrawerTitle className="text-base font-semibold">
-              {editingConfig ? `แก้ไขการตั้งค่า DHCP (${formInterface})` : "สร้างการตั้งค่า DHCP บนอินเตอร์เฟสใหม่"}
+              {editingConfig ? `แก้ไขการตั้งค่า DHCP (${formatIfaceLabel(formInterface, ifaceObjects)})` : "สร้างการตั้งค่า DHCP บนอินเตอร์เฟสใหม่"}
             </DrawerTitle>
           </DrawerHeader>
 
@@ -865,7 +871,7 @@ export default function DhcpServer() {
                   id="modal-dhcp-iface"
                   type="text"
                   disabled
-                  value={formInterface}
+                  value={formatIfaceLabel(formInterface, ifaceObjects)}
                   className="h-9 font-mono text-sm"
                 />
               ) : (
@@ -876,7 +882,7 @@ export default function DhcpServer() {
                   className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
                 >
                   {availableInterfaces.map(iface => (
-                    <option key={iface} value={iface}>{iface}</option>
+                    <option key={iface} value={iface}>{formatIfaceLabel(iface, ifaceObjects)}</option>
                   ))}
                 </select>
               )}

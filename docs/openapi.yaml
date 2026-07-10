@@ -509,6 +509,10 @@ paths:
                   example: 100
                 alias:
                   type: string
+                  description: >-
+                    Optional display alias (defaults to the link name). Same rules as
+                    PUT /interfaces/{id}: unique case-insensitively, must not equal
+                    another interface's OS name.
                   example: vlan100
                 role:
                   type: string
@@ -541,11 +545,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/NetworkInterface'
         '400':
-          description: Invalid input (bad VLAN ID, missing/invalid parent, wireless parent, etc.)
+          description: Invalid input (bad VLAN ID, missing/invalid parent, wireless parent, malformed alias, etc.)
         '403':
           description: Forbidden (read-only user or -disable-edit mode)
         '409':
-          description: A VLAN with that name already exists (in the kernel or database)
+          description: A VLAN with that name already exists (in the kernel or database), or the alias is already in use
         '500':
           description: Internal server error (kernel link creation or DB write failed)
 
@@ -562,6 +566,9 @@ paths:
         The dhcpcd client is reconciled to the saved addressing mode: switching to DHCP on an up
         interface (re)starts dhcpcd immediately (Wi-Fi once associated), and switching to static
         releases any running lease — no manual interface toggle is required.
+        The alias is validated server-side: an empty alias defaults to the OS name; a
+        malformed alias returns 400; an alias already used by another interface
+        (case-insensitive) or equal to another interface's OS name returns 409.
       parameters:
         - name: id
           in: path
@@ -581,8 +588,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NetworkInterface'
+        '400':
+          description: Invalid alias (must contain only letters, numbers and underscores)
         '404':
           description: Interface not found
+        '409':
+          description: Alias already in use by another interface, or equals another interface's OS name (case-insensitive)
         '500':
           description: Internal server error or OS firewall sync failed
     patch:
@@ -594,6 +605,7 @@ paths:
         are updated; omitted fields are left unchanged. Useful for changing a single property without
         sending the full interface payload.
         Password masking rules are identical to PUT.
+        Alias validation rules are identical to PUT (400 malformed / 409 conflict).
         If adminAccess changes, firewall rules are automatically re-synced.
         The dhcpcd client is reconciled to the saved addressing mode: switching to DHCP on an up
         interface (re)starts dhcpcd immediately (Wi-Fi once associated), and switching to static
@@ -669,8 +681,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NetworkInterface'
+        '400':
+          description: Invalid alias (must contain only letters, numbers and underscores)
         '404':
           description: Interface not found
+        '409':
+          description: Alias already in use by another interface, or equals another interface's OS name (case-insensitive)
         '500':
           description: Internal server error or OS firewall sync failed
     delete:
@@ -2912,7 +2928,10 @@ components:
           example: eth0
         alias:
           type: string
-          description: Human-readable label for the interface
+          description: >-
+            Human-readable label for the interface, shown UI-wide as "alias (name)".
+            Unique across interfaces (case-insensitive) and must not equal another
+            interface's OS name; an empty alias defaults to the OS name.
           example: LAN_Internal
         role:
           type: string

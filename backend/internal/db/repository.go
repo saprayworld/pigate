@@ -1647,6 +1647,24 @@ func (r *Repository) GetInterfaces() ([]model.NetworkInterface, error) {
 	return r.GetInterfacesFromDB()
 }
 
+// AliasExists reports whether an interface row other than excludeID already uses
+// the alias. Case-insensitive, matching the unique index on the column, so a
+// violation is caught here as a 409 instead of surfacing as a DB error.
+func (r *Repository) AliasExists(alias, excludeID string) (bool, error) {
+	var one int
+	err := r.db.QueryRow(
+		"SELECT 1 FROM network_interfaces WHERE alias = ? COLLATE NOCASE AND id != ? LIMIT 1",
+		alias, excludeID,
+	).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (r *Repository) GetInterfacesFromDB() ([]model.NetworkInterface, error) {
 	rows, err := r.db.Query(`SELECT
 		id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, metric, mac_address, admin_access, status, speed,

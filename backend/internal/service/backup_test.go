@@ -496,3 +496,56 @@ func TestImportKeepsVlanRow(t *testing.T) {
 		t.Errorf("expected a skip warning for orphan VLAN ethX.200, got: %v", res.Warnings)
 	}
 }
+
+// A backup carrying duplicate (or name-colliding) aliases must not abort the
+// restore: the unique alias index would fail the single restore transaction, so
+// resolveInterfaces de-duplicates them up front with a warning. (issue #25)
+func TestImportDedupsConflictingAliases(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	// Corrupt the backup: give both interfaces the same alias (different case).
+	for i := range file.Config.Interfaces {
+		switch file.Config.Interfaces[i].Name {
+		case "eth0":
+			file.Config.Interfaces[i].Alias = "Shared_Label"
+		case "wlan0":
+			file.Config.Interfaces[i].Alias = "shared_label"
+		}
+	}
+	sum, _ := configChecksum(*file.Config)
+	file.Meta.Checksum = sum
+	raw, _ := json.Marshal(file)
+
+	res, err := bs.Import(raw, model.ImportOptions{})
+	if err != nil {
+		t.Fatalf("import with duplicate aliases must not fail, got: %v", err)
+	}
+
+	var warned bool
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "alias") && strings.Contains(w, "shared_label") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("expected an alias-dedup warning, got warnings: %v", res.Warnings)
+	}
+
+	ifaces, err := repo.GetInterfaces()
+	if err != nil {
+		t.Fatalf("get interfaces: %v", err)
+	}
+	seen := map[string]string{}
+	for _, i := range ifaces {
+		lower := strings.ToLower(i.Alias)
+		if prev, dup := seen[lower]; dup {
+			t.Errorf("aliases still duplicated after import: %s and %s share %q", prev, i.Name, i.Alias)
+		}
+		seen[lower] = i.Name
+	}
+}

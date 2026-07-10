@@ -293,7 +293,7 @@ func TestInterfaceMetric(t *testing.T) {
 	base := model.NetworkInterface{
 		ID:             "iface-metric",
 		Name:           "eth-test",
-		Alias:          "WAN Test",
+		Alias:          "WAN_Test",
 		Role:           "WAN",
 		Type:           "ethernet",
 		AddressingMode: "dhcp",
@@ -675,5 +675,85 @@ func TestStartupRecreatesMissingVlan(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected startup to recreate missing VLAN eth0.250 (CreateVlan called), got createdVlans=%v", tracker.createdVlans)
+	}
+}
+
+func TestAliasValidation(t *testing.T) {
+	svc, repo, _ := newVlanTestService(t)
+
+	// Managed row whose alias the target must not duplicate. Mock kernel exposes
+	// eth0 + wlan0, so "eth1" below exists only as a DB row.
+	if err := repo.CreateInterfaceForTest(model.NetworkInterface{
+		ID: "iface-eth0", Name: "eth0", Alias: "LAN_Main", Role: "LAN",
+		Type: "ethernet", AddressingMode: "static", IP: "192.168.1.1", Netmask: "24",
+		MacAddress: "aa:bb:cc:dd:ee:01", AdminAccess: []string{"PING"}, Status: "up", Speed: "1000 Mbps",
+	}); err != nil {
+		t.Fatalf("seed eth0: %v", err)
+	}
+
+	apply := func(alias string) error {
+		return svc.ApplyInterfaceConfig(model.NetworkInterface{
+			ID: "iface-eth1", Name: "eth1", Alias: alias, Role: "LAN",
+			Type: "ethernet", AddressingMode: "static", IP: "192.168.2.1", Netmask: "24",
+			MacAddress: "aa:bb:cc:dd:ee:02", AdminAccess: []string{"PING"}, Status: "up", Speed: "1000 Mbps",
+		})
+	}
+
+	cases := []struct {
+		name  string
+		alias string
+		want  error
+	}{
+		{"invalid characters", "bad alias!", ErrAliasInvalid},
+		{"duplicate case-insensitive", "lan_main", ErrAliasConflict},
+		{"collides with other kernel name", "WLAN0", ErrAliasConflict},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := apply(tc.alias); !errors.Is(err, tc.want) {
+				t.Errorf("alias %q: expected %v, got %v", tc.alias, tc.want, err)
+			}
+		})
+	}
+
+	// Own name is always a legal alias (default state).
+	if err := apply("eth1"); err != nil {
+		t.Fatalf("alias == own name should pass, got %v", err)
+	}
+	// Re-applying the row's current alias must pass (self-exemption by id).
+	if err := apply("Uplink_1"); err != nil {
+		t.Fatalf("first set of Uplink_1 failed: %v", err)
+	}
+	if err := apply("Uplink_1"); err != nil {
+		t.Fatalf("re-applying own alias should pass, got %v", err)
+	}
+	// Empty alias is normalized to the OS name, never persisted as "".
+	if err := apply("  "); err != nil {
+		t.Fatalf("empty alias should be normalized, got %v", err)
+	}
+	stored, err := repo.GetInterfaceByID("iface-eth1")
+	if err != nil || stored == nil {
+		t.Fatalf("load iface-eth1: %v", err)
+	}
+	if stored.Alias != "eth1" {
+		t.Errorf("expected empty alias normalized to \"eth1\", got %q", stored.Alias)
+	}
+}
+
+func TestCreateVlanInterface_AliasConflict(t *testing.T) {
+	svc, _, tracker := newVlanTestService(t)
+	if _, err := svc.CreateVlanInterface(model.CreateVlanInput{
+		Parent: "eth0", VlanID: 100, Alias: "VLAN_Guest", AddressingMode: "dhcp",
+	}); err != nil {
+		t.Fatalf("first create failed: %v", err)
+	}
+	_, err := svc.CreateVlanInterface(model.CreateVlanInput{
+		Parent: "eth0", VlanID: 200, Alias: "vlan_guest", AddressingMode: "dhcp",
+	})
+	if !errors.Is(err, ErrAliasConflict) {
+		t.Errorf("expected ErrAliasConflict on duplicate VLAN alias, got %v", err)
+	}
+	if len(tracker.createdVlans) != 1 {
+		t.Errorf("expected no kernel link for rejected VLAN, got %v", tracker.createdVlans)
 	}
 }

@@ -29,6 +29,7 @@ import { serviceObjectService } from "@/services/serviceObjectService"
 import { interfaceService } from "@/services/interfaceService"
 import { useAlert } from "@/hooks/useAlert"
 import { cn } from "@/lib/utils"
+import { formatIfaceLabel } from "@/lib/ifaceLabel"
 
 // shadcn UI component imports
 import {
@@ -107,12 +108,12 @@ function StatCard({
   )
 }
 
-// Helper: render an interface value as a readable label
+// Helper: render an interface value as a readable label ("ALL" is not an
+// interface, keep it verbatim)
 function ifaceLabel(val: string | undefined, interfaces: NetworkInterface[]) {
   const v = val || "ALL"
   if (v === "ALL") return "ALL"
-  const iface = interfaces.find((i) => i.name === v)
-  return iface ? `${iface.alias || iface.name} (${iface.name})` : v
+  return formatIfaceLabel(v, interfaces)
 }
 
 // Props for Sortable Row component
