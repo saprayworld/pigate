@@ -157,7 +157,7 @@ func main() {
 		netlinkMonitor,
 	)
 
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService)
 
 	// Apply config form database to kernel
 

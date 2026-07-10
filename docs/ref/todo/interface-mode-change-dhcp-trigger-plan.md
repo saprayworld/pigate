@@ -204,14 +204,19 @@ func (s *DhcpcdService) SyncInterface(name string) {
 
 ## 6. Checklist สรุป (Definition of Done)
 
-- [ ] `service/dhcpcd.go` — สกัด `applyDhcpcdDecision` + refactor `HandleLinkUpdate`/`SyncActiveInterfaces` ให้เรียกใช้ (พฤติกรรมเท่าเดิม)
-- [ ] `service/dhcpcd.go` — เพิ่ม `SyncInterface(name)` (mock-guard + static→stop + dhcp→decision)
-- [ ] `api/handlers.go` — เพิ่ม field `dhcpcdService` ใน `Server` + พารามิเตอร์ใน `NewServer`
-- [ ] `cmd/pigate/main.go` — ส่ง `dhcpcdService` เข้า `api.NewServer`
-- [ ] `api/handlers.go` — `HandlePatchInterface` + `HandleUpdateInterface` เรียก `SyncInterface` หลัง save (non-fatal)
-- [ ] `service/dhcpcd_test.go` — test decision ครบเคส (ethernet/wifi/up/running/static) + ไม่ regress `HandleLinkUpdate`
-- [ ] `docs/openapi.yaml` + `frontend/public/openapi.yaml` — (optional) เพิ่มประโยค description PATCH/PUT (sync สองไฟล์)
-- [ ] `cd backend && go build ./... && go test ./...` ผ่าน
-- [ ] ทดสอบ mock mode (`-mock=true`): เปลี่ยน mode ผ่าน API แล้วดู log `[MockDhcpcd] Simulating starting/stopping` ตรงตาม mode
+- [x] `service/dhcpcd.go` — สกัด `applyDhcpcdDecision` + refactor `HandleLinkUpdate`/`SyncActiveInterfaces` ให้เรียกใช้ (พฤติกรรมเท่าเดิม)
+- [x] `service/dhcpcd.go` — เพิ่ม `SyncInterface(name)` (static→stop [mock-safe] + dhcp→mock-guard→decision)
+- [x] `api/handlers.go` — เพิ่ม field `dhcpcdService` ใน `Server` + พารามิเตอร์ใน `NewServer` (+ อัปเดต call sites ใน `handlers_test.go`)
+- [x] `cmd/pigate/main.go` — ส่ง `dhcpcdService` เข้า `api.NewServer`
+- [x] `api/handlers.go` — `HandlePatchInterface` + `HandleUpdateInterface` เรียก `SyncInterface` หลัง save (non-fatal)
+- [x] `service/dhcpcd_test.go` — test decision ครบเคส (ethernet/wifi/up/running) + static→stop + dhcp mock no-op; `HandleLinkUpdate` เดิมไม่ regress
+- [x] `docs/openapi.yaml` + `frontend/public/openapi.yaml` — เพิ่มประโยค description PATCH/PUT (sync สองไฟล์)
+- [x] `cd backend && go build ./... && go test ./...` ผ่าน
+- [ ] ทดสอบ mock mode (`-mock=true`): เปลี่ยน mode ผ่าน API แล้วดู log `[MockDhcpcd] Simulating starting/stopping` ตรงตาม mode (ยัง — unit test ครอบ SyncInterface mock ไว้แล้ว)
 - [ ] ทดสอบบอร์ดจริง (physical access เท่านั้น): static→dhcp ขณะ up (ethernet) → `ip addr` ได้ lease โดยไม่ต้อง toggle; dhcp→static ขณะ up → dhcpcd ถูก stop (`systemctl is-active dhcpcd@<iface>` = inactive); wifi static→dhcp → dhcpcd start หลัง associate
-- [ ] อัปเดต `docs/ref/*` ที่เกี่ยวข้องถ้าพฤติกรรม dhcpcd trigger ถูกอ้างถึง; ปิด issue #22
+- [ ] อัปเดต `docs/ref/*` ที่เกี่ยวข้องถ้าพฤติกรรม dhcpcd trigger ถูกอ้างถึง; ปิด issue #22 (ตอน merge)
+
+> **หมายเหตุ implementation:** `SyncInterface` แบ่ง mock-guard เป็นสองชั้น (ไม่ guard ทั้ง
+> ฟังก์ชันแบบ `SyncActiveInterfaces`) — ขา static→stop รันได้ใน mock mode เพราะ mock
+> dhcpcd manager เป็น no-op และทำให้ unit test ครอบพฤติกรรมใหม่นี้ได้; ขา dhcp ที่ต้อง
+> อ่าน kernel flag จริงยัง guard `IsMockMode` ไว้
