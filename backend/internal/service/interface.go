@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"regexp"
 	"strings"
 
 	"pigate/internal/db"
@@ -19,6 +20,15 @@ var (
 	ErrVlanExists  = errors.New("vlan interface already exists")
 	ErrVlanInvalid = errors.New("invalid vlan configuration")
 )
+
+// Sentinel errors for alias validation, mapped by the API layer the same way:
+// ErrAliasConflict -> 409 Conflict, ErrAliasInvalid -> 400 Bad Request.
+var (
+	ErrAliasConflict = errors.New("interface alias already in use")
+	ErrAliasInvalid  = errors.New("invalid interface alias")
+)
+
+var aliasPattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 
 type InterfaceService struct {
 	repo    *db.Repository
@@ -412,8 +422,50 @@ func (s *InterfaceService) GetDataLayerInterfaceByID(id string) (*model.NetworkI
 	return nil, nil
 }
 
+// validateAlias enforces the server-side alias rules: character set, case-insensitive
+// uniqueness against other DB rows (mirroring the NOCASE unique index so violations
+// surface as 409 instead of a DB error), and no collision with another interface's
+// OS name — the index cannot see those, and an alias like "eth0" on a different
+// interface would make every label ambiguous. selfID/selfName exempt the interface's
+// own row and its own name: alias == own name is the default state.
+func (s *InterfaceService) validateAlias(alias, selfID, selfName string) error {
+	// alias == own OS name is the default state (VLAN create, empty-alias
+	// normalization) and must always be accepted, even when the name itself has
+	// characters outside the alias pattern (e.g. "eth0.100").
+	if alias != selfName && !aliasPattern.MatchString(alias) {
+		return fmt.Errorf("%w: %q must contain only letters, numbers and underscores", ErrAliasInvalid, alias)
+	}
+	exists, err := s.repo.AliasExists(alias, selfID)
+	if err != nil {
+		return fmt.Errorf("failed to check alias uniqueness: %w", err)
+	}
+	if exists {
+		return fmt.Errorf("%w: %q", ErrAliasConflict, alias)
+	}
+	kernelIfaces, err := s.GetKernelInterfaces()
+	if err != nil {
+		return fmt.Errorf("failed to list interfaces for alias check: %w", err)
+	}
+	for _, k := range kernelIfaces {
+		if k.Name != selfName && strings.EqualFold(alias, k.Name) {
+			return fmt.Errorf("%w: %q is the name of another interface", ErrAliasConflict, alias)
+		}
+	}
+	return nil
+}
+
 // ApplyInterfaceConfig saves the specified interface configuration to both kernel and DB.
 func (s *InterfaceService) ApplyInterfaceConfig(iface model.NetworkInterface) error {
+	// Empty alias means "default to the OS name" (same rule as CreateVlanInterface):
+	// a PUT without an alias must neither persist "" nor be rejected.
+	iface.Alias = strings.TrimSpace(iface.Alias)
+	if iface.Alias == "" {
+		iface.Alias = iface.Name
+	}
+	if err := s.validateAlias(iface.Alias, iface.ID, iface.Name); err != nil {
+		return err
+	}
+
 	if iface.Type == "wireless" {
 		ssid := ""
 		if iface.WifiSSID != nil {
@@ -606,6 +658,9 @@ func (s *InterfaceService) CreateVlanInterface(input model.CreateVlanInput) (*mo
 	alias := strings.TrimSpace(input.Alias)
 	if alias == "" {
 		alias = name
+	}
+	if err := s.validateAlias(alias, "iface-"+name, name); err != nil {
+		return nil, err
 	}
 
 	vlanParent := parent

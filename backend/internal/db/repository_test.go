@@ -2,6 +2,7 @@ package db
 
 import (
 	"runtime"
+	"strings"
 	"testing"
 
 	"pigate/internal/model"
@@ -761,3 +762,61 @@ func TestInterfaceMetricColumn(t *testing.T) {
 	}
 }
 
+
+// TestAliasMigrationDedup simulates upgrading a legacy database that predates the
+// unique alias index: it may hold duplicate aliases (case-insensitive) and rows
+// with an empty alias. Boot (InitDB) must repair them instead of failing on
+// CREATE UNIQUE INDEX.
+func TestAliasMigrationDedup(t *testing.T) {
+	dsn := t.TempDir() + "/legacy.db"
+
+	first, err := InitDB(dsn)
+	if err != nil {
+		t.Fatalf("initial InitDB failed: %v", err)
+	}
+	// Recreate the legacy state: no index yet, conflicting/empty aliases present.
+	if _, err := first.Exec("DROP INDEX idx_network_interfaces_alias"); err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+	insert := `INSERT INTO network_interfaces (
+		id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed
+	) VALUES (?, ?, ?, 'LAN', 'ethernet', 'device', 'static', '10.0.0.1', '24', '', 'aa:bb:cc:dd:ee:ff', 'PING', 'up', '1000 Mbps')`
+	for _, row := range [][2]string{
+		{"iface-eth7", "eth7"}, {"iface-eth8", "eth8"}, // duplicate alias, different case
+		{"iface-eth9", "eth9"}, {"iface-eth10", "eth10"}, // both empty
+	} {
+		alias := map[string]string{"eth7": "Uplink", "eth8": "uplink", "eth9": "", "eth10": ""}[row[1]]
+		if _, err := first.Exec(insert, row[0], row[1], alias); err != nil {
+			t.Fatalf("seed legacy row %s: %v", row[1], err)
+		}
+	}
+	first.Close()
+
+	// Reboot: migration must de-duplicate and recreate the index without error.
+	second, err := InitDB(dsn)
+	if err != nil {
+		t.Fatalf("InitDB on legacy data failed: %v", err)
+	}
+	defer second.Close()
+
+	rows, err := second.Query("SELECT name, alias FROM network_interfaces")
+	if err != nil {
+		t.Fatalf("query aliases: %v", err)
+	}
+	defer rows.Close()
+	seen := map[string]string{}
+	for rows.Next() {
+		var name, alias string
+		if err := rows.Scan(&name, &alias); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if alias == "" {
+			t.Errorf("interface %s still has an empty alias after migration", name)
+		}
+		lower := strings.ToLower(alias)
+		if prev, dup := seen[lower]; dup {
+			t.Errorf("aliases still duplicated after migration: %s and %s share %q", prev, name, alias)
+		}
+		seen[lower] = name
+	}
+}

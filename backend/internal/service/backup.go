@@ -340,6 +340,50 @@ func (s *BackupService) resolveInterfaces(backup []model.NetworkInterface) ([]mo
 		m.FailoverCooldown = b.FailoverCooldown
 		merged = append(merged, m)
 	}
+
+	// Alias uniqueness guard (issue #25): network_interfaces has a case-insensitive
+	// unique index on alias, and RestoreConfig runs in a single transaction — one
+	// bad alias in the backup would roll back the whole restore. Normalize (empty ->
+	// own name) and de-duplicate against both the other merged rows and the device
+	// rows this restore does not touch (restore updates by id, it does not replace
+	// the table).
+	mergedIDs := make(map[string]bool, len(merged))
+	for _, m := range merged {
+		mergedIDs[m.ID] = true
+	}
+	taken := make(map[string]bool)
+	names := make(map[string]bool)
+	for _, e := range existing {
+		names[strings.ToLower(e.Name)] = true
+		if !mergedIDs[e.ID] {
+			taken[strings.ToLower(e.Alias)] = true
+		}
+	}
+	for _, m := range merged {
+		names[strings.ToLower(m.Name)] = true // VLAN rows may be new to this device
+	}
+	conflicts := func(alias, ownName string) bool {
+		lower := strings.ToLower(alias)
+		return taken[lower] || (names[lower] && !strings.EqualFold(alias, ownName))
+	}
+	for i := range merged {
+		m := &merged[i]
+		alias := strings.TrimSpace(m.Alias)
+		if alias == "" {
+			alias = m.Name
+		}
+		if conflicts(alias, m.Name) {
+			orig := alias
+			alias = m.Name
+			for n := 2; conflicts(alias, m.Name); n++ {
+				alias = fmt.Sprintf("%s_%d", m.Name, n)
+			}
+			warnings = append(warnings, fmt.Sprintf("interface %q: alias %q already in use — replaced with %q", m.Name, orig, alias))
+		}
+		m.Alias = alias
+		taken[strings.ToLower(alias)] = true
+	}
+
 	return merged, warnings, changed, nil
 }
 

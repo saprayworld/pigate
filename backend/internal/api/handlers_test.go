@@ -724,7 +724,7 @@ func TestInterfaceUpdateSyncsFirewall(t *testing.T) {
 	iface := model.NetworkInterface{
 		ID:                   "iface-test-sync",
 		Name:                 "eth-test-sync",
-		Alias:                "LAN_Internal",
+		Alias:                "LAN_TestSync",
 		Role:                 "LAN",
 		Type:                 "ethernet",
 		AddressingMode:       "static",
@@ -1164,5 +1164,62 @@ func TestVlanAPIViewerForbidden(t *testing.T) {
 	})
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for read-only user creating VLAN, got %d", rec.Code)
+	}
+}
+
+// TestInterfaceAliasAPIValidation covers the HTTP mapping of the alias rules on
+// PUT /api/interfaces/{id}: 409 for conflicts (duplicate alias or another
+// interface's OS name), 400 for a malformed alias, and normalization of an
+// omitted alias to the OS name instead of persisting "".
+func TestInterfaceAliasAPIValidation(t *testing.T) {
+	handler, repo := setupTestServer(t)
+	authToken := "mock_session_id_test_token"
+
+	put := func(t *testing.T, alias string) *httptest.ResponseRecorder {
+		t.Helper()
+		payload := map[string]any{
+			"alias": alias, "role": "LAN", "addressingMode": "static",
+			"ip": "192.168.1.1", "netmask": "24", "gateway": "",
+			"macAddress": "DC:A6:32:AA:BB:C1", "adminAccess": []string{"PING", "HTTP", "SSH"},
+		}
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest("PUT", "/api/interfaces/iface-1", bytes.NewBuffer(body))
+		req.Header.Set("Authorization", "Bearer "+authToken)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Duplicate of wlan0's seeded alias "WAN_WiFi", case-insensitive.
+	if rec := put(t, "wan_wifi"); rec.Code != http.StatusConflict {
+		t.Errorf("duplicate alias: expected 409, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	// Another interface's OS name.
+	if rec := put(t, "WLAN0"); rec.Code != http.StatusConflict {
+		t.Errorf("alias == other OS name: expected 409, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	// Malformed alias.
+	if rec := put(t, "bad alias!"); rec.Code != http.StatusBadRequest {
+		t.Errorf("malformed alias: expected 400, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Omitted/empty alias normalizes to the OS name — in the response and in the DB.
+	rec := put(t, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty alias: expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var got model.NetworkInterface
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Alias != "eth0" {
+		t.Errorf("expected response alias normalized to \"eth0\", got %q", got.Alias)
+	}
+	stored, err := repo.GetInterfaceByID("iface-1")
+	if err != nil || stored == nil {
+		t.Fatalf("load iface-1: %v", err)
+	}
+	if stored.Alias != "eth0" {
+		t.Errorf("expected persisted alias \"eth0\", got %q", stored.Alias)
 	}
 }

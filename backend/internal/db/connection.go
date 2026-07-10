@@ -507,6 +507,70 @@ func migrate(db *sql.DB) error {
 		return fmt.Errorf("failed to normalize legacy timezone value: %w", err)
 	}
 
+	// Interface aliases are displayed as the primary interface label (issue #25), so
+	// they must be unique. Existing databases may hold empty or duplicate aliases
+	// (an old PUT could persist ""), which would make CREATE UNIQUE INDEX fail and
+	// abort boot — normalize and de-duplicate before creating the index.
+	if err := ensureUniqueAliasIndex(db); err != nil {
+		return fmt.Errorf("failed to enforce unique interface aliases: %w", err)
+	}
+
+	return nil
+}
+
+// ensureUniqueAliasIndex normalizes interface aliases (empty -> the interface's own
+// name, duplicates -> own name plus a numeric suffix when even that is taken) and
+// then creates the case-insensitive unique index that enforces uniqueness from then
+// on. Runs after the CREATE TABLE queries so it works on both fresh and existing
+// databases; safe to run repeatedly.
+func ensureUniqueAliasIndex(db *sql.DB) error {
+	if _, err := db.Exec("UPDATE network_interfaces SET alias = name WHERE TRIM(alias) = ''"); err != nil {
+		return fmt.Errorf("failed to normalize empty aliases: %w", err)
+	}
+
+	rows, err := db.Query("SELECT id, name, alias FROM network_interfaces ORDER BY rowid")
+	if err != nil {
+		return err
+	}
+	type ifaceRow struct{ id, name, alias string }
+	var all []ifaceRow
+	for rows.Next() {
+		var r ifaceRow
+		if err := rows.Scan(&r.id, &r.name, &r.alias); err != nil {
+			rows.Close()
+			return err
+		}
+		all = append(all, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	taken := make(map[string]bool, len(all))
+	for _, r := range all {
+		key := strings.ToLower(r.alias)
+		if !taken[key] {
+			taken[key] = true
+			continue
+		}
+		// Duplicate (case-insensitive): fall back to the row's own name, which is
+		// UNIQUE — unless another row happens to use that name as its alias, then
+		// append a numeric suffix until free.
+		candidate := r.name
+		for i := 2; taken[strings.ToLower(candidate)]; i++ {
+			candidate = fmt.Sprintf("%s_%d", r.name, i)
+		}
+		if _, err := db.Exec("UPDATE network_interfaces SET alias = ? WHERE id = ?", candidate, r.id); err != nil {
+			return fmt.Errorf("failed to de-duplicate alias for interface %s: %w", r.name, err)
+		}
+		log.Printf("[Migration] Warning: interface %s had duplicate alias %q, renamed to %q", r.name, r.alias, candidate)
+		taken[strings.ToLower(candidate)] = true
+	}
+
+	if _, err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_network_interfaces_alias ON network_interfaces(alias COLLATE NOCASE)"); err != nil {
+		return fmt.Errorf("failed to create unique alias index: %w", err)
+	}
 	return nil
 }
 

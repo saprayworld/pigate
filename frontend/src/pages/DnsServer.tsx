@@ -42,6 +42,7 @@ import { dnsServerService } from "@/services/dnsServerService"
 import { interfaceService } from "@/services/interfaceService"
 import { useAlert } from "@/hooks/useAlert"
 import { isValidIp } from "@/lib/utils"
+import { ifaceLabel } from "@/lib/ifaceLabel"
 
 export default function DnsServer() {
   const { alert, confirm } = useAlert()
@@ -480,10 +481,7 @@ export default function DnsServer() {
                       onChange={(e) => handleToggleInterface(iface.name, e.target.checked)}
                       className="h-4 w-4 cursor-pointer accent-primary"
                     />
-                    {iface.name}
-                    {iface.alias && iface.alias !== iface.name && (
-                      <span className="text-muted-foreground/60">({iface.alias})</span>
-                    )}
+                    {ifaceLabel(iface)}
                   </label>
                 )
               })}

@@ -202,19 +202,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_network_interfaces_alias
 
 ## 6. Summary Checklist (Definition of Done)
 
-- [ ] `db/connection.go` — pass ว่าง→name + de-dup pass + `CREATE UNIQUE INDEX ... (alias COLLATE NOCASE)`
-- [ ] `db/repository.go` — `AliasExists(alias, excludeID)` (NOCASE)
-- [ ] `service/interface.go` — normalize (ว่าง→name) ใน `ApplyInterfaceConfig` + `ErrAliasConflict`/`ErrAliasInvalid` + `validateAlias(alias, selfID, selfName)` + wire ใน `ApplyInterfaceConfig`/`CreateVlanInterface`
-- [ ] `api/handlers.go` — map error 409/400 ใน `HandleUpdateInterface`/`HandlePatchInterface`/`HandleCreateVlan`
-- [ ] `service/backup.go` — dedup alias ใน `resolveInterfaces` ก่อน restore
-- [ ] `frontend/src/lib/ifaceLabel.ts` — helper `formatIfaceLabel` (ยุบเมื่อ alias ว่าง/เท่ากับ name)
-- [ ] แทนที่ label ทุกจุด: FirewallPolicy, StaticRoutes, QoS(×2), DnsServer, Interfaces, Dashboard, DhcpServer (+โหลด objects)
-- [ ] `Interfaces.tsx` — เช็ค alias≠name-อื่น (client) + แสดง error 409/400 จาก server (ฟอร์ม edit + create vlan)
-- [ ] `docs/openapi.yaml` **และ** `frontend/public/openapi.yaml` — เพิ่ม 409 + คำอธิบาย alias unique
-- [ ] Test BE: `service/interface_test.go` — validateAlias (รูปแบบผิด/ซ้ำ NOCASE/ชน name อื่น/ยกเว้นตัวเอง/alias==ชื่อตัวเองผ่าน), migration de-dup
-- [ ] Test BE: `api/handlers_test.go` — PUT/POST alias ซ้ำ → 409, รูปแบบผิด → 400, **PUT ไม่ส่ง alias → 200 และ alias = name (ไม่ใช่ `""`)**
-- [ ] Test BE: `backup_test.go` — import ที่มี alias ซ้ำไม่ทำ restore ล้ม (ถูก dedup + warning)
-- [ ] `go build ./...` + `go test ./...` ผ่าน; `yarn build` + `yarn lint` ผ่าน
-- [ ] ทดสอบ mock: ตั้ง alias ซ้ำ→เตือน, ทุกหน้าโชว์ `alias (name)`, dropdown ยังส่ง OS name (สร้าง policy แล้ว `in_interface` เป็น `eth0`)
-- [ ] ทดสอบ migration: เปิด DB เดิมที่มี alias ซ้ำ **และแถว alias ว่างหลายแถว** → boot ผ่าน, alias ถูกแก้ + มี warning ใน log
-- [ ] (ไม่ต้องแตะ README Feature Status — ไม่ใช่ feature ใหม่ เป็น UX/integrity ปรับปรุง; ใส่หมายเหตุได้ถ้าต้องการ)
+- [x] `db/connection.go` — pass ว่าง→name + de-dup pass + `CREATE UNIQUE INDEX ... (alias COLLATE NOCASE)`
+- [x] `db/repository.go` — `AliasExists(alias, excludeID)` (NOCASE)
+- [x] `service/interface.go` — normalize (ว่าง→name) ใน `ApplyInterfaceConfig` + `ErrAliasConflict`/`ErrAliasInvalid` + `validateAlias(alias, selfID, selfName)` + wire ใน `ApplyInterfaceConfig`/`CreateVlanInterface`
+- [x] `api/handlers.go` — map error 409/400 ใน `HandleUpdateInterface`/`HandlePatchInterface`/`HandleCreateVlan`
+- [x] `service/backup.go` — dedup alias ใน `resolveInterfaces` ก่อน restore
+- [x] `frontend/src/lib/ifaceLabel.ts` — helper `formatIfaceLabel` (ยุบเมื่อ alias ว่าง/เท่ากับ name)
+- [x] แทนที่ label ทุกจุด: FirewallPolicy, StaticRoutes, QoS(×2), DnsServer, Interfaces, Dashboard, DhcpServer (+โหลด objects)
+- [x] `Interfaces.tsx` — เช็ค alias≠name-อื่น (client) + แสดง error 409/400 จาก server (ฟอร์ม edit + create vlan)
+- [x] `docs/openapi.yaml` **และ** `frontend/public/openapi.yaml` — เพิ่ม 409 + คำอธิบาย alias unique
+- [x] Test BE: `service/interface_test.go` — validateAlias (รูปแบบผิด/ซ้ำ NOCASE/ชน name อื่น/ยกเว้นตัวเอง/alias==ชื่อตัวเองผ่าน), migration de-dup
+- [x] Test BE: `api/handlers_test.go` — PUT/POST alias ซ้ำ → 409, รูปแบบผิด → 400, **PUT ไม่ส่ง alias → 200 และ alias = name (ไม่ใช่ `""`)**
+- [x] Test BE: `backup_test.go` — import ที่มี alias ซ้ำไม่ทำ restore ล้ม (ถูก dedup + warning)
+- [x] `go build ./...` + `go test ./...` ผ่าน; `yarn build` + `yarn lint` ผ่าน
+- [x] ทดสอบ mock: ตั้ง alias ซ้ำ→เตือน, ทุกหน้าโชว์ `alias (name)`, dropdown ยังส่ง OS name (สร้าง policy แล้ว `in_interface` เป็น `eth0`)
+- [x] ทดสอบ migration: เปิด DB เดิมที่มี alias ซ้ำ **และแถว alias ว่างหลายแถว** → boot ผ่าน, alias ถูกแก้ + มี warning ใน log
+- [x] (ไม่ต้องแตะ README Feature Status — ไม่ใช่ feature ใหม่ เป็น UX/integrity ปรับปรุง; ใส่หมายเหตุได้ถ้าต้องการ)

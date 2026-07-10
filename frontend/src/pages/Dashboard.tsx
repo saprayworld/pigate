@@ -34,6 +34,7 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { useTheme } from "@/hooks/useTheme"
 import { cn } from "@/lib/utils"
+import { ifaceLabel } from "@/lib/ifaceLabel"
 import {
   dashboardService,
   type PerformanceMetrics,
@@ -534,7 +535,7 @@ function InterfacesCard({ interfaces }: { interfaces: NetworkInterface[] }) {
                     className={cn("h-4 w-4", isUp ? "text-foreground" : "text-muted-foreground/60")}
                   />
                   <div className="flex items-baseline gap-2">
-                    <span className="font-mono text-sm font-medium text-foreground">{iface.name}</span>
+                    <span className="font-mono text-sm font-medium text-foreground">{ifaceLabel(iface)}</span>
                     <span className="text-xs text-muted-foreground">{detailParts.join(" · ")}</span>
                   </div>
                 </div>
