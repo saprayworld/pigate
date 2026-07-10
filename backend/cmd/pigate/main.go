@@ -6,12 +6,15 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	// Embed the IANA timezone database so timezone validation
 	// (time.LoadLocation) works even on minimal environments that lack a system
 	// tzdata package (dev containers, etc.). ~450KB. On the Pi this simply
 	// mirrors the system tzdata.
 	_ "time/tzdata"
+
+	"github.com/google/uuid"
 
 	"pigate/internal/api"
 	"pigate/internal/db"
@@ -54,15 +57,13 @@ func main() {
 	log.Printf("[Main] Prioritize Kernel Routes: %t", *prioritizeKernelRoutes)
 	log.Printf("[Main] Docker Compatibility: %t", *dockerCompat)
 
-	// 2. Initialize in-memory logs circular buffer (Ring Buffer)
-	ringBuffer := logs.NewRingBuffer(50)
-
-	// Seed firewall log mock entries so the Dashboard "Recent Logs" widget isn't
-	// empty in mock mode. Real mode starts with an empty buffer (no fake data).
-	if *mockOS {
-		ringBuffer.Add(model.FirewallLog{ID: "log-init-1", Time: "14:31:02", Action: "DROP", Src: "185.220.101.4", Dest: "10.0.0.45", Port: "445", Proto: "TCP", Reason: "Blocked Port (SMB)"})
-		ringBuffer.Add(model.FirewallLog{ID: "log-init-2", Time: "14:31:15", Action: "PASS", Src: "192.168.1.105", Dest: "8.8.8.8", Port: "53", Proto: "UDP", Reason: "DNS request"})
-	}
+	// 2. Initialize in-memory forward-traffic logs circular buffer (Ring Buffer).
+	// Fed live by the TrafficLogManager watcher below (real NFLOG or mock
+	// generator); powers both the Forward Traffic page and the Dashboard Recent
+	// Logs widget. RAM-only — never persisted (SD card wear, tech_stack_design.md
+	// §8). Capacity 500: a FirewallLog is a handful of short strings, so this is
+	// only a few hundred KB while giving the log view a useful window.
+	ringBuffer := logs.NewRingBuffer(500)
 
 	// 3. Initialize SQLite DB & run migrations
 	sqliteDB, err := db.InitDB(*dbPath, *mockOS)
@@ -88,6 +89,7 @@ func main() {
 	var timeMgr kernel.TimeManager
 	var sysStats kernel.SystemStatsManager
 	var powerMgr kernel.PowerManager
+	var trafficLog kernel.TrafficLogManager
 	dns := kernel.NewDNSManager(*mockOS)
 
 	if *mockOS || *mockFromReal {
@@ -104,6 +106,7 @@ func main() {
 		timeMgr = kernel.NewMockTimeManager()
 		sysStats = kernel.NewMockSystemStats()
 		powerMgr = kernel.NewMockPowerManager()
+		trafficLog = kernel.NewMockTrafficLog()
 	} else {
 		// Real kernel integrations via netlink — used on Raspberry Pi 5 production.
 		// Requires: sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
@@ -118,6 +121,7 @@ func main() {
 		timeMgr = kernel.NewRealTimeManager()
 		sysStats = kernel.NewRealSystemStats()
 		powerMgr = kernel.NewRealPowerManager()
+		trafficLog = kernel.NewRealTrafficLog()
 	}
 
 	// 5. Instantiate Server & Router
@@ -183,6 +187,24 @@ func main() {
 	monitorCtx, cancelMonitor := context.WithCancel(context.Background())
 	defer cancelMonitor()
 	netlinkMonitor.Start(monitorCtx)
+
+	// Start the forward-traffic log watcher. It feeds the shared ring buffer that
+	// backs the Forward Traffic page and Dashboard Recent Logs. Each event is
+	// stamped with an RFC3339 UTC timestamp (the frontend formats it for display)
+	// and a unique id. Real mode reads NFLOG group 100; mock mode synthesizes
+	// events. If the watcher errors (e.g. NFLOG unavailable), the buffer simply
+	// stays empty — packets are unaffected.
+	log.Printf("[Main] Starting forward-traffic log watcher...")
+	go func() {
+		err := trafficLog.WatchForwardTraffic(monitorCtx, func(entry model.FirewallLog) {
+			entry.Time = time.Now().UTC().Format(time.RFC3339)
+			entry.ID = uuid.NewString()
+			ringBuffer.Add(entry)
+		})
+		if err != nil && monitorCtx.Err() == nil {
+			log.Printf("[Main] Warning: forward-traffic log watcher stopped: %v", err)
+		}
+	}()
 
 	// Start the event log batch writer (flushes queued events to SQLite in
 	// batches to preserve the SD card).

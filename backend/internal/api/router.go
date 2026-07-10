@@ -47,6 +47,11 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("GET /api/logs/events", s.HandleGetSystemEvents)
 	superAdminRoute("POST /api/logs/events/clear", s.HandleClearSystemEvents)
 
+	// 2.2 Forward Traffic Log — live PASS/DROP packet events from the firewall
+	// forward chain, read from the same RAM ring buffer as the dashboard logs
+	// (never persisted). Read-only; clearing reuses /api/dashboard/logs/clear.
+	authRoute("GET /api/logs/traffic", s.HandleGetTrafficLogs)
+
 	// 3. Network Interfaces
 	authRoute("GET /api/interfaces", s.HandleGetInterfaces)
 	authRoute("PUT /api/interfaces/{id}", s.HandleUpdateInterface)

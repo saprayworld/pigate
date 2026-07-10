@@ -19,6 +19,17 @@ type FirewallManager interface {
 	) error
 }
 
+// TrafficLogManager streams forward-chain PASS/DROP packet events into the app.
+// The real implementation subscribes to an NFLOG netlink group (the forward-chain
+// log statements are configured to log to a group instead of printk); the mock
+// implementation synthesizes events so dev/mock mode has a live log feed.
+// WatchForwardTraffic blocks until ctx is cancelled, invoking cb once per event.
+// cb must return promptly — implementations must not let a slow consumer stall
+// the netlink read loop (see real_traffic_log.go).
+type TrafficLogManager interface {
+	WatchForwardTraffic(ctx context.Context, cb func(model.FirewallLog)) error
+}
+
 // NetworkManager abstracts Wi-Fi scanning and interface control
 type NetworkManager interface {
 	ToggleInterface(name string, up bool) error

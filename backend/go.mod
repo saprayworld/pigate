@@ -3,6 +3,7 @@ module pigate
 go 1.26.4
 
 require (
+	github.com/florianl/go-nflog/v2 v2.3.0
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/google/nftables v0.3.0
 	github.com/google/uuid v1.6.0
@@ -14,11 +15,8 @@ require (
 )
 
 require (
-	github.com/BurntSushi/toml v0.4.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/josharian/native v0.0.0-20200817173448-b6b71def0850 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/mdlayher/genetlink v1.4.0 // indirect
 	github.com/mdlayher/netlink v1.11.2 // indirect
@@ -26,15 +24,10 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
-	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/tools v0.46.0 // indirect
-	honnef.co/go/tools v0.2.2 // indirect
 	modernc.org/gc/v3 v3.1.5 // indirect
 	modernc.org/libc v1.73.5 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/strutil v1.2.1 // indirect
-	modernc.org/token v1.1.0 // indirect
 )

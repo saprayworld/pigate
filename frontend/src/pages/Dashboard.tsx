@@ -263,11 +263,21 @@ const alertStyle: Record<AlertLevel, { badge: string; icon: typeof Info }> = {
   ERR: { badge: "bg-destructive/10 text-destructive border-destructive/20", icon: ShieldAlert },
 }
 
+// Forward-traffic log entries now carry an RFC3339 UTC timestamp (from the
+// kernel NFLOG watcher). Format it to a local HH:MM:SS for display; fall back to
+// the raw string if it isn't a parseable date (older/mock "HH:MM:SS" values).
+function formatLogTime(time: string): string {
+  const d = new Date(time)
+  if (isNaN(d.getTime())) return time
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
 function logsToAlerts(logs: FirewallLog[]): AlertItem[] {
   return logs.slice(0, 8).map((l) => ({
     level: l.action === "DROP" ? "WARN" : "INFO",
     message: `${l.reason} — ${l.src} → ${l.dest}:${l.port}/${l.proto}`,
-    time: l.time,
+    time: formatLogTime(l.time),
   }))
 }
 

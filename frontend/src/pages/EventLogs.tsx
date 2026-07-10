@@ -199,7 +199,7 @@ export default function EventLogs() {
             <ScrollText className="size-5" />
           </div>
           <div>
-            <h1 className="text-lg font-bold tracking-tight">Event Logs</h1>
+            <h1 className="text-lg font-bold tracking-tight">System Events</h1>
             <p className="text-xs text-muted-foreground">
               ประวัติเหตุการณ์สำคัญของระบบ (login, config changes, DHCP leases, reboot)
             </p>

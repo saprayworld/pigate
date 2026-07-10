@@ -411,6 +411,54 @@ paths:
           description: Caller is not super_admin
 
   # =========================================================================
+  # FORWARD TRAFFIC LOG (live packet PASS/DROP, RAM-only)
+  # =========================================================================
+
+  /logs/traffic:
+    get:
+      tags:
+        - Event Log
+      summary: Get live forward-chain packet logs (PASS/DROP, newest first)
+      description: |
+        Real-time PASS/DROP events for packets forwarded through the firewall
+        (LAN↔WAN forward chain), captured from the kernel via NFLOG into a
+        fixed-size RAM ring buffer. Deliberately NOT persisted to SQLite (packet
+        rate + SD-card wear), so it is a recent-sample view, not a complete
+        record. Shares the buffer with `/dashboard/logs`; clear it via
+        `/dashboard/logs/clear`. Established connections are accepted without a
+        log (ct state), so mostly connection-opening and dropped packets appear.
+        Available to any authenticated role.
+      parameters:
+        - name: action
+          in: query
+          schema:
+            type: string
+            enum: [PASS, DROP]
+          description: Filter by verdict (case-insensitive); omit for all
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: Case-insensitive text search across src, dest, port, proto, and reason
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+          description: Max rows to return (capped at the buffer capacity)
+      responses:
+        '200':
+          description: Matching forward-traffic logs (newest first)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FirewallLog'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # =========================================================================
   # NETWORK INTERFACES
   # =========================================================================
   /interfaces:
@@ -2708,6 +2756,8 @@ components:
         - dest
         - port
         - proto
+        - inIface
+        - outIface
         - reason
       properties:
         id:
@@ -2732,6 +2782,14 @@ components:
         proto:
           type: string
           example: TCP
+        inIface:
+          type: string
+          description: Ingress interface name (NFLOG indev); "-" if unknown.
+          example: eth0
+        outIface:
+          type: string
+          description: Egress interface name (NFLOG outdev); "-" if unknown.
+          example: eth1
         reason:
           type: string
           example: Blocked Port (SMB)
