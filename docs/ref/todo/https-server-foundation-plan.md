@@ -9,6 +9,7 @@
 >
 > เขียนเมื่อ: 2026-07-10 · ปรับเป็น Default-HTTPS หลัง review ร่วมกับเจ้าของโปรเจค: 2026-07-10
 > Reference branch: `main` (จะทำงานบน `feat/https-server-foundation`)
+> Issue: https://github.com/saprayworld/pigate/issues/27
 > README Feature Status: ยังไม่มีแถว HTTPS → เพิ่มเป็น Completed เมื่อจบงาน
 
 ## 0. Goal and Scope
