@@ -194,13 +194,16 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 			user.Username, user.Username, "User "+user.Username+" logged in")
 	}
 
-	// Set secure cookie
+	// Set secure cookie. Secure is decided per-request from r.TLS (nil over plain
+	// HTTP, non-nil over HTTPS) rather than a global flag, because the HTTP fallback
+	// mode serves the same handler without TLS — a hardcoded Secure:true there would
+	// make the browser silently drop the session cookie.
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionKey,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   false, // Set to true in HTTPS production
+		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteStrictMode,
 		Expires:  time.Now().Add(24 * time.Hour),
 	})
@@ -230,12 +233,15 @@ func (s *Server) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		RemoveSession(token)
 	}
 
-	// Clear cookie
+	// Clear cookie. Mirror the login cookie's Secure attribute (per-request from
+	// r.TLS) so the browser reliably matches and removes it under both schemes.
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionKey,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 		Expires:  time.Unix(0, 0),
 	})

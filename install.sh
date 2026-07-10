@@ -355,6 +355,54 @@ chmod 0644 "${TIMESYNCD_DROPIN}"
 log_ok "ตั้งค่า /etc/systemd/timesyncd.conf.d สำเร็จ"
 
 # =============================================================================
+# STEP 5.2: ตั้งเวลา / timezone / NTP
+# =============================================================================
+# PiGate เสิร์ฟผ่าน HTTPS ด้วย self-signed certificate ที่ "สร้างครั้งเดียว" ตอน
+# boot แรก — เวลาเครื่องตอนนั้นควรถูกต้องเพื่อให้ timestamp ของ log/เหตุการณ์อ่าน
+# ง่าย (ตัว cert เองใช้ช่วง validity คงที่ จึงไม่ล็อกกับเวลา แต่การตั้งเวลาให้ถูก
+# ตั้งแต่ต้นเป็นสุขอนามัยที่ดี โดยเฉพาะ Raspberry Pi ที่ไม่มี RTC battery)
+log_info "STEP 5.2: ตั้งเวลา / timezone / NTP..."
+
+if [[ -t 0 ]] && command -v timedatectl &>/dev/null; then
+    echo ""
+    log_info "เวลาปัจจุบันของระบบ:"
+    timedatectl | sed 's/^/    /'
+    echo ""
+
+    read -r -p "$(echo -e "${YELLOW}ตั้งค่า timezone หรือไม่? (เช่น Asia/Bangkok) [ปล่อยว่าง = ข้าม]: ${NC}")" TZ_INPUT || TZ_INPUT=""
+    if [[ -n "${TZ_INPUT}" ]]; then
+        if timedatectl set-timezone "${TZ_INPUT}" 2>/dev/null; then
+            log_ok "ตั้ง timezone เป็น ${TZ_INPUT} สำเร็จ"
+        else
+            log_warn "timezone ${TZ_INPUT} ไม่ถูกต้อง — ข้าม (ตั้งภายหลังได้ในหน้าเว็บ)"
+        fi
+    fi
+
+    echo ""
+    read -r -p "$(echo -e "${YELLOW}เปิด NTP sync (ซิงค์เวลาอัตโนมัติผ่านอินเทอร์เน็ต)? [Y/n]: ${NC}")" NTP_INPUT || NTP_INPUT=""
+    if [[ "${NTP_INPUT}" =~ ^[Nn]$ ]]; then
+        timedatectl set-ntp false 2>/dev/null || true
+        log_info "ปิด NTP sync แล้ว"
+        echo ""
+        log_warn "เครื่องนี้ไม่ซิงค์เวลาอัตโนมัติ — หากออฟไลน์ควรตั้งเวลาเอง"
+        read -r -p "$(echo -e "${YELLOW}ตั้งเวลาเอง (รูปแบบ 'YYYY-MM-DD HH:MM:SS') [ปล่อยว่าง = ข้าม]: ${NC}")" TIME_INPUT || TIME_INPUT=""
+        if [[ -n "${TIME_INPUT}" ]]; then
+            if timedatectl set-time "${TIME_INPUT}" 2>/dev/null; then
+                log_ok "ตั้งเวลาเป็น ${TIME_INPUT} สำเร็จ"
+            else
+                log_warn "รูปแบบเวลาไม่ถูกต้อง — ข้าม"
+            fi
+        fi
+    else
+        timedatectl set-ntp true 2>/dev/null || true
+        log_ok "เปิด NTP sync แล้ว (เวลาจะซิงค์อัตโนมัติเมื่อออนไลน์)"
+    fi
+    echo ""
+else
+    log_warn "ข้ามการตั้งเวลา (ไม่ใช่ interactive terminal หรือไม่มี timedatectl) — ตั้งได้ภายหลังในหน้าเว็บ"
+fi
+
+# =============================================================================
 # STEP 6: คัดลอก binary และตั้งค่า capabilities
 # =============================================================================
 log_info "STEP 6: ติดตั้ง binary..."
@@ -363,8 +411,11 @@ cp "${BINARY_SRC}" /usr/local/bin/pigate
 chmod 755 /usr/local/bin/pigate
 log_ok "คัดลอก pigate ไปยัง /usr/local/bin/ สำเร็จ"
 
-log_info "ตั้งค่า Linux capabilities (cap_net_admin, cap_net_raw)..."
-setcap cap_net_admin,cap_net_raw+ep /usr/local/bin/pigate
+log_info "ตั้งค่า Linux capabilities (cap_net_admin, cap_net_raw, cap_net_bind_service)..."
+# cap_net_bind_service จำเป็นสำหรับ bind พอร์ต < 1024 (HTTPS 443 + HTTP 80 redirect)
+# โดย user pigate ที่ไม่ใช่ root — ต้องตั้งทั้งที่ไฟล์ (setcap) และใน unit
+# (AmbientCapabilities/CapabilityBoundingSet ดู STEP 7) ขาดที่ใดที่หนึ่ง bind จะล้มเหลว
+setcap cap_net_admin,cap_net_raw,cap_net_bind_service+ep /usr/local/bin/pigate
 log_ok "ตั้งค่า capabilities สำเร็จ"
 
 # หมายเหตุ: ไม่ setcap ให้ตัว dhcpcd binary โดยตรงอีกต่อไป เพราะตอนนี้ dhcpcd
@@ -391,11 +442,11 @@ Wants=network-online.target
 [Service]
 User=pigate
 Group=netdev
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
 RuntimeDirectory=pigate dhcpcd
 RuntimeDirectoryMode=0755
-ExecStart=/usr/local/bin/pigate -mock=false -db=/var/lib/pigate/pigate.db
+ExecStart=/usr/local/bin/pigate -mock=false -db=/var/lib/pigate/pigate.db -https-port=443
 Restart=on-failure
 RestartSec=5s
 
