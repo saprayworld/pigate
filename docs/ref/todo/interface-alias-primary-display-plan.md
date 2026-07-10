@@ -5,7 +5,8 @@
 > **alias ห้ามชนกับ OS name ของ interface อื่น**, ย้าย validation รูปแบบ alias ไปฝั่ง server
 > **คงการเก็บ OS name เป็น key อ้างอิงเดิมทุกที่** (firewall/dhcp/qos/routing/dns ไม่แตะ) และ event log คง name อย่างเดียว
 >
-> เขียนเมื่อ: 2026-07-10 · Reference branch: `main` (จะทำงานบน `feat/interface-alias-primary-display`)
+> เขียนเมื่อ: 2026-07-10 · ตรวจทานกับโค้ดจริงหลัง merge #24 เข้า branch: 2026-07-10
+> Reference branch: `main` (จะทำงานบน `feat/interface-alias-primary-display`)
 > Issue: https://github.com/saprayworld/pigate/issues/25
 > เกี่ยวเนื่องกับงาน VLAN (#20, PR #24) ที่เพิ่ง merge — VLAN มี default alias = name เช่นกัน
 
@@ -35,7 +36,8 @@
 | FE: helper กลางสำหรับ label ยังไม่มี (`lib/utils.ts` มีแค่ `isValidIp`) | ขาด | `frontend/src/lib/utils.ts` |
 | FE: DhcpServer เก็บ interface เป็น `string[]` (ชื่อล้วน) ไม่มี object → โชว์ alias ไม่ได้ทันที | ต้องแก้ | `frontend/src/pages/DhcpServer.tsx:88,879` |
 | FE: ตรวจ alias (regex + ซ้ำ case-insensitive ยกเว้นตัวเอง) เฉพาะฟอร์ม edit | บางส่วน | `frontend/src/pages/Interfaces.tsx:596-606` |
-| BE: ไม่มี validation alias ฝั่ง server เลย (PUT set ตรง ๆ) | ขาด | `backend/internal/api/handlers.go:500` |
+| BE: ไม่มี validation alias ฝั่ง server เลย — PUT ทับตรง ๆ (`iface.Alias = updates.Alias`) **client ที่ไม่ส่ง field alias จะได้ `""` ลง DB** | ขาด | `handlers.go:501` (PUT), `:693` (PATCH) |
+| BE: `ApplyInterfaceConfig` มี caller แค่ PUT/PATCH สองจุด (ยืนยันแล้ว) → wire validate จุดเดียวครอบ | เสร็จ | `handlers.go:576,748` |
 | BE: `CreateVlanInterface` ตั้ง default alias = name แต่ไม่เช็คซ้ำ | ต้องเพิ่ม | `backend/internal/service/interface.go:607` |
 | DB: `alias TEXT NOT NULL` **ไม่ UNIQUE**, ไม่มี index | ขาด | `backend/internal/db/connection.go:360` |
 | DB: มี pattern migration `ADD COLUMN` + `queries` CREATE ให้ลอก | เสร็จ | `connection.go:194-215` |
@@ -46,7 +48,7 @@
 
 | หน้า | ตอนนี้แสดง | อ้างอิง |
 |---|---|---|
-| FirewallPolicy | `alias (name)` (alias-first — เป็นแบบที่ต้องการอยู่แล้ว) | `FirewallPolicy.tsx:115` (`ifaceLabel`) |
+| FirewallPolicy | `alias (name)` alias-first แต่**ไม่ยุบ**เมื่อ alias==name (ได้ `eth0 (eth0)`) + มี logic ค่า `ALL` ที่ต้องคงไว้ | `FirewallPolicy.tsx:111-116` (`ifaceLabel`) |
 | StaticRoutes | `name (alias\|\|role)` (name-first) | `StaticRoutes.tsx:807` |
 | QoS | `NAME (alias\|\|role)` + `alias\|\|type` | `QoS.tsx:675,348` |
 | DnsServer | `name (alias)` ยุบเมื่อเท่ากัน (ใกล้เป้าหมายสุด) | `DnsServer.tsx:483-485` |
@@ -70,20 +72,28 @@ export function formatIfaceLabel(name: string, ifaces: {name:string; alias?:stri
 แทนที่ logic inline ทั้ง 7 จุด (ยกโครงจาก `DnsServer.tsx:484` ที่ยุบ-เมื่อ-เท่ากัน มาเป็นมาตรฐาน)
 **DhcpServer** ต้องโหลด interface objects เพิ่ม (มี `interfaceService.getAll()` แล้วในหน้าอื่น) แล้วส่งเข้า helper
 
-**Backend — validation ฝั่ง service** เพิ่มใน `service/interface.go`:
+**Backend — normalize + validation ฝั่ง service** เพิ่มใน `service/interface.go`:
 ```go
 var ErrAliasConflict = errors.New("interface alias already in use")
 var ErrAliasInvalid  = errors.New("invalid interface alias")
-// validateAlias: regex ^[A-Za-z0-9_]+$; ไม่ซ้ำ alias อื่น (case-insensitive);
-// ไม่ตรงกับ OS name ของ interface อื่น (เทียบจาก kernel list); ยกเว้น row ของตัวเอง (selfID)
-func (s *InterfaceService) validateAlias(alias, selfID string) error { ... }
+// normalize ก่อนเสมอ: TrimSpace แล้วถ้าว่าง → ใช้ name (เหมือน CreateVlanInterface :607-610 ทำอยู่แล้ว)
+//   — สำคัญ: PUT เดิมปล่อย "" ลง DB ได้ ถ้า reject แทน normalize จะเป็น breaking change
+// validateAlias: regex ^[A-Za-z0-9_]+$; ไม่ซ้ำ alias อื่น (repo, COLLATE NOCASE);
+// ไม่ตรงกับ OS name ของ interface อื่น (kernel list, strings.EqualFold ให้ตรงกับ index NOCASE);
+// ยกเว้นตัวเอง: selfID สำหรับ row ใน DB, selfName สำหรับ alias == ชื่อตัวเอง (ค่า default ต้องผ่านเสมอ)
+func (s *InterfaceService) validateAlias(alias, selfID, selfName string) error { ... }
 ```
-เรียกใน `ApplyInterfaceConfig` (ครอบ PUT/PATCH) และ `CreateVlanInterface` ก่อนเขียน DB
+เรียกใน `ApplyInterfaceConfig` (ครอบ PUT/PATCH — ยืนยันแล้วว่าเป็น caller เพียงสองจุด `handlers.go:576,748`)
+และ `CreateVlanInterface` (หลัง normalize เดิม ก่อน `CreateVlan`)
 เทียบ alias↔alias ผ่าน repo (query DB), เทียบ alias↔name ผ่าน `GetKernelInterfaces()`
 
-**DB — unique index (ไม่ใช่ table-rebuild)** ใน `connection.go` ต่อจาก migration vlan (~211):
+**DB — unique index (ไม่ใช่ table-rebuild)** ใน `connection.go` หลังบล็อก vlan migration (~214, ก่อน `queries :=` ~216):
 ```sql
--- de-dup ก่อน: แถวที่ alias ซ้ำ (NOCASE) ให้ต่อท้าย _<name> แล้ว log warning
+-- pass 0: alias ว่าง → ตั้งเป็น name (PUT เดิมปล่อย '' ลง DB ได้ — หลายแถวว่างพร้อมกัน index จะ fail)
+UPDATE network_interfaces SET alias = name WHERE TRIM(alias) = '';
+-- pass 1 (ทำใน Go, ไม่ใช่ SQL ล้วน): แถวที่ alias ซ้ำ (NOCASE) นอกจากแถวแรก → ตั้งกลับเป็น name ของตัวเอง
+--   (ค่า default; name UNIQUE จึงเกือบชัวร์) ถ้ายังชนอีก (มี row อื่น alias เป็นชื่อนั้นพอดี) วน _2, _3 ... จน unique
+--   ทุกแถวที่ถูกแก้ log warning
 CREATE UNIQUE INDEX IF NOT EXISTS idx_network_interfaces_alias
   ON network_interfaces(alias COLLATE NOCASE);
 ```
@@ -99,9 +109,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_network_interfaces_alias
 
 ## 3. Steps (เรียงจากชั้นในสุดออกนอก)
 
-### Step 1 — DB: de-dup + unique index
-**File:** `backend/internal/db/connection.go` (~211 ต่อจาก vlan migration)
-- ก่อนสร้าง index: SELECT หา alias ที่ซ้ำแบบ NOCASE → แถวที่ซ้ำ (นอกจากตัวแรก) UPDATE เป็น `alias || '_' || name`, log warning
+### Step 1 — DB: normalize ว่าง + de-dup + unique index
+**File:** `backend/internal/db/connection.go` (หลังบล็อก vlan migration ~214, ก่อน `queries :=` ~216)
+- pass 0: `UPDATE ... SET alias = name WHERE TRIM(alias) = ''` (กันหลายแถวว่างชนกันเอง)
+- pass 1 (Go): SELECT หา alias ซ้ำแบบ NOCASE → แถวที่ซ้ำ (นอกจากตัวแรก) ตั้งกลับเป็น `name` ของตัวเอง,
+  ถ้ายังชน วนต่อท้าย `_2`, `_3`, ... จน unique — log warning ทุกแถวที่แก้
 - `CREATE UNIQUE INDEX IF NOT EXISTS idx_network_interfaces_alias ON network_interfaces(alias COLLATE NOCASE)`
 - CREATE TABLE ใหม่ (~360) ไม่ต้องแตะ (index สร้างแยก idempotent ใช้ได้ทั้ง new + existing)
 
@@ -109,27 +121,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_network_interfaces_alias
 **File:** `backend/internal/db/repository.go`
 - `AliasExists(alias, excludeID string) (bool, error)` — `SELECT 1 ... WHERE alias = ? COLLATE NOCASE AND id != ?`
 
-### Step 3 — Service: validateAlias + wire
+### Step 3 — Service: normalize + validateAlias + wire
 **File:** `backend/internal/service/interface.go`
-- เพิ่ม `ErrAliasConflict`, `ErrAliasInvalid` (ใกล้ `ErrVlan*`)
-- `validateAlias(alias, selfID)`: regex; `repo.AliasExists` (409); loop kernel list — ถ้า alias == ชื่อจริงของ interface อื่น (name != selfName) → conflict
-- เรียกใน `ApplyInterfaceConfig` (ต้นฟังก์ชัน) และ `CreateVlanInterface` (หลัง normalize alias, ก่อน CreateVlan)
+- เพิ่ม `ErrAliasConflict`, `ErrAliasInvalid` (ใกล้ `ErrVlan*` ที่ :19-20)
+- ต้น `ApplyInterfaceConfig` (:416): normalize — `TrimSpace`; ถ้าว่าง → `iface.Alias = iface.Name`
+  (PUT ที่ไม่ส่ง alias ต้องไม่พัง/ไม่ได้ `""`; PATCH ไม่กระทบเพราะแก้เฉพาะ key ที่ส่งมา)
+- `validateAlias(alias, selfID, selfName)`: regex; `repo.AliasExists` NOCASE (409); loop kernel list —
+  ถ้า `strings.EqualFold(alias, name-อื่น)` และ name นั้น != selfName → conflict (alias == ชื่อตัวเองต้องผ่านเสมอ)
+- เรียกใน `ApplyInterfaceConfig` (หลัง normalize) และ `CreateVlanInterface` (หลัง normalize เดิมที่ :607-610, ก่อน CreateVlan)
 
 ### Step 4 — Handlers: map error
 **File:** `backend/internal/api/handlers.go`
-- `HandleUpdateInterface` (~500) + `HandlePatchInterface` (~600) + `HandleCreateVlan`: ถ้า err เป็น
+- `HandleUpdateInterface` (:482, err จาก Apply ที่ :576) + `HandlePatchInterface` (:633, err ที่ :748)
+  + `HandleCreateVlan` (:601, เพิ่ม case ใน switch `ErrVlan*` เดิมที่ :611-614): ถ้า err เป็น
   `ErrAliasConflict` → 409, `ErrAliasInvalid` → 400 (ตาม pattern switch ของ vlan)
 > Reset flow ไม่ต้องแก้: reset ตั้ง alias = name ซึ่ง unique อยู่แล้ว (name UNIQUE) และผ่านกติกา not-equal-other-name เสมอ
 
 ### Step 5 — Backup/Restore: กัน alias ซ้ำตอน import
 **File:** `backend/internal/service/backup.go` (`resolveInterfaces`)
-- backup อาจพก alias ซ้ำ/ชน name มา → ถ้าปล่อยไป unique index จะทำ transaction restore ล้มทั้งก้อน
-- ตรวจ/dedup alias ใน merged rows (ซ้ำ → ต่อท้าย `_<name>` + เพิ่ม warning) ก่อนส่งเข้า `RestoreConfig`
+- backup อาจพก alias ว่าง/ซ้ำ/ชน name มา → ถ้าปล่อยไป unique index จะทำ transaction restore ล้มทั้งก้อน
+- normalize + dedup ใน merged rows แบบเดียวกับ Step 1 (ว่าง → name; ซ้ำ → name ของตัวเอง + วน `_2`...)
+  พร้อมเพิ่ม warning ก่อนส่งเข้า `RestoreConfig`
 
 ### Step 6 — FE helper กลาง + แทนที่ทุกจุด
 **File (ใหม่):** `frontend/src/lib/ifaceLabel.ts` — `formatIfaceLabel(name, ifaces)`
-**Files:** แทนที่ inline ที่ `FirewallPolicy.tsx:115`, `StaticRoutes.tsx:807`, `QoS.tsx:675,348`,
-`DnsServer.tsx:483-485`, `Interfaces.tsx` (Name cell + drawer title), `Dashboard.tsx:537`
+**Files:** แทนที่ inline ที่ `FirewallPolicy.tsx:111-116` (คงเช็คค่า `ALL` ไว้ที่หน้า — helper ไม่ต้องรู้จัก),
+`StaticRoutes.tsx:806-808`, `QoS.tsx:675,348`, `DnsServer.tsx:483-486`,
+`Interfaces.tsx` (Name cell :790 + drawer title :1059 + VLAN parent dropdown :1613), `Dashboard.tsx:537`
 **File:** `DhcpServer.tsx` — โหลด interface objects (เพิ่ม state จาก `interfaceService.getAll()`) แล้วใช้ helper
 ที่ `:879`; `value`/`key` ของ option ยังเป็นชื่อจริงเหมือนเดิม
 
@@ -158,11 +176,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_network_interfaces_alias
 
 ## 5. Cautions
 
-1. **Migration de-dup ต้องมาก่อนสร้าง index** — ถ้าข้อมูลเดิมมี alias ซ้ำ (user ตั้งเอง) แล้วรัน
-   `CREATE UNIQUE INDEX` เลย จะ error → **boot ล้มทั้งเครื่อง**. ป้องกัน: de-dup pass (rename `_<name>`) ก่อนเสมอ + log
-   (default alias = name เป็น unique อยู่แล้ว เพราะ name UNIQUE — เคสซ้ำมีแค่ที่ user แก้เอง)
-2. **Case-sensitivity ต้องตรงกันสองที่** — index เป็น `COLLATE NOCASE` แต่ `validateAlias` เทียบ case-sensitive
-   → server ปล่อยผ่านแต่ index reject = 500 แทน 409. ป้องกัน: `AliasExists` ใช้ `COLLATE NOCASE` ให้ตรงกับ index
+1. **Migration normalize+de-dup ต้องมาก่อนสร้าง index** — ข้อมูลเดิมอาจมีทั้ง alias ซ้ำ (user ตั้งเอง) **และ
+   alias ว่างหลายแถว** (PUT เดิมทับด้วย `""` ได้เมื่อ client ไม่ส่ง field — `handlers.go:501`) ถ้ารัน
+   `CREATE UNIQUE INDEX` เลย จะ error → **boot ล้มทั้งเครื่อง**. ป้องกัน: pass ว่าง→name แล้ว de-dup (→ own name,
+   วน `_2`...) ก่อนเสมอ + log
+2. **Case-sensitivity ต้องตรงกันทุกที่** — index เป็น `COLLATE NOCASE` แต่ถ้า `validateAlias` เทียบ case-sensitive
+   → server ปล่อยผ่านแต่ index reject = 500 แทน 409. ป้องกัน: `AliasExists` ใช้ `COLLATE NOCASE` และ
+   เช็ค alias↔name ใช้ `strings.EqualFold` ให้ตรงกับ index
+2b. **PUT ที่ไม่ส่ง alias ต้องไม่กลายเป็น 400** — semantics เดิมของ PUT คือทับทั้ง object; client เดิม/script
+   ที่ไม่ส่ง alias เคยผ่าน ถ้า validate ตรง ๆ จะ reject. ป้องกัน: normalize ว่าง→name (พฤติกรรม default
+   เดียวกับ VLAN create) ไม่ใช่ reject; ระบุใน OpenAPI ด้วย
 3. **alias == OS name ของ interface อื่น index จับไม่ได้** — unique index เทียบแค่ alias↔alias ไม่เทียบ alias↔name
    → label กำกวม `eth0 (eth1)`. ป้องกัน: เช็ค alias↔kernel-name แยกใน `validateAlias` (เทียบจาก `GetKernelInterfaces`
    จึงครอบ interface ที่ unmanaged/ไม่มีใน DB ด้วย)
@@ -179,19 +202,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_network_interfaces_alias
 
 ## 6. Summary Checklist (Definition of Done)
 
-- [ ] `db/connection.go` — de-dup pass + `CREATE UNIQUE INDEX ... (alias COLLATE NOCASE)`
+- [ ] `db/connection.go` — pass ว่าง→name + de-dup pass + `CREATE UNIQUE INDEX ... (alias COLLATE NOCASE)`
 - [ ] `db/repository.go` — `AliasExists(alias, excludeID)` (NOCASE)
-- [ ] `service/interface.go` — `ErrAliasConflict`/`ErrAliasInvalid` + `validateAlias` + wire ใน `ApplyInterfaceConfig`/`CreateVlanInterface`
+- [ ] `service/interface.go` — normalize (ว่าง→name) ใน `ApplyInterfaceConfig` + `ErrAliasConflict`/`ErrAliasInvalid` + `validateAlias(alias, selfID, selfName)` + wire ใน `ApplyInterfaceConfig`/`CreateVlanInterface`
 - [ ] `api/handlers.go` — map error 409/400 ใน `HandleUpdateInterface`/`HandlePatchInterface`/`HandleCreateVlan`
 - [ ] `service/backup.go` — dedup alias ใน `resolveInterfaces` ก่อน restore
 - [ ] `frontend/src/lib/ifaceLabel.ts` — helper `formatIfaceLabel` (ยุบเมื่อ alias ว่าง/เท่ากับ name)
 - [ ] แทนที่ label ทุกจุด: FirewallPolicy, StaticRoutes, QoS(×2), DnsServer, Interfaces, Dashboard, DhcpServer (+โหลด objects)
 - [ ] `Interfaces.tsx` — เช็ค alias≠name-อื่น (client) + แสดง error 409/400 จาก server (ฟอร์ม edit + create vlan)
 - [ ] `docs/openapi.yaml` **และ** `frontend/public/openapi.yaml` — เพิ่ม 409 + คำอธิบาย alias unique
-- [ ] Test BE: `service/interface_test.go` — validateAlias (รูปแบบผิด/ซ้ำ NOCASE/ชน name อื่น/ยกเว้นตัวเอง), migration de-dup
-- [ ] Test BE: `api/handlers_test.go` — PUT/POST alias ซ้ำ → 409, รูปแบบผิด → 400
+- [ ] Test BE: `service/interface_test.go` — validateAlias (รูปแบบผิด/ซ้ำ NOCASE/ชน name อื่น/ยกเว้นตัวเอง/alias==ชื่อตัวเองผ่าน), migration de-dup
+- [ ] Test BE: `api/handlers_test.go` — PUT/POST alias ซ้ำ → 409, รูปแบบผิด → 400, **PUT ไม่ส่ง alias → 200 และ alias = name (ไม่ใช่ `""`)**
 - [ ] Test BE: `backup_test.go` — import ที่มี alias ซ้ำไม่ทำ restore ล้ม (ถูก dedup + warning)
 - [ ] `go build ./...` + `go test ./...` ผ่าน; `yarn build` + `yarn lint` ผ่าน
 - [ ] ทดสอบ mock: ตั้ง alias ซ้ำ→เตือน, ทุกหน้าโชว์ `alias (name)`, dropdown ยังส่ง OS name (สร้าง policy แล้ว `in_interface` เป็น `eth0`)
-- [ ] ทดสอบ migration: เปิด DB เดิมที่มี alias ซ้ำ → boot ผ่าน, alias ถูก rename + มี warning ใน log
+- [ ] ทดสอบ migration: เปิด DB เดิมที่มี alias ซ้ำ **และแถว alias ว่างหลายแถว** → boot ผ่าน, alias ถูกแก้ + มี warning ใน log
 - [ ] (ไม่ต้องแตะ README Feature Status — ไม่ใช่ feature ใหม่ เป็น UX/integrity ปรับปรุง; ใส่หมายเหตุได้ถ้าต้องการ)
