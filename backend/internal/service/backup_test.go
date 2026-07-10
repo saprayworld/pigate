@@ -431,3 +431,68 @@ func TestImportSkipsUnknownInterface(t *testing.T) {
 		}
 	}
 }
+
+// A VLAN row in a backup must survive import even though the VLAN link is not
+// present on the device (it only comes back when re-created at reapply). Its parent
+// must exist; an orphan VLAN (missing parent) is skipped with a warning. (issue #20)
+func TestImportKeepsVlanRow(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	parent := "eth0" // present in the mock-seeded DB
+	vid := 100
+	orphanParent := "ethX" // not present
+	ovid := 200
+	file.Config.Interfaces = append(file.Config.Interfaces,
+		model.NetworkInterface{
+			ID: "iface-eth0.100", Name: "eth0.100", Alias: "vlan100", Role: "LAN",
+			Type: "ethernet", Subtype: "vlan", AddressingMode: "dhcp", IP: "0.0.0.0",
+			Netmask: "24", Gateway: "", MacAddress: "aa:bb:cc:dd:ee:ff", Status: "up",
+			Speed: "1000 Mbps", AdminAccess: []string{"PING"}, VlanParent: &parent, VlanID: &vid,
+		},
+		model.NetworkInterface{
+			ID: "iface-ethX.200", Name: "ethX.200", Alias: "vlanOrphan", Role: "LAN",
+			Type: "ethernet", Subtype: "vlan", AddressingMode: "dhcp", IP: "0.0.0.0",
+			Netmask: "24", Gateway: "", MacAddress: "aa:bb:cc:dd:ee:00", Status: "up",
+			Speed: "1000 Mbps", AdminAccess: []string{"PING"}, VlanParent: &orphanParent, VlanID: &ovid,
+		},
+	)
+	sum, _ := configChecksum(*file.Config)
+	file.Meta.Checksum = sum
+	raw, _ := json.Marshal(file)
+
+	res, err := bs.Import(raw, model.ImportOptions{})
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	ifaces, _ := repo.GetInterfaces()
+	byName := map[string]model.NetworkInterface{}
+	for _, i := range ifaces {
+		byName[i.Name] = i
+	}
+	kept, ok := byName["eth0.100"]
+	if !ok {
+		t.Fatalf("VLAN eth0.100 was dropped during import")
+	}
+	if kept.VlanParent == nil || *kept.VlanParent != "eth0" || kept.VlanID == nil || *kept.VlanID != 100 {
+		t.Errorf("VLAN metadata not preserved: %+v", kept)
+	}
+	if _, present := byName["ethX.200"]; present {
+		t.Errorf("orphan VLAN ethX.200 (missing parent) should not have been restored")
+	}
+	var warned bool
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "ethX.200") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("expected a skip warning for orphan VLAN ethX.200, got: %v", res.Warnings)
+	}
+}

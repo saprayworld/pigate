@@ -40,6 +40,13 @@ type NetworkManager interface {
 	ConfigureInterface(name string, mode string, ip string, netmask string, gateway string, metric int) error
 	ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string, backupSecurity string, macMode string) error
 	GetWifiStatus(name string) (*model.WifiConnectionStatus, error)
+	// CreateVlan creates an 802.1Q VLAN sub-interface named "<parent>.<vlanID>"
+	// on top of the given parent interface (e.g. CreateVlan("eth0", 100) -> "eth0.100").
+	CreateVlan(parent string, vlanID int) error
+	// DeleteVlan removes a VLAN link previously created on this host. It must
+	// refuse to delete a link whose kernel type is not "vlan" (a guard against
+	// deleting a physical interface such as eth0/wlan0).
+	DeleteVlan(name string) error
 }
 
 // RoutingManager abstracts netlink route modifications

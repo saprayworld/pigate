@@ -43,6 +43,19 @@ function saveLocalInterfaces(interfaces: NetworkInterface[]) {
   localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(interfaces));
 }
 
+// Input payload for creating an 802.1Q VLAN sub-interface.
+export interface CreateVlanInput {
+  parent: string
+  vlanId: number
+  alias?: string
+  role?: "LAN" | "WAN"
+  addressingMode?: "dhcp" | "static"
+  ip?: string
+  netmask?: string
+  gateway?: string
+  adminAccess?: string[]
+}
+
 export const interfaceService = {
   // Fetch all network interfaces
   getAll: async (): Promise<NetworkInterface[]> => {
@@ -238,6 +251,67 @@ export const interfaceService = {
       throw new Error(`Failed to reset interface: ${response.statusText}`);
     }
     return response.json();
+  },
+
+  // Create an 802.1Q VLAN sub-interface. The resulting link is named "<parent>.<vlanId>".
+  createVlan: async (input: CreateVlanInput): Promise<NetworkInterface> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      const current = getLocalInterfaces()
+      const name = `${input.parent}.${input.vlanId}`
+      if (current.some((i) => i.name === name)) {
+        throw new Error(`VLAN ${name} already exists`)
+      }
+      const parent = current.find((i) => i.name === input.parent)
+      if (!parent) {
+        throw new Error(`Parent interface ${input.parent} not found`)
+      }
+      if (parent.type !== "ethernet" || parent.subtype === "vlan") {
+        throw new Error(`Parent ${input.parent} must be a non-VLAN ethernet interface`)
+      }
+      const mode = input.addressingMode || "dhcp"
+      const role = input.role || "LAN"
+      const newIface: NetworkInterface = {
+        id: `iface-${name}`,
+        name,
+        alias: input.alias || name,
+        role,
+        type: "ethernet",
+        subtype: "vlan",
+        addressingMode: mode,
+        ip: mode === "static" ? input.ip || "0.0.0.0" : "0.0.0.0",
+        netmask: mode === "static" ? input.netmask || "24" : "24",
+        gateway: mode === "static" ? input.gateway || "" : "",
+        macAddress: parent.macAddress,
+        adminAccess: (input.adminAccess as NetworkInterface["adminAccess"]) ||
+          (role === "WAN" ? ["PING"] : ["PING", "HTTP", "SSH"]),
+        status: "up",
+        managed: true,
+        speed: parent.speed,
+        vlanParent: input.parent,
+        vlanId: input.vlanId,
+      }
+      current.push(newIface)
+      saveLocalInterfaces(current)
+      return newIface
+    }
+
+    const response = await fetch(`${API_BASE_URL}/interfaces/vlan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    })
+    if (!response.ok) {
+      let message = `Failed to create VLAN: ${response.statusText}`
+      try {
+        const body = await response.json()
+        if (body?.message) message = body.message
+      } catch {
+        // response has no JSON body; keep the status-text fallback
+      }
+      throw new Error(message)
+    }
+    return response.json()
   },
 
   // Delete interface from database

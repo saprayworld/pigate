@@ -332,7 +332,7 @@ func restoreInterface(tx *sql.Tx, iface model.NetworkInterface) error {
 	if iface.FailoverEnabled != nil && *iface.FailoverEnabled {
 		fo = 1
 	}
-	_, err := tx.Exec(`UPDATE network_interfaces SET
+	res, err := tx.Exec(`UPDATE network_interfaces SET
 		alias = ?, role = ?, addressing_mode = ?, ip = ?, netmask = ?, gateway = ?, metric = ?, admin_access = ?,
 		mac_mode = ?, randomized_mac = ?, laa_mac_address = ?, randomize_on_reconnect = ?,
 		connected_ssid = ?, wifi_password = ?, wifi_security = ?, failover_enabled = ?, backup_ssid = ?, backup_wifi_password = ?, backup_wifi_security = ?,
@@ -344,6 +344,26 @@ func restoreInterface(tx *sql.Tx, iface model.NetworkInterface) error {
 		iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown, iface.ID)
 	if err != nil {
 		return fmt.Errorf("restore interface %q: %w", iface.Name, err)
+	}
+
+	// Physical interfaces are always update-in-place (they exist as device rows).
+	// VLAN sub-interfaces, however, may not exist on the target board yet — the
+	// backup carries them so they can be re-created on boot (issue #20). When the
+	// UPDATE matched no row and this is a VLAN, INSERT the full row (identity fields
+	// included) so the VLAN survives a restore onto a fresh device.
+	if n, _ := res.RowsAffected(); n == 0 && iface.Subtype == "vlan" {
+		if _, err := tx.Exec(`INSERT INTO network_interfaces (
+			id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, metric, mac_address, admin_access, status, speed,
+			mac_mode, randomized_mac, laa_mac_address, randomize_on_reconnect,
+			connected_ssid, wifi_password, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, backup_wifi_security,
+			ip_check_timeout, primary_max_retries, failover_cooldown, vlan_parent, vlan_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			iface.ID, iface.Name, iface.Alias, iface.Role, iface.Type, iface.Subtype, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.Metric, iface.MacAddress, adminAccess, iface.Status, iface.Speed,
+			iface.MacMode, iface.RandomizedMac, iface.LaaMacAddress, recon,
+			iface.WifiSSID, iface.WifiPassword, iface.WifiSecurity, fo, iface.BackupSSID, iface.BackupWifiPassword, iface.BackupWifiSecurity,
+			iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown, iface.VlanParent, iface.VlanID); err != nil {
+			return fmt.Errorf("restore vlan interface %q: %w", iface.Name, err)
+		}
 	}
 	return nil
 }

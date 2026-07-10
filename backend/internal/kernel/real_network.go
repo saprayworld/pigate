@@ -4,6 +4,7 @@ package kernel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -285,6 +286,59 @@ func (r *RealNetwork) ConfigureInterface(name string, mode string, ip string, ne
 		}
 	}
 
+	return nil
+}
+
+// CreateVlan creates an 802.1Q VLAN sub-interface named "<parent>.<vlanID>" via netlink.
+// Equivalent to `ip link add link <parent> name <parent>.<vlanID> type vlan id <vlanID>`
+// but as a direct netlink syscall (no shell execution). Requires cap_net_admin.
+func (r *RealNetwork) CreateVlan(parent string, vlanID int) error {
+	log.Printf("[RealNetwork] CreateVlan called: parent=%s, vlanID=%d", parent, vlanID)
+	if vlanID < 1 || vlanID > 4094 {
+		return fmt.Errorf("invalid VLAN ID %d: must be between 1 and 4094", vlanID)
+	}
+
+	parentLink, err := netlink.LinkByName(parent)
+	if err != nil {
+		return fmt.Errorf("parent interface %q not found: %w", parent, err)
+	}
+
+	name := fmt.Sprintf("%s.%d", parent, vlanID)
+	vlan := &netlink.Vlan{
+		LinkAttrs: netlink.LinkAttrs{
+			Name:        name,
+			ParentIndex: parentLink.Attrs().Index,
+		},
+		VlanId:       vlanID,
+		VlanProtocol: netlink.VLAN_PROTOCOL_8021Q,
+	}
+
+	if err := netlink.LinkAdd(vlan); err != nil {
+		if errors.Is(err, os.ErrExist) || strings.Contains(strings.ToLower(err.Error()), "file exists") {
+			return fmt.Errorf("vlan %q already exists", name)
+		}
+		return fmt.Errorf("failed to create vlan %q: %w", name, err)
+	}
+	log.Printf("[RealNetwork] VLAN %s created successfully", name)
+	return nil
+}
+
+// DeleteVlan removes a VLAN link. It first verifies the link's kernel type is "vlan"
+// so a stray DELETE can never remove a physical interface (eth0/wlan0). This guard
+// is enforced here at the kernel layer independently of any handler-level check.
+func (r *RealNetwork) DeleteVlan(name string) error {
+	log.Printf("[RealNetwork] DeleteVlan called: name=%s", name)
+	link, err := netlink.LinkByName(name)
+	if err != nil {
+		return fmt.Errorf("interface %q not found: %w", name, err)
+	}
+	if link.Type() != "vlan" {
+		return fmt.Errorf("refusing to delete %q: not a vlan interface (type=%q)", name, link.Type())
+	}
+	if err := netlink.LinkDel(link); err != nil {
+		return fmt.Errorf("failed to delete vlan %q: %w", name, err)
+	}
+	log.Printf("[RealNetwork] VLAN %s deleted successfully", name)
 	return nil
 }
 

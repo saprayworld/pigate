@@ -24,7 +24,8 @@ import {
   GitMerge,
   HelpCircle,
   Fingerprint,
-  Info
+  Info,
+  Plus
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -40,6 +41,7 @@ import {
 import {
   Drawer,
   DrawerContent,
+  DrawerDescription,
   DrawerHeader,
   DrawerTitle,
 } from "@/components/ui/drawer"
@@ -198,6 +200,20 @@ export default function Interfaces() {
   const [isScanning, setIsScanning] = useState(false)
   const [scanResults, setScanResults] = useState<WifiScanResult[]>([])
   const [showScanResults, setShowScanResults] = useState(false)
+
+  // Create VLAN Dialog State
+  const [isCreateVlanOpen, setIsCreateVlanOpen] = useState(false)
+  const [vlanParent, setVlanParent] = useState("")
+  const [vlanId, setVlanId] = useState("")
+  const [vlanAlias, setVlanAlias] = useState("")
+  const [vlanRole, setVlanRole] = useState<"LAN" | "WAN">("LAN")
+  const [vlanMode, setVlanMode] = useState<AddressingMode>("dhcp")
+  const [vlanIp, setVlanIp] = useState("")
+  const [vlanNetmask, setVlanNetmask] = useState("")
+  const [vlanGateway, setVlanGateway] = useState("")
+  const [vlanAccess, setVlanAccess] = useState<AdminAccess[]>(["PING", "HTTP", "SSH"])
+  const [vlanError, setVlanError] = useState("")
+  const [vlanSubmitting, setVlanSubmitting] = useState(false)
 
   // --- Load Data ---
   const loadData = async (silent = false) => {
@@ -469,6 +485,107 @@ export default function Interfaces() {
     }
   }
 
+  // Eligible VLAN parents: ethernet interfaces that are not themselves VLANs.
+  const vlanParentOptions = useMemo(
+    () => interfaces.filter((i) => i.type === "ethernet" && i.subtype !== "vlan"),
+    [interfaces]
+  )
+
+  const openCreateVlanDialog = useCallback(() => {
+    setVlanParent("")
+    setVlanId("")
+    setVlanAlias("")
+    setVlanRole("LAN")
+    setVlanMode("dhcp")
+    setVlanIp("")
+    setVlanNetmask("")
+    setVlanGateway("")
+    setVlanAccess(["PING", "HTTP", "SSH"])
+    setVlanError("")
+    setIsCreateVlanOpen(true)
+  }, [])
+
+  const toggleVlanAccess = (access: AdminAccess) => {
+    setVlanAccess((prev) =>
+      prev.includes(access) ? prev.filter((a) => a !== access) : [...prev, access]
+    )
+  }
+
+  const handleDeleteVlan = async (id: string, name: string) => {
+    const ok = await confirm(
+      "ยืนยันการลบ VLAN",
+      `คุณต้องการลบ VLAN ${name} ใช่หรือไม่?\n` +
+        `การดำเนินการนี้จะลบทั้ง VLAN link ออกจากเคอร์เนลและการตั้งค่าในฐานข้อมูล และไม่สามารถย้อนกลับได้\n` +
+        `หากคุณกำลังเชื่อมต่อกับบอร์ดผ่าน VLAN นี้ การเชื่อมต่ออาจหลุด`
+    )
+    if (!ok) return
+
+    try {
+      await interfaceService.delete(id)
+      await alert("สำเร็จ", `ลบ VLAN ${name} เรียบร้อยแล้ว`)
+      await loadData()
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "Failed to delete VLAN: " + getErrorMessage(err))
+    }
+  }
+
+  const handleCreateVlan = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setVlanError("")
+
+    if (!vlanParent) {
+      setVlanError("กรุณาเลือก Parent Interface")
+      return
+    }
+    const idNum = Number(vlanId)
+    if (!Number.isInteger(idNum) || idNum < 1 || idNum > 4094) {
+      setVlanError("VLAN ID ต้องเป็นจำนวนเต็มในช่วง 1–4094")
+      return
+    }
+    const newName = `${vlanParent}.${idNum}`
+    if (interfaces.some((i) => i.name === newName)) {
+      setVlanError(`VLAN ${newName} มีอยู่ในระบบแล้ว`)
+      return
+    }
+    if (vlanAlias && !/^[a-zA-Z0-9_]+$/.test(vlanAlias)) {
+      setVlanError("ชื่อ Alias ต้องใช้ภาษาอังกฤษ ตัวเลข หรือเครื่องหมาย _ เท่านั้น (ห้ามเว้นวรรค)")
+      return
+    }
+    if (vlanMode === "static") {
+      if (!isValidIp(vlanIp)) {
+        setVlanError("กรุณากรอก IP Address ให้ถูกต้อง (เช่น 192.168.100.1)")
+        return
+      }
+      const maskNum = parseInt(vlanNetmask)
+      if (isNaN(maskNum) || maskNum < 0 || maskNum > 32) {
+        setVlanError("Netmask ต้องอยู่ในช่วง 0-32")
+        return
+      }
+    }
+
+    setVlanSubmitting(true)
+    try {
+      await interfaceService.createVlan({
+        parent: vlanParent,
+        vlanId: idNum,
+        alias: vlanAlias || undefined,
+        role: vlanRole,
+        addressingMode: vlanMode,
+        ip: vlanMode === "static" ? vlanIp : undefined,
+        netmask: vlanMode === "static" ? vlanNetmask : undefined,
+        gateway: vlanMode === "static" ? vlanGateway : undefined,
+        adminAccess: vlanAccess,
+      })
+      setIsCreateVlanOpen(false)
+      await loadData()
+      await alert("สำเร็จ", `สร้าง VLAN ${newName} เรียบร้อยแล้ว`)
+    } catch (err) {
+      setVlanError(getErrorMessage(err) || "Failed to create VLAN.")
+    } finally {
+      setVlanSubmitting(false)
+    }
+  }
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
     setFormError("")
@@ -617,16 +734,26 @@ export default function Interfaces() {
             <Network className="h-4 w-4 text-muted-foreground" />
             Interface List
           </CardTitle>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => loadData(true)}
-            disabled={isLoading || isRefreshing}
-            className="cursor-pointer gap-2"
-          >
-            <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={openCreateVlanDialog}
+              className="cursor-pointer gap-2"
+            >
+              <Plus className="h-4 w-4" />
+              Create VLAN
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => loadData(true)}
+              disabled={isLoading || isRefreshing}
+              className="cursor-pointer gap-2"
+            >
+              <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           <Table>
@@ -831,6 +958,20 @@ export default function Interfaces() {
                               onCheckedChange={() => handleToggleStatus(iface.id)}
                             />
                           </div>
+                        )}
+                        {/* VLAN sub-interfaces created by pigate can be deleted at any
+                            time (link + config), unlike physical ports which must be
+                            offline first. */}
+                        {iface.subtype === "vlan" && iface.managed !== false && (
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => handleDeleteVlan(iface.id, iface.name)}
+                            className="cursor-pointer text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            title="ลบ VLAN"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
                         )}
                         <Button
                           variant="outline"
@@ -1417,6 +1558,225 @@ export default function Interfaces() {
               </Button>
               <Button type="submit" className="cursor-pointer px-6 font-semibold">
                 Save Changes
+              </Button>
+            </div>
+          </form>
+          </div>
+        </DrawerContent>
+      </Drawer>
+
+      {/* 6. Create VLAN Drawer (right side, mirrors the Edit Interface drawer).
+          Uses plain Select (not Combobox), so default behavior is fine. */}
+      <Drawer direction="right" open={isCreateVlanOpen} onOpenChange={setIsCreateVlanOpen}>
+        <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[560px]">
+          <DrawerHeader className="border-b border-border/50">
+            <DrawerTitle className="flex items-center gap-2 text-base font-semibold">
+              <Layers className="h-4 w-4 text-primary" />
+              Create VLAN Interface
+            </DrawerTitle>
+            <DrawerDescription className="text-xs">
+              สร้าง VLAN (802.1Q) บน interface ที่มีอยู่ — ชื่อจะถูกตั้งเป็น
+              <span className="mx-1 font-mono text-foreground">
+                {vlanParent && vlanId ? `${vlanParent}.${vlanId}` : "<parent>.<id>"}
+              </span>
+              และจะถูกสร้างคืนอัตโนมัติทุกครั้งที่รีบูต
+            </DrawerDescription>
+          </DrawerHeader>
+
+          <div className="flex-1 overflow-y-auto p-4">
+          <form onSubmit={handleCreateVlan} className="space-y-4 text-sm">
+            {vlanError && (
+              <Alert variant="destructive" className="px-3 py-2.5">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-xs">{vlanError}</AlertDescription>
+              </Alert>
+            )}
+
+            {/* Parent + VLAN ID */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="vlan-parent" className="block text-xs font-medium text-muted-foreground">
+                  Parent Interface <span className="text-destructive">*</span>
+                </Label>
+                <Select value={vlanParent} onValueChange={setVlanParent}>
+                  <SelectTrigger id="vlan-parent" className="h-9 w-full text-xs font-medium">
+                    <SelectValue placeholder="เลือก interface" />
+                  </SelectTrigger>
+                  <SelectContent className="text-xs font-medium">
+                    {vlanParentOptions.length === 0 ? (
+                      <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                        ไม่พบ ethernet interface ที่ใช้ได้
+                      </div>
+                    ) : (
+                      vlanParentOptions.map((p) => (
+                        <SelectItem key={p.id} value={p.name}>
+                          {p.name} {p.alias && p.alias !== p.name ? `(${p.alias})` : ""}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="vlan-id" className="block text-xs font-medium text-muted-foreground">
+                  VLAN ID (1–4094) <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="vlan-id"
+                  type="number"
+                  min={1}
+                  max={4094}
+                  value={vlanId}
+                  onChange={(e) => setVlanId(e.target.value)}
+                  placeholder="100"
+                  className="h-9 font-mono text-sm"
+                />
+              </div>
+            </div>
+
+            {/* Alias + Role */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="vlan-alias" className="block text-xs font-medium text-muted-foreground">
+                  Alias Name
+                </Label>
+                <Input
+                  id="vlan-alias"
+                  type="text"
+                  value={vlanAlias}
+                  onChange={(e) => setVlanAlias(e.target.value)}
+                  placeholder={vlanParent && vlanId ? `${vlanParent}.${vlanId}` : "เว้นว่าง = ใช้ชื่อ link"}
+                  className="h-9 font-mono text-sm"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="vlan-role" className="block text-xs font-medium text-muted-foreground">
+                  Port Role
+                </Label>
+                <Select value={vlanRole} onValueChange={(v: "LAN" | "WAN") => setVlanRole(v)}>
+                  <SelectTrigger id="vlan-role" className="h-9 w-full text-xs font-medium">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="text-xs font-medium">
+                    <SelectItem value="LAN">LAN (วงภายใน)</SelectItem>
+                    <SelectItem value="WAN">WAN (ต่อขายนอก / อินเทอร์เน็ต)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Addressing mode */}
+            <div className="space-y-2">
+              <Label className="block text-xs font-medium text-muted-foreground">Addressing Mode</Label>
+              <div className="flex w-fit gap-0.5 rounded-lg border border-border bg-muted p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setVlanMode("dhcp")}
+                  className={`cursor-pointer rounded-md px-4 py-1.5 text-xs font-medium transition ${vlanMode === "dhcp"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    }`}
+                >
+                  DHCP (Auto)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVlanMode("static")}
+                  className={`cursor-pointer rounded-md px-4 py-1.5 text-xs font-medium transition ${vlanMode === "static"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    }`}
+                >
+                  Manual (Static)
+                </button>
+              </div>
+            </div>
+
+            {vlanMode === "static" && (
+              <div className="space-y-3 rounded-lg border border-border bg-muted/50 p-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="vlan-ip" className="text-xs font-medium text-muted-foreground">
+                      IP Address <span className="text-destructive">*</span>
+                    </Label>
+                    <Input
+                      id="vlan-ip"
+                      type="text"
+                      value={vlanIp}
+                      onChange={(e) => setVlanIp(e.target.value)}
+                      placeholder="192.168.100.1"
+                      className="h-9 font-mono text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="vlan-netmask" className="text-xs font-medium text-muted-foreground">
+                      Netmask (CIDR) <span className="text-destructive">*</span>
+                    </Label>
+                    <Input
+                      id="vlan-netmask"
+                      type="text"
+                      value={vlanNetmask}
+                      onChange={(e) => setVlanNetmask(e.target.value)}
+                      placeholder="24"
+                      className="h-9 font-mono text-sm"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="vlan-gateway" className="text-xs font-medium text-muted-foreground">Gateway</Label>
+                  <Input
+                    id="vlan-gateway"
+                    type="text"
+                    value={vlanGateway}
+                    onChange={(e) => setVlanGateway(e.target.value)}
+                    placeholder="192.168.100.254"
+                    className="h-9 font-mono text-sm"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Admin Access */}
+            <div className="space-y-2">
+              <Label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <Shield className="h-3.5 w-3.5" />
+                Admin Access (Management)
+              </Label>
+              <div className="flex flex-wrap gap-2">
+                {ALL_ACCESS_OPTIONS.map((access) => {
+                  const isActive = vlanAccess.includes(access)
+                  return (
+                    <button
+                      key={access}
+                      type="button"
+                      onClick={() => toggleVlanAccess(access)}
+                      className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition ${isActive
+                        ? "border-primary/40 bg-primary/10 text-primary"
+                        : "border-border bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        }`}
+                    >
+                      <div className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${isActive ? "border-primary bg-primary" : "border-muted-foreground/40"
+                        }`}>
+                        {isActive && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
+                      </div>
+                      {access}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 border-t border-border/50 pt-4">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setIsCreateVlanOpen(false)}
+                className="cursor-pointer text-muted-foreground"
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={vlanSubmitting} className="cursor-pointer px-6 font-semibold">
+                {vlanSubmitting ? "Creating..." : "Create VLAN"}
               </Button>
             </div>
           </form>
