@@ -181,7 +181,7 @@ func (s *InterfaceService) GetKernelInterfaces() ([]model.NetworkInterface, erro
 				Netmask:        "24",
 				Gateway:        "",
 				MacAddress:     "DC:A6:32:AA:BB:C1",
-				AdminAccess:    []string{"PING", "HTTP", "SSH"},
+				AdminAccess:    []string{"PING", "HTTP", "HTTPS", "SSH"},
 				Status:         "up",
 				Speed:          "1000 Mbps",
 			},
@@ -228,7 +228,7 @@ func (s *InterfaceService) GetKernelInterfaces() ([]model.NetworkInterface, erro
 				Netmask:        "24",
 				Gateway:        "192.168.2.1",
 				MacAddress:     "DC:A6:32:AA:BB:C3",
-				AdminAccess:    []string{"PING", "HTTP", "SSH"},
+				AdminAccess:    []string{"PING", "HTTP", "HTTPS", "SSH"},
 				Status:         "up",
 				Speed:          "100 Mbps",
 			},
@@ -313,7 +313,7 @@ func (s *InterfaceService) GetKernelInterfaces() ([]model.NetworkInterface, erro
 			Netmask:        netmaskStr,
 			Gateway:        gateway,
 			MacAddress:     macAddr,
-			AdminAccess:    []string{"PING", "HTTP", "SSH"},
+			AdminAccess:    []string{"PING", "HTTP", "HTTPS", "SSH"},
 			Status:         status,
 			Speed:          speed,
 		}
@@ -398,7 +398,7 @@ func (s *InterfaceService) GetDataLayerInterface() ([]model.NetworkInterface, er
 				if kIface.Role == "WAN" {
 					kIface.AdminAccess = []string{"PING"}
 				} else {
-					kIface.AdminAccess = []string{"PING", "HTTP", "SSH"}
+					kIface.AdminAccess = []string{"PING", "HTTP", "HTTPS", "SSH"}
 				}
 			}
 		}
@@ -652,7 +652,7 @@ func (s *InterfaceService) CreateVlanInterface(input model.CreateVlanInput) (*mo
 		if role == "WAN" {
 			adminAccess = []string{"PING"}
 		} else {
-			adminAccess = []string{"PING", "HTTP", "SSH"}
+			adminAccess = []string{"PING", "HTTP", "HTTPS", "SSH"}
 		}
 	}
 	alias := strings.TrimSpace(input.Alias)

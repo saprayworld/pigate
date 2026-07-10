@@ -515,6 +515,72 @@ func migrate(db *sql.DB) error {
 		return fmt.Errorf("failed to enforce unique interface aliases: %w", err)
 	}
 
+	// HTTPS (443) becomes the primary admin channel (issue #27). On an upgraded box
+	// the firewall now drops non-HTTPS/whitelisted traffic and HTTP 308-redirects to
+	// HTTPS, so any interface whose admin_access already allows the web UI over HTTP
+	// but not HTTPS would lock the admin out of 443. Backfill HTTPS on exactly those
+	// rows before the listener starts serving.
+	if err := ensureHTTPSAdminAccess(db); err != nil {
+		return fmt.Errorf("failed to backfill HTTPS admin access: %w", err)
+	}
+
+	return nil
+}
+
+// ensureHTTPSAdminAccess adds "HTTPS" to the comma-separated admin_access of every
+// interface that already allows "HTTP" but not "HTTPS". Rows that do not expose the
+// web UI over HTTP (e.g. a WAN interface with just "PING") are intentionally left
+// untouched — the presence of HTTP is the signal that admin web access is desired.
+// Idempotent: a second run finds no HTTP-without-HTTPS rows and changes nothing.
+func ensureHTTPSAdminAccess(db *sql.DB) error {
+	rows, err := db.Query("SELECT id, admin_access FROM network_interfaces")
+	if err != nil {
+		return err
+	}
+	type ifaceRow struct{ id, adminAccess string }
+	var toUpdate []ifaceRow
+	for rows.Next() {
+		var r ifaceRow
+		if err := rows.Scan(&r.id, &r.adminAccess); err != nil {
+			rows.Close()
+			return err
+		}
+		tokens := strings.Split(r.adminAccess, ",")
+		hasHTTP, hasHTTPS := false, false
+		for _, t := range tokens {
+			switch strings.ToUpper(strings.TrimSpace(t)) {
+			case "HTTP":
+				hasHTTP = true
+			case "HTTPS":
+				hasHTTPS = true
+			}
+		}
+		if hasHTTP && !hasHTTPS {
+			toUpdate = append(toUpdate, r)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, r := range toUpdate {
+		// Insert HTTPS immediately after HTTP so the stored order reads
+		// "...,HTTP,HTTPS,...", matching the seed/default ordering.
+		tokens := strings.Split(r.adminAccess, ",")
+		out := make([]string, 0, len(tokens)+1)
+		for _, t := range tokens {
+			out = append(out, t)
+			if strings.EqualFold(strings.TrimSpace(t), "HTTP") {
+				out = append(out, "HTTPS")
+			}
+		}
+		updated := strings.Join(out, ",")
+		if _, err := db.Exec("UPDATE network_interfaces SET admin_access = ? WHERE id = ?", updated, r.id); err != nil {
+			return fmt.Errorf("failed to backfill HTTPS admin_access for interface %s: %w", r.id, err)
+		}
+		log.Printf("[Migration] Added HTTPS admin access to interface %s (admin_access %q -> %q)", r.id, r.adminAccess, updated)
+	}
 	return nil
 }
 
@@ -760,7 +826,7 @@ func seed(db *sql.DB, dsn string, mockMode bool) error {
 				connected_ssid, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, backup_wifi_security, ip_check_timeout, primary_max_retries, failover_cooldown
 			) VALUES 
 			(
-				'iface-1', 'eth0', 'LAN_Internal', 'LAN', 'ethernet', 'device', 'static', '192.168.1.1', '24', '', 'DC:A6:32:AA:BB:C1', 'PING,HTTP,SSH', 'up', '1000 Mbps',
+				'iface-1', 'eth0', 'LAN_Internal', 'LAN', 'ethernet', 'device', 'static', '192.168.1.1', '24', '', 'DC:A6:32:AA:BB:C1', 'PING,HTTP,HTTPS,SSH', 'up', '1000 Mbps',
 				'hardware', 'DC:A6:32:AA:BB:C1', NULL, NULL, 0, NULL, NULL, 0, NULL, NULL, 'WPA2', NULL, NULL, NULL
 			),
 			(

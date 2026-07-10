@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"log"
+	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -40,6 +43,8 @@ func main() {
 	enableEditSystemRoute := flag.Bool("enable-edit-system-route", false, "Enable direct kernel management of system/kernel-only routes without database")
 	prioritizeKernelRoutes := flag.Bool("prioritize-kernel-routes", false, "Prioritize kernel route information over database if duplicate")
 	dockerCompat := flag.Bool("docker-compat", true, "Enable Docker compatibility (bypass docker0 and br-* interfaces)")
+	httpsPort := flag.Int("https-port", 0, "HTTPS port (0 = HTTP only; the systemd unit passes 443 to make HTTPS the primary channel)")
+	tlsDir := flag.String("tls-dir", "", "Directory for the self-signed TLS cert/key (default: <dir of -db>/tls)")
 	printVersion := flag.Bool("v", false, "Print Version")
 	flag.Parse()
 	if *printVersion {
@@ -56,6 +61,7 @@ func main() {
 	log.Printf("[Main] Enable Edit System Route (Bypass DB): %t", *enableEditSystemRoute)
 	log.Printf("[Main] Prioritize Kernel Routes: %t", *prioritizeKernelRoutes)
 	log.Printf("[Main] Docker Compatibility: %t", *dockerCompat)
+	log.Printf("[Main] HTTPS Port: %d (0 = HTTP only)", *httpsPort)
 
 	// 2. Initialize in-memory forward-traffic logs circular buffer (Ring Buffer).
 	// Fed live by the TrafficLogManager watcher below (real NFLOG or mock
@@ -266,10 +272,140 @@ func main() {
 	eventLogService.Log(model.EventCategorySystem, "system.boot", model.EventSeverityInfo,
 		model.EventActorSystem, "host", "PiGate backend started (version "+version+")")
 
-	// 7. Start HTTP API listener
-	address := ":" + strconv.Itoa(*port)
-	log.Printf("[Main] ===== PiGate API Backend is listening at http://localhost%s =====", address)
-	if err := http.ListenAndServe(address, handler); err != nil {
+	// 7. Start HTTP/HTTPS API listeners.
+	// See docs/ref/todo/https-server-foundation-plan.md for the full rationale.
+	// Ladder:
+	//   httpsPort > 0 (systemd unit passes 443 → HTTPS is the primary channel):
+	//     (1) cert OK + :443 binds → HTTPS serves the real handler (TLS 1.2+),
+	//         HTTP :<port> (and bonus :80 when httpsPort==443) 308-redirect to HTTPS.
+	//     (2) cert fails OR :443 won't bind → warn loudly + event log, then HTTP
+	//         :<port> serves the real handler (last-resort fallback; admin must be
+	//         able to reach the box no matter what).
+	//   httpsPort == 0 (dev/mock, no flag): HTTP :<port> serves the real handler —
+	//     identical to the legacy behavior.
+	httpAddr := ":" + strconv.Itoa(*port)
+
+	if *httpsPort > 0 {
+		tlsDirResolved := *tlsDir
+		if tlsDirResolved == "" {
+			tlsDirResolved = filepath.Join(filepath.Dir(*dbPath), "tls")
+		}
+
+		hostname := "pigate"
+		if hs, hErr := hostnameService.Get(); hErr == nil && hs.Hostname != "" {
+			hostname = hs.Hostname
+		}
+
+		certPath, keyPath, tlsErr := setupTLS(tlsDirResolved, hostname, eventLogService)
+		if tlsErr == nil {
+			httpsAddr := ":" + strconv.Itoa(*httpsPort)
+			// Probe-bind :443 up front: if it fails we fall through to the HTTP
+			// fallback instead of dying after HTTP has already become a redirect.
+			// (bindTCP wraps net.Listen; the local kernel manager variable named
+			// "net" shadows the net package inside main.)
+			ln, bindErr := bindTCP(httpsAddr)
+			if bindErr == nil {
+				redirect := newHTTPSRedirectHandler(*httpsPort)
+				startRedirectListener(httpAddr, redirect)
+				if *httpsPort == 443 {
+					// Bonus: catch users who type the bare http://<ip> (port 80).
+					startRedirectListener(":80", redirect)
+				}
+
+				httpsServer := &http.Server{
+					Handler:           handler,
+					TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
+					ReadHeaderTimeout: 10 * time.Second,
+					ReadTimeout:       30 * time.Second,
+					WriteTimeout:      60 * time.Second,
+					IdleTimeout:       120 * time.Second,
+				}
+				log.Printf("[Main] ===== PiGate API Backend is listening at https://localhost%s (HTTP %s → 308 redirect) =====", httpsAddr, httpAddr)
+				if err := httpsServer.ServeTLS(ln, certPath, keyPath); err != nil {
+					log.Fatalf("HTTPS server listener failed: %v", err)
+				}
+				return
+			}
+			log.Printf("[Main] Warning: could not bind HTTPS port %s: %v", httpsAddr, bindErr)
+		} else {
+			log.Printf("[Main] Warning: could not set up TLS certificate: %v", tlsErr)
+		}
+
+		// Fallthrough — TLS could not be started. Serve full HTTP so the admin can
+		// still reach the box, but make the degradation impossible to miss.
+		log.Printf("[Main] ***** WARNING: HTTPS unavailable — serving PLAIN HTTP on %s. Re-run install.sh to restore HTTPS. *****", httpAddr)
+		eventLogService.Log(model.EventCategorySystem, "system.https_fallback", model.EventSeverityWarning,
+			model.EventActorSystem, "host", "HTTPS could not start; serving plain HTTP as a fallback (re-run install.sh)")
+	}
+
+	// Plain HTTP: dev/mock (no -https-port) or the last-resort fallback above.
+	httpServer := &http.Server{
+		Addr:              httpAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	log.Printf("[Main] ===== PiGate API Backend is listening at http://localhost%s =====", httpAddr)
+	if err := httpServer.ListenAndServe(); err != nil {
 		log.Fatalf("Server listener failed: %v", err)
 	}
+}
+
+// bindTCP opens a TCP listener on addr. It exists so main() can bind a socket
+// without referencing the net package directly — the local kernel.NetworkManager
+// variable named "net" shadows the package inside main().
+func bindTCP(addr string) (net.Listener, error) {
+	return net.Listen("tcp", addr)
+}
+
+// newHTTPSRedirectHandler returns a handler that 308-redirects any request to the
+// same host+path over HTTPS on httpsPort (the port is omitted from the target when
+// it is the standard 443). 308 (Permanent Redirect) preserves the method/body,
+// unlike 301/302, which matters for API clients that POST to /api over HTTP.
+func newHTTPSRedirectHandler(httpsPort int) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		target := "https://" + host
+		if httpsPort != 443 {
+			target += ":" + strconv.Itoa(httpsPort)
+		}
+		target += r.URL.RequestURI()
+		http.Redirect(w, r, target, http.StatusPermanentRedirect)
+	})
+}
+
+// startRedirectListener starts an HTTP server on addr in a background goroutine
+// serving the redirect handler. Bind/serve failures are logged, never fatal — a
+// failed :80 bonus listener (or a :<port> already in use) must not take the whole
+// process, including the primary HTTPS listener, down with it.
+func startRedirectListener(addr string, h http.Handler) {
+	srv := &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		log.Printf("[Main] HTTP redirect listener starting on %s (308 → HTTPS)", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("[Main] Warning: HTTP redirect listener on %s stopped: %v", addr, err)
+		}
+	}()
+}
+
+// setupTLS ensures a self-signed certificate/key pair exists under tlsDir and
+// returns their paths. A newly generated cert is recorded in the event log.
+func setupTLS(tlsDir, hostname string, eventLog *service.EventLogService) (certPath, keyPath string, err error) {
+	certPath, keyPath, generated, err := service.EnsureSelfSignedCert(tlsDir, hostname, service.LocalInterfaceIPs())
+	if err != nil {
+		return "", "", err
+	}
+	if generated {
+		log.Printf("[Main] Generated self-signed TLS certificate in %s", tlsDir)
+		if eventLog != nil {
+			eventLog.Log(model.EventCategorySystem, "system.tls_cert_generated", model.EventSeverityInfo,
+				model.EventActorSystem, "host", "Generated self-signed TLS certificate for HTTPS")
+		}
+	}
+	return certPath, keyPath, nil
 }

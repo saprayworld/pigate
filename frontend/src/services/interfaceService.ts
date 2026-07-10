@@ -244,7 +244,7 @@ export const interfaceService = {
         alias: target.name,
         role: target.name.includes("wan") || target.name.includes("wlan") ? "WAN" : "LAN",
         addressingMode: target.type === "wireless" || target.name.includes("wan") ? "dhcp" : "static",
-        adminAccess: target.name.includes("wan") || target.name.includes("wlan") ? ["PING"] : ["PING", "HTTP", "SSH"],
+        adminAccess: target.name.includes("wan") || target.name.includes("wlan") ? ["PING"] : ["PING", "HTTP", "HTTPS", "SSH"],
         macMode: "hardware",
         randomizeOnReconnect: false,
         failoverEnabled: false,
@@ -307,7 +307,7 @@ export const interfaceService = {
         gateway: mode === "static" ? input.gateway || "" : "",
         macAddress: parent.macAddress,
         adminAccess: (input.adminAccess as NetworkInterface["adminAccess"]) ||
-          (role === "WAN" ? ["PING"] : ["PING", "HTTP", "SSH"]),
+          (role === "WAN" ? ["PING"] : ["PING", "HTTP", "HTTPS", "SSH"]),
         status: "up",
         managed: true,
         speed: parent.speed,

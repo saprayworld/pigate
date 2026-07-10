@@ -762,7 +762,6 @@ func TestInterfaceMetricColumn(t *testing.T) {
 	}
 }
 
-
 // TestAliasMigrationDedup simulates upgrading a legacy database that predates the
 // unique alias index: it may hold duplicate aliases (case-insensitive) and rows
 // with an empty alias. Boot (InitDB) must repair them instead of failing on
@@ -818,5 +817,70 @@ func TestAliasMigrationDedup(t *testing.T) {
 			t.Errorf("aliases still duplicated after migration: %s and %s share %q", prev, name, alias)
 		}
 		seen[lower] = name
+	}
+}
+
+// TestHTTPSAdminAccessMigration verifies that boot backfills HTTPS on exactly the
+// interfaces that already allow the web UI over HTTP, so an upgraded box does not
+// lock the admin out of port 443 once HTTP starts 308-redirecting to HTTPS.
+func TestHTTPSAdminAccessMigration(t *testing.T) {
+	dsn := t.TempDir() + "/legacy.db"
+
+	first, err := InitDB(dsn)
+	if err != nil {
+		t.Fatalf("initial InitDB failed: %v", err)
+	}
+	insert := `INSERT INTO network_interfaces (
+		id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, mac_address, admin_access, status, speed
+	) VALUES (?, ?, ?, 'LAN', 'ethernet', 'device', 'static', '10.0.0.1', '24', '', 'aa:bb:cc:dd:ee:ff', ?, 'up', '1000 Mbps')`
+	rows := []struct{ id, name, alias, adminAccess string }{
+		{"iface-lan", "lan0", "LAN0", "PING,HTTP,SSH"},   // has HTTP → should gain HTTPS
+		{"iface-wan", "wan0", "WAN0", "PING"},            // no HTTP → untouched
+		{"iface-both", "eth7", "ETH7", "HTTP,HTTPS,SSH"}, // already has HTTPS → untouched
+		{"iface-lower", "eth8", "ETH8", "ping,http"},     // case-insensitive → should gain HTTPS
+	}
+	for _, r := range rows {
+		if _, err := first.Exec(insert, r.id, r.name, r.alias, r.adminAccess); err != nil {
+			t.Fatalf("seed row %s: %v", r.name, err)
+		}
+	}
+	first.Close()
+
+	second, err := InitDB(dsn)
+	if err != nil {
+		t.Fatalf("InitDB on legacy data failed: %v", err)
+	}
+	defer second.Close()
+
+	get := func(id string) string {
+		var v string
+		if err := second.QueryRow("SELECT admin_access FROM network_interfaces WHERE id = ?", id).Scan(&v); err != nil {
+			t.Fatalf("query admin_access for %s: %v", id, err)
+		}
+		return v
+	}
+
+	hasToken := func(csv, token string) bool {
+		for _, t := range strings.Split(csv, ",") {
+			if strings.EqualFold(strings.TrimSpace(t), token) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if got := get("iface-lan"); !hasToken(got, "HTTPS") {
+		t.Errorf("iface-lan: expected HTTPS backfilled, got %q", got)
+	}
+	if got := get("iface-lower"); !hasToken(got, "HTTPS") {
+		t.Errorf("iface-lower: expected HTTPS backfilled (case-insensitive), got %q", got)
+	}
+	// WAN with only PING must not be touched — user intentionally closed the web UI.
+	if got := get("iface-wan"); hasToken(got, "HTTPS") {
+		t.Errorf("iface-wan: HTTPS must NOT be added to a PING-only interface, got %q", got)
+	}
+	// A row that already had HTTPS must be left byte-for-byte unchanged (idempotent).
+	if got := get("iface-both"); got != "HTTP,HTTPS,SSH" {
+		t.Errorf("iface-both: expected unchanged 'HTTP,HTTPS,SSH', got %q", got)
 	}
 }

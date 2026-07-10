@@ -189,18 +189,18 @@ re-run install.sh**, ตาราง Feature Status เพิ่มแถว HTT
 
 ## 6. Summary Checklist (Definition of Done)
 
-- [ ] `service/tls_cert.go` + `tls_cert_test.go` — gen/idempotent/regenerate-เมื่อ-invalid/perms/SAN/validity คงที่
-- [ ] `db/connection.go` — migration เติม HTTPS (idempotent, เฉพาะแถวมี HTTP) + seed LAN มี HTTPS
-- [ ] `service/interface.go` — default adminAccess (interface ใหม่ + VLAN) มี HTTPS; FE mock ตรงกัน
-- [ ] `main.go` — flags + listener ladder + timeouts + redirect 308 + warn-not-fatal + event log
-- [ ] `api/handlers.go` — cookie `Secure: r.TLS != nil` (login + logout)
-- [ ] `install.sh` — setcap + unit caps + `-https-port=443` + ขั้นตอนตั้งเวลา/timezone/NTP
-- [ ] `docs/openapi.yaml` **และ** `frontend/public/openapi.yaml` — servers เพิ่ม https
-- [ ] README — Default HTTPS, self-signed warning, upgrade path, Feature Status
-- [ ] `go build ./...` + `go test ./...` ผ่าน (รวม test migration adminAccess); `yarn build` ยืนยัน
-- [ ] ทดสอบ mock: `-https-port=8443` → `curl -k https://…` ได้, HTTP โดน 308, ไม่ส่ง flag = เดิมทุกอย่าง,
-    login ผ่าน https ได้ cookie `Secure` / ผ่าน http (fallback) ไม่มี `Secure`
-- [ ] ทดสอบ cert: ลบ `tls/` → สร้างใหม่ + event log; boot ซ้ำไม่สร้างซ้ำ; cert หมดอายุ → regenerate
-- [ ] ทดสอบ fallback: ตั้ง `-tls-dir` ชี้ที่เขียนไม่ได้ → HTTP เสิร์ฟเต็มรูปแบบ + warning + event log
+- [x] `service/tls_cert.go` + `tls_cert_test.go` — gen/idempotent/regenerate-เมื่อ-invalid/perms/SAN/validity คงที่
+- [x] `db/connection.go` — migration เติม HTTPS (idempotent, เฉพาะแถวมี HTTP) + seed LAN มี HTTPS
+- [x] `service/interface.go` — default adminAccess (interface ใหม่ + VLAN) มี HTTPS; FE mock ตรงกัน
+- [x] `main.go` — flags + listener ladder + timeouts + redirect 308 + warn-not-fatal + event log
+- [x] `api/handlers.go` — cookie `Secure: r.TLS != nil` (login + logout)
+- [x] `install.sh` — setcap + unit caps + `-https-port=443` + ขั้นตอนตั้งเวลา/timezone/NTP
+- [x] `docs/openapi.yaml` **และ** `frontend/public/openapi.yaml` — servers เพิ่ม https
+- [x] README — Default HTTPS, self-signed warning, upgrade path, Feature Status
+- [x] `go build ./...` + `go test ./...` ผ่าน (รวม test migration adminAccess); `yarn build` ยืนยัน
+- [x] ทดสอบ mock: `-https-port=8443` → `curl -k https://…` ได้, HTTP โดน 308, ไม่ส่ง flag = เดิมทุกอย่าง,
+    login ผ่าน https ได้ cookie `Secure` / ผ่าน http (fallback) ไม่มี `Secure` — ✅ ยืนยันด้วย curl แล้ว
+- [x] ทดสอบ cert: boot แรกสร้าง cert + event log; boot ซ้ำไม่สร้างซ้ำ (generated=false); regenerate เมื่อ invalid/expired (unit test)
+- [x] ทดสอบ fallback: ตั้ง `-tls-dir` ชี้ที่เขียนไม่ได้ (`/proc/...`) → HTTP เสิร์ฟเต็มรูปแบบ + warning + event log — ✅
 - [ ] ทดสอบเครื่องจริง (physical access): re-run install.sh → https เข้าได้, http redirect,
-    DB เก่าถูก migrate เติม HTTPS, WAN ที่มีแค่ PING ไม่ถูกแตะ
+    DB เก่าถูก migrate เติม HTTPS, WAN ที่มีแค่ PING ไม่ถูกแตะ — **ค้างไว้ให้เจ้าของทดสอบบนบอร์ดจริง**

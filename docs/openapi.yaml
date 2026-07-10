@@ -5,9 +5,11 @@ info:
   version: 1.0.0
 servers:
   - url: http://localhost:2479/api
-    description: Development server (default port)
+    description: Development server (default port, mock mode)
   - url: /api
-    description: Production (same-origin)
+    description: Production (same-origin — HTTPS on real devices)
+  - url: https://pigate.local/api
+    description: Production HTTPS (self-signed; replace host with the device IP/hostname)
 
 security:
   - BearerAuth: []
