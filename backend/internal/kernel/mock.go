@@ -90,6 +90,20 @@ func (m *MockNetwork) ScanWifi(name string) ([]model.WifiScanResult, error) {
 	}, nil
 }
 
+// CreateVlan is a log-only no-op in mock mode (never touches the OS). The VLAN
+// still appears in the UI because GetKernelInterfaces' mock branch appends any DB
+// row not already in the interface list.
+func (m *MockNetwork) CreateVlan(parent string, vlanID int) error {
+	log.Printf("[MockNetwork] CreateVlan: parent=%s vlanID=%d -> %s.%d", parent, vlanID, parent, vlanID)
+	return nil
+}
+
+// DeleteVlan is a log-only no-op in mock mode.
+func (m *MockNetwork) DeleteVlan(name string) error {
+	log.Printf("[MockNetwork] DeleteVlan: %s", name)
+	return nil
+}
+
 func (m *MockNetwork) GetWifiStatus(name string) (*model.WifiConnectionStatus, error) {
 	return &model.WifiConnectionStatus{
 		State:     "COMPLETED",

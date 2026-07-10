@@ -191,6 +191,27 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
+	// Add vlan_parent/vlan_id columns to network_interfaces if they don't exist.
+	// Both nullable — only populated for rows with subtype='vlan', immutable after
+	// creation (change VLAN ID/parent = delete + recreate). These let VLAN links be
+	// re-created from the DB on boot (InitApplyConfigurationAtStartup).
+	var sqlCreateIfaceVlan string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='network_interfaces'").Scan(&sqlCreateIfaceVlan)
+	if err == nil {
+		if !strings.Contains(sqlCreateIfaceVlan, "vlan_parent") {
+			_, err = db.Exec("ALTER TABLE network_interfaces ADD COLUMN vlan_parent TEXT")
+			if err != nil {
+				return fmt.Errorf("failed to add vlan_parent column: %w", err)
+			}
+		}
+		if !strings.Contains(sqlCreateIfaceVlan, "vlan_id") {
+			_, err = db.Exec("ALTER TABLE network_interfaces ADD COLUMN vlan_id INTEGER")
+			if err != nil {
+				return fmt.Errorf("failed to add vlan_id column: %w", err)
+			}
+		}
+	}
+
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY,
@@ -364,7 +385,10 @@ func migrate(db *sql.DB) error {
 			backup_wifi_security TEXT DEFAULT 'WPA2',
 			ip_check_timeout INTEGER,
 			primary_max_retries INTEGER,
-			failover_cooldown INTEGER
+			failover_cooldown INTEGER,
+			-- VLAN (802.1Q) sub-interface fields (populated only when subtype='vlan')
+			vlan_parent TEXT,
+			vlan_id INTEGER
 		);`,
 
 		`CREATE TABLE IF NOT EXISTS system_dns_settings (

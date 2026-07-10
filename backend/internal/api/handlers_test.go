@@ -1018,3 +1018,151 @@ func TestGetDataLayerAndResetAPI(t *testing.T) {
 		t.Fatal("Expected eth1 config to be flushed/deleted from DB")
 	}
 }
+
+// --- VLAN interface management API (issue #20) ---
+
+func vlanReq(t *testing.T, handler http.Handler, method, path, token string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	var buf *bytes.Buffer
+	if body != nil {
+		b, _ := json.Marshal(body)
+		buf = bytes.NewBuffer(b)
+	} else {
+		buf = bytes.NewBuffer(nil)
+	}
+	req := httptest.NewRequest(method, path, buf)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestVlanAPICreateAndDelete(t *testing.T) {
+	handler, _ := setupTestServer(t)
+	token := "mock_session_id_test_token"
+
+	// Create a VLAN on eth0 (present in the mock kernel).
+	rec := vlanReq(t, handler, "POST", "/api/interfaces/vlan", token, model.CreateVlanInput{
+		Parent: "eth0", VlanID: 100, Alias: "vlan100", Role: "LAN", AddressingMode: "dhcp",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var created model.NetworkInterface
+	json.NewDecoder(rec.Body).Decode(&created)
+	if created.Name != "eth0.100" || created.Subtype != "vlan" {
+		t.Fatalf("unexpected created VLAN: %+v", created)
+	}
+
+	// It should now show up in the interface list, up + managed.
+	rec = vlanReq(t, handler, "GET", "/api/interfaces", token, nil)
+	var list []model.NetworkInterface
+	json.NewDecoder(rec.Body).Decode(&list)
+	var found *model.NetworkInterface
+	for i := range list {
+		if list[i].Name == "eth0.100" {
+			found = &list[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("created VLAN not present in interface list")
+	}
+
+	// Delete it while it is up (VLANs can be deleted regardless of offline state).
+	rec = vlanReq(t, handler, "DELETE", "/api/interfaces/"+found.ID, token, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK deleting up VLAN, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Confirm it's gone.
+	rec = vlanReq(t, handler, "GET", "/api/interfaces", token, nil)
+	list = nil
+	json.NewDecoder(rec.Body).Decode(&list)
+	for _, it := range list {
+		if it.Name == "eth0.100" {
+			t.Errorf("VLAN eth0.100 still present after delete")
+		}
+	}
+}
+
+func TestVlanAPICreateValidationAndConflict(t *testing.T) {
+	handler, _ := setupTestServer(t)
+	token := "mock_session_id_test_token"
+
+	// Invalid VLAN ID -> 400
+	rec := vlanReq(t, handler, "POST", "/api/interfaces/vlan", token, model.CreateVlanInput{
+		Parent: "eth0", VlanID: 9999,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid VLAN ID, got %d", rec.Code)
+	}
+
+	// Wireless parent -> 400
+	rec = vlanReq(t, handler, "POST", "/api/interfaces/vlan", token, model.CreateVlanInput{
+		Parent: "wlan0", VlanID: 10,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for wireless parent, got %d", rec.Code)
+	}
+
+	// Create once, then duplicate -> 409
+	rec = vlanReq(t, handler, "POST", "/api/interfaces/vlan", token, model.CreateVlanInput{
+		Parent: "eth0", VlanID: 200, AddressingMode: "dhcp",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for first create, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	rec = vlanReq(t, handler, "POST", "/api/interfaces/vlan", token, model.CreateVlanInput{
+		Parent: "eth0", VlanID: 200, AddressingMode: "dhcp",
+	})
+	if rec.Code != http.StatusConflict {
+		t.Errorf("expected 409 for duplicate VLAN, got %d", rec.Code)
+	}
+}
+
+// A physical (non-vlan) interface that is up must still be protected by the
+// offline-only delete guard — the VLAN branch must not weaken it.
+func TestDeletePhysicalInterfaceStillOfflineGuarded(t *testing.T) {
+	handler, _ := setupTestServer(t)
+	token := "mock_session_id_test_token"
+
+	// Find a real, up, non-vlan interface from the live list.
+	rec := vlanReq(t, handler, "GET", "/api/interfaces", token, nil)
+	var list []model.NetworkInterface
+	json.NewDecoder(rec.Body).Decode(&list)
+	var target *model.NetworkInterface
+	for i := range list {
+		if list[i].Subtype != "vlan" && list[i].Status == "up" {
+			target = &list[i]
+			break
+		}
+	}
+	if target == nil {
+		t.Skip("no up physical interface available in mock kernel")
+	}
+
+	rec = vlanReq(t, handler, "DELETE", "/api/interfaces/"+target.ID, token, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 deleting an up physical interface, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestVlanAPIViewerForbidden(t *testing.T) {
+	handler, repo := setupTestServer(t)
+
+	// Create a read-only user and a session for them.
+	if err := repo.CreateUser(model.User{
+		ID: "user-viewer", Username: "viewer", PasswordHash: "x",
+		Role: model.RoleAdminReadonly, Status: model.StatusActive,
+	}); err != nil {
+		t.Fatalf("create viewer user: %v", err)
+	}
+	AddSession("viewer_token", "viewer")
+
+	rec := vlanReq(t, handler, "POST", "/api/interfaces/vlan", "viewer_token", model.CreateVlanInput{
+		Parent: "eth0", VlanID: 300, AddressingMode: "dhcp",
+	})
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for read-only user creating VLAN, got %d", rec.Code)
+	}
+}
