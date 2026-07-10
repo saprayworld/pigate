@@ -263,6 +263,7 @@ export interface NetworkInterface {
   macAddress: string          // Effective MAC address currently active
   adminAccess: AdminAccess[]
   status: "up" | "down" | "offline"
+  managed?: boolean           // computed: false = exists in kernel but has no config row (unmanaged); undefined = treat as managed
   speed: string               // e.g. "1000 Mbps", "72 Mbps"
   // Wi-Fi specific
   wifiSSID?: string
@@ -302,6 +303,7 @@ export const initialNetworkInterfaces: NetworkInterface[] = [
     macMode: "hardware",
     adminAccess: ["PING", "HTTP", "SSH"],
     status: "up",
+    managed: true,
     speed: "1000 Mbps"
   },
   {
@@ -324,6 +326,7 @@ export const initialNetworkInterfaces: NetworkInterface[] = [
     randomizeOnReconnect: true,
     adminAccess: ["PING"],
     status: "up",
+    managed: false, // demo: interface present in kernel but not configured by pigate (shows UNMANAGED badge)
     speed: "72 Mbps",
     wifiSSID: "MyHome_5G",
     wifiPassword: "••••••••",

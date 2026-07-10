@@ -86,6 +86,15 @@ func (s *InterfaceService) InitApplyConfigurationAtStartup() error {
 			}
 		}
 
+		// Toggle the interface to its desired administrative state FIRST. ConfigureInterface
+		// no longer forces the link up and defers the gateway route while the link is down,
+		// so the link must already be up for the static default route to be installed.
+		isUp := iface.Status == "up"
+		log.Printf("[Startup] Toggling interface %s state to up=%t...", iface.Name, isUp)
+		if err := s.network.ToggleInterface(iface.Name, isUp); err != nil {
+			log.Printf("[Startup] Warning: Failed to toggle interface %s state: %v", iface.Name, err)
+		}
+
 		metric := 0
 		if iface.Metric != nil {
 			metric = *iface.Metric
@@ -94,13 +103,6 @@ func (s *InterfaceService) InitApplyConfigurationAtStartup() error {
 			iface.Name, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, metric)
 		if err := s.network.ConfigureInterface(iface.Name, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, metric); err != nil {
 			log.Printf("[Startup] Warning: Failed to configure interface %s: %v", iface.Name, err)
-		}
-
-		// Toggle interface state up/down based on database status config
-		isUp := iface.Status == "up"
-		log.Printf("[Startup] Toggling interface %s state to up=%t...", iface.Name, isUp)
-		if err := s.network.ToggleInterface(iface.Name, isUp); err != nil {
-			log.Printf("[Startup] Warning: Failed to toggle interface %s state: %v", iface.Name, err)
 		}
 	}
 	log.Printf("[Startup] Successfully applied interface configuration at startup.")
@@ -305,6 +307,9 @@ func (s *InterfaceService) GetDataLayerInterface() ([]model.NetworkInterface, er
 	var result []model.NetworkInterface
 	for _, kIface := range kernelIfaces {
 		dbIface, exists := dbMap[kIface.Name]
+		// managed = has a config row in DB (pigate has configured this interface).
+		// Computed from the presence of the DB row, never persisted.
+		kIface.Managed = exists
 		if exists {
 			// Overwrite database config fields into the data layer interface
 			kIface.ID = dbIface.ID
@@ -436,6 +441,43 @@ func (s *InterfaceService) ApplyInterfaceConfig(iface model.NetworkInterface) er
 	}
 
 	return nil
+}
+
+// SetInterfaceState is the single path that changes an interface's administrative
+// state (up/down). It is separate from ApplyInterfaceConfig ("configure") so that
+// saving configuration never toggles the link.
+//
+// On the "up" leg it brings the link up first, then reapplies the DB configuration
+// (static IP, gateway route, metric) which the "configure" path deferred while the
+// link was down. Reapplying the route may fail on a link that is up but has no carrier
+// yet (unplugged ethernet, wireless still associating); this is logged as a non-fatal
+// warning — the same behaviour as startup — rather than failing the whole request.
+//
+// On the "down" leg it simply brings the link down; the kernel drops the interface's
+// routes on down, so no configuration replay is needed.
+//
+// Status is persisted with ToggleInterfaceStatus (a targeted UPDATE), not an upsert, so
+// toggling an unmanaged interface (no DB row) does not silently create one.
+func (s *InterfaceService) SetInterfaceState(iface model.NetworkInterface, up bool) error {
+	if err := s.network.ToggleInterface(iface.Name, up); err != nil {
+		return fmt.Errorf("failed to set interface %s state: %w", iface.Name, err)
+	}
+
+	if up {
+		metric := 0
+		if iface.Metric != nil {
+			metric = *iface.Metric
+		}
+		if err := s.network.ConfigureInterface(iface.Name, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, metric); err != nil {
+			log.Printf("[Interface] Warning: reapply config for %s after toggle up failed: %v", iface.Name, err)
+		}
+	}
+
+	status := "down"
+	if up {
+		status = "up"
+	}
+	return s.repo.ToggleInterfaceStatus(iface.ID, status)
 }
 
 // FlushInterfaceConfig flushes configuration of the specified interface from the database.

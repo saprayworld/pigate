@@ -156,6 +156,20 @@ func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, s
 		}
 		log.Printf("[RealNetwork] wpa_supplicant config reloaded successfully")
 	} else {
+		// The config file is now written to disk (persistence done). Starting the
+		// wpa_supplicant service would drive the link up, which must not happen while
+		// the interface is administratively down — that is the Wi-Fi equivalent of the
+		// Save-silently-enables bug. Only start the service when the link is up; when the
+		// interface is later toggled up, ToggleInterface starts the service itself.
+		if link, err := netlink.LinkByName(name); err == nil {
+			if link.Attrs().Flags&net.FlagUp == 0 {
+				log.Printf("[RealNetwork] %s is down; wrote wpa_supplicant config but not starting %s (will start on toggle up)", name, serviceName)
+				return nil
+			}
+		} else {
+			log.Printf("[RealNetwork] Warning: could not read link state for %s before starting %s: %v", name, serviceName, err)
+		}
+
 		// Start service via systemd
 		log.Printf("[RealNetwork] Service %s is inactive. Initiating systemd start...", serviceName)
 
@@ -189,12 +203,16 @@ func (r *RealNetwork) ConfigureInterface(name string, mode string, ip string, ne
 		return fmt.Errorf("interface %q not found: %w", name, err)
 	}
 
-	// Bring the interface up if it is not up, as IP configuration and routing require an active link
-	if link.Attrs().Flags&net.FlagUp == 0 {
-		if err := netlink.LinkSetUp(link); err != nil {
-			return fmt.Errorf("failed to bring interface %q up: %w", name, err)
-		}
-	}
+	// "configure" and "activate" are separate actions: configuring an interface must
+	// never force the link up (that is what causes a Save to silently re-enable an
+	// interface the user has turned off). The link state is the desired state stored in
+	// the DB and only changed via ToggleInterface / SetInterfaceState.
+	//
+	// Address assignment (netlink AddrAdd) works on a down link, so static IPs are still
+	// applied. The gateway default route, however, cannot be installed while the link is
+	// down (the kernel reports the network as unreachable, and would drop the route on
+	// down anyway); it is deferred until the interface is toggled up.
+	linkIsUp := link.Attrs().Flags&net.FlagUp != 0
 
 	// Always clear existing IPv4 addresses from the interface
 	addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
@@ -225,6 +243,13 @@ func (r *RealNetwork) ConfigureInterface(name string, mode string, ip string, ne
 
 	// Configure default gateway route if specified
 	if gateway != "" {
+		// A default route cannot be installed while the link is down; defer it until
+		// the interface is toggled up (SetInterfaceState reapplies this configuration).
+		if !linkIsUp {
+			log.Printf("[RealNetwork] %s is down; deferring gateway route %s until the interface is toggled up", name, gateway)
+			return nil
+		}
+
 		gwIP := net.ParseIP(gateway)
 		if gwIP == nil {
 			return fmt.Errorf("invalid gateway IP format: %q", gateway)

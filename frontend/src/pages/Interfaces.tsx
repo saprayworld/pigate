@@ -774,19 +774,29 @@ export default function Interfaces() {
 
                     {/* Status */}
                     <TableCell className="py-3">
-                      {iface.status === "up" ? (
-                        <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
-                          UP
-                        </Badge>
-                      ) : iface.status === "offline" ? (
-                        <Badge variant="outline" className="animate-pulse rounded border-warning/20 bg-warning/10 px-2 py-0.5 text-[10px] font-semibold text-warning">
-                          OFFLINE
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline" className="rounded border-destructive/20 bg-destructive/10 px-2 py-0.5 text-[10px] font-semibold text-destructive">
-                          DOWN
-                        </Badge>
-                      )}
+                      <div className="flex flex-wrap items-center gap-1">
+                        {iface.status === "up" ? (
+                          <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                            UP
+                          </Badge>
+                        ) : iface.status === "offline" ? (
+                          <Badge variant="outline" className="animate-pulse rounded border-warning/20 bg-warning/10 px-2 py-0.5 text-[10px] font-semibold text-warning">
+                            OFFLINE
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="rounded border-destructive/20 bg-destructive/10 px-2 py-0.5 text-[10px] font-semibold text-destructive">
+                            DOWN
+                          </Badge>
+                        )}
+                        {/* Unmanaged: exists in kernel but has no config row in DB.
+                            Use `=== false` (not falsy) so cached mock data without the
+                            field is treated as managed. */}
+                        {iface.managed === false && (
+                          <Badge variant="outline" className="rounded border-border bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                            UNMANAGED
+                          </Badge>
+                        )}
+                      </div>
                     </TableCell>
 
                     {/* Action */}

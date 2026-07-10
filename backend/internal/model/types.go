@@ -140,6 +140,7 @@ type NetworkInterface struct {
 	MacAddress     string   `json:"macAddress"`
 	AdminAccess    []string `json:"adminAccess"` // PING, HTTP, HTTPS, SSH
 	Status         string   `json:"status"`      // "up", "down"
+	Managed        bool     `json:"managed"`     // true = has a config row in DB (pigate has configured it); computed, not persisted
 	Speed          string   `json:"speed"`       // e.g. "1000 Mbps"
 
 	WifiSSID             *string `json:"wifiSSID,omitempty"`

@@ -502,7 +502,9 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 	iface.Gateway = updates.Gateway
 	iface.MacAddress = updates.MacAddress
 	iface.AdminAccess = updates.AdminAccess
-	iface.Status = updates.Status
+	// Status is intentionally NOT taken from the request: saving configuration must not
+	// change the interface's administrative state. iface.Status already holds the live
+	// kernel state and is persisted as-is. Up/down is changed only via the toggle route.
 
 	if updates.MacMode != nil {
 		iface.MacMode = updates.MacMode
@@ -653,7 +655,9 @@ func (s *Server) HandlePatchInterface(w http.ResponseWriter, r *http.Request) {
 	updateString("netmask", &iface.Netmask)
 	updateString("gateway", &iface.Gateway)
 	updateString("macAddress", &iface.MacAddress)
-	updateString("status", &iface.Status)
+	// "status" is intentionally not accepted here: saving configuration must not toggle
+	// the interface. iface.Status keeps its live kernel value and is persisted unchanged.
+	// Up/down is changed only via POST /interfaces/{id}/toggle.
 
 	updatePtrString("wifiSSID", &iface.WifiSSID)
 	updatePtrString("wifiSecurity", &iface.WifiSecurity)
@@ -730,18 +734,15 @@ func (s *Server) HandleToggleInterface(w http.ResponseWriter, r *http.Request) {
 		nextStatus = "down"
 	}
 
-	// Trigger OS action
-	err = s.network.ToggleInterface(iface.Name, nextStatus == "up")
-	if err != nil {
+	// Route through the service layer: the "up" leg brings the link up and reapplies the
+	// DB configuration (static IP, gateway route, metric); status is persisted with a
+	// targeted UPDATE so an unmanaged interface is not silently adopted into the DB.
+	if err := s.interfaceService.SetInterfaceState(*iface, nextStatus == "up"); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "OS level configuration failed")
 		return
 	}
 
 	iface.Status = nextStatus
-	if err := s.repo.UpdateInterface(*iface); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	s.logEvent(r, model.EventCategoryNetwork, "network.interface_changed", model.EventSeverityInfo,
 		iface.Name, "Interface "+iface.Name+" toggled "+nextStatus)
 	maskInterfacePasswords(iface)

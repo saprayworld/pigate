@@ -15,6 +15,7 @@ type trackingNetworkManager struct {
 	toggledInterfaces    map[string]bool
 	wifiConfigured       []string
 	configuredMetrics    map[string]int
+	callOrder            []string // ordered log of "toggle-up:eth0", "configure:eth0", etc.
 }
 
 func (t *trackingNetworkManager) ToggleInterface(name string, up bool) error {
@@ -22,6 +23,11 @@ func (t *trackingNetworkManager) ToggleInterface(name string, up bool) error {
 		t.toggledInterfaces = make(map[string]bool)
 	}
 	t.toggledInterfaces[name] = up
+	if up {
+		t.callOrder = append(t.callOrder, "toggle-up:"+name)
+	} else {
+		t.callOrder = append(t.callOrder, "toggle-down:"+name)
+	}
 	return nil
 }
 
@@ -35,6 +41,7 @@ func (t *trackingNetworkManager) ConfigureInterface(name string, mode string, ip
 		t.configuredMetrics = make(map[string]int)
 	}
 	t.configuredMetrics[name] = metric
+	t.callOrder = append(t.callOrder, "configure:"+name)
 	return nil
 }
 
@@ -321,5 +328,132 @@ func TestInterfaceMetric(t *testing.T) {
 		if err := svc.ApplyInterfaceConfig(invalid); err == nil {
 			t.Errorf("expected error for out-of-range metric %d, got nil", bad)
 		}
+	}
+}
+
+// TestSetInterfaceState verifies the configure/activate separation: the "up" leg brings
+// the link up BEFORE reapplying configuration (so the static gateway route lands on an up
+// link), the "down" leg only toggles the link down without reconfiguring, and status is
+// persisted in both cases.
+func TestSetInterfaceState(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	if err := repo.ClearInterfaces(); err != nil {
+		t.Fatalf("Failed to clear DB interfaces: %v", err)
+	}
+
+	iface := model.NetworkInterface{
+		ID:             "iface-set",
+		Name:           "eth-set",
+		Alias:          "Set Test",
+		Role:           "LAN",
+		Type:           "ethernet",
+		AddressingMode: "static",
+		IP:             "192.168.5.1",
+		Netmask:        "24",
+		Gateway:        "192.168.5.254",
+		Status:         "down",
+		AdminAccess:    []string{"PING"},
+	}
+	if err := repo.CreateInterfaceForTest(iface); err != nil {
+		t.Fatalf("Failed to seed interface: %v", err)
+	}
+
+	// --- up leg: toggle up must happen BEFORE configure ---
+	tracker := &trackingNetworkManager{}
+	svc := NewInterfaceService(repo, tracker)
+	if err := svc.SetInterfaceState(iface, true); err != nil {
+		t.Fatalf("SetInterfaceState(up) failed: %v", err)
+	}
+	if len(tracker.callOrder) != 2 {
+		t.Fatalf("expected exactly 2 kernel calls on up leg, got %v", tracker.callOrder)
+	}
+	if tracker.callOrder[0] != "toggle-up:eth-set" {
+		t.Errorf("expected toggle-up first, got %q", tracker.callOrder[0])
+	}
+	if tracker.callOrder[1] != "configure:eth-set" {
+		t.Errorf("expected configure second, got %q", tracker.callOrder[1])
+	}
+	if stored, err := repo.GetInterfaceByID("iface-set"); err != nil {
+		t.Fatalf("GetInterfaceByID failed: %v", err)
+	} else if stored.Status != "up" {
+		t.Errorf("expected status 'up' persisted after up leg, got %q", stored.Status)
+	}
+
+	// --- down leg: toggle down, NO configure ---
+	tracker2 := &trackingNetworkManager{}
+	svc2 := NewInterfaceService(repo, tracker2)
+	if err := svc2.SetInterfaceState(iface, false); err != nil {
+		t.Fatalf("SetInterfaceState(down) failed: %v", err)
+	}
+	if len(tracker2.configuredInterfaces) != 0 {
+		t.Errorf("expected no ConfigureInterface on down leg, got %v", tracker2.configuredInterfaces)
+	}
+	if up, toggled := tracker2.toggledInterfaces["eth-set"]; !toggled || up {
+		t.Errorf("expected interface toggled down, got toggled=%v up=%v", toggled, up)
+	}
+	if stored, err := repo.GetInterfaceByID("iface-set"); err != nil {
+		t.Fatalf("GetInterfaceByID failed: %v", err)
+	} else if stored.Status != "down" {
+		t.Errorf("expected status 'down' persisted after down leg, got %q", stored.Status)
+	}
+}
+
+// TestManagedFlag verifies GetDataLayerInterface marks an interface Managed only when it
+// has a config row in the database. Uses mock kernel mode for a deterministic interface list.
+func TestManagedFlag(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	if err := repo.ClearInterfaces(); err != nil {
+		t.Fatalf("Failed to clear DB interfaces: %v", err)
+	}
+	repo.SetMockMode(true, false)
+
+	// Seed a DB row for eth0 (present in the mock kernel list) → should be managed.
+	// eth1 is in the mock kernel list but has no DB row → should be unmanaged.
+	if err := repo.CreateInterfaceForTest(model.NetworkInterface{
+		ID:             "iface-eth0",
+		Name:           "eth0",
+		Alias:          "eth0",
+		Role:           "LAN",
+		Type:           "ethernet",
+		AddressingMode: "static",
+		IP:             "192.168.1.1",
+		Netmask:        "24",
+		Status:         "up",
+	}); err != nil {
+		t.Fatalf("Failed to seed eth0: %v", err)
+	}
+
+	svc := NewInterfaceService(repo, &trackingNetworkManager{})
+	list, err := svc.GetDataLayerInterface()
+	if err != nil {
+		t.Fatalf("GetDataLayerInterface failed: %v", err)
+	}
+
+	byName := make(map[string]model.NetworkInterface)
+	for _, it := range list {
+		byName[it.Name] = it
+	}
+
+	if eth0, ok := byName["eth0"]; !ok {
+		t.Errorf("expected eth0 to be present in data layer")
+	} else if !eth0.Managed {
+		t.Errorf("expected eth0 (has DB row) to be Managed=true")
+	}
+	if eth1, ok := byName["eth1"]; !ok {
+		t.Errorf("expected eth1 to be present in data layer")
+	} else if eth1.Managed {
+		t.Errorf("expected eth1 (no DB row) to be Managed=false")
 	}
 }
