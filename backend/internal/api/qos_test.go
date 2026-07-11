@@ -16,7 +16,7 @@ func TestQosAPIRoutes(t *testing.T) {
 
 	// 1. Get QoS Rules (initially empty)
 	req := httptest.NewRequest("GET", "/api/qos/rules", nil)
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -46,7 +46,7 @@ func TestQosAPIRoutes(t *testing.T) {
 	}
 	body, _ := json.Marshal(ruleInput)
 	req = httptest.NewRequest("POST", "/api/qos/rules", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -73,7 +73,7 @@ func TestQosAPIRoutes(t *testing.T) {
 
 	// 3. Get QoS Rule by ID (GET /api/qos/rules/{id})
 	req = httptest.NewRequest("GET", "/api/qos/rules/"+created.ID, nil)
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -93,7 +93,7 @@ func TestQosAPIRoutes(t *testing.T) {
 	ruleInput.EgressRateMbps = 60
 	body, _ = json.Marshal(ruleInput)
 	req = httptest.NewRequest("PUT", "/api/qos/rules/"+created.ID, bytes.NewBuffer(body))
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -111,7 +111,7 @@ func TestQosAPIRoutes(t *testing.T) {
 
 	// 5. Toggle QoS Rule (POST /api/qos/rules/{id}/toggle)
 	req = httptest.NewRequest("POST", "/api/qos/rules/"+created.ID+"/toggle", nil)
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -129,7 +129,7 @@ func TestQosAPIRoutes(t *testing.T) {
 
 	// 6. Delete QoS Rule (DELETE /api/qos/rules/{id})
 	req = httptest.NewRequest("DELETE", "/api/qos/rules/"+created.ID, nil)
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

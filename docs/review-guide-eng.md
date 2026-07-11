@@ -142,12 +142,13 @@ a token and expects 401.
 **How:**
 - The server currently serves **plain HTTP on all interfaces** (`":"+port`) and the cookie sets
   `Secure: false`.
-- The token is delivered twice: as an HttpOnly cookie **and** in the JSON body, which the frontend
-  stores in `localStorage`.
+- ~~The token is delivered twice: as an HttpOnly cookie **and** in the JSON body, which the frontend
+  stores in `localStorage`.~~ → **Fixed (cookie-only-session-auth-plan)**: the token is delivered
+  only via `Set-Cookie` (HttpOnly); the frontend no longer stores it in `localStorage`.
 
-**Risk:** anyone on the LAN who can sniff (ARP spoofing, rogue AP) sees passwords and tokens in
-plaintext; `localStorage` lets any XSS steal the session instantly (the HttpOnly cookie would
-prevent exactly that, but its benefit is nullified by also shipping the token in the body).
+**Risk:** anyone on the LAN who can sniff (ARP spoofing, rogue AP) sees passwords in plaintext (fix
+with TLS — see finding 1). The "XSS steals the token from `localStorage`" vector is now closed —
+the token lives only in the HttpOnly cookie.
 
 **Remediation (by value):**
 1. Add TLS: generate a self-signed cert at install time, add `-tls-cert`/`-tls-key` flags, set
@@ -158,12 +159,12 @@ prevent exactly that, but its benefit is nullified by also shipping the token in
 3. At minimum: bind to the LAN management interface's IP instead of `0.0.0.0`.
 
 **C.1 CSRF (always review together with cookies)**
-- Currently protected by two mechanisms: the cookie is `SameSite=Strict` (browsers block all
-  cross-site sends) and the frontend sends an `Authorization: Bearer` header via the fetch hook
-  (`config.ts`), which is inherently immune to CSRF.
-- **What to watch:** the cookie fallback in `AuthMiddleware` is the only path CSRF could attack —
-  each review round, confirm `SameSite` is still `Strict` (never downgraded to `Lax`/`None`) and
-  that no mutating endpoint accepts cookie auth while bypassing the middleware.
+- After the cookie-only auth change, auth arrives via the cookie **only** (the `Authorization:
+  Bearer` path was removed), so CSRF is now guarded by a single mechanism: the cookie is
+  `SameSite=Strict` (browsers block all cross-site sends).
+- **What to watch (now more critical):** `SameSite=Strict` is the sole CSRF barrier — each review
+  round, confirm the login/logout cookies still set `SameSite=Strict` (never downgraded to
+  `Lax`/`None`), since there is no Bearer-header backstop anymore.
 - Defense-in-depth option: check the `Origin`/`Sec-Fetch-Site` headers on mutating requests and
   reject cross-site ones.
 
@@ -329,8 +330,8 @@ must **re-grade every round**, using the referenced checklist areas as the how-t
 | Session Management | C | Tokens **never expire server-side** until restart; good: per-request DB check, session purge on account delete/config import | A |
 | Authorization | A- | Fail-closed RBAC, complete guard rails with tests; watch GETs with side effects slipping past the read-only role | B |
 | Password Hashing | A- | bcrypt cost 10, used consistently across create/login/reset | A |
-| CSRF | B | Safe via `SameSite=Strict` + Bearer header; add an `Origin` check as defense-in-depth | C.1 |
-| Cookie Security | C+ | `HttpOnly` + `SameSite=Strict` correct, but `Secure:false` and the HttpOnly benefit is nullified by duplicating the token into `localStorage` | C |
+| CSRF | B | After cookie-only auth: guarded by `SameSite=Strict` alone (Bearer removed) — add an `Origin` check as defense-in-depth since there is no backstop | C.1 |
+| Cookie Security | B | `HttpOnly` + `SameSite=Strict` correct, and the token is no longer duplicated into `localStorage` (HttpOnly benefit fully restored); the remaining item is `Secure`, tied to HTTPS (`r.TLS`) | C |
 | CORS | B+ | Exact-match whitelist, no wildcard; dev origins still active in production | B, C |
 | Rate Limiting | B- | Present at login (the right place); limiter map has no eviction, expensive endpoints (scan/apply) unlimited | A, G |
 | File Upload | A- | Single path: config import — super_admin only, 10 MB cap, single transaction + snapshot, session purge after import; no uploaded files ever written to the filesystem | F |
@@ -338,8 +339,9 @@ must **re-grade every round**, using the referenced checklist areas as the how-t
 | TLS/HTTPS | **F** | **Absent — the number-one weakness**; passwords/tokens travel plaintext on the LAN | C |
 | Input Validation | B | Parameterized SQL, wpa sanitization with tests, `ParseIP`/`ParseMAC`; pending: complete the dnsmasq path audit (zone/record/hostname) | D, E |
 
-**Fix priority:** TLS (F) → drop the dual token delivery in favor of HttpOnly-cookie-only auth
-(raises Cookie/CSRF/Session grades together) → session TTL → finish the dnsmasq path audit.
+**Fix priority:** TLS (F) → ~~drop the dual token delivery in favor of HttpOnly-cookie-only auth~~
+(**done** — cookie-only-session-auth-plan; Cookie/CSRF grades already raised) → session TTL →
+finish the dnsmasq path audit.
 
 ## 6. What Is Already Done Well (as of this review — preserve, don't regress)
 
@@ -369,7 +371,7 @@ must **re-grade every round**, using the referenced checklist areas as the how-t
 | # | Severity | Issue | Location | Remediation |
 |---|---|---|---|---|
 | 1 | High | No TLS — passwords/tokens travel plaintext on the LAN; cookie `Secure:false` | `cmd/pigate/main.go`, `handlers.go` | Self-signed cert at install + TLS flags + `Secure:true` |
-| 2 | High | Token stored in `localStorage` and returned in the JSON body despite the HttpOnly cookie — any XSS steals the session | `authService.ts`, `HandleLogin` | Cookie-only auth; stop returning the token in the body |
+| 2 | ~~High~~ **Fixed** | ~~Token stored in `localStorage` and returned in the JSON body despite the HttpOnly cookie — any XSS steals the session~~ → cookie-only auth: `LoginResponse` drops `token`, the frontend keeps only a non-secret `pigate_logged_in` flag, `AuthMiddleware`/logout read the cookie only | `authService.ts`, `HandleLogin`, `middleware.go` | **Done** (cookie-only-session-auth-plan) — cookie is the single channel, `credentials: "include"` |
 | 3 | Med–High | Sessions never expire server-side until restart | `middleware.go` (`activeSessions`) | Add TTL + sweeper |
 | 4 | Medium | No server timeouts (slowloris); body size limit exists only on import (10 MB), not other endpoints | `main.go`, handlers | Explicit `http.Server` with timeouts; `http.MaxBytesReader` on all endpoints |
 | 5 | Medium | Rate-limiter map grows unboundedly (no eviction) | `middleware.go` | LRU or cleanup goroutine |

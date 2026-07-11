@@ -12,7 +12,7 @@ servers:
     description: Production HTTPS (self-signed; replace host with the device IP/hostname)
 
 security:
-  - BearerAuth: []
+  - cookieAuth: []
 
 paths:
   # =========================================================================
@@ -43,15 +43,21 @@ paths:
                   example: admin
       responses:
         '200':
-          description: Login successful
+          description: |
+            Login successful. The session token is delivered ONLY via the
+            `Set-Cookie: pigate_session=...` response header (HttpOnly, Secure
+            over HTTPS, SameSite=Strict) — it is never returned in the body.
+          headers:
+            Set-Cookie:
+              description: HttpOnly session cookie carrying the session token.
+              schema:
+                type: string
+                example: pigate_session=session_id_abc123xyz; Path=/; HttpOnly; Secure; SameSite=Strict
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  token:
-                    type: string
-                    example: session_id_abc123xyz
                   mustChangePassword:
                     type: boolean
                     description: If true, user must change password before using other API endpoints
@@ -78,7 +84,7 @@ paths:
         - Authentication
       summary: Check current session validity and user context
       description: |
-        Verifies that the current bearer token/session cookie is still valid on the backend.
+        Verifies that the current session cookie (pigate_session) is still valid on the backend.
         Also returns whether the user must change their password (IsInitial check).
         If mustChangePassword is true, all other API endpoints (except /system/password) will return 403 Forbidden.
       responses:
@@ -314,7 +320,7 @@ paths:
       summary: Server-Sent Events (SSE) stream for live firewall block logs
       description: Establishes a text/event-stream connection to push live firewall logs.
       security:
-        - BearerAuth: []
+        - cookieAuth: []
       responses:
         '200':
           description: SSE stream initiated
@@ -2095,7 +2101,7 @@ paths:
         - System & Maintenance
       summary: Reboot the Raspberry Pi 5 board host — super_admin only
       security:
-        - BearerAuth: []
+        - cookieAuth: []
       description: |
         Restarts the physical board via org.freedesktop.login1 (systemd-logind)
         over D-Bus — no shell execution. Restricted to super_admin; a read-only
@@ -2114,7 +2120,7 @@ paths:
         - System & Maintenance
       summary: Shutdown/halt the Raspberry Pi 5 board host — super_admin only
       security:
-        - BearerAuth: []
+        - cookieAuth: []
       description: |
         Powers off the physical board via org.freedesktop.login1 (systemd-logind)
         over D-Bus — no shell execution. Restricted to super_admin; a read-only
@@ -2133,7 +2139,7 @@ paths:
         - System & Maintenance
       summary: Export full configuration backup (schema v2) — super_admin only
       security:
-        - BearerAuth: []
+        - cookieAuth: []
       description: |
         Returns a complete, typed JSON backup (schema v2) of all persisted
         configuration: interfaces, raw static routes (gateway "default" kept
@@ -2186,7 +2192,7 @@ paths:
         - System & Maintenance
       summary: Import & restore a configuration backup (Replace semantics) — super_admin only
       security:
-        - BearerAuth: []
+        - cookieAuth: []
       description: |
         Validates, snapshots, restores (in a single transaction), and re-applies a
         backup produced by the export endpoint. Accepts both schema v2 and legacy
@@ -2265,7 +2271,7 @@ paths:
       summary: List all QoS rules
       operationId: getQosRules
       security:
-        - BearerAuth: []
+        - cookieAuth: []
       responses:
         '200':
           description: List of QoS rules
@@ -2283,7 +2289,7 @@ paths:
       summary: Create a new QoS rule
       operationId: createQosRule
       security:
-        - BearerAuth: []
+        - cookieAuth: []
       requestBody:
         required: true
         content:
@@ -2309,7 +2315,7 @@ paths:
       summary: Get a QoS rule by ID
       operationId: getQosRuleById
       security:
-        - BearerAuth: []
+        - cookieAuth: []
       parameters:
         - name: id
           in: path
@@ -2333,7 +2339,7 @@ paths:
       summary: Update a QoS rule
       operationId: updateQosRule
       security:
-        - BearerAuth: []
+        - cookieAuth: []
       parameters:
         - name: id
           in: path
@@ -2365,7 +2371,7 @@ paths:
       summary: Delete a QoS rule
       operationId: deleteQosRule
       security:
-        - BearerAuth: []
+        - cookieAuth: []
       parameters:
         - name: id
           in: path
@@ -2395,7 +2401,7 @@ paths:
       summary: Toggle QoS rule enabled/disabled
       operationId: toggleQosRule
       security:
-        - BearerAuth: []
+        - cookieAuth: []
       parameters:
         - name: id
           in: path
@@ -2421,7 +2427,7 @@ paths:
       summary: Sync all QoS rules to kernel (tc)
       operationId: syncQosRules
       security:
-        - BearerAuth: []
+        - cookieAuth: []
       responses:
         '200':
           description: Sync result
@@ -2443,7 +2449,7 @@ paths:
       summary: Get live kernel QoS status for an interface
       operationId: getQosIfaceStatus
       security:
-        - BearerAuth: []
+        - cookieAuth: []
       parameters:
         - name: iface
           in: path
@@ -2468,7 +2474,7 @@ paths:
       summary: Clear all QoS qdiscs/classes from an interface
       operationId: clearQosIface
       security:
-        - BearerAuth: []
+        - cookieAuth: []
       parameters:
         - name: iface
           in: path
@@ -2495,11 +2501,13 @@ paths:
 # =========================================================================
 components:
   securitySchemes:
-    BearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
-      description: Enter the Bearer session token generated during login.
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: pigate_session
+      description: |
+        HttpOnly session cookie set by POST /auth/login. Sent automatically by
+        the browser on same-site requests; it is the only supported auth channel.
 
   responses:
     Unauthorized:

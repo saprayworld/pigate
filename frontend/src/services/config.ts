@@ -11,7 +11,11 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
 type PiGateWindow = Window & { __pigate_fetch_hooked__?: boolean };
 
-// Automatically hook the global window.fetch to attach the Authorization header if available
+// Automatically hook the global window.fetch so every /api/ request carries the
+// HttpOnly session cookie. The session token lives only in that cookie now
+// (cookie-only auth) — no Authorization: Bearer header is sent. `credentials:
+// "include"` is required for the dev cross-origin case (localhost:5173 ->
+// localhost:8081); production is same-origin and would send the cookie anyway.
 if (typeof window !== "undefined" && !(window as PiGateWindow).__pigate_fetch_hooked__) {
   const originalFetch = window.fetch;
   window.fetch = async (input, init) => {
@@ -25,21 +29,18 @@ if (typeof window !== "undefined" && !(window as PiGateWindow).__pigate_fetch_ho
     }
 
     if (url.includes("/api/")) {
-      const token = localStorage.getItem("pigate_session");
-      if (token) {
-        const headers = new Headers(init?.headers);
-        if (!headers.has("Authorization")) {
-          headers.set("Authorization", `Bearer ${token}`);
-        }
-        init = { ...init, headers };
-      }
+      init = { ...init, credentials: "include" };
     }
     const response = await originalFetch(input, init);
 
-    // Automatically handle session expiration/invalidation
+    // Automatically handle session expiration/invalidation. The cookie is the
+    // source of truth; here we just clear the JS-side UI hints and bounce to
+    // /login when a protected call comes back 401.
     if (url.includes("/api/") && response.status === 401) {
       if (!url.includes("/auth/session") && !url.includes("/auth/login")) {
-        localStorage.removeItem("pigate_session");
+        localStorage.removeItem("pigate_logged_in");
+        localStorage.removeItem("pigate_role");
+        localStorage.removeItem("pigate_username");
         localStorage.removeItem("pigate_must_change_password");
         window.location.href = "/login";
       }
