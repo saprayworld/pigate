@@ -99,7 +99,7 @@
 <div class="wrap">
   <div class="intro">
     <h2 id="introTitle">เช็คลิสต์ทดสอบบนอุปกรณ์จริง</h2>
-    <p>เลือกสถานะแต่ละข้อ (ผ่าน / ไม่ผ่าน / ไม่เกี่ยว) กรอกค่าที่สังเกตได้ในช่องที่ให้มา เสร็จแล้วกด <b>Export JSON</b> ด้านล่างแล้วส่งไฟล์กลับมาให้ตรวจ · ระบบบันทึกอัตโนมัติในเบราว์เซอร์</p>
+    <p>เลือกสถานะแต่ละข้อ (ผ่าน / ไม่ผ่าน / ไม่เกี่ยว) กรอกค่าที่สังเกตได้ในช่องที่ให้มา เสร็จแล้วกด <b>Export JSON</b> ด้านล่างแล้วส่งไฟล์กลับมาให้ตรวจ · ระบบบันทึกอัตโนมัติในเบราว์เซอร์ (ผูกกับ browser + ตำแหน่งไฟล์ — อย่าเปลี่ยน browser หรือย้ายไฟล์ระหว่างทดสอบ)</p>
   </div>
 
   <fieldset class="meta">
@@ -295,10 +295,15 @@ function save() {
   }, 250);
 }
 
+function plainText(html) {
+  const d = document.createElement("div");
+  d.innerHTML = html;
+  return d.textContent;
+}
 function buildReport() {
   const items = SECTIONS.flatMap(sec => sec.items.map(it => ({
     id: it.id, section: sec.num + " " + sec.title,
-    label: it.label.replace(/<[^>]+>/g, ""),
+    label: plainText(it.label),
     status: state.status[it.id] || "untested",
     observed: state.obs[it.id] || "", notes: state.notes[it.id] || "",
   })));
@@ -315,7 +320,15 @@ function toast(msg) {
   const t = document.getElementById("toast");
   t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 1800);
 }
+function warnMissingMeta() {
+  const labels = { date: "วันที่ทดสอบ", build: "Build / commit" };
+  const missing = Object.keys(labels).filter(k => !(state.meta[k] || "").trim());
+  if (!missing.length) return true;
+  return confirm("ยังไม่ได้กรอก: " + missing.map(k => labels[k]).join(", ") +
+    "\nสองช่องนี้สำคัญต่อการตรวจย้อนหลังว่าทดสอบกับ build ไหน — Export ต่อเลยหรือไม่?");
+}
 document.getElementById("exportBtn").addEventListener("click", () => {
+  if (!warnMissingMeta()) return;
   const blob = new Blob([JSON.stringify(buildReport(), null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob), a = document.createElement("a");
   const d = (state.meta.date || new Date().toISOString().slice(0,10)).replace(/[^0-9-]/g,"") || "report";
@@ -324,6 +337,7 @@ document.getElementById("exportBtn").addEventListener("click", () => {
   toast("Export สำเร็จ ⬇");
 });
 document.getElementById("copyBtn").addEventListener("click", async () => {
+  if (!warnMissingMeta()) return;
   try { await navigator.clipboard.writeText(JSON.stringify(buildReport(), null, 2)); toast("คัดลอก JSON แล้ว 📋"); }
   catch { toast("คัดลอกไม่ได้ ใช้ Export แทน"); }
 });

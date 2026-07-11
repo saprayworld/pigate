@@ -24,6 +24,10 @@
    least one test item, because a caution is "a spot already known to be able
    to break." If the checklist doesn't cover a caution, you haven't proven the
    risk you yourself wrote down is actually mitigated.
+   **Exception:** a caution that automation already proves in full (`go test`,
+   the `verify` skill — see principle 3) does not get an HTML item; instead the
+   AI must state in its summary which cautions were verified by automation, so
+   coverage stays traceable.
 
 2. **Critical items must capture the "observed value", not just pass/fail.**
    A checkbox alone can't be trusted — someone can mark it pass without really
@@ -120,7 +124,9 @@ status pass/fail/na + a notes field + (critical items only) an observed field.
   observed field on critical items
 - **Metadata header:** tester, date, device, URL/IP, build/commit, browser
 - **Autosave to localStorage** — survives close/reopen/refresh so testing can
-  span days
+  span days; the saved state is tied to the browser + file location (`file://`
+  origin), so don't switch browsers or move/rename the file mid-test, or the
+  filled-in state is lost
 - **A progress bar** counting pass/fail/na in real time
 - **Export JSON** (download) **+ Copy JSON** (clipboard) **+ Reset** buttons
 - Support dark/light via `prefers-color-scheme`
@@ -133,6 +139,7 @@ status pass/fail/na + a notes field + (critical items only) an observed field.
   "branch": "<branch>",
   "generatedAt": "<ISO timestamp>",
   "meta": { "tester": "", "date": "", "device": "", "url": "", "build": "", "browser": "", "overall": "" },
+  "overall": "<duplicate of meta.overall, kept top-level for convenience>",
   "summary": { "total": 0, "pass": 0, "fail": 0, "na": 0, "untested": 0 },
   "items": [
     { "id": "<stable-id>", "section": "<n> <title>", "label": "<plain text>",
@@ -143,6 +150,11 @@ status pass/fail/na + a notes field + (critical items only) an observed field.
 
 Each item's `id` must be **stable and meaningful** (e.g. `set_cookie`,
 `ls_no_session`) so it can be referenced during review.
+
+Note: `meta` contains only the fields the tester actually typed — an untouched
+field is **absent from the JSON**, not an empty string. When reviewing, treat a
+missing `build`/`date` as "not recorded" and ask for it if it matters (the
+template warns the tester on export when these two are empty).
 
 ---
 
