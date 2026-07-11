@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PiGate · Test Checklist</title>
+<!--
+  ============================================================================
+  REUSABLE TEST CHECKLIST TEMPLATE  (see test-checklist-instruction.md)
+  ----------------------------------------------------------------------------
+  วิธีใช้ / How to use:
+    1) ก็อปไฟล์นี้ไปวางที่ root ของ repo ตั้งชื่อ <topic>-test-report.html
+    2) แก้เฉพาะ 2 บล็อกใน <script> ด้านล่าง:  META  และ  SECTIONS
+    3) ห้ามแก้ส่วน render / autosave / export (ทำงานครบแล้ว)
+    4) เปิดไฟล์ในเบราว์เซอร์ กรอกผล กด "Export JSON" แล้วส่งกลับให้ AI ตรวจ
+  หมายเหตุ: เป็นไฟล์ local เท่านั้น — อย่าเปลี่ยนไปใช้ Artifact (CSP บล็อก download)
+  ============================================================================
+-->
+<style>
+  :root {
+    --bg:#f6f7f9; --card:#fff; --border:#e3e6ea; --text:#1c2127; --muted:#66707b;
+    --primary:#2f6feb; --pass:#1f9d55; --pass-bg:#e6f5ec; --fail:#d5372b; --fail-bg:#fbe9e7;
+    --na:#8a929c; --na-bg:#eef0f2; --warn:#b7791f; --warn-bg:#fdf6e6; --input-bg:#fbfcfd;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#14171b; --card:#1c2128; --border:#2c333c; --text:#e5e9ee; --muted:#9aa4af;
+      --primary:#5b8cf5; --pass:#46c07a; --pass-bg:#17301f; --fail:#f0665a; --fail-bg:#331b18;
+      --na:#7d8791; --na-bg:#23282f; --warn:#e0b355; --warn-bg:#2e2611; --input-bg:#171b21;
+    }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI","Noto Sans Thai",sans-serif;
+    background:var(--bg); color:var(--text); line-height:1.5; font-size:15px; }
+  .wrap { max-width:900px; margin:0 auto; padding:0 16px 80px; }
+  header.top { position:sticky; top:0; z-index:20; background:var(--card); border-bottom:1px solid var(--border); padding:12px 16px; }
+  header.top .inner { max-width:900px; margin:0 auto; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  header.top h1 { font-size:15px; margin:0; font-weight:700; letter-spacing:.2px; }
+  header.top .sub { color:var(--muted); font-size:12px; margin:0; }
+  .spacer { flex:1 1 auto; }
+  .progress-pill { font-size:12.5px; color:var(--muted); background:var(--na-bg); border:1px solid var(--border); padding:5px 10px; border-radius:999px; white-space:nowrap; }
+  .progress-pill b { color:var(--text); }
+  .btn { font:inherit; font-size:13px; font-weight:600; border:1px solid var(--border); background:var(--input-bg); color:var(--text); padding:7px 13px; border-radius:8px; cursor:pointer; white-space:nowrap; }
+  .btn:hover { border-color:var(--primary); }
+  .btn.primary { background:var(--primary); color:#fff; border-color:var(--primary); }
+  .intro { margin:22px 0 4px; }
+  .intro h2 { margin:0 0 4px; font-size:20px; }
+  .intro p { margin:0; color:var(--muted); font-size:13.5px; }
+  fieldset.meta { border:1px solid var(--border); border-radius:12px; background:var(--card); padding:14px 16px; margin:18px 0; }
+  fieldset.meta legend { font-weight:700; font-size:13px; padding:0 6px; }
+  .meta-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+  @media (max-width:560px) { .meta-grid { grid-template-columns:1fr; } }
+  .field label { display:block; font-size:12px; color:var(--muted); margin-bottom:3px; font-weight:600; }
+  input[type=text], textarea { width:100%; font:inherit; font-size:13.5px; background:var(--input-bg); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:7px 9px; }
+  input[type=text]:focus, textarea:focus { outline:none; border-color:var(--primary); }
+  textarea { resize:vertical; min-height:38px; }
+  section.block { margin:26px 0 0; }
+  section.block > h3 { font-size:15px; margin:0 0 2px; display:flex; align-items:baseline; gap:8px; }
+  section.block > h3 .num { color:var(--primary); font-variant-numeric:tabular-nums; font-weight:800; }
+  section.block > .desc { color:var(--muted); font-size:12.5px; margin:0 0 12px; }
+  .item { background:var(--card); border:1px solid var(--border); border-radius:11px; padding:12px 14px; margin-bottom:10px; }
+  .item .head { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+  .item .label { flex:1 1 340px; font-size:14px; }
+  .item .label .hint { display:block; color:var(--muted); font-size:12px; margin-top:3px; }
+  .item .label code { background:var(--na-bg); border:1px solid var(--border); padding:1px 5px; border-radius:5px; font-size:12px; }
+  .seg { display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; flex:0 0 auto; }
+  .seg button { font:inherit; font-size:12px; font-weight:600; border:0; cursor:pointer; background:var(--input-bg); color:var(--muted); padding:6px 11px; border-right:1px solid var(--border); }
+  .seg button:last-child { border-right:0; }
+  .seg button[aria-pressed="true"][data-v="pass"] { background:var(--pass-bg); color:var(--pass); }
+  .seg button[aria-pressed="true"][data-v="fail"] { background:var(--fail-bg); color:var(--fail); }
+  .seg button[aria-pressed="true"][data-v="na"] { background:var(--na-bg); color:var(--na); }
+  .item.is-fail { border-color:var(--fail); }
+  .item.is-pass { border-color:var(--pass); }
+  .extra { margin-top:10px; display:none; }
+  .item.has-extra .extra { display:block; }
+  .extra .field + .field { margin-top:8px; }
+  .risk h3 .num { color:var(--warn); }
+  .risk .item { border-left:3px solid var(--warn); }
+  footer.actions { position:fixed; bottom:0; left:0; right:0; z-index:30; background:var(--card); border-top:1px solid var(--border); padding:10px 16px; }
+  footer.actions .inner { max-width:900px; margin:0 auto; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .saved-note { font-size:12px; color:var(--muted); }
+  .toast { position:fixed; bottom:70px; left:50%; transform:translateX(-50%); background:var(--text); color:var(--bg); padding:9px 16px; border-radius:8px; font-size:13px; font-weight:600; opacity:0; pointer-events:none; transition:opacity .2s; z-index:40; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="inner">
+    <div>
+      <h1 id="hTitle">🧪 Test Checklist</h1>
+      <p class="sub" id="hSub"></p>
+    </div>
+    <span class="spacer"></span>
+    <span class="progress-pill" id="progress">—</span>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="intro">
+    <h2 id="introTitle">เช็คลิสต์ทดสอบบนอุปกรณ์จริง</h2>
+    <p>เลือกสถานะแต่ละข้อ (ผ่าน / ไม่ผ่าน / ไม่เกี่ยว) กรอกค่าที่สังเกตได้ในช่องที่ให้มา เสร็จแล้วกด <b>Export JSON</b> ด้านล่างแล้วส่งไฟล์กลับมาให้ตรวจ · ระบบบันทึกอัตโนมัติในเบราว์เซอร์</p>
+  </div>
+
+  <fieldset class="meta">
+    <legend>ข้อมูลการทดสอบ</legend>
+    <div class="meta-grid">
+      <div class="field"><label>ผู้ทดสอบ</label><input type="text" data-meta="tester" placeholder="ชื่อ"></div>
+      <div class="field"><label>วันที่ทดสอบ</label><input type="text" data-meta="date" placeholder="2026-07-11"></div>
+      <div class="field"><label>อุปกรณ์ / รุ่น</label><input type="text" data-meta="device" placeholder="Raspberry Pi 5"></div>
+      <div class="field"><label>URL / IP</label><input type="text" data-meta="url" placeholder="https://192.168.1.1"></div>
+      <div class="field"><label>Build / commit</label><input type="text" data-meta="build" placeholder="git rev-parse --short HEAD"></div>
+      <div class="field"><label>เบราว์เซอร์</label><input type="text" data-meta="browser" placeholder="Chrome / Firefox / Safari"></div>
+    </div>
+  </fieldset>
+
+  <div id="sections"></div>
+
+  <fieldset class="meta" style="margin-top:26px">
+    <legend>สรุปโดยรวม / ปัญหาที่พบ</legend>
+    <textarea data-meta="overall" placeholder="สรุปผล ปัญหาที่เจอ หรือสิ่งที่อยากให้ตรวจเพิ่ม..." style="min-height:80px"></textarea>
+  </fieldset>
+</div>
+
+<footer class="actions">
+  <div class="inner">
+    <button class="btn primary" id="exportBtn">⬇ Export JSON</button>
+    <button class="btn" id="copyBtn">📋 Copy JSON</button>
+    <button class="btn" id="resetBtn">♻ ล้างทั้งหมด</button>
+    <span class="spacer"></span>
+    <span class="saved-note" id="savedNote">พร้อมใช้งาน</span>
+  </div>
+</footer>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ==========================================================================
+ * ▼▼▼ แก้ตรงนี้เท่านั้น  (EDIT ONLY THIS)  ▼▼▼
+ * ======================================================================== */
+
+const META = {
+  report: "example-topic",                 // slug ของหัวข้อ (ใช้ใน JSON + ชื่อไฟล์ export)
+  branch: "feat/example-branch",           // branch ที่ทดสอบ
+  title:  "🧪 Example — Test Checklist",    // โชว์บน header
+  subtitle: "PiGate · ทดสอบบนอุปกรณ์จริง",
+};
+
+// SECTIONS: array ของหมวด แต่ละหมวดมี items[]
+//   item: { id, label, type?, hint?, vLabel?, vPlaceholder? }
+//     - id: ตัวอ้างอิงคงที่ (ห้ามเปลี่ยนภายหลัง) เช่น "set_cookie"
+//     - label: บอก "ดูที่ไหน + คาดหวังอะไร" (ใส่ <code>..</code>/<b>..</b> ได้)
+//     - type: ใส่ "value" ถ้าต้องเก็บค่าที่สังเกต (มีช่อง observed); ไม่ใส่ = แค่ pass/fail
+//     - hint: คำอธิบายย่อยใต้ label
+//     - vLabel / vPlaceholder: ป้าย + ตัวอย่างของช่อง observed
+//   section: { num, title, desc?, risk?, items }  — risk:true = แถบเตือนสีเหลือง
+const SECTIONS = [
+  {
+    num: "0", title: "เตรียมก่อนทดสอบ", desc: "build/deploy ให้พร้อมบนเครื่องจริง",
+    items: [
+      { id: "build_ok", label: "<code>bash build.sh</code> สำเร็จ ได้ binary ที่ deploy แล้ว" },
+      { id: "deploy_ok", label: "ติดตั้ง/ตั้งสิทธิ์บนเครื่องจริงเรียบร้อย (setcap / install.sh)" },
+    ],
+  },
+  {
+    num: "1", title: "Happy path หลัก", desc: "",
+    items: [
+      { id: "flow_main", label: "flow หลักของฟีเจอร์ทำงานครบตั้งแต่ต้นจนจบ" },
+    ],
+  },
+  {
+    num: "2", title: "ข้อสังเกตชี้ขาด (หัวใจของงาน)",
+    desc: "วางค่าจริงที่เห็นลงช่อง เพื่อให้ตรวจซ้ำได้",
+    items: [
+      { id: "observed_example", type: "value",
+        label: "ตัวอย่าง: Network → response ต้องมี/ไม่มีค่าที่คาดไว้",
+        hint: "จุดที่ต้องดูเป็นพิเศษ",
+        vLabel: "วางค่าจริงที่เห็น", vPlaceholder: "เช่น header / body / localStorage keys" },
+    ],
+  },
+  {
+    num: "3", title: "flow ครบวงจร / หลาย role", desc: "",
+    items: [
+      { id: "all_pages", label: "เดินดูทุกหน้าที่เกี่ยวข้อง โหลดข้อมูลได้ ไม่มี error หลุด" },
+      { id: "role_readonly", label: "Role read-only: กดแก้ไข/สร้าง → โดนบล็อก 403" },
+    ],
+  },
+  {
+    num: "4", title: "Edge cases (จาก Cautions ในแผน)", desc: "",
+    items: [
+      { id: "edge_example", label: "ตัวอย่าง edge case จาก caution ในแผน" },
+    ],
+  },
+  {
+    num: "!", title: "จุดเสี่ยงที่สุด — ยืนยันก่อนเพื่อน", risk: true,
+    desc: "ข้อที่ถ้าพลาดจะพังเงียบ ๆ ทั้งงาน",
+    items: [
+      { id: "risk_example", label: "ตัวอย่าง: อาการที่จะเห็นถ้าพัง (ระบุให้ชัดเพื่อให้จับได้)" },
+    ],
+  },
+];
+
+/* ==========================================================================
+ * ▲▲▲ หยุดแก้ตรงนี้  (STOP EDITING HERE)  ▲▲▲
+ * ส่วนล่างเป็นกลไก render / autosave / export — ไม่ต้องแก้
+ * ======================================================================== */
+
+const STORE_KEY = "pigate_test_report_" + META.report;
+document.title = META.title;
+document.getElementById("hTitle").textContent = META.title;
+document.getElementById("hSub").innerHTML = META.subtitle +
+  (META.branch ? ' · <code style="background:var(--na-bg);border:1px solid var(--border);padding:1px 5px;border-radius:5px">' + META.branch + '</code>' : "");
+document.getElementById("introTitle").textContent = "เช็คลิสต์ทดสอบ: " + META.report;
+
+const state = loadState();
+const sectionsEl = document.getElementById("sections");
+
+SECTIONS.forEach(sec => {
+  const s = document.createElement("section");
+  s.className = "block" + (sec.risk ? " risk" : "");
+  s.innerHTML = `<h3><span class="num">${sec.num}</span> ${sec.title}</h3>` +
+                (sec.desc ? `<p class="desc">${sec.desc}</p>` : "");
+  sec.items.forEach(it => {
+    const item = document.createElement("div");
+    item.className = "item"; item.dataset.id = it.id;
+    const hint = it.hint ? `<span class="hint">${it.hint}</span>` : "";
+    const valField = (it.type === "value") ? `
+        <div class="field"><label>${it.vLabel || "ค่าที่สังเกตได้"}</label>
+          <textarea data-obs="${it.id}" placeholder="${(it.vPlaceholder||"").replace(/"/g,'&quot;')}"></textarea></div>` : "";
+    item.innerHTML = `
+      <div class="head">
+        <div class="label">${it.label}${hint}</div>
+        <div class="seg" role="group">
+          <button type="button" data-v="pass" data-id="${it.id}">ผ่าน</button>
+          <button type="button" data-v="fail" data-id="${it.id}">ไม่ผ่าน</button>
+          <button type="button" data-v="na" data-id="${it.id}">ไม่เกี่ยว</button>
+        </div>
+      </div>
+      <div class="extra">${valField}
+        <div class="field"><label>หมายเหตุ</label>
+          <input type="text" data-note="${it.id}" placeholder="เพิ่มเติม (ถ้ามี)"></div>
+      </div>`;
+    s.appendChild(item);
+  });
+  sectionsEl.appendChild(s);
+});
+
+document.querySelectorAll("[data-meta]").forEach(el => {
+  const k = el.dataset.meta; if (state.meta[k] != null) el.value = state.meta[k];
+  el.addEventListener("input", () => { state.meta[k] = el.value; save(); });
+});
+document.querySelectorAll("[data-obs]").forEach(el => {
+  const k = el.dataset.obs; if (state.obs[k] != null) el.value = state.obs[k];
+  el.addEventListener("input", () => { state.obs[k] = el.value; save(); });
+});
+document.querySelectorAll("[data-note]").forEach(el => {
+  const k = el.dataset.note; if (state.notes[k] != null) el.value = state.notes[k];
+  el.addEventListener("input", () => { state.notes[k] = el.value; save(); });
+});
+document.querySelectorAll(".seg button").forEach(btn => {
+  const id = btn.dataset.id, v = btn.dataset.v;
+  btn.addEventListener("click", () => {
+    state.status[id] = (state.status[id] === v) ? null : v; reflect(); save();
+  });
+});
+
+function reflect() {
+  SECTIONS.forEach(sec => sec.items.forEach(it => {
+    const val = state.status[it.id] || null;
+    const item = document.querySelector(`.item[data-id="${it.id}"]`);
+    item.classList.toggle("has-extra", it.type === "value" || !!val);
+    item.classList.toggle("is-fail", val === "fail");
+    item.classList.toggle("is-pass", val === "pass");
+    item.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === val)));
+  }));
+  updateProgress();
+}
+function updateProgress() {
+  const all = SECTIONS.flatMap(s => s.items), total = all.length, c = { pass:0, fail:0, na:0 };
+  all.forEach(it => { const v = state.status[it.id]; if (v) c[v]++; });
+  document.getElementById("progress").innerHTML =
+    `<b>${c.pass+c.fail+c.na}/${total}</b> · ✅ ${c.pass} · ❌ ${c.fail} · ➖ ${c.na}`;
+}
+
+function loadState() {
+  try { const s = JSON.parse(localStorage.getItem(STORE_KEY)); if (s) return normalize(s); } catch {}
+  return normalize({});
+}
+function normalize(s) { return { meta:s.meta||{}, status:s.status||{}, obs:s.obs||{}, notes:s.notes||{} }; }
+let saveTimer;
+function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    document.getElementById("savedNote").textContent = "บันทึกแล้ว " + new Date().toLocaleTimeString("th-TH");
+  }, 250);
+}
+
+function buildReport() {
+  const items = SECTIONS.flatMap(sec => sec.items.map(it => ({
+    id: it.id, section: sec.num + " " + sec.title,
+    label: it.label.replace(/<[^>]+>/g, ""),
+    status: state.status[it.id] || "untested",
+    observed: state.obs[it.id] || "", notes: state.notes[it.id] || "",
+  })));
+  const c = { pass:0, fail:0, na:0, untested:0 };
+  items.forEach(i => { c[i.status]++; });
+  return {
+    report: META.report, branch: META.branch, generatedAt: new Date().toISOString(),
+    meta: state.meta, overall: state.meta.overall || "",
+    summary: { total: items.length, pass:c.pass, fail:c.fail, na:c.na, untested:c.untested },
+    items,
+  };
+}
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 1800);
+}
+document.getElementById("exportBtn").addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(buildReport(), null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob), a = document.createElement("a");
+  const d = (state.meta.date || new Date().toISOString().slice(0,10)).replace(/[^0-9-]/g,"") || "report";
+  a.href = url; a.download = `${META.report}-report-${d}.json`;
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  toast("Export สำเร็จ ⬇");
+});
+document.getElementById("copyBtn").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(JSON.stringify(buildReport(), null, 2)); toast("คัดลอก JSON แล้ว 📋"); }
+  catch { toast("คัดลอกไม่ได้ ใช้ Export แทน"); }
+});
+document.getElementById("resetBtn").addEventListener("click", () => {
+  if (!confirm("ล้างข้อมูลทั้งหมดในรายงานนี้?")) return;
+  localStorage.removeItem(STORE_KEY); location.reload();
+});
+
+reflect();
+</script>
+</body>
+</html>
