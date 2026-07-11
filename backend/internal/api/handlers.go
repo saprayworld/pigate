@@ -209,24 +209,16 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 
 	s.writeJSON(w, http.StatusOK, model.LoginResponse{
-		Token:              token,
 		MustChangePassword: user.IsInitial,
 		Role:               user.Role,
 	})
 }
 
 func (s *Server) HandleLogout(w http.ResponseWriter, r *http.Request) {
-	// Extract token
+	// Session token lives only in the HttpOnly cookie (cookie-only auth).
 	var token string
-	authHeader := r.Header.Get("Authorization")
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		token = strings.TrimPrefix(authHeader, "Bearer ")
-	}
-	if token == "" {
-		cookie, err := r.Cookie(SessionKey)
-		if err == nil {
-			token = cookie.Value
-		}
+	if cookie, err := r.Cookie(SessionKey); err == nil {
+		token = cookie.Value
 	}
 
 	if token != "" {
@@ -2107,7 +2099,9 @@ func (s *Server) HandleLogStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// CORS for the credentialed EventSource is handled by CORSMiddleware (which
+	// echoes a specific Origin + Allow-Credentials). A wildcard ACAO here would
+	// make the browser reject the withCredentials stream — see the plan Caution 3.
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {

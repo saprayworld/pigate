@@ -27,7 +27,7 @@ import { SizeIndicator, TailwindIndicator } from "./components/tailwindIndicator
 
 // A simple authentication route guard
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const isAuthenticated = !!localStorage.getItem("pigate_session")
+  const isAuthenticated = authService.isAuthenticated()
   const mustChangePassword = localStorage.getItem("pigate_must_change_password") === "true"
 
   if (!isAuthenticated) {
@@ -51,7 +51,7 @@ function SuperAdminRoute({ children }: { children: React.ReactNode }) {
 }
 
 function ChangePasswordRoute({ children }: { children: React.ReactNode }) {
-  const isAuthenticated = !!localStorage.getItem("pigate_session")
+  const isAuthenticated = authService.isAuthenticated()
   const mustChangePassword = localStorage.getItem("pigate_must_change_password") === "true"
 
   if (!isAuthenticated) {
@@ -68,7 +68,7 @@ export default function App() {
 
   useEffect(() => {
     const verifySession = async () => {
-      if (!localStorage.getItem("pigate_session")) {
+      if (!authService.isAuthenticated()) {
         setIsChecking(false)
         return
       }

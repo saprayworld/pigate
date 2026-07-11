@@ -53,6 +53,25 @@ func setupTestServer(t *testing.T) (http.Handler, *db.Repository) {
 	return handler, repo
 }
 
+// addSessionCookie attaches the session token via the pigate_session cookie,
+// the single supported auth channel (Authorization: Bearer was removed).
+func addSessionCookie(req *http.Request, token string) {
+	req.AddCookie(&http.Cookie{Name: SessionKey, Value: token})
+}
+
+// sessionCookieFromRec extracts the pigate_session token from a login response's
+// Set-Cookie, mirroring how a browser obtains the session (cookie-only auth).
+func sessionCookieFromRec(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == SessionKey {
+			return c.Value
+		}
+	}
+	t.Fatal("expected login response to set the pigate_session cookie, none found")
+	return ""
+}
+
 func TestAPICORSHeaders(t *testing.T) {
 	handler, _ := setupTestServer(t)
 
@@ -99,10 +118,16 @@ func TestAPIAuthenticationFlow(t *testing.T) {
 		t.Errorf("Expected ok status 200, got %d", rec.Code)
 	}
 
-	var loginRes model.LoginResponse
-	json.NewDecoder(rec.Body).Decode(&loginRes)
-	if loginRes.Token == "" {
-		t.Fatal("Expected login to return a session token, got empty string")
+	// The session token must arrive only via the HttpOnly Set-Cookie, never in
+	// the JSON body (cookie-only auth).
+	var rawBody map[string]json.RawMessage
+	json.Unmarshal(rec.Body.Bytes(), &rawBody)
+	if _, hasToken := rawBody["token"]; hasToken {
+		t.Error("login response body must not contain a token field (cookie-only auth)")
+	}
+	authToken := sessionCookieFromRec(t, rec)
+	if authToken == "" {
+		t.Fatal("Expected login to set a non-empty session cookie")
 	}
 
 	// 3. Request protected resource without token (should fail)
@@ -114,9 +139,9 @@ func TestAPIAuthenticationFlow(t *testing.T) {
 		t.Errorf("Expected 401 Unauthorized for missing auth token, got %d", rec.Code)
 	}
 
-	// 4. Request protected resource with valid auth header token
+	// 4. Request protected resource with the valid session cookie
 	req = httptest.NewRequest("GET", "/api/dashboard/stats", nil)
-	req.Header.Set("Authorization", "Bearer "+loginRes.Token)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -139,7 +164,7 @@ func TestAddressCRUDAPI(t *testing.T) {
 
 	// 1. List addresses
 	req := httptest.NewRequest("GET", "/api/addresses", nil)
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -158,7 +183,7 @@ func TestAddressCRUDAPI(t *testing.T) {
 	}
 	body, _ := json.Marshal(addrInput)
 	req = httptest.NewRequest("POST", "/api/addresses", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -176,7 +201,7 @@ func TestAddressCRUDAPI(t *testing.T) {
 	addrInput.Value = "10.10.5.0/24"
 	body, _ = json.Marshal(addrInput)
 	req = httptest.NewRequest("PUT", "/api/addresses/"+created.ID, bytes.NewBuffer(body))
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -186,7 +211,7 @@ func TestAddressCRUDAPI(t *testing.T) {
 
 	// 4. Delete system object (should fail)
 	req = httptest.NewRequest("DELETE", "/api/addresses/addr-1", nil) // 'ALL' ID
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -196,7 +221,7 @@ func TestAddressCRUDAPI(t *testing.T) {
 
 	// 5. Delete custom object
 	req = httptest.NewRequest("DELETE", "/api/addresses/"+created.ID, nil)
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -255,7 +280,7 @@ func TestWifiScanAPI(t *testing.T) {
 
 	// 1. Scan on ethernet interface (should fail with 400 Bad Request)
 	req := httptest.NewRequest("GET", "/api/interfaces/iface-1/scan", nil)
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -265,7 +290,7 @@ func TestWifiScanAPI(t *testing.T) {
 
 	// 2. Scan on wireless interface (should succeed with 200 OK)
 	req = httptest.NewRequest("GET", "/api/interfaces/iface-2/scan", nil)
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -322,7 +347,7 @@ func TestDisableEditMode(t *testing.T) {
 
 	// 2. Read operations should succeed (GET /api/interfaces)
 	req = httptest.NewRequest("GET", "/api/interfaces", nil)
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -344,7 +369,7 @@ func TestDisableEditMode(t *testing.T) {
 	}
 	policyBody, _ := json.Marshal(policyInput)
 	req = httptest.NewRequest("POST", "/api/policies", bytes.NewBuffer(policyBody))
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -359,7 +384,7 @@ func TestDNSConfigAPI(t *testing.T) {
 
 	// 1. Fetch default DNS Config
 	req := httptest.NewRequest("GET", "/api/system/dns", nil)
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -383,7 +408,7 @@ func TestDNSConfigAPI(t *testing.T) {
 	}
 	body, _ := json.Marshal(updatePayload)
 	req = httptest.NewRequest("PUT", "/api/system/dns", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -393,7 +418,7 @@ func TestDNSConfigAPI(t *testing.T) {
 
 	// 3. Verify updated DNS Config
 	req = httptest.NewRequest("GET", "/api/system/dns", nil)
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -464,10 +489,11 @@ func TestForcePasswordChangeFlow(t *testing.T) {
 	if !loginRes.MustChangePassword {
 		t.Error("Expected MustChangePassword to be true")
 	}
+	authToken := sessionCookieFromRec(t, rec)
 
 	// 2. Try fetching a protected resource like stats, should get 403 Forbidden
 	req = httptest.NewRequest("GET", "/api/dashboard/stats", nil)
-	req.Header.Set("Authorization", "Bearer "+loginRes.Token)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -479,7 +505,7 @@ func TestForcePasswordChangeFlow(t *testing.T) {
 	changePayload := model.ChangePasswordRequest{CurrentPassword: "pigate", NewPassword: "new_secure_pass"}
 	changeBody, _ := json.Marshal(changePayload)
 	req = httptest.NewRequest("PUT", "/api/system/password", bytes.NewBuffer(changeBody))
-	req.Header.Set("Authorization", "Bearer "+loginRes.Token)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -489,7 +515,7 @@ func TestForcePasswordChangeFlow(t *testing.T) {
 
 	// 4. Try fetching stats again, should succeed now
 	req = httptest.NewRequest("GET", "/api/dashboard/stats", nil)
-	req.Header.Set("Authorization", "Bearer "+loginRes.Token)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -509,7 +535,7 @@ func TestChangePasswordRejectsWeakPassword(t *testing.T) {
 	changePayload := model.ChangePasswordRequest{CurrentPassword: "pigate", NewPassword: "short"}
 	changeBody, _ := json.Marshal(changePayload)
 	req := httptest.NewRequest("PUT", "/api/system/password", bytes.NewBuffer(changeBody))
-	req.Header.Set("Authorization", "Bearer mock_session_id_test_token")
+	addSessionCookie(req, "mock_session_id_test_token")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -578,11 +604,10 @@ func TestCheckSessionAPI(t *testing.T) {
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	var loginRes model.LoginResponse
-	json.NewDecoder(rec.Body).Decode(&loginRes)
+	authToken := sessionCookieFromRec(t, rec)
 
 	req = httptest.NewRequest("GET", "/api/auth/session", nil)
-	req.Header.Set("Authorization", "Bearer "+loginRes.Token)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -601,7 +626,7 @@ func TestCheckSessionAPI(t *testing.T) {
 	_, _ = sqliteDB.Exec("UPDATE users SET is_initial = 1 WHERE username = 'pigate'")
 
 	req = httptest.NewRequest("GET", "/api/auth/session", nil)
-	req.Header.Set("Authorization", "Bearer "+loginRes.Token)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -621,7 +646,7 @@ func TestDashboardSystemStatusAPIs(t *testing.T) {
 
 	get := func(path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", path, nil)
-		req.Header.Set("Authorization", "Bearer "+authToken)
+		addSessionCookie(req, authToken)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		return rec
@@ -753,7 +778,7 @@ func TestInterfaceUpdateSyncsFirewall(t *testing.T) {
 
 	bodyBytes, _ := json.Marshal(updatePayloadNoChange)
 	req := httptest.NewRequest("PUT", "/api/interfaces/iface-test-sync", bytes.NewBuffer(bodyBytes))
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -771,7 +796,7 @@ func TestInterfaceUpdateSyncsFirewall(t *testing.T) {
 
 	bodyBytes2, _ := json.Marshal(updatePayloadWithChange)
 	req = httptest.NewRequest("PUT", "/api/interfaces/iface-test-sync", bytes.NewBuffer(bodyBytes2))
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -832,7 +857,7 @@ func TestInterfacePatchAPI(t *testing.T) {
 	}
 	bodyBytes, _ := json.Marshal(patchPayload)
 	req := httptest.NewRequest("PATCH", "/api/interfaces/iface-test-patch", bytes.NewBuffer(bodyBytes))
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -869,7 +894,7 @@ func TestInterfacePatchAPI(t *testing.T) {
 	}
 	bodyBytes, _ = json.Marshal(patchPayloadEmptyPassword)
 	req = httptest.NewRequest("PATCH", "/api/interfaces/iface-test-patch", bytes.NewBuffer(bodyBytes))
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -888,7 +913,7 @@ func TestInterfacePatchAPI(t *testing.T) {
 	}
 	bodyBytes, _ = json.Marshal(patchPayloadMaskedPassword)
 	req = httptest.NewRequest("PATCH", "/api/interfaces/iface-test-patch", bytes.NewBuffer(bodyBytes))
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -920,7 +945,7 @@ func TestGetDataLayerAndResetAPI(t *testing.T) {
 	// Since we are in mockMode, it should return mock interfaces (eth0, wlan0, eth1).
 	// eth1 exists in kernel mock but NOT in DB.
 	req := httptest.NewRequest("GET", "/api/interfaces", nil)
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -973,7 +998,7 @@ func TestGetDataLayerAndResetAPI(t *testing.T) {
 
 	bodyBytes, _ := json.Marshal(eth1Update)
 	req = httptest.NewRequest("PUT", "/api/interfaces/iface-eth1", bytes.NewBuffer(bodyBytes))
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -993,7 +1018,7 @@ func TestGetDataLayerAndResetAPI(t *testing.T) {
 	// 3. Perform a Reset request via POST /api/interfaces/iface-eth1/reset.
 	// This should Flush/Delete it from DB and return kernel defaults.
 	req = httptest.NewRequest("POST", "/api/interfaces/iface-eth1/reset", nil)
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	addSessionCookie(req, authToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -1031,7 +1056,7 @@ func vlanReq(t *testing.T, handler http.Handler, method, path, token string, bod
 		buf = bytes.NewBuffer(nil)
 	}
 	req := httptest.NewRequest(method, path, buf)
-	req.Header.Set("Authorization", "Bearer "+token)
+	addSessionCookie(req, token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	return rec
@@ -1184,7 +1209,7 @@ func TestInterfaceAliasAPIValidation(t *testing.T) {
 		}
 		body, _ := json.Marshal(payload)
 		req := httptest.NewRequest("PUT", "/api/interfaces/iface-1", bytes.NewBuffer(body))
-		req.Header.Set("Authorization", "Bearer "+authToken)
+		addSessionCookie(req, authToken)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		return rec

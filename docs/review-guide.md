@@ -112,9 +112,9 @@ go install github.com/securego/gosec/v2/cmd/gosec@latest
 
 **ดูอย่างไร:**
 - ปัจจุบันเสิร์ฟ **HTTP เปล่าทุก interface** (`":"+port`) และ cookie ตั้ง `Secure: false`
-- token ถูกส่งซ้ำสองทาง: HttpOnly cookie **และ** JSON body ที่ frontend เก็บลง `localStorage`
+- ~~token ถูกส่งซ้ำสองทาง: HttpOnly cookie **และ** JSON body ที่ frontend เก็บลง `localStorage`~~ → **แก้แล้ว (cookie-only-session-auth-plan)**: token มากับ `Set-Cookie` (HttpOnly) ทางเดียว; frontend ไม่เก็บ token ใน `localStorage` อีก
 
-**ความเสี่ยง:** ใครก็ตามใน LAN ที่ sniff ได้ (ARP spoof, rogue AP) เห็นรหัสผ่านและ token เป็น plaintext; `localStorage` ทำให้ XSS ใดๆ ขโมย session ได้ทันที (HttpOnly cookie ป้องกันเรื่องนี้ แต่ระบบกลับส่ง token ออกไปทาง body ด้วย จึงเสียประโยชน์ของ HttpOnly)
+**ความเสี่ยง:** ใครก็ตามใน LAN ที่ sniff ได้ (ARP spoof, rogue AP) เห็นรหัสผ่านและ token เป็น plaintext (แก้ด้วย TLS — ดูข้อ 1). ส่วนช่องทาง "XSS ขโมย token จาก `localStorage`" ปิดไปแล้วเพราะ token อยู่ใน HttpOnly cookie เท่านั้น
 
 **แนวทางแก้ (เรียงตามความคุ้ม):**
 1. รองรับ TLS: self-signed cert ที่ generate ตอน install + flag `-tls-cert`/`-tls-key` แล้วตั้ง `Secure: true`
@@ -122,8 +122,8 @@ go install github.com/securego/gosec/v2/cmd/gosec@latest
 3. อย่างน้อยที่สุด: bind เฉพาะ IP ของ LAN management interface แทน `0.0.0.0`
 
 **C.1 CSRF (ตรวจคู่กับ cookie เสมอ)**
-- ปัจจุบันป้องกันได้จากสองกลไก: cookie เป็น `SameSite=Strict` (เบราว์เซอร์บล็อค cross-site request ทั้งหมด) และ frontend ส่ง `Authorization: Bearer` header ผ่าน fetch hook (`config.ts`) ซึ่ง immune ต่อ CSRF โดยธรรมชาติ
-- **จุดที่ต้องเฝ้า:** cookie fallback ใน `AuthMiddleware` คือ path เดียวที่ CSRF โจมตีได้ — ทุกรอบรีวิวให้ยืนยันว่า `SameSite` ยังเป็น `Strict` (ห้ามลดเป็น `Lax`/`None`) และไม่มี endpoint mutate ใดรับ auth จาก cookie โดยข้าม middleware
+- หลังทำ cookie-only auth แล้ว auth มาทาง cookie **ทางเดียว** (ตัด `Authorization: Bearer` ทิ้ง) ดังนั้น CSRF ป้องกันด้วยกลไกเดียวคือ cookie เป็น `SameSite=Strict` (เบราว์เซอร์บล็อค cross-site request ทั้งหมด)
+- **จุดที่ต้องเฝ้า (สำคัญขึ้นกว่าเดิม):** ตอนนี้ `SameSite=Strict` คือด่านเดียวที่กัน CSRF — ทุกรอบรีวิวต้องยืนยันว่า cookie login/logout ยังตั้ง `SameSite=Strict` (ห้ามลดเป็น `Lax`/`None`) เพราะไม่มี Bearer header เป็น backstop อีกแล้ว
 - แนวทางเสริม (defense-in-depth): เช็ค `Origin`/`Sec-Fetch-Site` header สำหรับ request ที่ mutate — reject ถ้าเป็น cross-site
 
 ### D. Input Validation และ Config-File Injection
@@ -240,8 +240,8 @@ cd ../frontend && yarn audit
 | Session Management | C | token **ไม่หมดอายุฝั่ง server** จนกว่า restart; ที่ดี: เช็ค DB ทุก request, purge session เมื่อลบบัญชี/import config | A |
 | Authorization | A- | RBAC แบบ fail-closed, guard rails ครบพร้อม test; ระวัง GET ที่มี side effect หลุด role read-only | B |
 | Password Hashing | A- | bcrypt cost 10 ใช้สม่ำเสมอทั้ง create/login/reset | A |
-| CSRF | B | ปลอดภัยจาก `SameSite=Strict` + Bearer header; ควรเพิ่มเช็ค `Origin` เป็น defense-in-depth | C.1 |
-| Cookie Security | C+ | `HttpOnly` + `SameSite=Strict` ถูกต้อง แต่ `Secure:false` และประโยชน์ HttpOnly ถูกทำลายเพราะ token ซ้ำใน `localStorage` | C |
+| CSRF | B | หลัง cookie-only auth: กันด้วย `SameSite=Strict` กลไกเดียว (ตัด Bearer แล้ว) — ควรเพิ่มเช็ค `Origin` เป็น defense-in-depth เพราะไม่มี backstop | C.1 |
+| Cookie Security | B | `HttpOnly` + `SameSite=Strict` ถูกต้อง และ token ไม่ซ้ำใน `localStorage` อีก (ประโยชน์ HttpOnly กลับมาเต็ม); เหลือประเด็น `Secure` ที่ผูกกับ HTTPS (`r.TLS`) | C |
 | CORS | B+ | whitelist แบบ exact match ไม่ใช่ wildcard; ติดที่ dev origins ยัง active ใน production | B, C |
 | Rate Limiting | B- | มีที่ login (ถูกจุด); map ไม่มี eviction, endpoint แพง (scan/apply) ไม่มี limit | A, G |
 | File Upload | A- | มีทางเดียวคือ config import: super_admin only, cap 10 MB, transaction เดียว + snapshot, purge session หลัง import; ไม่มีการเขียนไฟล์ upload ลง filesystem | F |
@@ -249,8 +249,8 @@ cd ../frontend && yarn audit
 | TLS/HTTPS | **F** | **ไม่มีเลย — ช่องโหว่อันดับหนึ่ง** รหัสผ่าน/token วิ่ง plaintext ใน LAN | C |
 | Input Validation | B | SQL parameterized, wpa sanitize + test, `ParseIP`/`ParseMAC`; ค้าง audit เส้นทาง dnsmasq (zone/record/hostname) ให้ครบ | D, E |
 
-**ลำดับความสำคัญของการแก้:** TLS (F) → เลิกส่ง token สองทางให้เหลือ HttpOnly cookie อย่างเดียว
-(ยกเกรด Cookie/CSRF/Session พร้อมกัน) → session TTL → audit เส้นทาง dnsmasq ให้จบ
+**ลำดับความสำคัญของการแก้:** TLS (F) → ~~เลิกส่ง token สองทางให้เหลือ HttpOnly cookie อย่างเดียว~~
+(**เสร็จแล้ว** — cookie-only-session-auth-plan; ยกเกรด Cookie/CSRF ไปแล้ว) → session TTL → audit เส้นทาง dnsmasq ให้จบ
 
 ## 6. สิ่งที่ทำได้ดีแล้ว (ณ รอบรีวิวนี้ — คงไว้ อย่าถอยหลัง)
 
@@ -271,7 +271,7 @@ cd ../frontend && yarn audit
 | # | ระดับ | ปัญหา | ที่อยู่ | แนวทางแก้ |
 |---|---|---|---|---|
 | 1 | สูง | ไม่มี TLS — รหัสผ่าน/token วิ่งเป็น plaintext ใน LAN, cookie `Secure:false` | `cmd/pigate/main.go`, `handlers.go` | self-signed cert ตอน install + flag TLS + `Secure:true` |
-| 2 | สูง | token เก็บใน `localStorage` และถูกส่งใน JSON body ทั้งที่มี HttpOnly cookie แล้ว — XSS ใดๆ ขโมย session ได้ | `authService.ts`, `HandleLogin` | ใช้ HttpOnly cookie ทางเดียว, เลิกส่ง token ใน body |
+| 2 | ~~สูง~~ **แก้แล้ว** | ~~token เก็บใน `localStorage` และถูกส่งใน JSON body ทั้งที่มี HttpOnly cookie แล้ว — XSS ใดๆ ขโมย session ได้~~ → cookie-only auth: `LoginResponse` ไม่มี `token`, frontend เลิกเก็บ `localStorage` (เหลือ flag `pigate_logged_in` ที่ไม่ลับ), `AuthMiddleware`/logout อ่าน cookie ทางเดียว | `authService.ts`, `HandleLogin`, `middleware.go` | **เสร็จ** (cookie-only-session-auth-plan) — cookie เป็นช่องทางเดียว, `credentials: "include"` |
 | 3 | กลาง–สูง | session ไม่มีวันหมดอายุฝั่ง server จนกว่าจะ restart | `middleware.go` (`activeSessions`) | เพิ่ม TTL + sweeper |
 | 4 | กลาง | ไม่มี server timeouts (slowloris); body size limit มีเฉพาะ import (10 MB) ส่วน endpoint อื่นไม่มี | `main.go`, handlers | สร้าง `http.Server` เองพร้อม timeout, ครอบ `http.MaxBytesReader` ทุก endpoint |
 | 5 | กลาง | rate limiter map โตได้ไม่จำกัด (ไม่มี eviction) | `middleware.go` | LRU หรือ cleanup goroutine |

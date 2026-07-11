@@ -276,12 +276,11 @@ export const dashboardService = {
       return () => clearInterval(intervalId);
     }
 
-    // Real SSE connection
-    const token = localStorage.getItem("pigate_session");
-    // EventSource does not support custom headers, use URL param or cookies
-    // Backend should accept token via Authorization header or query string
-    const url = `${API_BASE_URL}/dashboard/logs/stream${token ? `?token=${encodeURIComponent(token)}` : ""}`;
-    const es = new EventSource(url);
+    // Real SSE connection. Auth rides on the HttpOnly session cookie —
+    // withCredentials makes EventSource send it (needed for the dev
+    // cross-origin case; production is same-origin). No token in the URL.
+    const url = `${API_BASE_URL}/dashboard/logs/stream`;
+    const es = new EventSource(url, { withCredentials: true });
 
     es.onmessage = (event) => {
       try {

@@ -47,9 +47,10 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
-// LoginResponse represents login token payload
+// LoginResponse represents the login result. The session token is delivered
+// only via the HttpOnly Set-Cookie header (never in this body) so that XSS in
+// the SPA cannot read it — see docs/ref/complete/cookie-only-session-auth-plan.md.
 type LoginResponse struct {
-	Token              string `json:"token"`
 	MustChangePassword bool   `json:"mustChangePassword"`
 	Role               string `json:"role"`
 }

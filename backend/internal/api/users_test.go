@@ -38,7 +38,7 @@ func TestReadonlyUserBlockedFromMutations(t *testing.T) {
 
 	// GET is allowed for a read-only user.
 	req := httptest.NewRequest("GET", "/api/interfaces", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
+	addSessionCookie(req, token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -47,7 +47,7 @@ func TestReadonlyUserBlockedFromMutations(t *testing.T) {
 
 	// A mutation must be blocked with 403.
 	req = httptest.NewRequest("POST", "/api/policies", bytes.NewBufferString(`{}`))
-	req.Header.Set("Authorization", "Bearer "+token)
+	addSessionCookie(req, token)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
@@ -56,7 +56,7 @@ func TestReadonlyUserBlockedFromMutations(t *testing.T) {
 
 	// Read-only users may still change their own password (allow-listed).
 	req = httptest.NewRequest("PUT", "/api/system/password", bytes.NewBufferString(`{"currentPassword":"nope","newPassword":"whatever12"}`))
-	req.Header.Set("Authorization", "Bearer "+token)
+	addSessionCookie(req, token)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code == http.StatusForbidden {
@@ -70,7 +70,7 @@ func TestReadonlyUserCannotAccessUserAPI(t *testing.T) {
 
 	// Even GET /api/users must be forbidden for a read-only admin.
 	req := httptest.NewRequest("GET", "/api/users", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
+	addSessionCookie(req, token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
@@ -85,7 +85,7 @@ func TestSuperAdminUserCRUDViaAPI(t *testing.T) {
 
 	// List: should include the seeded pigate account.
 	req := httptest.NewRequest("GET", "/api/users", nil)
-	req.Header.Set("Authorization", "Bearer "+adminToken)
+	addSessionCookie(req, adminToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -104,7 +104,7 @@ func TestSuperAdminUserCRUDViaAPI(t *testing.T) {
 	// Create a new read-only user.
 	body, _ := json.Marshal(model.CreateUserRequest{Username: "newviewer", Password: "password123", Role: model.RoleAdminReadonly})
 	req = httptest.NewRequest("POST", "/api/users", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", "Bearer "+adminToken)
+	addSessionCookie(req, adminToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -118,7 +118,7 @@ func TestSuperAdminUserCRUDViaAPI(t *testing.T) {
 
 	// Toggle the new user (disable).
 	req = httptest.NewRequest("POST", "/api/users/"+created.ID+"/toggle", nil)
-	req.Header.Set("Authorization", "Bearer "+adminToken)
+	addSessionCookie(req, adminToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -127,7 +127,7 @@ func TestSuperAdminUserCRUDViaAPI(t *testing.T) {
 
 	// Delete the new user.
 	req = httptest.NewRequest("DELETE", "/api/users/"+created.ID, nil)
-	req.Header.Set("Authorization", "Bearer "+adminToken)
+	addSessionCookie(req, adminToken)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -151,7 +151,7 @@ func TestDisabledUserSessionEvictedImmediately(t *testing.T) {
 
 	// Works before disabling.
 	req := httptest.NewRequest("GET", "/api/interfaces", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
+	addSessionCookie(req, token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -163,7 +163,7 @@ func TestDisabledUserSessionEvictedImmediately(t *testing.T) {
 
 	// The lingering session must now be rejected on the very next request.
 	req = httptest.NewRequest("GET", "/api/interfaces", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
+	addSessionCookie(req, token)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {

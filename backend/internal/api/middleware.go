@@ -76,7 +76,7 @@ func CORSMiddleware(next http.Handler) http.Handler {
 		}
 
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Requested-With")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -87,23 +87,14 @@ func CORSMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// AuthMiddleware checks for a valid session token in Authorization Header or Cookie
+// AuthMiddleware checks for a valid session token in the HttpOnly cookie.
+// The Authorization: Bearer path was removed — the cookie is the single
+// channel for the session token (cookie-only auth).
 func (s *Server) AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var token string
-
-		// 1. Check Authorization header
-		authHeader := r.Header.Get("Authorization")
-		if strings.HasPrefix(authHeader, "Bearer ") {
-			token = strings.TrimPrefix(authHeader, "Bearer ")
-		}
-
-		// 2. Check Cookie if header is empty
-		if token == "" {
-			cookie, err := r.Cookie(SessionKey)
-			if err == nil {
-				token = cookie.Value
-			}
+		if cookie, err := r.Cookie(SessionKey); err == nil {
+			token = cookie.Value
 		}
 
 		if token == "" || !IsSessionValid(token) {

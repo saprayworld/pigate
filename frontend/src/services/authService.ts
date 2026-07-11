@@ -1,10 +1,23 @@
 import { IS_MOCK_MODE, API_BASE_URL } from "./config";
 
-const SESSION_KEY = "pigate_session";
+// The real session token lives only in an HttpOnly cookie (cookie-only auth) —
+// JS can neither read nor store it. LOGGED_IN_KEY is a non-secret UI hint that
+// tells the route guards a login has happened; the cookie + GET /auth/session
+// remain the real source of truth.
+const LOGGED_IN_KEY = "pigate_logged_in";
 const ROLE_KEY = "pigate_role";
 const USERNAME_KEY = "pigate_username";
+// Legacy key from the pre-cookie-only versions; may hold a stale token on
+// machines that logged in before this change. Purged on load and on logout.
+const LEGACY_SESSION_KEY = "pigate_session";
 
 export type UserRole = "super_admin" | "admin_readonly";
+
+// One-time cleanup: drop any token left in localStorage by an older version so
+// it can't linger as garbage or be exfiltrated by XSS after the fact.
+if (typeof localStorage !== "undefined") {
+  localStorage.removeItem(LEGACY_SESSION_KEY);
+}
 
 // Mock accounts, kept in sync with userService's mock seed so role-based UI can
 // be exercised without a backend. Only used when IS_MOCK_MODE is true.
@@ -13,8 +26,8 @@ const MOCK_ACCOUNTS: Record<string, { password: string; role: UserRole }> = {
   viewer: { password: "viewer", role: "admin_readonly" },
 };
 
-function storeSession(token: string, role: string, username: string, mustChange: boolean) {
-  localStorage.setItem(SESSION_KEY, token);
+function storeSession(role: string, username: string, mustChange: boolean) {
+  localStorage.setItem(LOGGED_IN_KEY, "true");
   localStorage.setItem(ROLE_KEY, role || "");
   localStorage.setItem(USERNAME_KEY, username || "");
   if (mustChange) {
@@ -25,23 +38,25 @@ function storeSession(token: string, role: string, username: string, mustChange:
 }
 
 function clearSession() {
-  localStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem(LOGGED_IN_KEY);
   localStorage.removeItem(ROLE_KEY);
   localStorage.removeItem(USERNAME_KEY);
   localStorage.removeItem("pigate_must_change_password");
+  // Also clear the legacy token key so it doesn't survive a logout.
+  localStorage.removeItem(LEGACY_SESSION_KEY);
 }
 
 export const authService = {
-  // Login method
-  login: async (username: string, password: string): Promise<string> => {
+  // Login method. On success the backend sets the HttpOnly session cookie; here
+  // we only record the non-secret UI hints (logged-in flag, role, username).
+  login: async (username: string, password: string): Promise<void> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 500));
       const acct = MOCK_ACCOUNTS[username];
       if (acct && acct.password === password) {
-        const token = "mock_session_id_" + Math.random().toString(36).substring(2, 9);
         // In mock mode the seeded accounts behave as already-initialized.
-        storeSession(token, acct.role, username, false);
-        return token;
+        storeSession(acct.role, username, false);
+        return;
       }
       throw new Error("Invalid username or password. (Try pigate / pigate or viewer / viewer)");
     }
@@ -58,8 +73,7 @@ export const authService = {
     }
 
     const data = await response.json();
-    storeSession(data.token, data.role || "", username, !!data.mustChangePassword);
-    return data.token;
+    storeSession(data.role || "", username, !!data.mustChangePassword);
   },
 
   // Logout method
@@ -74,14 +88,10 @@ export const authService = {
     clearSession();
   },
 
-  // Check if authenticated
+  // Check if authenticated. This only reflects the non-secret logged-in hint;
+  // the cookie + GET /auth/session are the real authority (see checkSession).
   isAuthenticated: (): boolean => {
-    return !!localStorage.getItem(SESSION_KEY);
-  },
-
-  // Get current session token
-  getToken: (): string | null => {
-    return localStorage.getItem(SESSION_KEY);
+    return localStorage.getItem(LOGGED_IN_KEY) === "true";
   },
 
   // Get the cached role of the current user (from the last login/checkSession).
@@ -102,12 +112,10 @@ export const authService = {
     role: UserRole | null;
     mustChangePassword: boolean;
   }> => {
-    const token = localStorage.getItem(SESSION_KEY);
-    if (!token) {
-      return { valid: false, username: "", role: null, mustChangePassword: false };
-    }
-
     if (IS_MOCK_MODE) {
+      if (localStorage.getItem(LOGGED_IN_KEY) !== "true") {
+        return { valid: false, username: "", role: null, mustChangePassword: false };
+      }
       await new Promise((resolve) => setTimeout(resolve, 300));
       const mustChange = localStorage.getItem("pigate_must_change_password") === "true";
       const role = authService.getRole();
@@ -115,6 +123,8 @@ export const authService = {
       return { valid: true, username, role, mustChangePassword: mustChange };
     }
 
+    // No local token gate anymore — the HttpOnly cookie decides. Hit the backend
+    // directly and sync the UI hints from the result (401 -> clear + invalid).
     try {
       const response = await fetch(`${API_BASE_URL}/auth/session`, {
         method: "GET",
@@ -127,7 +137,7 @@ export const authService = {
 
       const data = await response.json();
       const role: string = data.role || "";
-      storeSession(token, role, data.username || "", !!data.mustChangePassword);
+      storeSession(role, data.username || "", !!data.mustChangePassword);
       return {
         valid: true,
         username: data.username || "",
