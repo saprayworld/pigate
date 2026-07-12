@@ -403,6 +403,86 @@ else
 fi
 
 # =============================================================================
+# STEP 5.3: ตั้งค่า kernel ให้ทำตัวเป็น Gateway/Router (IP forwarding, VLAN/IFB, rp_filter)
+# =============================================================================
+# เหตุผล: PiGate สร้าง forward chain ใน nftables และ route ข้าม interface/VLAN ได้
+# แต่ kernel จะ "ไม่ forward packet เลย" ถ้าไม่เปิด net.ipv4.ip_forward — และตัว
+# pigate service รันเป็น user 'pigate' ที่ไม่มี CAP_SYS_MODULE จึง modprobe เอง
+# ตอน runtime ไม่ได้ (เช่น `modprobe ifb` ใน real_qos.go จะ fail) ดังนั้นการเปิด
+# forwarding + preload โมดูลที่จำเป็นต้องทำที่ระดับ host ตรงนี้ (มีผลตั้งแต่ boot
+# ผ่าน systemd-sysctl / systemd-modules-load ก่อน pigate.service เริ่มทำงาน)
+log_info "STEP 5.3: ตั้งค่า kernel สำหรับ Gateway/Router..."
+
+# --- rp_filter: ถามผู้ใช้ (ค่าเริ่มต้น = 2 loose สำหรับ router; strict อาจ drop
+#     forwarded traffic ที่ path ไม่สมมาตร เช่น หลาย VLAN / policy routing) ---
+RP_FILTER=2
+if [[ -t 0 ]]; then
+    echo ""
+    log_info "reverse-path filter (rp_filter) กัน IP spoofing แต่ strict อาจตัด traffic ที่ route ข้าม VLAN/หลาย interface"
+    read -r -p "$(echo -e "${YELLOW}ตั้ง rp_filter แบบไหน? [2=loose (แนะนำสำหรับ router) / 1=strict / 0=off] (ค่าเริ่มต้น=2): ${NC}")" RPF_INPUT || RPF_INPUT=""
+    case "${RPF_INPUT}" in
+        1) RP_FILTER=1 ;;
+        0) RP_FILTER=0 ;;
+        ""|2) RP_FILTER=2 ;;
+        *) log_warn "ค่าไม่ถูกต้อง — ใช้ค่าเริ่มต้น 2 (loose)"; RP_FILTER=2 ;;
+    esac
+else
+    log_info "ไม่ใช่ interactive — ใช้ rp_filter=2 (loose) ซึ่งเหมาะกับ router"
+fi
+
+# --- เขียนไฟล์ sysctl (persist ข้าม reboot; apply ทันทีด้านล่าง) ---
+SYSCTL_FILE="/etc/sysctl.d/99-pigate.conf"
+cat > "${SYSCTL_FILE}" << EOF
+# Managed by PiGate installer. Do not edit manually.
+# ค่าที่จำเป็นสำหรับให้เครื่องทำตัวเป็น Gateway/Router
+
+# IPv4 packet forwarding — จำเป็นสำหรับ route ระหว่าง interface/VLAN
+# (nftables forward chain จะไร้ผลถ้าไม่เปิดค่านี้)
+net.ipv4.ip_forward = 1
+
+# IPv6 forwarding — ปิดไว้ (เลือก IPv4-only ตอนติดตั้ง) หากต้องการ route IPv6
+# ข้าม interface ให้ปลดคอมเมนต์บรรทัดล่าง (พึงระวัง: การเปิด forwarding จะปิด
+# accept_ra บน interface ที่รับ IPv6 จาก WAN แบบ SLAAC ตามพฤติกรรม kernel)
+#net.ipv6.conf.all.forwarding = 1
+
+# Reverse-path filter (2=loose, 1=strict, 0=off) — router ที่มี asymmetric/
+# policy routing ควรใช้ loose ไม่งั้น forwarded packet อาจโดน drop เงียบ ๆ
+net.ipv4.conf.all.rp_filter = ${RP_FILTER}
+net.ipv4.conf.default.rp_filter = ${RP_FILTER}
+EOF
+log_ok "เขียน ${SYSCTL_FILE} (ip_forward=1, rp_filter=${RP_FILTER})"
+
+# apply ทันทีโดยไม่ต้อง reboot
+if sysctl --system >/dev/null 2>&1; then
+    log_ok "apply sysctl สำเร็จ (ip_forward เปิดแล้ว)"
+else
+    sysctl -p "${SYSCTL_FILE}" >/dev/null 2>&1 || log_warn "apply sysctl ไม่สำเร็จ — จะมีผลหลัง reboot"
+fi
+
+# --- preload kernel modules ที่ pigate ต้องใช้แต่ modprobe เองไม่ได้ ---
+# 8021q: VLAN sub-interface (pigate สร้างผ่าน netlink; ปกติ kernel auto-load แต่
+#        preload กันเคส blacklist/ไม่ auto-load)
+# ifb:   QoS ingress shaping (real_qos.go ต้องใช้ แต่ modprobe runtime ล้มเพราะ
+#        ไม่มี CAP_SYS_MODULE)
+MODULES_FILE="/etc/modules-load.d/pigate.conf"
+cat > "${MODULES_FILE}" << 'EOF'
+# Managed by PiGate installer. Do not edit manually.
+# โมดูลที่ pigate ต้องใช้แต่ modprobe เองไม่ได้ (ไม่มี CAP_SYS_MODULE)
+8021q
+ifb
+EOF
+log_ok "เขียน ${MODULES_FILE} (8021q, ifb)"
+
+# โหลดทันที (install รันเป็น root จึง modprobe ได้) — ไม่ fail ถ้า compiled-in
+for mod in 8021q ifb; do
+    if modprobe "${mod}" 2>/dev/null; then
+        log_ok "โหลดโมดูล ${mod} สำเร็จ"
+    else
+        log_warn "โหลดโมดูล ${mod} ไม่สำเร็จ (อาจ compiled-in อยู่แล้ว หรือ kernel ไม่รองรับ)"
+    fi
+done
+
+# =============================================================================
 # STEP 6: คัดลอก binary และตั้งค่า capabilities
 # =============================================================================
 log_info "STEP 6: ติดตั้ง binary..."
@@ -493,6 +573,8 @@ echo -e "  Binary:   ${BLUE}/usr/local/bin/pigate${NC}"
 echo -e "  Database: ${BLUE}/var/lib/pigate/pigate.db${NC}"
 echo -e "  Service:  ${BLUE}/etc/systemd/system/pigate.service${NC}"
 echo -e "  dhcpcd:   ${BLUE}/etc/systemd/system/dhcpcd@.service${NC} (per-interface, ควบคุมผ่าน polkit)"
+echo -e "  Gateway:  ${BLUE}/etc/sysctl.d/99-pigate.conf${NC} (ip_forward=1, rp_filter=${RP_FILTER})"
+echo -e "  Modules:  ${BLUE}/etc/modules-load.d/pigate.conf${NC} (8021q, ifb)"
 echo ""
 echo -e "${YELLOW}คำสั่งถัดไป:${NC}"
 if [[ "${IS_UPDATE}" == true ]] && [[ "${SERVICE_WAS_RUNNING}" == true ]]; then
