@@ -68,6 +68,14 @@ func (m *RealDNSServerManager) ApplyZones(zones []model.DNSZone, interfaces []st
 			continue
 		}
 
+		// Defense-in-depth: never let an un-validated zone reach the config file,
+		// even if a malformed value somehow persisted to the DB. The handler and
+		// config-import paths reject these up front; this is the last line.
+		if err := model.ValidateDNSZone(zone); err != nil {
+			log.Printf("[DNS Server] Skipping invalid zone %q: %v", zoneName, err)
+			continue
+		}
+
 		sb.WriteString(fmt.Sprintf("# Zone: %s\n", zoneName))
 
 		if zone.IsAuthoritative {
@@ -83,6 +91,11 @@ func (m *RealDNSServerManager) ApplyZones(zones []model.DNSZone, interfaces []st
 			sb.WriteString(fmt.Sprintf("local=/%s/\n", zoneName))
 
 			for _, rec := range zone.Records {
+				if err := model.ValidateDNSRecord(rec); err != nil {
+					log.Printf("[DNS Server] Skipping invalid record %q (type %s) in zone %q: %v", rec.Name, rec.Type, zoneName, err)
+					continue
+				}
+
 				name := strings.TrimSpace(rec.Name)
 				fullName := zoneName
 				if name != "" && name != "@" && name != zoneName {

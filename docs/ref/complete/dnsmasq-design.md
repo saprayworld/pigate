@@ -815,3 +815,33 @@ for _, port := range []uint16{137, 138, 67, 68} {
 - **ยังไม่ได้แก้ (นอก scope ของรอบนี้)**: มีข้อสังเกตว่ากฎ drop พอร์ต 68 แบบไม่มีเงื่อนไขนี้อาจกระทบ DHCP **Client** ฝั่ง WAN (`dhcpcd`) ด้วย เพราะ conntrack ปกติไม่รู้จัก broadcast DHCP reply ว่าเป็น "related" กับ request เดิม แต่ประเด็นนี้อยู่นอกเอกสารฉบับนี้และแตะพื้นที่ที่ถูกกำหนดห้ามแตะ (`dhcpcd.go`) จึงพักไว้เป็น follow-up แยกที่ต้องทดสอบบนฮาร์ดแวร์จริงก่อนสรุป
 - Backend ผ่าน `go build ./...`, `go vet ./...`, `go test ./...` ทั้งหมด — ยังไม่ได้ทดสอบบนฮาร์ดแวร์จริง (เช่น `nft list ruleset` ยืนยันลำดับกฎ, ต่ออุปกรณ์รับ lease จริง, `dig` ไปยัง DNS Server)
 
+
+### 🔒 Input Validation — กัน config injection (2026-07-12, issue #36)
+
+Security review finding 7 (Medium): ค่าที่ผู้ใช้กรอก (DNS zone name, record name/value,
+forward-zone `forwardTo`, DHCP reservation `deviceName`/MAC/IP) เดิมถูกเขียนลง
+`pigate-dns.conf` / `pigate-dhcp.conf` ด้วย `fmt.Sprintf` โดยมีแค่ `TrimSpace` — ซึ่ง
+**ไม่ตัด newline กลางสตริง** ค่าอย่าง `1.2.3.4\naddress=/evil/6.6.6.6` ฉีด directive ใหม่เข้า
+ไฟล์ได้ และ `dnsmasq --test` จับไม่ได้ (บรรทัดที่ฉีดเป็น config ที่ valid)
+
+**การแก้ (whitelist, reject-not-strip) — validate 3 ชั้น:**
+
+- **`backend/internal/model/dns_validate.go`** (ใหม่) — `ValidateDNSZone`, `ValidateDNSRecord`,
+  `ValidateReservation`/`ValidateReservationName`: pure function ใน `model` (ไม่มี dep,
+  เรียกได้ทุก layer). regex full-match `^...$` — ใน Go `$` = ปลายข้อความ จึง reject `\n`/`\r`
+  โดยอัตโนมัติ. per-type: A=IPv4 (`net.ParseIP`+`To4`), AAAA=IPv6, CNAME/PTR=FQDN charset,
+  MX=`"<pref> <target>"`/`"<target>"`, TXT≤255 ไม่มี `"`; zone name `^[a-zA-Z0-9.-]+$`;
+  reservation name อนุญาต space (writer แปลงเป็น `-`) แต่ reject อักขระคุม; MAC/IP validate ด้วย
+- **Handler layer** (`api/handlers.go`) — 6 handler (DNS zone/record create+update, DHCP
+  reservation create+update) เรียก validator หลัง decode → ตอบ `400` พร้อม message ชัด
+- **Import path** (`service/backup.go` → `validateConfig`) — import เขียน DB ตรงข้าม handler
+  จึง validate ทุก DNS/DHCP entry **ก่อน** single-txn restore; ถ้ามีตัวใดพัง reject ทั้ง import
+  (fail-closed, DB ไม่เปลี่ยน)
+- **Generation-time defense-in-depth** (`kernel/dns_server.go`, `dhcp_server.go`) — loop
+  ApplyZones/ApplyConfig ถ้า zone/record/reservation ตัวใด fail validate → **skip + log**
+  (ไม่ทำทั้ง apply พังเพราะ 1 entry เสีย) กันค่าที่หลุด DB เก่าไปถึงไฟล์
+
+Mock backend ไม่แตะ (mock DNS/DHCP ไม่เขียนไฟล์ dnsmasq จึงไม่มีผิวฉีด). ทดสอบ:
+`model/dns_validate_test.go` (per-type valid/invalid + injection ตรงๆ),
+`api/dns_validation_test.go` (handler 400), `service/backup_test.go`
+(`TestImportRejectsDnsmasqInjection` — import ถูก reject, DB ไม่เปลี่ยน)

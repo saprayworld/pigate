@@ -109,6 +109,12 @@ func (m *RealDhcpManager) ApplyConfig(cfgs []model.DhcpConfig, reservations []mo
 		sb.WriteString("# Static IP Reservations\n")
 		for _, res := range reservations {
 			if res.MacAddress != "" && res.IPAddress != "" {
+				// Defense-in-depth: skip any reservation whose MAC/IP/name would
+				// inject a directive. Handler + import paths reject these first.
+				if err := model.ValidateReservation(res); err != nil {
+					log.Printf("[DHCP Server] Skipping invalid reservation (mac=%q ip=%q name=%q): %v", res.MacAddress, res.IPAddress, res.DeviceName, err)
+					continue
+				}
 				name := res.DeviceName
 				if name == "" {
 					name = "pigate-device"

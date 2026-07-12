@@ -1465,6 +1465,11 @@ func (s *Server) HandleCreateDHCPReservation(w http.ResponseWriter, r *http.Requ
 		IPAddress:  input.IPAddress,
 	}
 
+	if err := model.ValidateReservation(res); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	if err := s.repo.CreateDHCPReservation(res); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1491,6 +1496,11 @@ func (s *Server) HandleUpdateDHCPReservation(w http.ResponseWriter, r *http.Requ
 		DeviceName: input.DeviceName,
 		MacAddress: input.MacAddress,
 		IPAddress:  input.IPAddress,
+	}
+
+	if err := model.ValidateReservation(res); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	if err := s.repo.UpdateDHCPReservation(res); err != nil {
@@ -2283,6 +2293,11 @@ func (s *Server) HandleCreateDNSZone(w http.ResponseWriter, r *http.Request) {
 		Records:         []model.DNSRecord{},
 	}
 
+	if err := model.ValidateDNSZone(zone); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	if err := s.repo.CreateDNSZone(zone); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -2312,6 +2327,11 @@ func (s *Server) HandleUpdateDNSZone(w http.ResponseWriter, r *http.Request) {
 		IsAuthoritative: input.IsAuthoritative,
 		Enabled:         input.Enabled,
 		Records:         existing.Records,
+	}
+
+	if err := model.ValidateDNSZone(zone); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	if err := s.repo.UpdateDNSZone(zone); err != nil {
@@ -2369,6 +2389,11 @@ func (s *Server) HandleCreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 		TTL:    input.TTL,
 	}
 
+	if err := model.ValidateDNSRecord(record); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	if err := s.repo.CreateDNSRecord(record); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -2397,6 +2422,11 @@ func (s *Server) HandleUpdateDNSRecord(w http.ResponseWriter, r *http.Request) {
 		Type:   input.Type,
 		Value:  input.Value,
 		TTL:    input.TTL,
+	}
+
+	if err := model.ValidateDNSRecord(record); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	if err := s.repo.UpdateDNSRecord(record); err != nil {

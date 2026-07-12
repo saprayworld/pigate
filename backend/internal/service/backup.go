@@ -659,6 +659,26 @@ func validateConfig(cfg model.BackupConfig) error {
 	if cfg.SystemDns.Mode != "" && cfg.SystemDns.Mode != "wan" && cfg.SystemDns.Mode != "static" {
 		return fmt.Errorf("invalid system DNS mode %q", cfg.SystemDns.Mode)
 	}
+
+	// The import path writes DNS zones/records and DHCP reservations straight to
+	// the DB, bypassing the create/update handlers. Enforce the same whitelist
+	// here so a crafted backup can't inject a dnsmasq directive. Fail-closed:
+	// one bad entry rejects the whole import (which is atomic) before any write.
+	for _, z := range cfg.DnsZones {
+		if err := model.ValidateDNSZone(z); err != nil {
+			return fmt.Errorf("dns zone %q: %w", z.ZoneName, err)
+		}
+		for _, rec := range z.Records {
+			if err := model.ValidateDNSRecord(rec); err != nil {
+				return fmt.Errorf("dns record in zone %q: %w", z.ZoneName, err)
+			}
+		}
+	}
+	for _, res := range cfg.DhcpReservations {
+		if err := model.ValidateReservation(res); err != nil {
+			return fmt.Errorf("dhcp reservation %q: %w", res.DeviceName, err)
+		}
+	}
 	return nil
 }
 

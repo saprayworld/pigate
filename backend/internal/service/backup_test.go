@@ -233,6 +233,46 @@ func TestImportConstraintViolationRollsBack(t *testing.T) {
 	}
 }
 
+// TestImportRejectsDnsmasqInjection ensures a crafted backup carrying a DNS
+// record value with an embedded newline (a dnsmasq directive injection) is
+// rejected before any DB mutation — the import path bypasses the create/update
+// handlers, so validation must also live in the import flow.
+func TestImportRejectsDnsmasqInjection(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	file.Config.DnsZones = append(file.Config.DnsZones, model.DNSZone{
+		ID: "zone-evil", ZoneName: "evil.local", IsAuthoritative: true, Enabled: true,
+		Records: []model.DNSRecord{
+			{ID: "rec-evil", ZoneID: "zone-evil", Name: "www", Type: "A",
+				Value: "1.2.3.4\naddress=/evil/6.6.6.6"},
+		},
+	})
+	sum, _ := configChecksum(*file.Config)
+	file.Meta.Checksum = sum
+	raw, _ := json.Marshal(file)
+
+	beforeZones, _ := repo.GetDNSZones()
+
+	if _, err := bs.Import(raw, model.ImportOptions{}); err == nil {
+		t.Fatalf("expected import to be rejected on injected DNS record")
+	}
+
+	afterZones, _ := repo.GetDNSZones()
+	if len(afterZones) != len(beforeZones) {
+		t.Errorf("DB changed despite rejected import: zones before=%d after=%d", len(beforeZones), len(afterZones))
+	}
+	for _, z := range afterZones {
+		if z.ID == "zone-evil" {
+			t.Errorf("injected zone leaked into DB")
+		}
+	}
+}
+
 func TestImportLegacyV1(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 
