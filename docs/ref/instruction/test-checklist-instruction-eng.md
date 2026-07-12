@@ -47,6 +47,14 @@
    role/permissions. Don't pad the human's manual list with things already
    covered by automation.
 
+   Between full automation and pure eyeballing sits a **middle tier: API/CLI
+   checks run against the *real* device** — real HTTPS, the real config files on
+   disk, real roles — which mock `verify` can't reach. Package these as a
+   **companion bash script the tester runs on the hardware** (§6). It never
+   replaces the observed field; it *feeds* it — the script prints each real
+   value and the tester pastes it into the HTML form, so every result still
+   passes through the tester's own eyes.
+
 ---
 
 ## 1. When This Kind of Checklist Is Required
@@ -70,7 +78,8 @@ tests **do not** need an HTML checklist — use judgment.
 **Where to put the report file:** place the `.html` at the **repo root** (or a
 temp folder) so the user can open it easily — it is a **test artifact, not
 committed** to the repo (unless the user asks to keep it). The JSON the user
-exports back is likewise an artifact.
+exports back is likewise an artifact. Any companion bash test script (§6) sits at
+the repo root beside it, with the same artifact status.
 
 ---
 
@@ -184,15 +193,87 @@ JSON per the schema above.
 
 ---
 
-## 6. The Workflow (human + AI)
+## 6. Companion Bash Test Script (API / CLI checks)
+
+For any work whose real-hardware verification is driven by **repeatable shell
+commands** — `curl` against real endpoints, `grep` of a generated config file on
+the device, status-code / response-body assertions, role checks — ship a
+**companion `bash` script** alongside the HTML report. Hand-typing a dozen curl
+commands is error-prone and the tester can't easily reproduce it; a script makes
+the run deterministic while still surfacing every value to the tester's eyes.
+
+**Purpose (why it exists — not just convenience):**
+- **Reproducible** — the same run any day, on any device, by anyone.
+- **Feeds the observed field, never replaces it.** The script prints an
+  `OBSERVED [<item-id>]: <real value>` line for each checklist item; the tester
+  reads it and pastes it into the matching HTML field. The human still sees every
+  result — the script only removes typing mistakes, it does not become the source
+  of truth.
+- **Reaches what mock can't** — real HTTPS/cert, the real `/etc/dnsmasq.d/*.conf`
+  on disk, real `super_admin` vs `admin_readonly` sessions.
+
+**Placement & lifecycle:** put the `.sh` at the **repo root** next to the `.html`,
+same as any test artifact — **not committed** unless the user asks. Ask at the end
+whether to keep, `.gitignore`, or discard (same as the HTML/JSON).
+
+**What goes in the script vs. what stays manual:**
+
+| Put in the bash script | Keep as manual / eyeball |
+|---|---|
+| `curl` status-code + response-body assertions (400/403/200) | DevTools Network/Application values |
+| `grep` of a generated config file **(run on the device)** | A real downstream client getting a DHCP lease |
+| Injection payloads → assert rejected | `dig` from a real client, redirect/SSE behavior |
+| Import/export round-trip via the API | Dark/light, visual layout, page bounce |
+| Role/permission calls with a read-only cookie | Anything needing a second physical device |
+
+**Conventions (match the ones proven in practice):**
+- `#!/usr/bin/env bash` + `set -u`; syntax-check with `bash -n` before sending.
+- Parametrise the target: `BASE="${BASE:-https://<ip>}"` and
+  `COOKIE="${COOKIE:-cookies.txt}"` read from env with sane defaults, so the
+  tester overrides without editing the file.
+- **Auth via a saved cookie, not inline credentials:** the tester logs in once
+  (`curl -c cookies.txt ... /api/auth/login`) and the script reuses it. For role
+  tests, take a second cookie or `RO_USER`+`RO_PASS` via env. **Never hardcode a
+  password** — take secrets from env or a prompt.
+- Print one **`OBSERVED [<item-id>]: ...`** line per HTML item, with `<item-id>`
+  matching the checklist `id` exactly, so the tester knows which field to paste
+  into. Add a `PASS`/`FAIL` helper and a final `PASS=x FAIL=y` summary.
+- **Assert on the *reason*, not just the status code.** A right code for the
+  wrong reason is a silent coverage hole — e.g. a record `type=SRV` with an
+  invalid *name* returns 400 because of the name, never exercising the
+  unsupported-*type* branch you meant to test. Grep the message
+  (`... | grep -qi 'unsupported DNS record type'`) so the script fails when the
+  400 came from the wrong check.
+- **Craft inputs to hit the intended code path.** To test the config-import
+  validator (not the checksum guard that runs before it), blank `meta.checksum`
+  so execution reaches the validator; to test the type branch, use a *valid* name.
+- **Device-local vs. remote:** a `grep` of `/etc/dnsmasq.d/*.conf` only works when
+  the script runs **on the device**. If it may run remotely, degrade gracefully —
+  skip and print the exact command to run on the device rather than failing.
+- **Self-clean:** delete any zone/record/reservation the script created (and temp
+  files), so re-runs start clean and the device isn't left with test junk.
+- **Don't depend on tools that may be absent** (e.g. `jq`); prefer `python3`/`grep`
+  and note the dependencies at the top of the script.
+- Group the script's output by the **same section numbers as the HTML** so the
+  tester can work top-to-bottom through both in lockstep.
+
+The AI still runs the mock-automatable tier itself (principle 3); the bash script
+is specifically the **real-device** API/CLI tier the tester runs by hand.
+
+---
+
+## 7. The Workflow (human + AI)
 
 1. **AI builds the report** from the plan (§2-§3) → copy the template, edit
-   `META`/`SECTIONS`, place the file at repo root → send it to the user with
-   `SendUserFile` (display render)
+   `META`/`SECTIONS`, place the file at repo root; **for API/CLI-driven items,
+   also build the companion bash script (§6)** → send both to the user with
+   `SendUserFile` (display render for the HTML)
 2. **AI runs the automatable parts first** — `go test`, `yarn lint`, the
    `verify` skill (mock) → tell the user only the real-hardware items remain
-3. **User deploys + tests on real hardware**, fills in status + pastes observed
-   values → Export JSON
+3. **User deploys + tests on real hardware** — logs in once to save a cookie,
+   **runs the bash script**, reads each printed `OBSERVED [...]` line and pastes
+   it into the matching HTML field (plus the pure-eyeball items), fills in
+   status → Export JSON
 4. **User pastes the JSON back** → **the AI reads each `items[].observed` and
    re-checks** that the real value is what it should be (not just the `status`)
    — e.g. confirm the pasted header actually contains `Secure`, the response
@@ -206,7 +287,7 @@ help verify the far end even without being at the machine.
 
 ---
 
-## 7. Writing Style
+## 8. Writing Style
 
 - **Language:** checklist labels/hints in Thai mixed with English technical
   terms (matching the project UI); file names/ids in English
@@ -217,6 +298,7 @@ help verify the far end even without being at the machine.
 - **Item count:** matched to DoD + cautions; don't pad with already-automated
   items — typically ~15-25 items is right
 - **Stable ids:** set once, never change — they anchor the JSON review
-- **After testing:** the report file + JSON are artifacts — ask the user whether
-  to keep them in the repo, `.gitignore` them, or discard; update the plan /
-  security artifact to note which items are now verified
+- **After testing:** the report file, the companion bash script, and the exported
+  JSON are artifacts — ask the user whether to keep them in the repo, `.gitignore`
+  them, or discard; update the plan / security artifact to note which items are
+  now verified
