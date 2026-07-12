@@ -1546,6 +1546,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DhcpReservation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
 
   /dhcp/reservations/{id}:
     put:
@@ -1571,6 +1573,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DhcpReservation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
     delete:
       tags:
         - DHCP Server
@@ -1691,6 +1695,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DNSZone'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '404':
           description: DNS Zone not found
     delete:
@@ -1804,6 +1810,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DNSRecord'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '404':
           description: DNS Record not found
     delete:
@@ -3413,9 +3421,16 @@ components:
       properties:
         zoneName:
           type: string
+          description: >-
+            Zone name. Allowed characters: letters, digits, '.' and '-' only
+            (no spaces, underscores or newlines). Invalid values are rejected
+            with 400 (guards against dnsmasq config injection).
           example: home.lan
         forwardTo:
           type: string
+          description: >-
+            Upstream resolver for a forward zone (IPv4/IPv6, optional '#port',
+            or hostname). Charset-validated; invalid values return 400.
           example: 192.168.1.53
         allowedIps:
           type: string
@@ -3470,12 +3485,20 @@ components:
       properties:
         name:
           type: string
+          description: >-
+            Host name relative to the zone ('@' or empty = zone apex). Allowed
+            characters: letters, digits, '.' and '-'. Invalid values return 400.
           example: nas
         type:
           type: string
+          description: One of A, AAAA, CNAME, MX, TXT, PTR. Any other type is rejected with 400.
           example: A
         value:
           type: string
+          description: >-
+            Validated per type (A=IPv4, AAAA=IPv6, CNAME/PTR=FQDN charset,
+            MX="<pref> <target>" or "<target>", TXT<=255 chars, no quotes).
+            Values with newlines/invalid charset return 400 (dnsmasq injection guard).
           example: 192.168.1.50
         ttl:
           type: integer
@@ -3714,12 +3737,18 @@ components:
       properties:
         deviceName:
           type: string
+          description: >-
+            Device name written to dnsmasq as the reservation hostname. Letters,
+            digits, spaces (collapsed to '-') and '-' only, max 63 chars; may be
+            empty (a default is used). Invalid values return 400.
           example: CEO_Laptop
         macAddress:
           type: string
+          description: Colon- or hyphen-separated 6-octet MAC. Invalid values return 400.
           example: "A1:B2:C3:D4:E5:F6"
         ipAddress:
           type: string
+          description: Reserved IPv4/IPv6 address. Invalid values return 400.
           example: 192.168.1.10
 
     ActiveDhcpLease:
