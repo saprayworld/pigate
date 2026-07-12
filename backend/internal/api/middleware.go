@@ -18,52 +18,8 @@ const (
 	SessionKey     string     = "pigate_session"
 )
 
-// Simple in-memory session store
-var (
-	sessionMutex   sync.RWMutex
-	activeSessions = map[string]string{} // token -> username
-)
-
-func AddSession(token, username string) {
-	sessionMutex.Lock()
-	defer sessionMutex.Unlock()
-	activeSessions[token] = username
-}
-
-func RemoveSession(token string) {
-	sessionMutex.Lock()
-	defer sessionMutex.Unlock()
-	delete(activeSessions, token)
-}
-
-func IsSessionValid(token string) bool {
-	sessionMutex.RLock()
-	defer sessionMutex.RUnlock()
-	_, valid := activeSessions[token]
-	return valid
-}
-
-// GetUsernameByToken resolves the username bound to a session token.
-func GetUsernameByToken(token string) (string, bool) {
-	sessionMutex.RLock()
-	defer sessionMutex.RUnlock()
-	username, ok := activeSessions[token]
-	return username, ok
-}
-
-// RemoveSessionsForUser purges every in-memory session belonging to a username.
-// Used when an account is deleted/disabled so the lingering token can't sit in
-// the map until restart. The AuthMiddleware already rejects such tokens on the
-// next request (the DB is source of truth); this is just housekeeping.
-func RemoveSessionsForUser(username string) {
-	sessionMutex.Lock()
-	defer sessionMutex.Unlock()
-	for token, u := range activeSessions {
-		if u == username {
-			delete(activeSessions, token)
-		}
-	}
-}
+// The in-memory session store (AddSession/RemoveSession/ValidateSession/…) lives
+// in session.go alongside the TTL/renewal/sweeper logic.
 
 // CORSMiddleware handles cross-origin requests from the frontend dev server
 func CORSMiddleware(next http.Handler) http.Handler {
@@ -97,21 +53,23 @@ func (s *Server) AuthMiddleware(next http.Handler) http.Handler {
 			token = cookie.Value
 		}
 
-		if token == "" || !IsSessionValid(token) {
+		// Validate + (rarely) renew in one call. renewExpiry is non-zero only when
+		// the sliding idle deadline was pushed forward and the cookie must be
+		// re-issued; ok is false for a missing or server-side-expired token.
+		username, renewExpiry, ok := ValidateSession(token)
+		if token == "" || !ok {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`{"message": "Unauthorized"}`))
 			return
 		}
 
-		// Resolve the real user bound to this session token.
-		username, ok := GetUsernameByToken(token)
-		if !ok || username == "" {
-			RemoveSession(token)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"message": "Unauthorized"}`))
-			return
+		// Re-issue the cookie with the slid deadline. This MUST happen before
+		// next.ServeHTTP — once the handler calls WriteHeader the header is
+		// silently dropped and the browser cookie expires ahead of the server
+		// session (Caution 3).
+		if !renewExpiry.IsZero() {
+			setSessionCookie(w, r, token, renewExpiry)
 		}
 
 		// Query the DB every request (source of truth). This makes deleting,

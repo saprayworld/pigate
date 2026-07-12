@@ -194,19 +194,11 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 			user.Username, user.Username, "User "+user.Username+" logged in")
 	}
 
-	// Set secure cookie. Secure is decided per-request from r.TLS (nil over plain
-	// HTTP, non-nil over HTTPS) rather than a global flag, because the HTTP fallback
-	// mode serves the same handler without TLS — a hardcoded Secure:true there would
-	// make the browser silently drop the session cookie.
-	http.SetCookie(w, &http.Cookie{
-		Name:     SessionKey,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   r.TLS != nil,
-		SameSite: http.SameSiteStrictMode,
-		Expires:  time.Now().Add(24 * time.Hour),
-	})
+	// Issue the session cookie via the shared helper so login and mid-session
+	// renewal always write identical attributes (Caution 4). The idle TTL is the
+	// server-side deadline; the browser cookie is slid forward on use and capped
+	// at the absolute max server-side.
+	setSessionCookie(w, r, token, time.Now().Add(sessionTTL))
 
 	s.writeJSON(w, http.StatusOK, model.LoginResponse{
 		MustChangePassword: user.IsInitial,
