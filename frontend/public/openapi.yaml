@@ -47,6 +47,14 @@ paths:
             Login successful. The session token is delivered ONLY via the
             `Set-Cookie: pigate_session=...` response header (HttpOnly, Secure
             over HTTPS, SameSite=Strict) — it is never returned in the body.
+
+            Session lifetime (server-enforced): a 15-minute idle TTL that slides
+            forward on use (any authenticated request within ~7.5 min of expiry
+            re-issues the cookie with a fresh deadline), capped by a 7-day
+            absolute maximum from login. A user may hold at most 5 concurrent
+            sessions; a 6th login evicts that user's oldest session. Separately,
+            the web UI auto-logs-out after 5 minutes of no mouse/keyboard
+            activity, calling POST /auth/logout to revoke the session immediately.
           headers:
             Set-Cookie:
               description: HttpOnly session cookie carrying the session token.
@@ -85,6 +93,10 @@ paths:
       summary: Check current session validity and user context
       description: |
         Verifies that the current session cookie (pigate_session) is still valid on the backend.
+        A session is invalid once it has expired server-side (15-minute sliding idle TTL, or the
+        7-day absolute cap), was evicted by the per-user session cap, or was revoked by logout —
+        all of which return 401 here. A valid session may also be renewed as a side effect (a
+        fresh Set-Cookie), since this route passes through the auth middleware.
         Also returns whether the user must change their password (IsInitial check).
         If mustChangePassword is true, all other API endpoints (except /system/password) will return 403 Forbidden.
       responses:
@@ -109,7 +121,10 @@ paths:
                     type: boolean
                     example: false
         '401':
-          description: Session invalid or expired
+          description: |
+            Session invalid, revoked, or expired server-side (idle TTL / absolute
+            cap / per-user cap eviction). The frontend clears its UI hints and
+            redirects to /login.
 
   /auth/logout:
     post:

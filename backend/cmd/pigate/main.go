@@ -216,6 +216,10 @@ func main() {
 	// batches to preserve the SD card).
 	eventLogService.Start(monitorCtx)
 
+	// Start the session sweeper: reaps in-memory sessions past their idle deadline
+	// so abandoned tokens don't linger in the map until restart.
+	api.StartSessionSweeper(monitorCtx)
+
 	// Start the dashboard telemetry sampler (CPU usage + WAN traffic history).
 	// Shares the monitor context so it stops on shutdown.
 	log.Printf("[Main] Starting system status telemetry sampler...")

@@ -4,8 +4,13 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { HostnameProvider } from "@/components/HostnameProvider"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { useIdleLogout } from "@/hooks/useIdleLogout"
 
 export default function ShellLayout() {
+  // Auto-logout after 5 minutes of inactivity. Mounted here (under ProtectedRoute)
+  // so it covers every authenticated page and never runs on Login/ChangePassword.
+  useIdleLogout()
+
   return (
     <HostnameProvider>
       <SidebarProvider
