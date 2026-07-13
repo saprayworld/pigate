@@ -1,7 +1,9 @@
 openapi: 3.0.0
 info:
   title: PiGate API Specification
-  description: API endpoints for PiGate - Raspberry Pi 5 Firewall & Gateway Controller. This spec is synchronized with the React frontend service layer.
+  description: >-
+    API endpoints for PiGate - Raspberry Pi 5 Firewall & Gateway Controller. This spec is synchronized with the React frontend service layer.
+    Request bodies are capped at 1 MB on every endpoint (a request that exceeds this fails with a 4xx), except POST /system/config/import which allows up to 10 MB for backup files.
   version: 1.0.0
 servers:
   - url: http://localhost:2479/api

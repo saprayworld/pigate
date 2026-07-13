@@ -22,13 +22,13 @@ sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend   # required for real 
 ./pigate-backend -port=8081 -db=pigate.db -mock=true
 ./pigate-backend -port=8081 -db=pigate.db -mock=true -disable-edit=true   # read-only mode
 ```
-Other relevant `main.go` flags: `-mock-from-real` (mock layer seeded from real kernel state), `-allow-edit-system-routes`, `-enable-edit-system-route`, `-prioritize-kernel-routes`, `-docker-compat`.
+Other relevant `main.go` flags: `-mock-from-real` (mock layer seeded from real kernel state), `-allow-edit-system-routes`, `-enable-edit-system-route`, `-prioritize-kernel-routes`, `-docker-compat`, `-allow-dev-cors` (echo CORS headers for the `localhost:5173/3000` frontend dev servers; off by default — pass it when running `yarn dev` against this backend, otherwise the browser blocks the cross-origin API calls).
 
 ### Frontend (React 19 + Vite + Tailwind + shadcn/ui, in `frontend/`)
 ```bash
 cd frontend
 yarn install
-yarn dev        # dev server
+yarn dev        # dev server (:5173) — start the backend with -allow-dev-cors so its API accepts the cross-origin calls
 yarn build      # tsc -b && vite build
 yarn lint
 ```

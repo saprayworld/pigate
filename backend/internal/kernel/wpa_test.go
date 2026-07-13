@@ -221,7 +221,6 @@ func TestGetWifiStatus(t *testing.T) {
 	}
 }
 
-
 // TestConfigureWifiAtomicWrite tests the atomic file writing configuration of wifi
 func TestConfigureWifiAtomicWrite(t *testing.T) {
 	// Create a temporary directory for wpa_supplicant configuration files
@@ -242,14 +241,14 @@ func TestConfigureWifiAtomicWrite(t *testing.T) {
 	}()
 
 	netMgr := NewRealNetwork()
-	
-	// Create an interface wlan_test, we stub/mock the systemctl check implicitly by catching the failed start 
+
+	// Create an interface wlan_test, we stub/mock the systemctl check implicitly by catching the failed start
 	// (or we can see if it writes the configuration file cleanly since we check file existence).
 	// To prevent executing real 'systemctl' command errors failing the test, we'll verify the config is created.
 	// Since wlan_test is not a systemctl service, starting it will fail, which is expected.
 	// Let's call ConfigureWifi and expect an error from systemctl, but check if the config file was written correctly!
 	err = netMgr.ConfigureWifi("wlan_test", "MyHomeSSID", "secpass", "WPA2-PSK", "BackupSSID", "backpass", "WPA2", "hardware")
-	
+
 	// The file should have been written despite systemctl service failing to start
 	configPath := filepath.Join(tmpDir, "wpa_supplicant-wlan_test.conf")
 	info, errStat := os.Stat(configPath)
@@ -273,7 +272,6 @@ func TestConfigureWifiAtomicWrite(t *testing.T) {
 		}
 	}
 }
-
 
 // Helper process for mocking exec.Command in tests
 func fakeExecCommand(command string, args ...string) *exec.Cmd {
@@ -382,4 +380,39 @@ func TestFrequencyToChannel(t *testing.T) {
 	}
 }
 
-
+// TestRedactWpaCommand verifies the allowlist semantics: only known-safe
+// commands (and bare verbs, which carry no argument) are logged verbatim —
+// every other command with arguments is redacted to its verb, so redaction
+// fails closed for secret-bearing commands the code has never seen.
+func TestRedactWpaCommand(t *testing.T) {
+	cases := []struct {
+		name string
+		cmd  string
+		want string
+	}{
+		{"reconfigure passes through", "RECONFIGURE", "RECONFIGURE"},
+		{"reconnect passes through", "RECONNECT", "RECONNECT"},
+		{"bare unknown verb passes through", "STATUS", "STATUS"},
+		{"psk redacted", `SET_NETWORK 0 psk "supersecret"`, "SET_NETWORK [redacted]"},
+		{"password redacted", `SET_NETWORK 0 password "hunter2"`, "SET_NETWORK [redacted]"},
+		{"sae_password redacted", `SET_NETWORK 0 sae_password "pw"`, "SET_NETWORK [redacted]"},
+		{"lowercase verb still redacted", `set_network 0 PSK "x"`, "set_network [redacted]"},
+		{"unlisted keyword fails closed (wps pin)", "WPS_PIN any 12345670", "WPS_PIN [redacted]"},
+		{"unlisted keyword fails closed (private_key_passwd)", `SET_NETWORK 0 private_key_passwd "kp"`, "SET_NETWORK [redacted]"},
+		{"any unknown command with args redacted", "SCAN freq=2412", "SCAN [redacted]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := redactWpaCommand(tc.cmd)
+			if got != tc.want {
+				t.Errorf("redactWpaCommand(%q) = %q, want %q", tc.cmd, got, tc.want)
+			}
+			// A redacted result must never leak the secret material.
+			for _, secret := range []string{"supersecret", "hunter2", "12345670", `"kp"`} {
+				if strings.Contains(got, secret) {
+					t.Errorf("redacted output still contains secret %q: %q", secret, got)
+				}
+			}
+		})
+	}
+}

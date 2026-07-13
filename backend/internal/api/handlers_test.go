@@ -17,6 +17,23 @@ import (
 )
 
 func setupTestServer(t *testing.T) (http.Handler, *db.Repository) {
+	return setupTestServerWithCORS(t, false)
+}
+
+func setupTestServerWithCORS(t *testing.T, allowDevCORS bool) (http.Handler, *db.Repository) {
+	server, repo := buildTestServer(t, allowDevCORS)
+	handler := RegisterRoutes(server)
+
+	// Add test session token to activeSessions since IsSessionValid no longer allows mock_session_id_* bypass
+	AddSession("mock_session_id_test_token", "pigate")
+
+	return handler, repo
+}
+
+// buildTestServer constructs a *Server backed by mock kernels and an in-memory
+// DB, returning it (and the repo) so tests that need the server internals — e.g.
+// flushing the event log to assert audit trails — can reach them.
+func buildTestServer(t *testing.T, allowDevCORS bool) (*Server, *db.Repository) {
 	// Initialize memory database
 	sqliteDB, err := db.InitDB(":memory:")
 	if err != nil {
@@ -44,13 +61,9 @@ func setupTestServer(t *testing.T) (http.Handler, *db.Repository) {
 	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcdMgr, ifaceService)
 	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo))
-	handler := RegisterRoutes(server)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, allowDevCORS, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo))
 
-	// Add test session token to activeSessions since IsSessionValid no longer allows mock_session_id_* bypass
-	AddSession("mock_session_id_test_token", "pigate")
-
-	return handler, repo
+	return server, repo
 }
 
 // addSessionCookie attaches the session token via the pigate_session cookie,
@@ -72,23 +85,45 @@ func sessionCookieFromRec(t *testing.T, rec *httptest.ResponseRecorder) string {
 	return ""
 }
 
+// TestAPICORSHeaders verifies the dev-origin echo is gated behind allowDevCORS.
+// With the flag OFF (production default) no Access-Control-Allow-Origin is echoed
+// even for a known dev origin; with it ON the origin is echoed. The preflight
+// still returns 204 either way.
 func TestAPICORSHeaders(t *testing.T) {
-	handler, _ := setupTestServer(t)
+	t.Run("gate off — no dev origin echoed", func(t *testing.T) {
+		handler, _ := setupTestServerWithCORS(t, false)
 
-	req := httptest.NewRequest("OPTIONS", "/api/auth/login", nil)
-	req.Header.Set("Origin", "http://localhost:5173")
-	rec := httptest.NewRecorder()
+		req := httptest.NewRequest("OPTIONS", "/api/auth/login", nil)
+		req.Header.Set("Origin", "http://localhost:5173")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
 
-	handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("Expected status code %d, got %d", http.StatusNoContent, rec.Code)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+			t.Errorf("Expected no Access-Control-Allow-Origin when gate is off, got '%s'", got)
+		}
+	})
 
-	if rec.Code != http.StatusNoContent {
-		t.Errorf("Expected status code %d, got %d", http.StatusNoContent, rec.Code)
-	}
+	t.Run("gate on — dev origin echoed", func(t *testing.T) {
+		handler, _ := setupTestServerWithCORS(t, true)
 
-	corsHeader := rec.Header().Get("Access-Control-Allow-Origin")
-	if corsHeader != "http://localhost:5173" {
-		t.Errorf("Expected CORS Access-Control-Allow-Origin 'http://localhost:5173', got '%s'", corsHeader)
-	}
+		req := httptest.NewRequest("OPTIONS", "/api/auth/login", nil)
+		req.Header.Set("Origin", "http://localhost:5173")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("Expected status code %d, got %d", http.StatusNoContent, rec.Code)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+			t.Errorf("Expected Access-Control-Allow-Origin 'http://localhost:5173', got '%s'", got)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+			t.Errorf("Expected Access-Control-Allow-Credentials 'true', got '%s'", got)
+		}
+	})
 }
 
 func TestAPIAuthenticationFlow(t *testing.T) {
@@ -326,7 +361,7 @@ func TestDisableEditMode(t *testing.T) {
 	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
 
 	// Server initialized with disableEdit = true
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, true, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo))
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, true, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo))
 	handler := RegisterRoutes(server)
 
 	// Add test session token to activeSessions since IsSessionValid no longer allows mock_session_id_* bypass
@@ -469,7 +504,7 @@ func TestForcePasswordChangeFlow(t *testing.T) {
 	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcdMgr, ifaceService)
 	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo))
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo))
 	handler := RegisterRoutes(server)
 
 	// 1. Login with correct password
@@ -581,7 +616,7 @@ func TestCheckSessionAPI(t *testing.T) {
 	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcdMgr, ifaceService)
 	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo))
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo))
 	handler := RegisterRoutes(server)
 
 	// 1. Check session without token (should fail with 401)
@@ -728,7 +763,7 @@ func setupTestServerWithFirewall(t *testing.T) (http.Handler, *db.Repository, *k
 	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcdMgr, ifaceService)
 	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
 
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo))
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo))
 	handler := RegisterRoutes(server)
 
 	AddSession("mock_session_id_test_token", "pigate")

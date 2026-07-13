@@ -369,9 +369,13 @@ func (r *Repository) DeleteAddress(id string) error {
 	return err
 }
 
-func (r *Repository) BulkDeleteAddresses(ids []string) error {
+// BulkDeleteAddresses deletes the given address objects and returns how many
+// rows were actually removed (IDs that don't exist are silently skipped by the
+// SQL IN delete, so the count can be lower than len(ids) — callers auditing the
+// operation must report this count, not the requested one).
+func (r *Repository) BulkDeleteAddresses(ids []string) (int64, error) {
 	if len(ids) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	// Build query placeholders
@@ -387,25 +391,28 @@ func (r *Repository) BulkDeleteAddresses(ids []string) error {
 	var systemCount int
 	querySys := fmt.Sprintf("SELECT COUNT(*) FROM address_objects WHERE system = 1 AND id IN (%s)", queryIn)
 	if err := r.db.QueryRow(querySys, args...).Scan(&systemCount); err != nil {
-		return err
+		return 0, err
 	}
 	if systemCount > 0 {
-		return errors.New("cannot delete system predefined address objects in bulk")
+		return 0, errors.New("cannot delete system predefined address objects in bulk")
 	}
 
 	// Check if any is referenced
 	var refCount int
 	queryRefs := fmt.Sprintf("SELECT COUNT(*) FROM policy_addresses WHERE address_id IN (%s)", queryIn)
 	if err := r.db.QueryRow(queryRefs, args...).Scan(&refCount); err != nil {
-		return err
+		return 0, err
 	}
 	if refCount > 0 {
-		return errors.New("cannot delete address objects referenced by firewall policies")
+		return 0, errors.New("cannot delete address objects referenced by firewall policies")
 	}
 
 	queryDel := fmt.Sprintf("DELETE FROM address_objects WHERE id IN (%s)", queryIn)
-	_, err := r.db.Exec(queryDel, args...)
-	return err
+	res, err := r.db.Exec(queryDel, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (r *Repository) AddressNameExists(name string) (bool, error) {
@@ -1132,9 +1139,12 @@ func (r *Repository) DeleteRoute(id string) error {
 	return err
 }
 
-func (r *Repository) BulkDeleteRoutes(ids []string) error {
+// BulkDeleteRoutes deletes the given static routes and returns how many rows
+// were actually removed (nonexistent IDs are silently skipped by the SQL IN
+// delete — audit callers must report this count, not the requested one).
+func (r *Repository) BulkDeleteRoutes(ids []string) (int64, error) {
 	if len(ids) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	placeholders := make([]string, len(ids))
@@ -1149,16 +1159,19 @@ func (r *Repository) BulkDeleteRoutes(ids []string) error {
 		var systemCount int
 		querySys := fmt.Sprintf("SELECT COUNT(*) FROM static_routes WHERE type = 'system' AND id IN (%s)", queryIn)
 		if err := r.db.QueryRow(querySys, args...).Scan(&systemCount); err != nil {
-			return err
+			return 0, err
 		}
 		if systemCount > 0 {
-			return errors.New("cannot delete system predefined static routes in bulk")
+			return 0, errors.New("cannot delete system predefined static routes in bulk")
 		}
 	}
 
 	queryDel := fmt.Sprintf("DELETE FROM static_routes WHERE id IN (%s)", queryIn)
-	_, err := r.db.Exec(queryDel, args...)
-	return err
+	res, err := r.db.Exec(queryDel, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (r *Repository) ToggleRouteStatus(id string) error {

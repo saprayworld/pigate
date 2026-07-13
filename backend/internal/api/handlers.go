@@ -30,6 +30,7 @@ type Server struct {
 	dhcp              kernel.DhcpManager
 	logs              *logs.RingBuffer
 	disableEdit       bool
+	allowDevCORS      bool
 	interfaceService  *service.InterfaceService
 	dhcpcdService     *service.DhcpcdService
 	routingService    *service.RoutingService
@@ -55,6 +56,7 @@ func NewServer(
 	dhcp kernel.DhcpManager,
 	l *logs.RingBuffer,
 	disableEdit bool,
+	allowDevCORS bool,
 	ifaceService *service.InterfaceService,
 	dhcpcdService *service.DhcpcdService,
 	routingService *service.RoutingService,
@@ -79,6 +81,7 @@ func NewServer(
 		dhcp:              dhcp,
 		logs:              l,
 		disableEdit:       disableEdit,
+		allowDevCORS:      allowDevCORS,
 		interfaceService:  ifaceService,
 		dhcpcdService:     dhcpcdService,
 		routingService:    routingService,
@@ -119,10 +122,29 @@ func maskInterfacePasswords(iface *model.NetworkInterface) {
 	}
 }
 
-func generateRandomToken() string {
+// generateRandomToken returns 16 bytes of crypto-random data hex-encoded. It is
+// fail-closed: if the OS entropy source errors, it returns the error rather than
+// a predictable/zero token. Session tokens and resource IDs are security-relevant
+// (a guessable session token = takeover; guessable IDs = collision/enumeration),
+// so every caller must handle the error and refuse the operation, never proceed
+// with a zero value.
+func generateRandomToken() (string, error) {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// randomID builds a short prefixed resource ID (e.g. "rule-1a2b3c4d"). Propagates
+// the entropy error so the caller can fail the request with 500 instead of
+// minting a predictable ID.
+func randomID(prefix string) (string, error) {
+	tok, err := generateRandomToken()
+	if err != nil {
+		return "", err
+	}
+	return prefix + tok[:8], nil
 }
 
 // logLoginFailed records a failed login attempt. Only the attempted username is
@@ -186,7 +208,13 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := "session_id_" + generateRandomToken()
+	tok, err := generateRandomToken()
+	if err != nil {
+		// Fail closed: never issue a session cookie backed by a predictable token.
+		s.writeError(w, http.StatusInternalServerError, "Could not generate session")
+		return
+	}
+	token := "session_id_" + tok
 	AddSession(token, user.Username)
 
 	if s.eventLog != nil {
@@ -340,6 +368,10 @@ func (s *Server) HandleGetRecentLogs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleClearLogs(w http.ResponseWriter, r *http.Request) {
 	s.logs.Clear()
+	// Wiping the live traffic/firewall log buffer must itself be attributable —
+	// same rationale as HandleClearSystemEvents re-logging the actor of a wipe.
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.logs_cleared", model.EventSeverityWarning,
+		"ringbuffer", "Dashboard traffic/firewall log buffer cleared")
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -917,6 +949,8 @@ func (s *Server) HandleResetInterface(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.logEvent(r, model.EventCategoryNetwork, "network.interface_reset", model.EventSeverityWarning,
+		iface.Name, "Interface \""+iface.Name+"\" configuration reset to defaults")
 	maskInterfacePasswords(refreshed)
 	s.writeJSON(w, http.StatusOK, refreshed)
 }
@@ -941,8 +975,13 @@ func (s *Server) HandleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	id, err := randomID("rule-")
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Could not generate ID")
+		return
+	}
 	rule := model.PolicyRule{
-		ID:           "rule-" + generateRandomToken()[:8],
+		ID:           id,
 		Name:         input.Name,
 		InInterface:  input.InInterface,
 		OutInterface: input.OutInterface,
@@ -1030,6 +1069,8 @@ func (s *Server) HandleReorderPolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.policy_reordered", model.EventSeverityInfo,
+		"policies", fmt.Sprintf("Firewall policies reordered (%d rule(s))", len(body.Policies)))
 	s.writeJSON(w, http.StatusOK, body.Policies)
 }
 
@@ -1040,6 +1081,12 @@ func (s *Server) HandleTogglePolicyLog(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	state := "disabled"
+	if p.Log {
+		state = "enabled"
+	}
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.policy_log_toggled", model.EventSeverityInfo,
+		p.Name, "Logging on firewall policy \""+p.Name+"\" "+state)
 	s.writeJSON(w, http.StatusOK, p)
 }
 
@@ -1050,6 +1097,12 @@ func (s *Server) HandleTogglePolicyStatus(w http.ResponseWriter, r *http.Request
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	state := "disabled"
+	if p.Status {
+		state = "enabled"
+	}
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.policy_toggled", model.EventSeverityInfo,
+		p.Name, "Firewall policy \""+p.Name+"\" "+state)
 	s.writeJSON(w, http.StatusOK, p)
 }
 
@@ -1087,8 +1140,13 @@ func (s *Server) HandleCreateAddress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	id, err := randomID("addr-")
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Could not generate ID")
+		return
+	}
 	addr := model.AddressObject{
-		ID:          "addr-" + generateRandomToken()[:8],
+		ID:          id,
 		Name:        input.Name,
 		Type:        input.Type,
 		Value:       input.Value,
@@ -1100,6 +1158,8 @@ func (s *Server) HandleCreateAddress(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.address_created", model.EventSeverityInfo,
+		addr.Name, "Address object \""+addr.Name+"\" created")
 	s.writeJSON(w, http.StatusOK, addr)
 }
 
@@ -1129,6 +1189,8 @@ func (s *Server) HandleUpdateAddress(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.address_updated", model.EventSeverityInfo,
+		addr.Name, "Address object \""+addr.Name+"\" updated")
 	s.writeJSON(w, http.StatusOK, addr)
 }
 
@@ -1138,6 +1200,8 @@ func (s *Server) HandleDeleteAddress(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.address_deleted", model.EventSeverityWarning,
+		id, "Address object "+id+" deleted")
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -1150,10 +1214,13 @@ func (s *Server) HandleBulkDeleteAddresses(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := s.firewallService.BulkDeleteAddresses(body.IDs); err != nil {
+	deleted, err := s.firewallService.BulkDeleteAddresses(body.IDs)
+	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.address_deleted", model.EventSeverityWarning,
+		"bulk", fmt.Sprintf("Bulk-deleted %d address object(s)", deleted))
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -1177,8 +1244,13 @@ func (s *Server) HandleCreateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	id, err := randomID("svc-")
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Could not generate ID")
+		return
+	}
 	svc := model.ServiceObject{
-		ID:          "svc-" + generateRandomToken()[:8],
+		ID:          id,
 		Name:        input.Name,
 		Protocol:    input.Protocol,
 		Port:        input.Port,
@@ -1190,6 +1262,8 @@ func (s *Server) HandleCreateService(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.service_created", model.EventSeverityInfo,
+		svc.Name, "Service object \""+svc.Name+"\" created")
 	s.writeJSON(w, http.StatusOK, svc)
 }
 
@@ -1219,6 +1293,8 @@ func (s *Server) HandleUpdateService(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.service_updated", model.EventSeverityInfo,
+		svc.Name, "Service object \""+svc.Name+"\" updated")
 	s.writeJSON(w, http.StatusOK, svc)
 }
 
@@ -1228,6 +1304,8 @@ func (s *Server) HandleDeleteService(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.service_deleted", model.EventSeverityWarning,
+		id, "Service object "+id+" deleted")
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -1251,8 +1329,13 @@ func (s *Server) HandleCreateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	id, err := randomID("route-")
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Could not generate ID")
+		return
+	}
 	route := model.StaticRoute{
-		ID:          "route-" + generateRandomToken()[:8],
+		ID:          id,
 		Destination: input.Destination,
 		Gateway:     input.Gateway,
 		Interface:   input.Interface,
@@ -1356,10 +1439,13 @@ func (s *Server) HandleBulkDeleteRoutes(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if err := s.routingService.BulkRemoveConfigRoutes(body.IDs); err != nil {
+	removed, err := s.routingService.BulkRemoveConfigRoutes(body.IDs)
+	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryRoute, "route.deleted", model.EventSeverityInfo,
+		"bulk", fmt.Sprintf("Bulk-deleted %d static route(s)", removed))
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -1369,6 +1455,8 @@ func (s *Server) HandleToggleRoute(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryRoute, "route.toggled", model.EventSeverityInfo,
+		id, "Static route "+id+" toggled")
 
 	var route *model.StaticRoute
 	if s.routingService.IsEnableEditSystemRoute() && strings.HasPrefix(id, "route-sys-") {
@@ -1450,8 +1538,13 @@ func (s *Server) HandleCreateDHCPReservation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	id, err := randomID("res-")
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Could not generate ID")
+		return
+	}
 	res := model.DhcpReservation{
-		ID:         "res-" + generateRandomToken()[:8],
+		ID:         id,
 		DeviceName: input.DeviceName,
 		MacAddress: input.MacAddress,
 		IPAddress:  input.IPAddress,
@@ -1466,6 +1559,8 @@ func (s *Server) HandleCreateDHCPReservation(w http.ResponseWriter, r *http.Requ
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDhcp, "dhcp.reservation_created", model.EventSeverityInfo,
+		res.DeviceName, "DHCP reservation for \""+res.DeviceName+"\" ("+res.MacAddress+" → "+res.IPAddress+") created")
 	s.writeJSON(w, http.StatusOK, res)
 }
 
@@ -1499,6 +1594,8 @@ func (s *Server) HandleUpdateDHCPReservation(w http.ResponseWriter, r *http.Requ
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDhcp, "dhcp.reservation_updated", model.EventSeverityInfo,
+		res.DeviceName, "DHCP reservation for \""+res.DeviceName+"\" updated")
 	s.writeJSON(w, http.StatusOK, res)
 }
 
@@ -1508,6 +1605,8 @@ func (s *Server) HandleDeleteDHCPReservation(w http.ResponseWriter, r *http.Requ
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDhcp, "dhcp.reservation_deleted", model.EventSeverityWarning,
+		id, "DHCP reservation "+id+" deleted")
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -1568,6 +1667,8 @@ func (s *Server) HandleCreateDHCPConfig(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDhcp, "dhcp.config_created", model.EventSeverityInfo,
+		cfg.Interface, "DHCP scope on "+cfg.Interface+" created")
 	s.writeJSON(w, http.StatusOK, cfg)
 }
 
@@ -1584,6 +1685,8 @@ func (s *Server) HandleUpdateDHCPConfigByID(w http.ResponseWriter, r *http.Reque
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDhcp, "dhcp.config_updated", model.EventSeverityInfo,
+		cfg.Interface, "DHCP scope on "+cfg.Interface+" updated")
 	s.writeJSON(w, http.StatusOK, cfg)
 }
 
@@ -1593,6 +1696,8 @@ func (s *Server) HandleDeleteDHCPConfig(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDhcp, "dhcp.config_deleted", model.EventSeverityWarning,
+		id, "DHCP scope "+id+" deleted")
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -1602,6 +1707,8 @@ func (s *Server) HandleToggleDHCPConfig(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDhcp, "dhcp.config_toggled", model.EventSeverityInfo,
+		id, "DHCP scope "+id+" toggled")
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -2111,6 +2218,14 @@ func (s *Server) HandleLogStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Clear the per-connection write deadline for this stream only. The server's
+	// global WriteTimeout (60s) would otherwise kill this long-lived SSE response
+	// every ~60s (masked by EventSource auto-reconnect). A zero deadline disables
+	// it for this connection while every normal endpoint keeps the 60s cap.
+	// Ignore the error: on a ResponseWriter that doesn't support it (e.g. tests),
+	// the stream just keeps the old 60s behavior — no worse than before.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
@@ -2182,6 +2297,8 @@ func (s *Server) HandleCreateQosRule(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "failed to create QoS rule")
 		return
 	}
+	s.logEvent(r, model.EventCategoryQos, "qos.rule_created", model.EventSeverityInfo,
+		rule.Name, "QoS rule \""+rule.Name+"\" created on "+rule.Interface)
 	s.writeJSON(w, http.StatusCreated, rule)
 }
 
@@ -2198,6 +2315,8 @@ func (s *Server) HandleUpdateQosRule(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "failed to update QoS rule")
 		return
 	}
+	s.logEvent(r, model.EventCategoryQos, "qos.rule_updated", model.EventSeverityInfo,
+		rule.Name, "QoS rule \""+rule.Name+"\" updated on "+rule.Interface)
 	s.writeJSON(w, http.StatusOK, rule)
 }
 
@@ -2208,6 +2327,8 @@ func (s *Server) HandleDeleteQosRule(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "failed to delete QoS rule")
 		return
 	}
+	s.logEvent(r, model.EventCategoryQos, "qos.rule_deleted", model.EventSeverityWarning,
+		id, "QoS rule "+id+" deleted")
 	s.writeJSON(w, http.StatusOK, map[string]string{"message": "QoS rule deleted"})
 }
 
@@ -2219,6 +2340,12 @@ func (s *Server) HandleToggleQosRule(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "failed to toggle QoS rule status")
 		return
 	}
+	state := "disabled"
+	if rule.Status {
+		state = "enabled"
+	}
+	s.logEvent(r, model.EventCategoryQos, "qos.rule_toggled", model.EventSeverityInfo,
+		rule.Name, "QoS rule \""+rule.Name+"\" "+state)
 	s.writeJSON(w, http.StatusOK, rule)
 }
 
@@ -2228,6 +2355,8 @@ func (s *Server) HandleSyncQosRules(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "failed to sync QoS rules to kernel")
 		return
 	}
+	s.logEvent(r, model.EventCategoryQos, "qos.synced", model.EventSeverityInfo,
+		"kernel", "QoS rules synced from database to kernel")
 	s.writeJSON(w, http.StatusOK, map[string]string{"message": "QoS rules synced to kernel"})
 }
 
@@ -2249,6 +2378,8 @@ func (s *Server) HandleClearQosIface(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "failed to clear QoS for interface")
 		return
 	}
+	s.logEvent(r, model.EventCategoryQos, "qos.iface_cleared", model.EventSeverityWarning,
+		iface, "QoS rules disabled and qdisc cleared on "+iface)
 	s.writeJSON(w, http.StatusOK, map[string]string{"message": "QoS cleared for interface " + iface})
 }
 
@@ -2275,8 +2406,13 @@ func (s *Server) HandleCreateDNSZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	id, err := randomID("zone-")
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Could not generate ID")
+		return
+	}
 	zone := model.DNSZone{
-		ID:              "zone-" + generateRandomToken()[:8],
+		ID:              id,
 		ZoneName:        input.ZoneName,
 		ForwardTo:       input.ForwardTo,
 		AllowedIPs:      input.AllowedIPs,
@@ -2294,6 +2430,8 @@ func (s *Server) HandleCreateDNSZone(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDns, "dns.zone_created", model.EventSeverityInfo,
+		zone.ZoneName, "DNS zone \""+zone.ZoneName+"\" created")
 	s.writeJSON(w, http.StatusOK, zone)
 }
 
@@ -2330,6 +2468,8 @@ func (s *Server) HandleUpdateDNSZone(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDns, "dns.zone_updated", model.EventSeverityInfo,
+		zone.ZoneName, "DNS zone \""+zone.ZoneName+"\" updated")
 	s.writeJSON(w, http.StatusOK, zone)
 }
 
@@ -2339,6 +2479,8 @@ func (s *Server) HandleDeleteDNSZone(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDns, "dns.zone_deleted", model.EventSeverityWarning,
+		id, "DNS zone "+id+" deleted")
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -2348,6 +2490,8 @@ func (s *Server) HandleToggleDNSZone(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDns, "dns.zone_toggled", model.EventSeverityInfo,
+		id, "DNS zone "+id+" toggled")
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -2372,8 +2516,13 @@ func (s *Server) HandleCreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	id, err := randomID("rec-")
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Could not generate ID")
+		return
+	}
 	record := model.DNSRecord{
-		ID:     "rec-" + generateRandomToken()[:8],
+		ID:     id,
 		ZoneID: zoneID,
 		Name:   input.Name,
 		Type:   input.Type,
@@ -2390,6 +2539,8 @@ func (s *Server) HandleCreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDns, "dns.record_created", model.EventSeverityInfo,
+		record.Name, "DNS record \""+record.Name+"\" ("+record.Type+") created")
 	s.writeJSON(w, http.StatusOK, record)
 }
 
@@ -2425,6 +2576,8 @@ func (s *Server) HandleUpdateDNSRecord(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDns, "dns.record_updated", model.EventSeverityInfo,
+		record.Name, "DNS record \""+record.Name+"\" ("+record.Type+") updated")
 	s.writeJSON(w, http.StatusOK, record)
 }
 
@@ -2434,6 +2587,8 @@ func (s *Server) HandleDeleteDNSRecord(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDns, "dns.record_deleted", model.EventSeverityWarning,
+		id, "DNS record "+id+" deleted")
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -2456,6 +2611,8 @@ func (s *Server) HandleClearDNSCache(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDns, "dns.cache_cleared", model.EventSeverityInfo,
+		"dnsmasq", "DNS server cache cleared")
 	s.writeJSON(w, http.StatusOK, true)
 }
 
@@ -2498,5 +2655,7 @@ func (s *Server) HandleUpdateDNSServerSettings(w http.ResponseWriter, r *http.Re
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent(r, model.EventCategoryDns, "dns.server_settings_changed", model.EventSeverityInfo,
+		"dns-server", fmt.Sprintf("DNS server bound to %d interface(s)", len(input.Interfaces)))
 	s.writeJSON(w, http.StatusOK, input)
 }

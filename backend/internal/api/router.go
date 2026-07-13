@@ -164,10 +164,13 @@ func RegisterRoutes(s *Server) http.Handler {
 	// Serve embedded static frontend files
 	serveStatic(mux)
 
-	var handler http.Handler = mux
+	// Body cap sits innermost (closest to the mux) so the config/import path can
+	// still install its own larger 10 MB cap; every other endpoint gets 1 MB.
+	var handler http.Handler = BodyLimitMiddleware(mux)
 	if s.disableEdit {
 		handler = DisableEditMiddleware(handler)
 	}
-	// Global CORS Wrapper must be outermost to ensure CORS headers are set on all responses (including 403 Forbidden)
-	return CORSMiddleware(handler)
+	// Security headers wrap everything below; CORS stays OUTERMOST so even a 403
+	// from an inner middleware still carries CORS (and now security) headers.
+	return s.CORSMiddleware(SecurityHeadersMiddleware(handler))
 }

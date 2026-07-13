@@ -160,8 +160,9 @@ func (s *FirewallService) DeleteAddress(id string) error {
 	return s.repo.DeleteAddress(id)
 }
 
-// BulkDeleteAddresses deletes multiple address objects by their IDs.
-func (s *FirewallService) BulkDeleteAddresses(ids []string) error {
+// BulkDeleteAddresses deletes multiple address objects by their IDs and returns
+// the number actually removed (nonexistent IDs are skipped, see repository).
+func (s *FirewallService) BulkDeleteAddresses(ids []string) (int64, error) {
 	return s.repo.BulkDeleteAddresses(ids)
 }
 

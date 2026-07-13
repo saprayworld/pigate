@@ -14,6 +14,10 @@ pigate.db-wal
 go.work
 go.work.sum
 
+# Manual-test leftovers (server PID files, curl payload dumps)
+*.pid
+big.txt
+
 # IDE/Editor config
 .vscode/
 .idea/

@@ -45,6 +45,7 @@ func main() {
 	dockerCompat := flag.Bool("docker-compat", true, "Enable Docker compatibility (bypass docker0 and br-* interfaces)")
 	httpsPort := flag.Int("https-port", 0, "HTTPS port (0 = HTTP only; the systemd unit passes 443 to make HTTPS the primary channel)")
 	tlsDir := flag.String("tls-dir", "", "Directory for the self-signed TLS cert/key (default: <dir of -db>/tls)")
+	allowDevCORS := flag.Bool("allow-dev-cors", false, "Echo CORS headers for frontend dev-server origins (localhost:5173/3000). Off by default; only needed when running `yarn dev` against this backend.")
 	printVersion := flag.Bool("v", false, "Print Version")
 	flag.Parse()
 	if *printVersion {
@@ -57,6 +58,7 @@ func main() {
 	log.Printf("[Main] Mock OS Integration: %t", *mockOS)
 	log.Printf("[Main] Mock From Real Data: %t", *mockFromReal)
 	log.Printf("[Main] Disable Edit Mode: %t", *disableEdit)
+	log.Printf("[Main] Allow Dev CORS Origins: %t", *allowDevCORS)
 	log.Printf("[Main] Allow Edit System Routes: %t", *allowEditSystemRoutes)
 	log.Printf("[Main] Enable Edit System Route (Bypass DB): %t", *enableEditSystemRoute)
 	log.Printf("[Main] Prioritize Kernel Routes: %t", *prioritizeKernelRoutes)
@@ -163,7 +165,7 @@ func main() {
 		netlinkMonitor,
 	)
 
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, *allowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService)
 
 	// Apply config form database to kernel
 
@@ -219,6 +221,10 @@ func main() {
 	// Start the session sweeper: reaps in-memory sessions past their idle deadline
 	// so abandoned tokens don't linger in the map until restart.
 	api.StartSessionSweeper(monitorCtx)
+
+	// Start the rate-limiter sweeper: reaps idle per-IP token buckets so the
+	// limiter map stays bounded (backstopped by a hard cap during bursts).
+	api.StartLimiterSweeper(monitorCtx)
 
 	// Start the dashboard telemetry sampler (CPU usage + WAN traffic history).
 	// Shares the monitor context so it stops on shutdown.
