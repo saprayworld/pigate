@@ -230,10 +230,29 @@ mkdir -p /etc/polkit-1/rules.d
 
 cat > "${POLKIT_RULE_FILE}" << 'EOF'
 polkit.addRule(function(action, subject) {
-    // ดักจับเฉพาะคำสั่ง manage-units ที่มาจาก User 'pigate'
-    if (action.id == "org.freedesktop.systemd1.manage-units" && subject.user == "pigate") {
+    // ไฟล์นี้ตัดสินเฉพาะ request ของ user 'pigate' เท่านั้น — request ของ user
+    // อื่นทั้งหมดต้อง "ไม่ออกความเห็น" (NOT_HANDLED) เพื่อให้ rule อื่น/default
+    // ของ distro ทำงานตามปกติ ห้ามคืน NO ให้ user อื่นเด็ดขาด: polkit หยุดที่
+    // rule แรกที่ให้คำตอบ และไฟล์ 10-* มาก่อน default ทั้งหมด — เวอร์ชันก่อน
+    // เคยมี catch-all `return NO` ทำให้ polkit ปฏิเสธทุก action ของทุก user
+    // ทั้งเครื่อง (เช่น mount USB / systemctl ของ user ปกติโดน deny เงียบ
+    // โดยไม่มี auth prompt; root ไม่เห็นอาการเพราะไม่ผ่าน polkit)
+    if (subject.user != "pigate") {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    // จากจุดนี้คือ request ของ pigate เท่านั้น — นโยบายคือ deny-by-default
+    // (บรรทัดสุดท้ายของฟังก์ชัน) แล้วเปิดเฉพาะ action/unit ใน allowlist
+
+    if (action.id == "org.freedesktop.systemd1.manage-units") {
         var unit = action.lookup("unit");
-        
+        // manage-units บาง call ไม่มี field unit แนบมา (เช่น daemon-reload) —
+        // ถ้าเรียก .indexOf บน undefined จะเกิด TypeError ทำให้ polkit ทิ้งผล
+        // ของ rule ทั้งไฟล์ → ต้อง guard แล้วปฏิเสธไปตรงๆ
+        if (!unit) {
+            return polkit.Result.NO;
+        }
+
         // 1. ถ้าเป็น Service ที่อนุญาต -> ให้ผ่าน (YES)
         //    dhcpcd@ ใช้ prefix match เพราะชื่อ interface ต่อท้ายไม่แน่นอน
         //    (ขึ้นกับฮาร์ดแวร์ เช่น wlan0, wlx0cef1548ff2b) เหมือน wpa_supplicant@
@@ -245,35 +264,33 @@ polkit.addRule(function(action, subject) {
             unit === "pigate.service") {
             return polkit.Result.YES;
         }
-        // 2. ถ้าเป็น Service ตัวอื่นๆ นอกเหนือจากด้านบน -> ปฏิเสธทันที (NO)
-        else {
-            return polkit.Result.NO;
-        }
+        // 2. Service ตัวอื่นนอกเหนือจากด้านบน -> ปฏิเสธ (least privilege)
+        return polkit.Result.NO;
     }
 
-    // ดักจับ action ของ org.freedesktop.hostname1, org.freedesktop.timedate1 และ
-    // org.freedesktop.login1 แยกต่างหาก (คนละ action id กับ systemd1.manage-units
-    // ด้านบน) เพื่ออนุญาตให้ pigate ตั้งชื่อเครื่องผ่าน hostnamed, ตั้งเขตเวลา/NTP/เวลา
+    // action ของ org.freedesktop.hostname1, org.freedesktop.timedate1 และ
+    // org.freedesktop.login1 (คนละ action id กับ systemd1.manage-units ด้านบน)
+    // เพื่ออนุญาตให้ pigate ตั้งชื่อเครื่องผ่าน hostnamed, ตั้งเขตเวลา/NTP/เวลา
     // ผ่าน timedated และสั่ง reboot/shutdown ผ่าน logind โดยไม่ต้อง exec
     // `hostnamectl` / `timedatectl` / `reboot` / `shutdown`
     //
     // *-multiple-sessions จำเป็นเผื่อกรณีมี user session อื่นค้างอยู่ (เช่น SSH) —
     // logind จะสลับไปตรวจ action ตัวนี้แทน reboot/power-off ปกติ
-    if ((action.id == "org.freedesktop.hostname1.set-static-hostname" ||
-         action.id == "org.freedesktop.hostname1.set-hostname" ||
-         action.id == "org.freedesktop.timedate1.set-timezone" ||
-         action.id == "org.freedesktop.timedate1.set-ntp" ||
-         action.id == "org.freedesktop.timedate1.set-time" ||
-         action.id == "org.freedesktop.login1.reboot" ||
-         action.id == "org.freedesktop.login1.reboot-multiple-sessions" ||
-         action.id == "org.freedesktop.login1.power-off" ||
-         action.id == "org.freedesktop.login1.power-off-multiple-sessions") &&
-        subject.user == "pigate") {
+    if (action.id == "org.freedesktop.hostname1.set-static-hostname" ||
+        action.id == "org.freedesktop.hostname1.set-hostname" ||
+        action.id == "org.freedesktop.timedate1.set-timezone" ||
+        action.id == "org.freedesktop.timedate1.set-ntp" ||
+        action.id == "org.freedesktop.timedate1.set-time" ||
+        action.id == "org.freedesktop.login1.reboot" ||
+        action.id == "org.freedesktop.login1.reboot-multiple-sessions" ||
+        action.id == "org.freedesktop.login1.power-off" ||
+        action.id == "org.freedesktop.login1.power-off-multiple-sessions") {
         return polkit.Result.YES;
     }
-    else {
-        return polkit.Result.NO;
-    }
+
+    // action อื่นทั้งหมดของ pigate -> ปฏิเสธ (deny-by-default เฉพาะ pigate;
+    // user อื่นไม่มีทางมาถึงบรรทัดนี้เพราะ guard ด้านบน)
+    return polkit.Result.NO;
 });
 EOF
 
