@@ -334,8 +334,10 @@ func (s *RoutingService) RemoveConfigRoute(id string) error {
 	return nil
 }
 
-// BulkRemoveConfigRoutes deletes multiple static route configurations from DB and updates the kernel.
-func (s *RoutingService) BulkRemoveConfigRoutes(ids []string) error {
+// BulkRemoveConfigRoutes deletes multiple static route configurations from DB and
+// updates the kernel. It returns how many routes were actually removed (on a
+// partial failure the count covers what was deleted before the error).
+func (s *RoutingService) BulkRemoveConfigRoutes(ids []string) (int64, error) {
 	var systemIDs []string
 	var dbIDs []string
 	for _, id := range ids {
@@ -346,22 +348,26 @@ func (s *RoutingService) BulkRemoveConfigRoutes(ids []string) error {
 		}
 	}
 
+	var removed int64
 	for _, id := range systemIDs {
 		if err := s.RemoveConfigRoute(id); err != nil {
-			return err
+			return removed, err
 		}
+		removed++
 	}
 
 	if len(dbIDs) > 0 {
-		if err := s.repo.BulkDeleteRoutes(dbIDs); err != nil {
-			return fmt.Errorf("failed to bulk delete routes from database: %w", err)
+		n, err := s.repo.BulkDeleteRoutes(dbIDs)
+		if err != nil {
+			return removed, fmt.Errorf("failed to bulk delete routes from database: %w", err)
 		}
+		removed += n
 		// Reconcile system/kernel routing table
 		if err := s.reconcileKernelRoutingTable(); err != nil {
-			return fmt.Errorf("routes deleted from database but failed to apply to kernel: %w", err)
+			return removed, fmt.Errorf("routes deleted from database but failed to apply to kernel: %w", err)
 		}
 	}
-	return nil
+	return removed, nil
 }
 
 // ToggleConfigRoute toggles route status in the DB and reconciles kernel routing.

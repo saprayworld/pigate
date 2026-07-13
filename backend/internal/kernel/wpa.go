@@ -23,6 +23,31 @@ func SanitizeWpaInput(val string) string {
 	return val
 }
 
+// wpaLoggableCommands is the allowlist of complete control commands that are safe
+// to log verbatim — exactly the commands PiGate sends today (PSKs go through the
+// config file, not the socket). Redaction fails CLOSED: any command not on this
+// list that carries arguments is logged as verb+"[redacted]", so a future
+// secret-bearing command (`SET_NETWORK 0 psk "..."`, `WPS_PIN ...`,
+// `SET_NETWORK 0 private_key_passwd "..."`) can never reach the journal even if
+// nobody remembers to update this list. (A secret-keyword blocklist was rejected:
+// it fails open for keywords it doesn't know about.)
+var wpaLoggableCommands = map[string]bool{
+	"RECONFIGURE": true,
+	"RECONNECT":   true,
+}
+
+// redactWpaCommand returns a log-safe form of a wpa control command. Allowlisted
+// commands and bare verbs (a lone verb carries no argument to leak) are returned
+// as-is so ordinary commands stay debuggable; anything else keeps only its verb
+// followed by "[redacted]".
+func redactWpaCommand(cmd string) string {
+	fields := strings.Fields(cmd)
+	if len(fields) <= 1 || wpaLoggableCommands[strings.ToUpper(strings.TrimSpace(cmd))] {
+		return cmd
+	}
+	return fields[0] + " [redacted]"
+}
+
 // GenerateWpaConfig constructs the raw text content for a wpa_supplicant configuration file.
 // It incorporates security options (Open, WPA2, WPA3, WPA2/WPA3), MAC randomization, and weight-based priorities.
 func GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode string) string {
@@ -150,7 +175,8 @@ func SendWpaCommand(ifaceName string, command string) (string, error) {
 		return "", err
 	}
 
-	log.Printf("[WPA Socket] Writing command datagram: %q", command)
+	loggedCmd := redactWpaCommand(command)
+	log.Printf("[WPA Socket] Writing command datagram: %q", loggedCmd)
 	_, err = conn.Write([]byte(command))
 	if err != nil {
 		log.Printf("[WPA Socket] Write datagram failed: %v", err)
@@ -165,6 +191,12 @@ func SendWpaCommand(ifaceName string, command string) (string, error) {
 	}
 
 	respStr := string(buf[:n])
-	log.Printf("[WPA Socket] Received response: %q", respStr)
+	// If the command was redacted, its response may echo the secret back —
+	// redact the logged response too (the caller still gets the real string).
+	loggedResp := respStr
+	if loggedCmd != command {
+		loggedResp = "[redacted]"
+	}
+	log.Printf("[WPA Socket] Received response: %q", loggedResp)
 	return respStr, nil
 }
