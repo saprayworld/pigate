@@ -424,7 +424,7 @@ export default function DnsServer() {
               )}
             </CardTitle>
             <CardDescription className="text-xs">
-              เลือก Interface จริงที่มีอยู่ในเครื่อง (ดึงจาก Interface Service) เพื่อใช้เป็น NS/auth-server ของ DNS Server — ค่านี้แยกอิสระจากการตั้งค่า DHCP Server
+              เลือก Interface จริงที่มีอยู่ในเครื่อง (ดึงจาก Interface Service) ที่ต้องการให้ DNS Server (dnsmasq) เปิดรับคำขอ DNS — ค่านี้แยกอิสระจากการตั้งค่า DHCP Server
             </CardDescription>
           </div>
           <div className="flex flex-wrap items-center gap-3">
@@ -569,7 +569,7 @@ export default function DnsServer() {
                           : "border-border bg-muted text-muted-foreground"
                           }`}
                       >
-                        {zone.isAuthoritative ? "Auth" : "Fwd"}
+                        {zone.isAuthoritative ? "Local" : "Fwd"}
                       </Badge>
                     </div>
                     {!zone.isAuthoritative && zone.forwardTo && (
@@ -637,7 +637,7 @@ export default function DnsServer() {
                   </CardTitle>
                   <CardDescription className="text-xs">
                     {selectedZone.isAuthoritative
-                      ? "โซน Authoritative (ระบุชื่อโฮสต์และค่าไอพีโดยตรง)"
+                      ? "Local zone (ตอบจาก records ในระบบ ชื่อที่ไม่รู้จักตอบ NXDOMAIN)"
                       : `โซน Forward (ระบบจะทำการส่งต่อคิวรีทั้งหมดไปให้ ${selectedZone.forwardTo})`}
                   </CardDescription>
                 </div>
@@ -805,7 +805,7 @@ export default function DnsServer() {
             {/* Field: Authoritative Toggle */}
             <div className="flex items-center justify-between rounded-lg border border-border bg-muted/50 p-3">
               <div className="space-y-0.5">
-                <Label className="text-xs font-semibold text-foreground">เป็นโซนหลัก (Authoritative Zone)</Label>
+                <Label className="text-xs font-semibold text-foreground">Local Zone (ตอบจาก records ในระบบ)</Label>
                 <p className="text-[10px] text-muted-foreground">
                   เปิดหากต้องการกำหนด DNS Records เอง หรือปิดหากต้องการทำ DNS Forwarding
                 </p>

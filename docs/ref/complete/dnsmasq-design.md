@@ -566,13 +566,36 @@ tcp   LISTEN 0      4096                         127.0.0.54:53        0.0.0.0:* 
 
 ผลนี้แปลว่า **ไม่ชนกัน** ตราบใดที่ dnsmasq ถูกตั้งค่าให้ฟังที่ IP ของวง LAN โดยตรง (เช่น `192.168.1.1:53`) ไม่ใช่ IP loopback
 
-> **กฎที่ต้องใส่ไว้ใน config เสมอ**: ระบุ `interface=` และ `bind-interfaces` ชี้ไปที่ IP วง LAN โดยตรง ห้ามปล่อยให้ dnsmasq ฟังแบบเปิดกว้างทุกที่อยู่ เพื่อป้องกันไม่ให้ไปชนกับ systemd-resolved ในอนาคต แม้ผลตรวจตอนนี้จะไม่ชนก็ตาม
+> **กฎที่ต้องใส่ไว้ใน config เสมอ**: ระบุ `interface=` (จาก DNS Server Listen Interfaces) เพื่อไม่ให้ dnsmasq ฟังแบบเปิดกว้างทุกที่อยู่ กันชนกับ systemd-resolved — แต่ใช้ `bind-dynamic` แทน `bind-interfaces` (ดูหมายเหตุด้านล่าง)
 >
 > ```
 > # /etc/dnsmasq.d/pigate-base.conf
+> bind-dynamic
+> # /etc/dnsmasq.d/pigate-dns.conf
 > interface=eth0
-> bind-interfaces
 > ```
+
+### หมายเหตุ: `bind-dynamic` แทน `bind-interfaces` (issue #50, implemented 2026-07-14)
+
+เดิม `pigate-base.conf` ใช้ `bind-interfaces` และการ listen ของ DNS Server ขี่บรรทัด
+`interface=` จาก `pigate-dhcp.conf` — ทำให้ **ปิด DHCP Server ทุก interface = DNS Server
+ใบ้ทั้งระบบ** และถ้ามีชื่อ interface ที่ไม่มีจริง (เช่น VLAN ที่ parent หาย) อยู่ใน config
+ภายใต้ `bind-interfaces` dnsmasq จะ **ล้มทั้งโปรเซส (รวม DHCP)** — `dnsmasq --test`
+จับไม่ได้เพราะเช็คแค่ syntax
+
+การแก้ (พิสูจน์บน LAB VM แล้ว):
+- base config เปลี่ยนเป็น `bind-dynamic` — ทน `interface=` ที่ชื่อไม่มีจริงได้ (dnsmasq
+  จะ bind ให้เองเมื่อ interface โผล่มา โดยไม่ต้อง restart/re-apply = self-healing)
+- `pigate-dns.conf` emit `interface=<name>` ต่อ Listen Interface ที่ตั้งในหน้า DNS Server
+  โดย**ไม่ skip** ชื่อที่ไม่มีจริง (ต่างจากฝั่ง DHCP ที่ยัง skip อยู่ ลด regression) —
+  ทุกชื่อผ่าน `model.ValidateInterfaceName` ก่อน emit (defense-in-depth กัน directive
+  injection จาก import path)
+- base config ถูก (re)write โดยทั้ง `RealDhcpManager.ApplyConfig` และ
+  `RealDNSServerManager.ApplyZones` ผ่าน helper ร่วม `ensureDnsmasqBaseConfig()` เสมอ
+  ก่อนเขียน per-role config — ปิด upgrade/ordering trap ที่ base เก่ายังเป็น
+  `bind-interfaces` ตอน binary ใหม่ apply DNS
+- **ความปลอดภัยมาจาก `bind-dynamic` ไม่ใช่จาก validation** — `dnsmasq --test` จับ
+  unknown interface ไม่ได้
 
 ---
 

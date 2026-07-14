@@ -35,7 +35,27 @@ var (
 	reForwardTo = regexp.MustCompile(`^[a-zA-Z0-9.:#-]+$`)
 	// reMAC is a colon- or hyphen-separated 6-octet MAC address.
 	reMAC = regexp.MustCompile(`^([0-9a-fA-F]{2})([:-][0-9a-fA-F]{2}){5}$`)
+	// reInterfaceName matches a Linux network interface name written to an
+	// `interface=` directive. Charset covers real names including VLAN sub-ifaces
+	// (eth0.301) and the kernel IFNAMSIZ limit of 15 chars. No newline/space, so an
+	// embedded control char can't inject a directive.
+	reInterfaceName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,15}$`)
 )
+
+// ValidateInterfaceName checks a network interface name before it is written to a
+// dnsmasq `interface=` line. Like the other validators here it REJECTS rather than
+// strips: the DNS Server config import path writes interface names to the DB
+// without validation, so this is the last line against a newline-injected directive
+// (see dns_validate.go header and issue #50).
+func ValidateInterfaceName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("interface name must not be empty")
+	}
+	if !reInterfaceName.MatchString(name) {
+		return fmt.Errorf("interface name %q contains invalid characters or is too long (allowed: letters, digits, '.', '_', '-', max 15)", name)
+	}
+	return nil
+}
 
 // ValidateDNSZone checks the zone name (always) and, for a forward zone, the
 // ForwardTo upstream. Records are validated separately via ValidateDNSRecord.
