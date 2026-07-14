@@ -726,5 +726,33 @@ func (s *InterfaceService) DeleteVlanInterface(id string) error {
 	if err := s.network.DeleteVlan(iface.Name); err != nil {
 		return fmt.Errorf("failed to delete vlan link: %w", err)
 	}
-	return s.repo.DeleteInterface(id)
+	if err := s.repo.DeleteInterface(id); err != nil {
+		return err
+	}
+
+	// Explicit user deletion of a VLAN removes any DNS Server binding to it, so the
+	// name doesn't linger as a dangling "Missing" chip. This is an explicit user
+	// action (not auto-heal), which is why it's allowed to drop user config here.
+	// A failure is non-fatal: the interface is already gone and the leftover name is
+	// tolerated by HandleUpdateDNSServerSettings anyway.
+	if saved, err := s.repo.GetDNSServerInterfaces(); err != nil {
+		log.Printf("[Interface] Warning: failed to load DNS server settings after deleting VLAN %s: %v", iface.Name, err)
+	} else {
+		pruned := make([]string, 0, len(saved))
+		changed := false
+		for _, name := range saved {
+			if name == iface.Name {
+				changed = true
+				continue
+			}
+			pruned = append(pruned, name)
+		}
+		if changed {
+			if err := s.repo.SetDNSServerInterfaces(pruned); err != nil {
+				log.Printf("[Interface] Warning: failed to prune DNS server settings after deleting VLAN %s: %v", iface.Name, err)
+			}
+		}
+	}
+
+	return nil
 }

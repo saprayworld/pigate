@@ -2628,6 +2628,12 @@ func (s *Server) HandleGetDNSServerSettings(w http.ResponseWriter, r *http.Reque
 
 // HandleUpdateDNSServerSettings saves the set of real interfaces (from Interface Service)
 // the DNS Server should bind to. Kept independent from DHCP Server configuration.
+//
+// Validation tolerates dangling refs: interfaces already saved in dns_server_settings
+// are grandfathered through even if they no longer exist in the kernel (e.g. a VLAN
+// whose parent went away), so the user can always keep or remove them via the UI
+// without hitting a 400 deadlock. Only names newly *added* in this request are
+// validated against real interfaces, to keep rejecting typos/garbage from API clients.
 func (s *Server) HandleUpdateDNSServerSettings(w http.ResponseWriter, r *http.Request) {
 	var input model.DNSServerSettings
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -2644,8 +2650,22 @@ func (s *Server) HandleUpdateDNSServerSettings(w http.ResponseWriter, r *http.Re
 	for _, iface := range realIfaces {
 		valid[iface.Name] = true
 	}
+
+	// Load the previously saved set BEFORE writing so we can grandfather it (Caution 2:
+	// must read before SetDNSServerInterfaces, otherwise the grandfather set would be
+	// the new input and validation would pass everything).
+	saved, err := s.repo.GetDNSServerInterfaces()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	savedSet := make(map[string]bool)
+	for _, name := range saved {
+		savedSet[name] = true
+	}
+
 	for _, name := range input.Interfaces {
-		if !valid[name] {
+		if !valid[name] && !savedSet[name] {
 			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("interface %s does not exist", name))
 			return
 		}

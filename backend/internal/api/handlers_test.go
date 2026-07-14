@@ -469,6 +469,50 @@ func TestDNSConfigAPI(t *testing.T) {
 	}
 }
 
+// TestDNSServerSettingsGrandfatherValidation verifies the tolerate-dangling-refs
+// semantics of PUT /api/dns/settings (issue #46, Step 1): a name already saved is
+// accepted even when it no longer exists in the kernel, so the user can keep or
+// remove it; only a *newly added* name that doesn't exist is rejected with 400.
+func TestDNSServerSettingsGrandfatherValidation(t *testing.T) {
+	handler, repo := setupTestServer(t)
+	token := "mock_session_id_test_token"
+
+	// Seed a dangling interface name (no matching kernel link).
+	if err := repo.SetDNSServerInterfaces([]string{"eth0.999"}); err != nil {
+		t.Fatalf("seed dns server settings failed: %v", err)
+	}
+
+	put := func(names []string) *httptest.ResponseRecorder {
+		return vlanReq(t, handler, "PUT", "/api/dns/settings", token, model.DNSServerSettings{Interfaces: names})
+	}
+
+	// (a) Keeping the saved dangling name is allowed (grandfathered) -> 200.
+	if rec := put([]string{"eth0.999"}); rec.Code != http.StatusOK {
+		t.Fatalf("(a) keep dangling name: expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	// (b) Removing the dangling name is allowed -> 200.
+	if rec := put([]string{}); rec.Code != http.StatusOK {
+		t.Fatalf("(b) remove dangling name: expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	if got, _ := repo.GetDNSServerInterfaces(); len(got) != 0 {
+		t.Fatalf("(b) expected settings emptied, got %v", got)
+	}
+
+	// (c) Adding a brand-new name that doesn't exist is rejected -> 400.
+	if rec := put([]string{"nope0"}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("(c) add fake name: expected 400, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	// (d) Adding a real kernel interface is accepted -> 200.
+	if rec := put([]string{"eth0"}); rec.Code != http.StatusOK {
+		t.Fatalf("(d) add real interface: expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	if got, _ := repo.GetDNSServerInterfaces(); len(got) != 1 || got[0] != "eth0" {
+		t.Fatalf("(d) expected settings [eth0], got %v", got)
+	}
+}
+
 func TestForcePasswordChangeFlow(t *testing.T) {
 	// Initialize memory database
 	sqliteDB, err := db.InitDB(":memory:")
