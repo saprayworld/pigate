@@ -67,6 +67,34 @@ func TestValidateDNSRecord(t *testing.T) {
 	}
 }
 
+func TestValidateInterfaceName(t *testing.T) {
+	tests := []struct {
+		name    string
+		iface   string
+		wantErr bool
+	}{
+		{"simple", "eth0", false},
+		{"vlan subiface", "eth0.301", false},
+		{"wlan", "wlan1", false},
+		{"underscore", "br_lan", false},
+		{"max length 15", "abcdefghij12345", false},
+		{"empty", "", true},
+		{"whitespace only", "   ", true},
+		{"too long", "abcdefghij123456", true},
+		{"space inside", "eth 0", true},
+		{"newline injection", "eth0\ninterface=eth1", true},
+		{"slash", "eth0/1", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateInterfaceName(tt.iface)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateInterfaceName(%q) err = %v, wantErr %v", tt.iface, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateReservation(t *testing.T) {
 	tests := []struct {
 		name    string

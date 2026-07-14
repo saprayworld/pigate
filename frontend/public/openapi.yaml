@@ -1893,8 +1893,14 @@ paths:
     put:
       tags:
         - DNS Server
-      summary: Set the interfaces the DNS server should bind to
+      summary: Set the interfaces the DNS server should listen on
       description: |
+        These interfaces are the ones dnsmasq actually listens for DNS on: applying
+        the DNS config emits an `interface=<name>` line per selected interface (using
+        dnsmasq `bind-dynamic`), so the DNS server works without any DHCP server
+        enabled. A selected interface that is missing is harmless — dnsmasq binds it
+        automatically if it later appears (no re-apply needed).
+
         Tolerates dangling references: names already saved are accepted even if the
         interface no longer exists on the device (e.g. a deleted VLAN), so they can be
         kept or removed without error. Only names newly added in the request are
@@ -3422,7 +3428,11 @@ components:
           example: 192.168.1.0/24
         isAuthoritative:
           type: boolean
-          description: True when this zone is served locally from its records instead of forwarded.
+          description: >-
+            True marks this as a local zone: dnsmasq answers it from the zone's own
+            records (`local=/zone/`) and returns NXDOMAIN for unknown names instead
+            of forwarding upstream. False makes it a forward zone (queries are sent
+            to forwardTo). The field name is retained for API compatibility.
           example: true
         enabled:
           type: boolean
