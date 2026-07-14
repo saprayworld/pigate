@@ -137,10 +137,15 @@ func (q *RealQos) ApplyQosRules(rules []model.QosRule) error {
 				log.Printf("[RealQos] LinkAdd %s info: %v", ifbName, err)
 			}
 
-			// Look up link to get dynamic attributes/index
+			// Look up link to get dynamic attributes/index. If the IFB link is
+			// unavailable (e.g. the board has no ifb module and modprobe/LinkAdd
+			// above both failed), skip only this interface's ingress shaping instead
+			// of aborting the whole sync — the other interfaces' QoS must still be
+			// applied. Same skip+log tolerance as the LinkByName above.
 			ifb, err := netlink.LinkByName(ifbName)
 			if err != nil {
-				return fmt.Errorf("[RealQos] failed to find IFB link %s: %w", ifbName, err)
+				log.Printf("[RealQos] Warning: IFB link %s not available, skipping ingress shaping for %s: %v", ifbName, ifaceName, err)
+				continue
 			}
 
 			// Bring IFB link UP
