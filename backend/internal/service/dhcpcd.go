@@ -67,14 +67,12 @@ func (s *DhcpcdService) applyDhcpcdDecision(name string, isWifi, isUp, isRunning
 	}
 }
 
-func (s *DhcpcdService) HandleLinkUpdate(update netlink.LinkUpdate) {
-	attrs := update.Attrs()
-	if attrs == nil {
-		return
-	}
-	name := attrs.Name
-	flags := attrs.Flags
-
+// HandleLinkEvent starts/stops the per-interface dhcpcd client from a semantic link
+// event (name + live up/running flags) delivered by the NetEventBus. It must be
+// subscribed in Immediate mode: the Wi-Fi "UP but not yet RUNNING" → "RUNNING"
+// transition has to be observed in order (a debounced/coalesced subscription would
+// swallow the intermediate state and the client would never request a lease).
+func (s *DhcpcdService) HandleLinkEvent(name string, isUp, isRunning bool) {
 	// 1. Get current interface details from interface service (data layer)
 	ifaces, err := s.ifaceService.GetDataLayerInterface()
 	if err != nil {
@@ -101,9 +99,6 @@ func (s *DhcpcdService) HandleLinkUpdate(update netlink.LinkUpdate) {
 	}
 
 	isWifi := targetIface.Type == "wireless" || strings.HasPrefix(name, "w")
-
-	isUp := flags&net.FlagUp != 0
-	isRunning := flags&net.FlagRunning != 0
 
 	s.applyDhcpcdDecision(name, isWifi, isUp, isRunning)
 }

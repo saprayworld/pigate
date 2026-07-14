@@ -409,6 +409,14 @@ func (s *RoutingService) InitApplyConfig() error {
 	return nil
 }
 
+// ReconcileKernelRoutingTable is the exported entry point for reconciling kernel
+// routing state against the DB, invoked by the NetEventBus AddrRouteChanged/LinkChanged
+// subscription (the running-state counterpart of InitApplyConfig). It wraps the
+// unexported worker so the wiring in main.go has a stable, documented hook.
+func (s *RoutingService) ReconcileKernelRoutingTable() error {
+	return s.reconcileKernelRoutingTable()
+}
+
 // reconcileKernelRoutingTable loads all DB routes and reconciles kernel routing state.
 func (s *RoutingService) reconcileKernelRoutingTable() error {
 	dbRoutes, err := s.GetDatabaseRouting()

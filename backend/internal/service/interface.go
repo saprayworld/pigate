@@ -70,16 +70,7 @@ func (s *InterfaceService) InitApplyConfigurationAtStartup() error {
 		if iface.Subtype != "vlan" || kernelMap[iface.Name] {
 			continue
 		}
-		if iface.VlanParent == nil || iface.VlanID == nil {
-			log.Printf("[Startup] Warning: VLAN %s is missing parent/id metadata; skipping recreate.", iface.Name)
-			continue
-		}
-		log.Printf("[Startup] Recreating missing VLAN %s (parent=%s, id=%d)...", iface.Name, *iface.VlanParent, *iface.VlanID)
-		if err := s.network.CreateVlan(*iface.VlanParent, *iface.VlanID); err != nil {
-			log.Printf("[Startup] Warning: failed to recreate VLAN %s: %v", iface.Name, err)
-			continue
-		}
-		kernelMap[iface.Name] = true
+		s.recreateVlanIfPossible(iface, kernelMap)
 	}
 
 	for _, iface := range ifaces {
@@ -87,66 +78,167 @@ func (s *InterfaceService) InitApplyConfigurationAtStartup() error {
 			log.Printf("[Startup] Warning: Interface %s configured in database does not exist in kernel. Skipping.", iface.Name)
 			continue
 		}
-
-		log.Printf("[Startup] Applying configuration to kernel for interface: %s (Type: %s, Role: %s)", iface.Name, iface.Type, iface.Role)
-
-		if iface.Type == "wireless" {
-			ssid := ""
-			if iface.WifiSSID != nil {
-				ssid = *iface.WifiSSID
-			}
-			password := ""
-			if iface.WifiPassword != nil {
-				password = *iface.WifiPassword
-			}
-			security := "WPA2"
-			if iface.WifiSecurity != nil {
-				security = *iface.WifiSecurity
-			}
-			backupSSID := ""
-			if iface.BackupSSID != nil {
-				backupSSID = *iface.BackupSSID
-			}
-			backupPassword := ""
-			if iface.BackupWifiPassword != nil {
-				backupPassword = *iface.BackupWifiPassword
-			}
-			backupSecurity := "WPA2"
-			if iface.BackupWifiSecurity != nil {
-				backupSecurity = *iface.BackupWifiSecurity
-			}
-			macMode := "hardware"
-			if iface.MacMode != nil {
-				macMode = *iface.MacMode
-			}
-
-			log.Printf("[Startup] Configuring Wi-Fi for interface %s...", iface.Name)
-			if err := s.network.ConfigureWifi(iface.Name, ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode); err != nil {
-				log.Printf("[Startup] Warning: Failed to configure Wi-Fi for interface %s: %v", iface.Name, err)
-			}
-		}
-
-		// Toggle the interface to its desired administrative state FIRST. ConfigureInterface
-		// no longer forces the link up and defers the gateway route while the link is down,
-		// so the link must already be up for the static default route to be installed.
-		isUp := iface.Status == "up"
-		log.Printf("[Startup] Toggling interface %s state to up=%t...", iface.Name, isUp)
-		if err := s.network.ToggleInterface(iface.Name, isUp); err != nil {
-			log.Printf("[Startup] Warning: Failed to toggle interface %s state: %v", iface.Name, err)
-		}
-
-		metric := 0
-		if iface.Metric != nil {
-			metric = *iface.Metric
-		}
-		log.Printf("[Startup] Configuring IP/mode for interface %s (Mode: %s, IP: %s, Netmask: %s, Gateway: %s, Metric: %d)...",
-			iface.Name, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, metric)
-		if err := s.network.ConfigureInterface(iface.Name, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, metric); err != nil {
-			log.Printf("[Startup] Warning: Failed to configure interface %s: %v", iface.Name, err)
-		}
+		s.applyOneInterface(iface)
 	}
 	log.Printf("[Startup] Successfully applied interface configuration at startup.")
 	return nil
+}
+
+// applyOneInterface pushes a single interface's DB configuration to the kernel:
+// Wi-Fi association (if wireless), then the desired admin up/down state, then the
+// IP/mode/gateway. Every step is best-effort (warn-and-continue) so one bad field
+// never aborts the caller. The link is assumed to already exist in the kernel — the
+// caller is responsible for skipping/recreating a missing link first. Shared by
+// startup (InitApplyConfigurationAtStartup) and the running-state self-heal path
+// (ReapplyInterfaceByName), so the desired-state application lives in one place.
+func (s *InterfaceService) applyOneInterface(iface model.NetworkInterface) {
+	log.Printf("[ApplyInterface] Applying configuration to kernel for interface: %s (Type: %s, Role: %s)", iface.Name, iface.Type, iface.Role)
+
+	if iface.Type == "wireless" {
+		ssid := ""
+		if iface.WifiSSID != nil {
+			ssid = *iface.WifiSSID
+		}
+		password := ""
+		if iface.WifiPassword != nil {
+			password = *iface.WifiPassword
+		}
+		security := "WPA2"
+		if iface.WifiSecurity != nil {
+			security = *iface.WifiSecurity
+		}
+		backupSSID := ""
+		if iface.BackupSSID != nil {
+			backupSSID = *iface.BackupSSID
+		}
+		backupPassword := ""
+		if iface.BackupWifiPassword != nil {
+			backupPassword = *iface.BackupWifiPassword
+		}
+		backupSecurity := "WPA2"
+		if iface.BackupWifiSecurity != nil {
+			backupSecurity = *iface.BackupWifiSecurity
+		}
+		macMode := "hardware"
+		if iface.MacMode != nil {
+			macMode = *iface.MacMode
+		}
+
+		log.Printf("[ApplyInterface] Configuring Wi-Fi for interface %s...", iface.Name)
+		if err := s.network.ConfigureWifi(iface.Name, ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode); err != nil {
+			log.Printf("[ApplyInterface] Warning: Failed to configure Wi-Fi for interface %s: %v", iface.Name, err)
+		}
+	}
+
+	// Toggle the interface to its desired administrative state FIRST. ConfigureInterface
+	// no longer forces the link up and defers the gateway route while the link is down,
+	// so the link must already be up for the static default route to be installed.
+	isUp := iface.Status == "up"
+	log.Printf("[ApplyInterface] Toggling interface %s state to up=%t...", iface.Name, isUp)
+	if err := s.network.ToggleInterface(iface.Name, isUp); err != nil {
+		log.Printf("[ApplyInterface] Warning: Failed to toggle interface %s state: %v", iface.Name, err)
+	}
+
+	metric := 0
+	if iface.Metric != nil {
+		metric = *iface.Metric
+	}
+	log.Printf("[ApplyInterface] Configuring IP/mode for interface %s (Mode: %s, IP: %s, Netmask: %s, Gateway: %s, Metric: %d)...",
+		iface.Name, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, metric)
+	if err := s.network.ConfigureInterface(iface.Name, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, metric); err != nil {
+		log.Printf("[ApplyInterface] Warning: Failed to configure interface %s: %v", iface.Name, err)
+	}
+}
+
+// ReapplyInterfaceByName re-pushes a single interface's DB configuration to the
+// kernel when that link (re)appears at runtime — the running-state counterpart to
+// the boot-time InitApplyConfigurationAtStartup. It is driven by the InterfaceAdded
+// event so an interface that vanished and came back (a USB NIC re-plugged, a VLAN
+// deleted and recreated outside PiGate) returns to its intended admin state + static
+// IP on its own, without the user touching the UI (issue #48 acceptance test).
+//
+// Invariant (issue #48): this only ever writes runtime/kernel state. It NEVER
+// deletes or mutates user config in the DB — a link that has no DB row is simply not
+// managed by PiGate and is left alone.
+//
+// If name is itself a VLAN parent, any child VLAN configured in the DB that is
+// missing from the kernel is recreated first, so bringing a parent NIC back also
+// restores the VLANs stacked on top of it.
+func (s *InterfaceService) ReapplyInterfaceByName(name string) {
+	ifaces, err := s.repo.GetInterfacesFromDB()
+	if err != nil {
+		log.Printf("[ApplyInterface] ReapplyInterfaceByName(%s): failed to load interfaces from DB: %v", name, err)
+		return
+	}
+
+	var target *model.NetworkInterface
+	for i := range ifaces {
+		if ifaces[i].Name == name {
+			target = &ifaces[i]
+			break
+		}
+	}
+	if target == nil {
+		// Not a PiGate-managed link — nothing to re-apply, and we must not create config.
+		log.Printf("[ApplyInterface] ReapplyInterfaceByName(%s): not a managed interface, ignoring", name)
+		return
+	}
+
+	kernelMap := s.kernelInterfaceNameSet()
+
+	// If the reappeared link is a VLAN that is (still) missing from the kernel — e.g.
+	// the event was for a flag change on a stale reference — recreate it before applying.
+	if target.Subtype == "vlan" && !kernelMap[target.Name] {
+		s.recreateVlanIfPossible(*target, kernelMap)
+	}
+
+	// If this link is a VLAN parent, restore any child VLANs the kernel lost. Bringing
+	// eth0 back should bring eth0.10 back too, otherwise its InterfaceAdded never fires.
+	for _, child := range ifaces {
+		if child.Subtype == "vlan" && child.VlanParent != nil && *child.VlanParent == name && !kernelMap[child.Name] {
+			if s.recreateVlanIfPossible(child, kernelMap) {
+				s.applyOneInterface(child)
+			}
+		}
+	}
+
+	s.applyOneInterface(*target)
+}
+
+// kernelInterfaceNameSet returns the set of interface names currently present in the
+// kernel, or an empty set on error (best-effort, callers treat absence as "missing").
+func (s *InterfaceService) kernelInterfaceNameSet() map[string]bool {
+	set := make(map[string]bool)
+	kernelIfaces, err := s.GetKernelInterfaces()
+	if err != nil {
+		log.Printf("[ApplyInterface] Warning: failed to load kernel interfaces: %v", err)
+		return set
+	}
+	for _, k := range kernelIfaces {
+		set[k.Name] = true
+	}
+	return set
+}
+
+// recreateVlanIfPossible recreates a DB-configured VLAN sub-interface that is missing
+// from the kernel, mirroring the startup recreate (issue #20). Returns true if the VLAN
+// is present in the kernel afterwards (already there or successfully created). It marks
+// the name in kernelMap on success so callers can chain further work.
+func (s *InterfaceService) recreateVlanIfPossible(iface model.NetworkInterface, kernelMap map[string]bool) bool {
+	if kernelMap[iface.Name] {
+		return true
+	}
+	if iface.VlanParent == nil || iface.VlanID == nil {
+		log.Printf("[ApplyInterface] Warning: VLAN %s is missing parent/id metadata; skipping recreate.", iface.Name)
+		return false
+	}
+	log.Printf("[ApplyInterface] Recreating missing VLAN %s (parent=%s, id=%d)...", iface.Name, *iface.VlanParent, *iface.VlanID)
+	if err := s.network.CreateVlan(*iface.VlanParent, *iface.VlanID); err != nil {
+		log.Printf("[ApplyInterface] Warning: failed to recreate VLAN %s: %v", iface.Name, err)
+		return false
+	}
+	kernelMap[iface.Name] = true
+	return true
 }
 
 // GetKernelInterfaces scans the OS for active interfaces (or returns mocked interfaces if mockMode is enabled).

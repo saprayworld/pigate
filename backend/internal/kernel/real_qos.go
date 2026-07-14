@@ -62,7 +62,12 @@ func (q *RealQos) ApplyQosRules(rules []model.QosRule) error {
 		// 2. Get the link
 		link, err := netlink.LinkByName(ifaceName)
 		if err != nil {
-			return fmt.Errorf("[RealQos] interface %q not found: %w", ifaceName, err)
+			// Interface not found — skip this interface but don't abort the remaining
+			// interfaces' rules (self-healing: a missing/offline NIC must not block QoS
+			// for the others). It re-applies on its own when the link comes back via the
+			// InterfaceAdded event. Same tolerance pattern as real_routing.go.
+			log.Printf("[RealQos] Warning: interface %q not found, skipping its QoS rules: %v", ifaceName, err)
+			continue
 		}
 
 		// 3. Setup Egress (Client Download) Shaping

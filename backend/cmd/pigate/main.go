@@ -153,10 +153,83 @@ func main() {
 	eventLogService := service.NewEventLogService(repo)
 	dhcpServerService.SetEventLog(eventLogService)
 
+	// Self-healing internal event bus: NetlinkMonitor translates raw kernel events
+	// into semantic NetEvents (InterfaceAdded/Removed, LinkChanged, AddrRouteChanged)
+	// and publishes them here; interested services subscribe below. This is what makes
+	// an interface that vanished and came back re-apply its config on its own without
+	// the user touching the UI (issue #48). Subscriptions are registered before the
+	// monitor is started (further down, after all startup applies complete).
+	eventBus := service.NewNetEventBus()
+
+	// InterfaceService: only a genuinely new/returned interface (InterfaceAdded)
+	// re-applies its DB config — a mere flag flap (LinkChanged) must not, or a
+	// blinking link would trigger a re-apply storm. Debounced + scoped by name.
+	eventBus.Subscribe("interface", []service.NetEventKind{service.InterfaceAdded}, service.Debounced,
+		func(e service.NetEvent) {
+			log.Printf("[Self-heal] Interface %q returned; re-applying its configuration", e.Name)
+			ifaceService.ReapplyInterfaceByName(e.Name)
+		})
+
+	// dhcpcd: must observe every link transition in order (Wi-Fi waits for RUNNING),
+	// so Immediate mode across Added/Changed/Removed.
+	eventBus.Subscribe("dhcpcd",
+		[]service.NetEventKind{service.InterfaceAdded, service.LinkChanged, service.InterfaceRemoved},
+		service.Immediate,
+		func(e service.NetEvent) {
+			dhcpcdService.HandleLinkEvent(e.Name, e.Up, e.Running)
+		})
+
+	// Routing + DNS client reconcile on any address/route change or link flag change.
+	// Debounced: coalesce a burst into a single full reconcile (idempotent).
+	eventBus.Subscribe("routing-dns",
+		[]service.NetEventKind{service.AddrRouteChanged, service.LinkChanged},
+		service.Debounced,
+		func(e service.NetEvent) {
+			if err := routingService.ReconcileKernelRoutingTable(); err != nil {
+				log.Printf("[Self-heal] Error reconciling routing table: %v", err)
+			}
+			if err := dnsService.ApplyDNSConfig(); err != nil {
+				log.Printf("[Self-heal] Error applying DNS configuration: %v", err)
+			}
+		})
+
+	// DHCP server: when an interface returns, re-run the full config so its dhcp-range
+	// (which was skipped while the interface was gone) is restored.
+	eventBus.Subscribe("dhcp-server", []service.NetEventKind{service.InterfaceAdded}, service.Debounced,
+		func(e service.NetEvent) {
+			if err := dhcpServerService.ApplyAll(); err != nil {
+				log.Printf("[Self-heal] Error re-applying DHCP server config: %v", err)
+			}
+		})
+
+	// QoS: re-attach qdiscs/classes to an interface that came back.
+	eventBus.Subscribe("qos", []service.NetEventKind{service.InterfaceAdded}, service.Debounced,
+		func(e service.NetEvent) {
+			if err := qosService.SyncToKernel(); err != nil {
+				log.Printf("[Self-heal] Error re-syncing QoS to kernel: %v", err)
+			}
+		})
+
+	// Event log: surface interface come-and-go to the user (self-healing must be
+	// observable). Immediate so the log ordering matches reality.
+	eventBus.Subscribe("event-log",
+		[]service.NetEventKind{service.InterfaceAdded, service.InterfaceRemoved},
+		service.Immediate,
+		func(e service.NetEvent) {
+			switch e.Kind {
+			case service.InterfaceAdded:
+				eventLogService.Log(model.EventCategoryNetwork, "network.interface.up", model.EventSeverityInfo,
+					model.EventActorSystem, e.Name, "Interface "+e.Name+" appeared; re-applying configuration")
+			case service.InterfaceRemoved:
+				eventLogService.Log(model.EventCategoryNetwork, "network.interface.down", model.EventSeverityWarning,
+					model.EventActorSystem, e.Name, "Interface "+e.Name+" removed from kernel")
+			}
+		})
+
 	// Netlink monitor is created here (but started later, after startup config is
-	// applied) so it can be injected into the BackupService, which pauses it
-	// around a config import.
-	netlinkMonitor := service.NewNetlinkMonitor(repo, routingService, dnsService, dhcpcdService)
+	// applied) so it can be injected into the BackupService, which pauses it (and
+	// hence the whole bus) around a config import.
+	netlinkMonitor := service.NewNetlinkMonitor(repo, eventBus)
 
 	backupService := service.NewBackupService(
 		repo, *dbPath, version,
@@ -190,11 +263,11 @@ func main() {
 		log.Printf("[Main] Warning: Failed to apply static routes to kernel at startup: %v", err)
 	}
 
-	// 6.2.1 Start Netlink Monitor to dynamically handle network and routing events
-	log.Printf("[Main] Initializing Netlink event monitor...")
+	// The netlink monitor is started later (after every subsystem's startup apply has
+	// completed) so boot-time link events don't race the startup path — but its
+	// context is created here because the watchers/samplers below share it.
 	monitorCtx, cancelMonitor := context.WithCancel(context.Background())
 	defer cancelMonitor()
-	netlinkMonitor.Start(monitorCtx)
 
 	// Start the forward-traffic log watcher. It feeds the shared ring buffer that
 	// backs the Forward Traffic page and Dashboard Recent Logs. Each event is
@@ -274,6 +347,14 @@ func main() {
 	if err := qosService.InitApplyConfig(); err != nil {
 		log.Printf("[Main] Warning: Failed to apply QoS rules to kernel at startup: %v", err)
 	}
+
+	// 6.5 Start the Netlink event monitor LAST, once every subsystem's startup apply
+	// has completed. Starting it earlier would let the flurry of boot-time link events
+	// (dhcpcd bringing links up) fire self-heal re-applies that race the startup path
+	// above (issue #48). A brief drift window between the applies and Start is
+	// acceptable — the startup applies just ran.
+	log.Printf("[Main] Starting Netlink event monitor (self-healing event bus)...")
+	netlinkMonitor.Start(monitorCtx)
 
 	handler := api.RegisterRoutes(server)
 

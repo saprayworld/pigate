@@ -785,3 +785,93 @@ func TestCreateVlanInterface_AliasConflict(t *testing.T) {
 		t.Errorf("expected no kernel link for rejected VLAN, got %v", tracker.createdVlans)
 	}
 }
+
+// TestReapplyInterfaceByName_Managed verifies the running-state self-heal path:
+// when a managed interface (present in the kernel) returns, its DB config is pushed
+// back to the kernel — the desired admin state is toggled and the IP/mode reapplied.
+func TestReapplyInterfaceByName_Managed(t *testing.T) {
+	svc, repo, tracker := newVlanTestService(t)
+
+	// eth0 exists in the mock kernel; seed a managed, admin-up static config for it.
+	if err := repo.CreateInterfaceForTest(model.NetworkInterface{
+		ID:             "iface-eth0",
+		Name:           "eth0",
+		Alias:          "eth0",
+		Role:           "LAN",
+		Type:           "ethernet",
+		Subtype:        "device",
+		AddressingMode: "static",
+		IP:             "192.168.1.1",
+		Netmask:        "24",
+		Status:         "up",
+	}); err != nil {
+		t.Fatalf("seed eth0: %v", err)
+	}
+
+	svc.ReapplyInterfaceByName("eth0")
+
+	if up, ok := tracker.toggledInterfaces["eth0"]; !ok || !up {
+		t.Errorf("expected eth0 toggled up, got %v (ok=%v)", up, ok)
+	}
+	if len(tracker.configuredInterfaces) == 0 || tracker.configuredInterfaces[len(tracker.configuredInterfaces)-1] != "eth0" {
+		t.Errorf("expected eth0 configured, got %v", tracker.configuredInterfaces)
+	}
+}
+
+// TestReapplyInterfaceByName_Unmanaged verifies the invariant that a link PiGate does
+// not manage (no DB row) is left completely alone — no kernel writes, no config created.
+func TestReapplyInterfaceByName_Unmanaged(t *testing.T) {
+	svc, _, tracker := newVlanTestService(t)
+
+	svc.ReapplyInterfaceByName("some-unmanaged-iface")
+
+	if len(tracker.toggledInterfaces) != 0 || len(tracker.configuredInterfaces) != 0 || len(tracker.createdVlans) != 0 {
+		t.Errorf("expected no kernel writes for unmanaged interface, got toggles=%v configures=%v vlans=%v",
+			tracker.toggledInterfaces, tracker.configuredInterfaces, tracker.createdVlans)
+	}
+}
+
+// TestRecreateVlanIfPossible exercises the VLAN self-heal primitive used by
+// ReapplyInterfaceByName to restore a child VLAN the kernel lost when its parent
+// returns (issue #48). It is tested directly against a synthetic kernel-name set
+// because the mock GetKernelInterfaces mirrors the DB (a DB-configured VLAN always
+// appears "present" in the mock kernel), so the missing-from-kernel case can only be
+// reproduced by controlling the kernel set explicitly.
+func TestRecreateVlanIfPossible(t *testing.T) {
+	svc, _, tracker := newVlanTestService(t)
+
+	parent := "eth0"
+	vlanID := 100
+	child := model.NetworkInterface{
+		Name:       "eth0.100",
+		Subtype:    "vlan",
+		VlanParent: &parent,
+		VlanID:     &vlanID,
+	}
+
+	// Child missing from the kernel -> recreated.
+	kernelMap := map[string]bool{"eth0": true}
+	if ok := svc.recreateVlanIfPossible(child, kernelMap); !ok {
+		t.Fatalf("expected recreate to succeed")
+	}
+	if len(tracker.createdVlans) != 1 || tracker.createdVlans[0] != "eth0:100" {
+		t.Errorf("expected CreateVlan(eth0:100), got %v", tracker.createdVlans)
+	}
+	if !kernelMap["eth0.100"] {
+		t.Errorf("expected kernelMap marked present after recreate")
+	}
+
+	// Already present -> no-op (no second CreateVlan).
+	if ok := svc.recreateVlanIfPossible(child, kernelMap); !ok {
+		t.Errorf("expected true when already present")
+	}
+	if len(tracker.createdVlans) != 1 {
+		t.Errorf("expected no extra CreateVlan when already present, got %v", tracker.createdVlans)
+	}
+
+	// Missing parent/id metadata -> cannot recreate.
+	bad := model.NetworkInterface{Name: "eth1.200", Subtype: "vlan"}
+	if ok := svc.recreateVlanIfPossible(bad, map[string]bool{}); ok {
+		t.Errorf("expected false when VLAN metadata is missing")
+	}
+}

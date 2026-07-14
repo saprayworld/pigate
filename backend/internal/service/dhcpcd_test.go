@@ -1,17 +1,14 @@
 package service
 
 import (
-	"net"
 	"testing"
 
 	"pigate/internal/db"
 	"pigate/internal/kernel"
 	"pigate/internal/model"
-
-	"github.com/vishvananda/netlink"
 )
 
-func TestDhcpcdService_HandleLinkUpdate(t *testing.T) {
+func TestDhcpcdService_HandleLinkEvent(t *testing.T) {
 	// Initialize a memory database
 	sqliteDB, err := db.InitDB(":memory:")
 	if err != nil {
@@ -63,59 +60,19 @@ func TestDhcpcdService_HandleLinkUpdate(t *testing.T) {
 	dhcpcdService := NewDhcpcdService(repo, ifaceService, kernel.NewMockDhcpcdManager())
 
 	// Test 1: Ethernet interface up
-	updateEth0Up := netlink.LinkUpdate{
-		Link: &netlink.Device{
-			LinkAttrs: netlink.LinkAttrs{
-				Name:  "eth0",
-				Flags: net.FlagUp,
-			},
-		},
-	}
-	dhcpcdService.HandleLinkUpdate(updateEth0Up)
+	dhcpcdService.HandleLinkEvent("eth0", true, false)
 
 	// Test 2: Ethernet interface down
-	updateEth0Down := netlink.LinkUpdate{
-		Link: &netlink.Device{
-			LinkAttrs: netlink.LinkAttrs{
-				Name:  "eth0",
-				Flags: 0, // not up
-			},
-		},
-	}
-	dhcpcdService.HandleLinkUpdate(updateEth0Down)
+	dhcpcdService.HandleLinkEvent("eth0", false, false)
 
 	// Test 3: Wi-Fi interface up but not running
-	updateWlan0UpNotRunning := netlink.LinkUpdate{
-		Link: &netlink.Device{
-			LinkAttrs: netlink.LinkAttrs{
-				Name:  "wlan0",
-				Flags: net.FlagUp,
-			},
-		},
-	}
-	dhcpcdService.HandleLinkUpdate(updateWlan0UpNotRunning)
+	dhcpcdService.HandleLinkEvent("wlan0", true, false)
 
 	// Test 4: Wi-Fi interface up and running
-	updateWlan0UpRunning := netlink.LinkUpdate{
-		Link: &netlink.Device{
-			LinkAttrs: netlink.LinkAttrs{
-				Name:  "wlan0",
-				Flags: net.FlagUp | net.FlagRunning,
-			},
-		},
-	}
-	dhcpcdService.HandleLinkUpdate(updateWlan0UpRunning)
+	dhcpcdService.HandleLinkEvent("wlan0", true, true)
 
 	// Test 5: Wi-Fi interface down
-	updateWlan0Down := netlink.LinkUpdate{
-		Link: &netlink.Device{
-			LinkAttrs: netlink.LinkAttrs{
-				Name:  "wlan0",
-				Flags: 0,
-			},
-		},
-	}
-	dhcpcdService.HandleLinkUpdate(updateWlan0Down)
+	dhcpcdService.HandleLinkEvent("wlan0", false, false)
 
 	// Test 6: SyncActiveInterfaces in mock mode
 	dhcpcdService.SyncActiveInterfaces()
