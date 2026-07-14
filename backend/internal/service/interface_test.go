@@ -614,6 +614,34 @@ func TestDeleteVlanInterface(t *testing.T) {
 	}
 }
 
+// TestDeleteVlanInterface_PrunesDNSServerSettings verifies that deleting a VLAN via
+// PiGate removes it from dns_server_settings, so it doesn't linger as a dangling
+// "Missing" chip (issue #46, Step 2). This is an explicit user action, so dropping
+// the binding here is intentional (not auto-heal).
+func TestDeleteVlanInterface_PrunesDNSServerSettings(t *testing.T) {
+	svc, repo, _ := newVlanTestService(t)
+	if _, err := svc.CreateVlanInterface(model.CreateVlanInput{Parent: "eth0", VlanID: 100, AddressingMode: "dhcp"}); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Bind the DNS server to the VLAN plus another (unrelated) interface name.
+	if err := repo.SetDNSServerInterfaces([]string{"eth0.100", "eth1"}); err != nil {
+		t.Fatalf("seed dns server settings failed: %v", err)
+	}
+
+	if err := svc.DeleteVlanInterface("iface-eth0.100"); err != nil {
+		t.Fatalf("DeleteVlanInterface failed: %v", err)
+	}
+
+	got, err := repo.GetDNSServerInterfaces()
+	if err != nil {
+		t.Fatalf("GetDNSServerInterfaces error: %v", err)
+	}
+	if len(got) != 1 || got[0] != "eth1" {
+		t.Errorf("expected dns server settings pruned to [eth1], got %v", got)
+	}
+}
+
 func TestDeleteVlanInterface_RefusesNonVlan(t *testing.T) {
 	svc, repo, tracker := newVlanTestService(t)
 	// Seed a non-vlan interface row.

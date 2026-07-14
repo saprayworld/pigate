@@ -132,6 +132,14 @@ export default function DnsServer() {
     }
   }
 
+  // Dangling ("Missing") interface names: saved in settings but no longer present in
+  // the LAN interface list (deleted VLAN, parent gone, or role changed off LAN). The
+  // backend grandfathers these so they can be un-ticked to remove; they can't be
+  // re-added since they're absent from availableInterfaces (issue #46).
+  const missingInterfaces = useMemo(() => {
+    return selectedInterfaces.filter(n => !availableInterfaces.some(i => i.name === n))
+  }, [selectedInterfaces, availableInterfaces])
+
   // Selected Zone object
   const selectedZone = useMemo(() => {
     return zones.find(z => z.id === selectedZoneId) || null
@@ -459,7 +467,7 @@ export default function DnsServer() {
           </div>
         </CardHeader>
         <CardContent>
-          {availableInterfaces.length === 0 ? (
+          {availableInterfaces.length === 0 && missingInterfaces.length === 0 ? (
             <p className="text-xs italic text-muted-foreground">ไม่พบ Interface ที่มี Role เป็น LAN ในระบบ</p>
           ) : (
             <div className="flex flex-wrap gap-2">
@@ -485,6 +493,22 @@ export default function DnsServer() {
                   </label>
                 )
               })}
+              {missingInterfaces.map(name => (
+                <label
+                  key={`missing-${name}`}
+                  className="flex cursor-pointer items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 font-mono text-xs text-foreground transition"
+                >
+                  <input
+                    type="checkbox"
+                    checked
+                    disabled={isSavingInterfaces}
+                    onChange={() => handleToggleInterface(name, false)}
+                    className="h-4 w-4 cursor-pointer accent-destructive"
+                  />
+                  {name}
+                  <Badge variant="destructive">Missing</Badge>
+                </label>
+              ))}
             </div>
           )}
         </CardContent>

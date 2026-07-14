@@ -1895,8 +1895,11 @@ paths:
         - DNS Server
       summary: Set the interfaces the DNS server should bind to
       description: |
-        Interface names are validated against the live interfaces on the device;
-        unknown names are rejected. Independent from the DHCP server configuration.
+        Tolerates dangling references: names already saved are accepted even if the
+        interface no longer exists on the device (e.g. a deleted VLAN), so they can be
+        kept or removed without error. Only names newly added in the request are
+        validated against the live interfaces; unknown new names are rejected.
+        Independent from the DHCP server configuration.
       requestBody:
         required: true
         content:
