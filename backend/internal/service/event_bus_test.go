@@ -139,6 +139,43 @@ func TestBusPauseSuppressesResumeRestores(t *testing.T) {
 	}
 }
 
+// TestBusPauseDropsPendingDebounced locks in the drop-while-paused semantics for
+// the debounced path: an event published BEFORE Pause whose flush timer fires
+// DURING the pause must be dropped, not delivered after Resume — nothing that
+// predates a config import may fire after it.
+func TestBusPauseDropsPendingDebounced(t *testing.T) {
+	bus := newNetEventBus(20 * time.Millisecond)
+
+	var mu sync.Mutex
+	var got []string
+	bus.Subscribe("test", []NetEventKind{InterfaceAdded}, Debounced, func(e NetEvent) {
+		mu.Lock()
+		got = append(got, e.Name)
+		mu.Unlock()
+	})
+
+	// Event enqueued while running, then Pause before its flush timer fires.
+	bus.Publish(NetEvent{Kind: InterfaceAdded, Name: "stale"})
+	bus.Pause()
+	time.Sleep(60 * time.Millisecond) // let the timer fire while paused
+	bus.Resume()
+
+	// A fresh post-resume event must be the ONLY thing ever delivered.
+	bus.Publish(NetEvent{Kind: InterfaceAdded, Name: "fresh"})
+	if !waitFor(t, time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(got) >= 1
+	}) {
+		t.Fatal("expected delivery of the post-resume event")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || got[0] != "fresh" {
+		t.Fatalf("expected only the post-resume event %q, got %v", "fresh", got)
+	}
+}
+
 func TestBusSlowHandlerDoesNotBlockOthers(t *testing.T) {
 	bus := newNetEventBus(20 * time.Millisecond)
 

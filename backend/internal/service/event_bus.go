@@ -220,6 +220,12 @@ func (s *subscriber) enqueueDebounced(e NetEvent) {
 
 func (s *subscriber) flush() {
 	if s.paused.Load() {
+		// Drop anything that was pending from before the pause, matching the
+		// drop-while-paused semantics of Publish: nothing that predates a config
+		// import may fire after it.
+		s.mu.Lock()
+		s.pending = nil
+		s.mu.Unlock()
 		return
 	}
 	s.mu.Lock()
