@@ -661,6 +661,97 @@ func TestDeleteVlanInterface_RefusesNonVlan(t *testing.T) {
 	}
 }
 
+// TestAppendOfflineRows verifies the pure helper behind GetDataLayerInterfaceIncludingOffline
+// (issue #49): a DB-configured interface with no live kernel link is appended as an offline,
+// managed row, while interfaces already present in the data layer are never duplicated.
+func TestAppendOfflineRows(t *testing.T) {
+	dataLayer := []model.NetworkInterface{
+		{ID: "iface-eth0", Name: "eth0", Status: "up", Managed: true},
+		{ID: "iface-eth1", Name: "eth1", Status: "down", Managed: false},
+	}
+	dbIfaces := []model.NetworkInterface{
+		// Present in the data layer already → must not be duplicated.
+		{ID: "iface-eth0", Name: "eth0", Status: "up"},
+		// DB row whose kernel link is gone → must be appended as offline/managed.
+		{ID: "iface-eth0.250", Name: "eth0.250", Status: "up", Subtype: "vlan"},
+	}
+
+	result := appendOfflineRows(dataLayer, dbIfaces)
+
+	if len(result) != 3 {
+		t.Fatalf("expected 3 rows (2 data-layer + 1 offline), got %d: %+v", len(result), result)
+	}
+
+	byName := make(map[string]model.NetworkInterface, len(result))
+	for _, it := range result {
+		byName[it.Name] = it
+	}
+
+	// eth0 is untouched (still up, not turned into an offline duplicate).
+	if eth0 := byName["eth0"]; eth0.Status != "up" {
+		t.Errorf("expected eth0 to keep status=up, got %q", eth0.Status)
+	}
+	// The dangling VLAN row is marked offline + managed.
+	offline, ok := byName["eth0.250"]
+	if !ok {
+		t.Fatalf("expected offline row eth0.250 to be appended")
+	}
+	if offline.Status != "offline" {
+		t.Errorf("expected eth0.250 status=offline, got %q", offline.Status)
+	}
+	if !offline.Managed {
+		t.Errorf("expected eth0.250 Managed=true")
+	}
+}
+
+// TestDeleteVlanInterface_LinkMissing verifies the offline-delete path (issue #49): when a
+// VLAN's kernel link is already gone, DeleteVlanInterface must skip the netlink DeleteVlan
+// call and still remove the DB config row. Uses non-mock kernel listing so the DB VLAN row
+// is genuinely absent from the kernel interface set.
+func TestDeleteVlanInterface_LinkMissing(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+	repo := db.NewRepository(sqliteDB)
+	if err := repo.ClearInterfaces(); err != nil {
+		t.Fatalf("clear interfaces: %v", err)
+	}
+	repo.SetMockMode(false, false)
+
+	parent := "eth0"
+	vid := 250
+	if err := repo.CreateInterfaceForTest(model.NetworkInterface{
+		ID: "iface-eth0.250", Name: "eth0.250", Alias: "vlan250", Role: "LAN",
+		Type: "ethernet", Subtype: "vlan", AddressingMode: "dhcp", IP: "0.0.0.0",
+		Netmask: "24", Gateway: "", MacAddress: "aa:bb:cc:dd:ee:ff", Status: "up",
+		Speed: "1000 Mbps", VlanParent: &parent, VlanID: &vid,
+	}); err != nil {
+		t.Fatalf("seed vlan row: %v", err)
+	}
+
+	tracker := &trackingNetworkManager{toggledInterfaces: make(map[string]bool)}
+	svc := NewInterfaceService(repo, tracker)
+
+	if err := svc.DeleteVlanInterface("iface-eth0.250"); err != nil {
+		t.Fatalf("DeleteVlanInterface failed for missing link: %v", err)
+	}
+
+	// The kernel link was absent, so no netlink delete should have been attempted.
+	if len(tracker.deletedVlans) != 0 {
+		t.Errorf("expected no DeleteVlan call when link is missing, got %v", tracker.deletedVlans)
+	}
+	// The DB config row must be gone.
+	stored, err := repo.GetInterfaceByID("iface-eth0.250")
+	if err != nil {
+		t.Fatalf("GetInterfaceByID error: %v", err)
+	}
+	if stored != nil {
+		t.Errorf("expected VLAN row removed, still present: %+v", stored)
+	}
+}
+
 // TestStartupRecreatesMissingVlan verifies the boot-time recreate step (the core fix
 // of issue #20): a VLAN row in the DB whose link is absent from the kernel is
 // re-created via CreateVlan. Uses real (non-mock) kernel listing so the DB VLAN row

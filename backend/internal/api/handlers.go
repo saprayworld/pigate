@@ -471,7 +471,7 @@ func (s *Server) HandleClearSystemEvents(w http.ResponseWriter, r *http.Request)
 // =========================================================================
 
 func (s *Server) HandleGetInterfaces(w http.ResponseWriter, r *http.Request) {
-	list, err := s.interfaceService.GetDataLayerInterface()
+	list, err := s.interfaceService.GetDataLayerInterfaceIncludingOffline()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -480,6 +480,17 @@ func (s *Server) HandleGetInterfaces(w http.ResponseWriter, r *http.Request) {
 		maskInterfacePasswords(&list[i])
 	}
 	s.writeJSON(w, http.StatusOK, list)
+}
+
+// rejectIfOffline writes a 409 and returns true when the interface has no live kernel link
+// (Status=="offline"). Handlers that mutate kernel state must not run against a phantom
+// interface — only delete/reset are allowed for an offline row.
+func (s *Server) rejectIfOffline(w http.ResponseWriter, iface *model.NetworkInterface) bool {
+	if iface.Status == "offline" {
+		s.writeError(w, http.StatusConflict, "interface is offline; only delete is allowed")
+		return true
+	}
+	return false
 }
 
 func equalStringSlices(a, b []string) bool {
@@ -506,6 +517,9 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 	iface, err := s.interfaceService.GetDataLayerInterfaceByID(id)
 	if err != nil || iface == nil {
 		s.writeError(w, http.StatusNotFound, "Interface not found")
+		return
+	}
+	if s.rejectIfOffline(w, iface) {
 		return
 	}
 
@@ -673,6 +687,9 @@ func (s *Server) HandlePatchInterface(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, "Interface not found")
 		return
 	}
+	if s.rejectIfOffline(w, iface) {
+		return
+	}
 
 	var body map[string]json.RawMessage
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -826,6 +843,9 @@ func (s *Server) HandleToggleInterface(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, "Interface not found")
 		return
 	}
+	if s.rejectIfOffline(w, iface) {
+		return
+	}
 
 	nextStatus := "up"
 	if iface.Status == "up" {
@@ -854,6 +874,9 @@ func (s *Server) HandleScanWifi(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, "Interface not found")
 		return
 	}
+	if s.rejectIfOffline(w, iface) {
+		return
+	}
 
 	if iface.Type != "wireless" {
 		s.writeError(w, http.StatusBadRequest, "Interface is not a wireless interface")
@@ -873,6 +896,9 @@ func (s *Server) HandleGetWifiStatus(w http.ResponseWriter, r *http.Request) {
 	iface, err := s.interfaceService.GetDataLayerInterfaceByID(id)
 	if err != nil || iface == nil {
 		s.writeError(w, http.StatusNotFound, "Interface not found")
+		return
+	}
+	if s.rejectIfOffline(w, iface) {
 		return
 	}
 
@@ -926,6 +952,13 @@ func (s *Server) HandleDeleteInterface(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Match the VLAN path: drop any DNS Server binding to this now-deleted interface so it
+	// doesn't linger as a dangling "Missing" chip. dhcp-range/QoS refs are left as tolerated
+	// dangling rows (the user sees and fixes those on their own pages).
+	s.interfaceService.PruneDNSServerBinding(iface.Name)
+
+	s.logEvent(r, model.EventCategoryNetwork, "network.interface_deleted", model.EventSeverityInfo,
+		iface.Name, "Offline interface "+iface.Name+" configuration deleted")
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
 }
 
@@ -937,20 +970,28 @@ func (s *Server) HandleResetInterface(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wasOffline := iface.Status == "offline"
+
 	if err := s.interfaceService.FlushInterfaceConfig(id); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	// Refreshed default settings from kernel
+	s.logEvent(r, model.EventCategoryNetwork, "network.interface_reset", model.EventSeverityWarning,
+		iface.Name, "Interface \""+iface.Name+"\" configuration reset to defaults")
+
+	// Refreshed default settings from kernel. For an offline interface there is no kernel
+	// link, so flushing the config leaves nothing to return — that's success, not an error.
 	refreshed, err := s.interfaceService.GetDataLayerInterfaceByID(id)
 	if err != nil || refreshed == nil {
+		if wasOffline && err == nil {
+			s.writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
+			return
+		}
 		s.writeError(w, http.StatusInternalServerError, "Failed to load refreshed interface default config")
 		return
 	}
 
-	s.logEvent(r, model.EventCategoryNetwork, "network.interface_reset", model.EventSeverityWarning,
-		iface.Name, "Interface \""+iface.Name+"\" configuration reset to defaults")
 	maskInterfacePasswords(refreshed)
 	s.writeJSON(w, http.StatusOK, refreshed)
 }

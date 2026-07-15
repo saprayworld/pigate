@@ -491,6 +491,11 @@ paths:
       tags:
         - Network Interfaces
       summary: Get all network interfaces (Ethernet & Wireless)
+      description: >-
+        Returns the unified data layer (kernel state overlaid with database configuration).
+        The list also includes "offline" interfaces: rows that have a database configuration
+        but no live kernel link (status="offline", managed=true), so the UI can surface them
+        and offer to delete their config. Other backend consumers do not see offline rows.
       responses:
         '200':
           description: List of interfaces
@@ -618,7 +623,10 @@ paths:
         '404':
           description: Interface not found
         '409':
-          description: Alias already in use by another interface, or equals another interface's OS name (case-insensitive)
+          description: >-
+            Alias already in use by another interface, or equals another interface's OS name
+            (case-insensitive); or the interface is offline (has no live kernel link), in which
+            case only delete is allowed.
         '500':
           description: Internal server error or OS firewall sync failed
     patch:
@@ -711,7 +719,10 @@ paths:
         '404':
           description: Interface not found
         '409':
-          description: Alias already in use by another interface, or equals another interface's OS name (case-insensitive)
+          description: >-
+            Alias already in use by another interface, or equals another interface's OS name
+            (case-insensitive); or the interface is offline (has no live kernel link), in which
+            case only delete is allowed.
         '500':
           description: Internal server error or OS firewall sync failed
     delete:
@@ -719,11 +730,14 @@ paths:
         - Network Interfaces
       summary: Delete an interface
       description: >-
-        Deletes an interface. For physical interfaces, only offline interfaces can be
-        deleted — active interfaces return a 400 Bad Request. VLAN sub-interfaces
-        (subtype='vlan') are an exception: they are removed via Netlink (kernel link +
-        database row) and can be deleted while up, since that is the only way to tear a
-        VLAN down. The kernel layer additionally guards against deleting a non-VLAN link.
+        Deletes an interface configuration. For physical interfaces, only offline interfaces
+        (status="offline" — a database row whose kernel link is gone) can be deleted; active
+        interfaces return a 400 Bad Request. Deleting the row also prunes any DNS Server
+        binding to the interface. VLAN sub-interfaces (subtype='vlan') are an exception: they
+        are removed via Netlink (kernel link + database row) and can be deleted while up,
+        since that is the only way to tear a VLAN down; when the VLAN's kernel link is already
+        gone the Netlink delete is skipped and only the database row is removed. The kernel
+        layer additionally guards against deleting a non-VLAN link.
       parameters:
         - name: id
           in: path
@@ -788,6 +802,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NetworkInterface'
+        '409':
+          description: Interface is offline (has no live kernel link); only delete is allowed
   /interfaces/{id}/reset:
     post:
       tags:
@@ -839,6 +855,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/WifiScanResult'
+        '409':
+          description: Interface is offline (has no live kernel link); only delete is allowed
 
   /interfaces/{id}/wifi-status:
     get:
@@ -862,6 +880,8 @@ paths:
           description: Interface is not wireless
         '404':
           description: Interface not found
+        '409':
+          description: Interface is offline (has no live kernel link); only delete is allowed
 
   # =========================================================================
   # FIREWALL POLICIES
@@ -3027,7 +3047,13 @@ components:
           example: [PING, HTTP, SSH]
         status:
           type: string
-          enum: [up, down]
+          enum: [up, down, offline]
+          description: >-
+            Live administrative state of the interface. "offline" is a computed value (never
+            persisted): the interface has a configuration row in the database but no live
+            kernel link — e.g. a VLAN whose parent vanished or an unplugged USB NIC. Offline
+            rows appear in GET /interfaces so the config can be deleted; mutating endpoints
+            reject them with 409.
           example: up
         managed:
           type: boolean
