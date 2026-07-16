@@ -316,9 +316,10 @@ func (m *MockQos) ClearQosRules(ifaceName string) error {
 func (m *MockQos) GetIfaceQosStatus(ifaceName string) (*model.QosIfaceStatus, error) {
 	log.Printf("[MockQos] GetIfaceQosStatus called for interface: %s", ifaceName)
 	return &model.QosIfaceStatus{
-		Interface: ifaceName,
-		HasQdisc:  false,
-		Classes:   []model.QosClass{},
+		Interface:        ifaceName,
+		HasQdisc:         false,
+		Classes:          []model.QosClass{},
+		IngressSupported: true, // mock runs on a dev workstation; assume supported
 	}, nil
 }
 
