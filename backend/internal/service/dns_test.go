@@ -97,8 +97,24 @@ func TestDNSGetAndApplyConfig(t *testing.T) {
 		t.Errorf("ApplyDNSConfig failed to configure global domain: %s", dnsMgr.globalDom)
 	}
 
-	if len(dnsMgr.linkDNS["eth0"]) != 2 || dnsMgr.linkDNS["eth0"][0] != "8.8.8.8" {
-		t.Errorf("ApplyDNSConfig failed to configure interface static DNS: %v", dnsMgr.linkDNS["eth0"])
+	// Static mode must NOT push per-link DNS (resolve1.Link.SetDNS): resolution
+	// comes from the global drop-in only. Per-link push required a Polkit privilege
+	// pigate lacks and always failed — issue #57 removed it.
+	if len(dnsMgr.linkDNS["eth0"]) != 0 {
+		t.Errorf("Static mode should not set per-link DNS, got: %v", dnsMgr.linkDNS["eth0"])
+	}
+	if dnsMgr.setGlobalCalls != 1 {
+		t.Errorf("Expected SetGlobalDNS called once, got %d", dnsMgr.setGlobalCalls)
+	}
+
+	// 2b. Idempotency guard: re-applying an unchanged config must be a no-op
+	// (no extra SetGlobalDNS call → no systemd-resolved restart). This is the
+	// core fix for the Wi-Fi flap re-apply storm (issue #57).
+	if err := dnsSvc.ApplyDNSConfig(); err != nil {
+		t.Fatalf("ApplyDNSConfig (repeat) failed: %v", err)
+	}
+	if dnsMgr.setGlobalCalls != 1 {
+		t.Errorf("Idempotency guard failed: SetGlobalDNS called again (%d) for unchanged config", dnsMgr.setGlobalCalls)
 	}
 
 	// 3. Update to WAN mode

@@ -179,15 +179,28 @@ func main() {
 			dhcpcdService.HandleLinkEvent(e.Name, e.Up, e.Running)
 		})
 
-	// Routing + DNS client reconcile on any address/route change or link flag change.
+	// Routing reconciles on any address/route change or link flag change — routes
+	// genuinely can shift when a link flaps, so it must observe those.
 	// Debounced: coalesce a burst into a single full reconcile (idempotent).
-	eventBus.Subscribe("routing-dns",
+	eventBus.Subscribe("routing",
 		[]service.NetEventKind{service.AddrRouteChanged, service.LinkChanged},
 		service.Debounced,
 		func(e service.NetEvent) {
 			if err := routingService.ReconcileKernelRoutingTable(); err != nil {
 				log.Printf("[Self-heal] Error reconciling routing table: %v", err)
 			}
+		})
+
+	// DNS client only reacts to a genuinely new/returned interface (InterfaceAdded),
+	// NOT to LinkChanged. The global DNS config is a system-wide resolved drop-in
+	// that does not depend on any single link's up/running state, so a Wi-Fi
+	// scan/reconnect flap must not trigger a re-apply (which would restart
+	// systemd-resolved and drop DNS). ApplyDNSConfig is idempotent-guarded, so even
+	// this InterfaceAdded path is a no-op when the config is unchanged (issue #57).
+	eventBus.Subscribe("dns",
+		[]service.NetEventKind{service.InterfaceAdded},
+		service.Debounced,
+		func(e service.NetEvent) {
 			if err := dnsService.ApplyDNSConfig(); err != nil {
 				log.Printf("[Self-heal] Error applying DNS configuration: %v", err)
 			}

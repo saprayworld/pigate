@@ -267,3 +267,24 @@ func (s *DNSService) listenToNetworkEvents() {
 }
 
 ```
+
+---
+
+## Re-apply behavior & idempotency guard (issue #57)
+
+`DNSService.ApplyDNSConfig` เป็น **idempotent + guarded**: เก็บ `lastSig` (signature ของ
+`mode|primaryDNS|secondaryDNS|localDomain`) ไว้ใน struct (RAM, ไม่เขียน SQLite) ถ้า config ที่
+เข้ามาเหมือนเดิม → **return ทันที ไม่เรียก `SetGlobalDNS` และไม่ restart `systemd-resolved`**
+มี `sync.Mutex` กันการเรียกซ้อนจาก HTTP handler (`UpdateDNSConfig`) กับ event bus goroutine
+
+**Event wiring (`cmd/pigate/main.go`):** DNS subscribe เฉพาะ `InterfaceAdded` (interface กลับมา
+จริง) **ไม่ผูกกับ `LinkChanged`** — global DNS เป็น system-wide drop-in ไม่ขึ้นกับสถานะ up/running
+ของลิงก์ใดลิงก์หนึ่ง ดังนั้น Wi-Fi scan/reconnect ที่ทำให้ลิงก์กระพริบ (`LinkChanged` รัว ๆ) จะ
+**ไม่** trigger DNS re-apply อีก (routing ยังคง reconcile บน `LinkChanged`/`AddrRouteChanged`
+ผ่าน subscriber `routing` ที่แยกออกมา)
+
+**Global-only, ไม่มี per-link SetDNS:** static/global mode ใช้ resolved drop-in
+(`/etc/systemd/resolved.conf.d/pigate.conf`) อย่างเดียว ไม่เรียก `resolve1.Link.SetDNS` ราย
+interface อีก — เดิมมันต้องใช้สิทธิ์ Polkit ราย-link ที่ pigate user ไม่มี จึง fail
+(`Permission denied`) ทุกครั้งอยู่แล้ว = resolution ที่ใช้งานได้จริงมาจาก global drop-in 100%
+มาตลอด การลบ loop จึงเป็น cleanup ล้วน ไม่เปลี่ยนพฤติกรรมจริง (แต่เอา log noise + call ที่ fail ออก)

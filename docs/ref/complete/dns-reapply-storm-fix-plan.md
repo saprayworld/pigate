@@ -170,16 +170,17 @@ func (s *DNSService) ApplyDNSConfig() error {
 
 ## 6. Summary Checklist (Definition of Done)
 
-- [ ] `backend/internal/service/dns.go` — เพิ่ม `sync.Mutex` + `lastSig` + guard ใน `ApplyDNSConfig`
-- [ ] `backend/internal/service/dns.go` — ลบ loop `SetLinkDNS` ในสาขา static (คง `interfaces` ให้ else ใช้)
-- [ ] `backend/cmd/pigate/main.go` — แยก subscriber `routing` (LinkChanged/AddrRouteChanged) กับ
+- [x] `backend/internal/service/dns.go` — เพิ่ม `sync.Mutex` + `lastSig` + guard ใน `ApplyDNSConfig`
+- [x] `backend/internal/service/dns.go` — ลบ loop `SetLinkDNS` ในสาขา static (คง `interfaces` ให้ else ใช้)
+- [x] `backend/cmd/pigate/main.go` — แยก subscriber `routing` (LinkChanged/AddrRouteChanged) กับ
       `dns` (InterfaceAdded เท่านั้น)
-- [ ] Test: `cd backend && go build ./... && go test ./...` ผ่าน (โดยเฉพาะ `internal/api`, `internal/service`)
-- [ ] Test (mock, workstation): `-mock=true` แก้ DNS config แล้ว Save → apply; Save ค่าเดิมซ้ำ →
-      log แสดง skip (ไม่เรียก SetGlobalDNS ซ้ำ)
+- [x] Test: `cd backend && go build ./... && go test ./...` ผ่าน (ปรับ `dns_test.go`: ลบ assert per-link,
+      เพิ่ม assert guard/`setGlobalCalls`); `go vet` ผ่าน
+- [x] Test (mock, workstation): `-mock=true` PUT `/api/system/dns` config ใหม่ → apply; PUT ค่าเดิมซ้ำ →
+      log `DNS config unchanged, skipping re-apply (no resolved restart)` (ยืนยันผ่าน full HTTP stack)
 - [ ] Test (บอร์ดจริง): Wi-Fi scan/reconnect → log **ไม่มี** `RestartUnit: systemd-resolved` ซ้ำ ๆ,
       **ไม่มี** `Permission denied`/`not found`; `resolvectl status` global DNS ถูกต้อง, `resolvectl query` ผ่าน
 - [ ] Test (บอร์ดจริง regression): ถอด-เสียบ WAN จริง → routing ยัง self-heal, DNS ยังถูกต้อง
 - [ ] Test (role): read-only login → GET `/api/dns` ยังอ่านได้ตามเดิม
-- [ ] อัปเดตแผนนี้ถ้าหน้างานต่าง แล้วย้ายไป `docs/ref/complete/` + สรุปลง
-      `docs/ref/complete/dns-system-design.md` เมื่อเสร็จ
+- [x] ย้ายแผนไป `docs/ref/complete/` + สรุป design ลง `docs/ref/complete/dns-system-design.md`
+      (เหลือเฉพาะ board-only tests ด้านบนที่รอ deploy)
