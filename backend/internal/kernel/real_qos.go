@@ -4,9 +4,11 @@ package kernel
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
 	"net"
+	"os"
 
 	"pigate/internal/model"
 
@@ -18,10 +20,44 @@ import (
 // Requires cap_net_admin capability on the binary.
 // Phase 1: Egress (Client Download) HTB shaping.
 // Phase 2: Ingress (Client Upload) via IFB redirect.
-type RealQos struct{}
+type RealQos struct {
+	// ingressSupported caches whether the kernel has the IFB module (probed once
+	// in NewRealQos). When false, ingress shaping is skipped fail-safe (egress
+	// still applies) and the UI is warned via QosIfaceStatus.IngressSupported.
+	ingressSupported bool
+}
 
+// NewRealQos probes IFB module availability once at construction and caches the
+// result. The probe runs here (not lazily) because it must happen before the
+// netlink monitor starts — a later probe would create/delete a link while the
+// monitor is watching and publish a spurious InterfaceAdded event onto the
+// self-healing bus. See docs/ref/qos-system.md.
 func NewRealQos() *RealQos {
-	return &RealQos{}
+	q := &RealQos{}
+
+	// Probe by adding a throwaway IFB link. A successful (or already-existing)
+	// LinkAdd of kind "ifb" means the kernel auto-loaded the module via
+	// request_module and ingress shaping will work for real. The name must be
+	// ≤15 chars (IFNAMSIZ) and must not match the "ifb-<iface>" pattern that
+	// ClearQosRules deletes.
+	const probeName = "pigate-ifb0"
+	la := netlink.NewLinkAttrs()
+	la.Name = probeName
+	probe := &netlink.Ifb{LinkAttrs: la}
+	err := netlink.LinkAdd(probe)
+	if err == nil || errors.Is(err, os.ErrExist) {
+		// os.ErrExist means a probe link leaked from a previous crash — still
+		// proof the module is available. Clean it up either way.
+		q.ingressSupported = true
+		if l, e := netlink.LinkByName(probeName); e == nil {
+			_ = netlink.LinkDel(l)
+		}
+		log.Printf("[RealQos] IFB module available, ingress shaping enabled")
+	} else {
+		log.Printf("[RealQos] IFB module unavailable, ingress shaping disabled: %v", err)
+	}
+
+	return q
 }
 
 // ApplyQosRules is idempotent: it clears existing qdiscs per interface then re-applies
@@ -121,9 +157,13 @@ func (q *RealQos) ApplyQosRules(rules []model.QosRule) error {
 
 		// 4. Setup Ingress (Client Upload) Shaping via IFB redirect
 		if len(enabledIngressRules) > 0 {
-			// Ensure IFB kernel module is loaded
-			if err := execCommand("modprobe", "ifb").Run(); err != nil {
-				log.Printf("[RealQos] Warning: modprobe ifb failed (ifb may be compiled-in): %v", err)
+			// Fail-safe: if the kernel has no IFB module (probed in NewRealQos),
+			// skip ingress shaping for this interface but keep egress applied and
+			// do not abort the sync — the UI surfaces this via
+			// QosIfaceStatus.IngressSupported. Must log + skip only, never error.
+			if !q.ingressSupported {
+				log.Printf("[RealQos] Warning: IFB module unavailable, skipping ingress shaping for %s (%d rule(s)); egress unaffected", ifaceName, len(enabledIngressRules))
+				continue
 			}
 
 			ifbName := "ifb-" + ifaceName
@@ -270,8 +310,9 @@ func (q *RealQos) GetIfaceQosStatus(ifaceName string) (*model.QosIfaceStatus, er
 	}
 
 	status := &model.QosIfaceStatus{
-		Interface: ifaceName,
-		Classes:   []model.QosClass{},
+		Interface:        ifaceName,
+		Classes:          []model.QosClass{},
+		IngressSupported: q.ingressSupported,
 	}
 
 	// 1. Fetch Egress qdiscs/classes

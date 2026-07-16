@@ -26,6 +26,9 @@ export interface QosIfaceStatus {
   interface: string
   hasQdisc: boolean
   classes: QosClass[]
+  // Whether the kernel has the IFB module (probed at backend startup). When
+  // false, ingress (upload) shaping is skipped and only egress is applied.
+  ingressSupported: boolean
 }
 
 const LOCAL_STORAGE_KEY = "pigate_qos_rules";
@@ -203,7 +206,8 @@ export const qosService = {
       return {
         interface: iface,
         hasQdisc: classes.length > 0,
-        classes: classes
+        classes: classes,
+        ingressSupported: true
       };
     }
 

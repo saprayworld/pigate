@@ -550,6 +550,10 @@ type QosIfaceStatus struct {
 	Interface string     `json:"interface"`
 	HasQdisc  bool       `json:"hasQdisc"`
 	Classes   []QosClass `json:"classes"`
+	// IngressSupported reports whether the kernel has the IFB module available
+	// (probed once at startup). When false, ingress (upload) shaping is skipped
+	// and only egress (download) QoS is applied.
+	IngressSupported bool `json:"ingressSupported"`
 }
 
 // QosClass represents a single active HTB class on an interface.

@@ -317,6 +317,14 @@ export default function QoS() {
     })
   }, [rules, searchQuery])
 
+  // Ingress (IFB) capability: warn only when a fetched status explicitly reports
+  // it unsupported. `=== false` keeps interfaces whose status failed to load or
+  // is still pending from becoming a false positive (see qos-system.md).
+  const ingressUnsupported = useMemo(
+    () => Object.values(ifaceStatuses).some((s) => s.ingressSupported === false),
+    [ifaceStatuses]
+  )
+
   if (isLoading && rules.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4">
@@ -328,6 +336,17 @@ export default function QoS() {
 
   return (
     <div className="space-y-4">
+      {/* 0. IFB ingress capability warning */}
+      {ingressUnsupported && (
+        <Alert className="border-warning/30 bg-warning/10 px-3 py-2.5 text-warning">
+          <AlertCircle className="h-4 w-4 text-warning" />
+          <AlertDescription className="text-warning">
+            <span className="font-semibold">Kernel นี้ไม่มี IFB module</span> — รองรับเฉพาะ QoS ขา
+            Egress (download) เท่านั้น, กฎ Ingress (upload) จะถูกข้ามและไม่ถูก apply จริง
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* 1. Per-interface QoS status cards */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
         {interfaces.map((iface) => {
@@ -569,11 +588,19 @@ export default function QoS() {
                       {rule.ingressRateMbps > 0 ? (
                         <div className="flex items-center gap-1.5 text-xs font-semibold text-warning">
                           <ArrowDown className="h-3.5 w-3.5" />
-                          <span>{rule.ingressRateMbps} Mbps</span>
+                          <span className={cn(ingressUnsupported && "line-through opacity-60")}>
+                            {rule.ingressRateMbps} Mbps
+                          </span>
                           {rule.ingressCeilMbps > rule.ingressRateMbps && (
                             <span className="text-[10px] font-normal text-muted-foreground">
                               (Max {rule.ingressCeilMbps})
                             </span>
+                          )}
+                          {ingressUnsupported && (
+                            <AlertCircle
+                              className="h-3.5 w-3.5"
+                              aria-label="Ingress ไม่ถูก apply: kernel ไม่มี IFB module"
+                            />
                           )}
                         </div>
                       ) : (
@@ -787,6 +814,7 @@ export default function QoS() {
                     className="h-9 bg-background font-mono text-sm"
                     placeholder="0 = Unlimited"
                     min="0"
+                    disabled={ingressUnsupported}
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -801,9 +829,17 @@ export default function QoS() {
                     className="h-9 bg-background font-mono text-sm"
                     placeholder="0 = Unlimited"
                     min="0"
+                    disabled={ingressUnsupported}
                   />
                 </div>
               </div>
+
+              {ingressUnsupported && (
+                <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-warning">
+                  <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+                  Kernel นี้ไม่มี IFB module — ตั้งค่า Ingress ไม่ได้ ค่าที่มีอยู่เดิมของกฎยังถูกเก็บไว้แต่จะไม่ถูก apply
+                </p>
+              )}
             </div>
 
             {/* Description */}

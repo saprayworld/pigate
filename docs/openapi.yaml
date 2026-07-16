@@ -4230,6 +4230,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/QosClass'
+        ingressSupported:
+          type: boolean
+          description: >-
+            Whether the kernel has the IFB module available (probed once at
+            startup). When false, ingress (upload) shaping is skipped and only
+            egress (download) QoS is applied; the UI warns the user.
+          example: true
 
     QosClass:
       type: object
