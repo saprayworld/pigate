@@ -105,6 +105,7 @@ export interface PolicyRule {
   service: string[]
   action: "ACCEPT" | "DROP"
   log: boolean
+  nat: boolean // Source NAT (masquerade to outgoing interface address)
   status: boolean // true = Enabled, false = Disabled
 }
 

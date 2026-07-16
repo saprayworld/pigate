@@ -604,7 +604,7 @@ func (r *Repository) ServiceNameExists(name string) (bool, error) {
 // =========================================================================
 
 func (r *Repository) GetPolicies() ([]model.PolicyRule, error) {
-	rows, err := r.db.Query("SELECT id, name, in_interface, out_interface, action, log, status FROM firewall_policies ORDER BY priority ASC")
+	rows, err := r.db.Query("SELECT id, name, in_interface, out_interface, action, log, nat, status FROM firewall_policies ORDER BY priority ASC")
 	if err != nil {
 		return nil, err
 	}
@@ -613,11 +613,12 @@ func (r *Repository) GetPolicies() ([]model.PolicyRule, error) {
 	list := []model.PolicyRule{}
 	for rows.Next() {
 		var p model.PolicyRule
-		var logInt, statInt int
-		if err := rows.Scan(&p.ID, &p.Name, &p.InInterface, &p.OutInterface, &p.Action, &logInt, &statInt); err != nil {
+		var logInt, natInt, statInt int
+		if err := rows.Scan(&p.ID, &p.Name, &p.InInterface, &p.OutInterface, &p.Action, &logInt, &natInt, &statInt); err != nil {
 			return nil, err
 		}
 		p.Log = logInt == 1
+		p.Nat = natInt == 1
 		p.Status = statInt == 1
 		p.Source = []string{}
 		p.Destination = []string{}
@@ -665,10 +666,10 @@ func (r *Repository) GetPolicies() ([]model.PolicyRule, error) {
 }
 
 func (r *Repository) GetPolicyByID(id string) (*model.PolicyRule, error) {
-	row := r.db.QueryRow("SELECT id, name, in_interface, out_interface, action, log, status FROM firewall_policies WHERE id = ?", id)
+	row := r.db.QueryRow("SELECT id, name, in_interface, out_interface, action, log, nat, status FROM firewall_policies WHERE id = ?", id)
 	var p model.PolicyRule
-	var logInt, statInt int
-	err := row.Scan(&p.ID, &p.Name, &p.InInterface, &p.OutInterface, &p.Action, &logInt, &statInt)
+	var logInt, natInt, statInt int
+	err := row.Scan(&p.ID, &p.Name, &p.InInterface, &p.OutInterface, &p.Action, &logInt, &natInt, &statInt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -676,6 +677,7 @@ func (r *Repository) GetPolicyByID(id string) (*model.PolicyRule, error) {
 		return nil, err
 	}
 	p.Log = logInt == 1
+	p.Nat = natInt == 1
 	p.Status = statInt == 1
 	p.Source = []string{}
 	p.Destination = []string{}
@@ -754,13 +756,17 @@ func (r *Repository) CreatePolicy(p model.PolicyRule) error {
 	if p.Log {
 		logVal = 1
 	}
+	natVal := 0
+	if p.Nat {
+		natVal = 1
+	}
 	statVal := 0
 	if p.Status {
 		statVal = 1
 	}
 
-	_, err = tx.Exec("INSERT INTO firewall_policies (id, name, in_interface, out_interface, action, log, status, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		p.ID, p.Name, p.InInterface, p.OutInterface, p.Action, logVal, statVal, maxPriority+1)
+	_, err = tx.Exec("INSERT INTO firewall_policies (id, name, in_interface, out_interface, action, log, nat, status, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		p.ID, p.Name, p.InInterface, p.OutInterface, p.Action, logVal, natVal, statVal, maxPriority+1)
 	if err != nil {
 		return err
 	}
@@ -800,13 +806,17 @@ func (r *Repository) UpdatePolicy(p model.PolicyRule) error {
 	if p.Log {
 		logVal = 1
 	}
+	natVal := 0
+	if p.Nat {
+		natVal = 1
+	}
 	statVal := 0
 	if p.Status {
 		statVal = 1
 	}
 
-	_, err = tx.Exec("UPDATE firewall_policies SET name = ?, in_interface = ?, out_interface = ?, action = ?, log = ?, status = ? WHERE id = ?",
-		p.Name, p.InInterface, p.OutInterface, p.Action, logVal, statVal, p.ID)
+	_, err = tx.Exec("UPDATE firewall_policies SET name = ?, in_interface = ?, out_interface = ?, action = ?, log = ?, nat = ?, status = ? WHERE id = ?",
+		p.Name, p.InInterface, p.OutInterface, p.Action, logVal, natVal, statVal, p.ID)
 	if err != nil {
 		return err
 	}

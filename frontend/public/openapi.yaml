@@ -3264,6 +3264,10 @@ components:
         log:
           type: boolean
           example: true
+        nat:
+          type: boolean
+          description: Source NAT (masquerade to outgoing interface address)
+          example: false
         status:
           type: boolean
           example: true
@@ -3312,6 +3316,10 @@ components:
         log:
           type: boolean
           example: true
+        nat:
+          type: boolean
+          description: Source NAT (masquerade to outgoing interface address)
+          example: false
         status:
           type: boolean
           example: true

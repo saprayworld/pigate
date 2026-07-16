@@ -499,6 +499,37 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
+	// Policy-based source NAT (issue #43). Add a per-policy `nat` toggle to
+	// firewall_policies. NAT used to be automatic on every interface with
+	// Role=WAN; it now comes solely from the policy's NAT flag. To preserve
+	// behaviour across the upgrade we do a one-shot data migration inside the
+	// same guard branch as the ADD COLUMN (so it runs exactly once, when the
+	// column is first added — running it every boot would flip nat=0 that an
+	// admin later set back to 1). We backfill nat=1 on every ACCEPT policy that
+	// egresses a WAN interface, or that leaves the egress unrestricted ('' or
+	// 'ALL'), matching the old "masquerade everything leaving WAN" behaviour.
+	// This runs after all CREATE TABLE statements above, so network_interfaces
+	// is readable; on a brand-new DB both tables are empty and the UPDATE is a
+	// no-op.
+	var sqlCreatePolicies string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='firewall_policies'").Scan(&sqlCreatePolicies)
+	if err == nil {
+		if !strings.Contains(sqlCreatePolicies, "nat") {
+			if _, err = db.Exec("ALTER TABLE firewall_policies ADD COLUMN nat INTEGER DEFAULT 0 CHECK(nat IN (0, 1))"); err != nil {
+				return fmt.Errorf("failed to add nat column to firewall_policies table: %w", err)
+			}
+			res, errUpd := db.Exec(`UPDATE firewall_policies SET nat = 1 WHERE action = 'ACCEPT' AND (
+				out_interface IN (SELECT name FROM network_interfaces WHERE UPPER(role) = 'WAN')
+				OR out_interface IN ('', 'ALL'))`)
+			if errUpd != nil {
+				return fmt.Errorf("failed to backfill nat on firewall_policies: %w", errUpd)
+			}
+			if n, _ := res.RowsAffected(); n > 0 {
+				log.Printf("[Migration] Policy-based source NAT: enabled nat on %d existing ACCEPT policy(ies) egressing WAN/ALL to preserve behaviour. Review your firewall policies — policies with out_interface 'ALL' now masquerade LAN-bound traffic too.", n)
+			}
+		}
+	}
+
 	// Normalize legacy timezone values. Older seeds stored the display string
 	// "Asia/Bangkok (GMT+7:00)" instead of a bare IANA name, which both
 	// time.LoadLocation and systemd-timedated reject. Strip anything from the

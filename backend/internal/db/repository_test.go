@@ -134,6 +134,7 @@ func TestFirewallPolicyAndReferentialIntegrity(t *testing.T) {
 		Service:      []string{"DNS_TEST"},
 		Action:       "ACCEPT",
 		Log:          false,
+		Nat:          true,
 		Status:       true,
 	}
 
@@ -148,6 +149,23 @@ func TestFirewallPolicyAndReferentialIntegrity(t *testing.T) {
 	}
 	if len(fetchedRule.Source) != 1 || fetchedRule.Source[0] != "SRC_TEST" {
 		t.Errorf("Expected source 'SRC_TEST', got %v", fetchedRule.Source)
+	}
+	if !fetchedRule.Nat {
+		t.Errorf("Expected nat=true to round-trip via GetPolicyByID, got false")
+	}
+
+	// nat must also survive an update that flips it off, then back through GetPolicies.
+	updated := *fetchedRule
+	updated.Nat = false
+	if err := repo.UpdatePolicy(updated); err != nil {
+		t.Fatalf("Failed to update policy: %v", err)
+	}
+	policies, err := repo.GetPolicies()
+	if err != nil {
+		t.Fatalf("Failed to list policies: %v", err)
+	}
+	if len(policies) != 1 || policies[0].Nat {
+		t.Errorf("Expected nat=false after update via GetPolicies, got %+v", policies)
 	}
 	if len(fetchedRule.Service) != 1 || fetchedRule.Service[0] != "DNS_TEST" {
 		t.Errorf("Expected service 'DNS_TEST', got %v", fetchedRule.Service)
