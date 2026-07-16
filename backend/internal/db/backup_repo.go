@@ -133,10 +133,10 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 	// Preserve the backup's ordering as priority (GetPolicies exported them
 	// ordered by priority ASC).
 	for i, p := range cfg.Policies {
-		logVal, statVal := boolToInt(p.Log), boolToInt(p.Status)
+		logVal, natVal, statVal := boolToInt(p.Log), boolToInt(p.Nat), boolToInt(p.Status)
 		if _, err := tx.Exec(
-			"INSERT INTO firewall_policies (id, name, in_interface, out_interface, action, log, status, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-			p.ID, p.Name, p.InInterface, p.OutInterface, p.Action, logVal, statVal, i+1,
+			"INSERT INTO firewall_policies (id, name, in_interface, out_interface, action, log, nat, status, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			p.ID, p.Name, p.InInterface, p.OutInterface, p.Action, logVal, natVal, statVal, i+1,
 		); err != nil {
 			return fmt.Errorf("restore policy %q: %w", p.Name, err)
 		}

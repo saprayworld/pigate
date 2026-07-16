@@ -1031,6 +1031,7 @@ func (s *Server) HandleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		Service:      input.Service,
 		Action:       input.Action,
 		Log:          input.Log,
+		Nat:          input.Nat,
 		Status:       input.Status,
 	}
 
@@ -1068,6 +1069,7 @@ func (s *Server) HandleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		Service:      input.Service,
 		Action:       input.Action,
 		Log:          input.Log,
+		Nat:          input.Nat,
 		Status:       input.Status,
 	}
 

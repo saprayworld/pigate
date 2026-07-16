@@ -108,6 +108,7 @@ type PolicyRule struct {
 	Service      []string `json:"service"`
 	Action       string   `json:"action"` // "ACCEPT", "DROP"
 	Log          bool     `json:"log"`
+	Nat          bool     `json:"nat"`    // Source NAT (masquerade to outgoing interface address)
 	Status       bool     `json:"status"` // Enabled/Disabled
 	Priority     int      `json:"-"`      // Ordering precedence
 }
@@ -122,6 +123,7 @@ type PolicyRuleInput struct {
 	Service      []string `json:"service"`
 	Action       string   `json:"action"` // "ACCEPT", "DROP"
 	Log          bool     `json:"log"`
+	Nat          bool     `json:"nat"` // Source NAT (masquerade to outgoing interface address)
 	Status       bool     `json:"status"`
 }
 

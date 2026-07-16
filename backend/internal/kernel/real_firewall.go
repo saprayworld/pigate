@@ -498,7 +498,7 @@ func (rf *RealFirewall) ApplyRules(
 						exprs, err := buildRuleExpressions(
 							r.InInterface, r.OutInterface,
 							src, dest, svc, proto,
-							r.Action, r.Log, logPrefix,
+							r.Action, r.Log, r.Nat, logPrefix,
 							addrsMap, svcsMap,
 						)
 						if err != nil {
@@ -525,7 +525,13 @@ func (rf *RealFirewall) ApplyRules(
 		},
 	})
 
-	// 6. Setup NAT table and chain for masquerading on WAN interfaces
+	// 6. Setup NAT table and chain for policy-based source NAT.
+	// Source NAT is now driven per firewall policy (the policy's "NAT" toggle),
+	// not by interface Role. Policies with NAT enabled tag accepted packets with
+	// fwmark 0x1 in the forward chain (see buildRuleExpressions); this single
+	// postrouting rule masquerades every marked packet to its outgoing interface
+	// address. This covers LAN→WAN and LAN-to-LAN NAT alike, since masquerade
+	// always uses the address of the actual egress interface.
 	natTable := conn.AddTable(&nftables.Table{
 		Name:   "pigate_nat",
 		Family: nftables.TableFamilyIPv4, // family ip
@@ -540,20 +546,16 @@ func (rf *RealFirewall) ApplyRules(
 		Priority: nftables.ChainPriorityNATSource,
 	})
 
-	for _, iface := range ifaces {
-		if strings.ToUpper(iface.Role) == "WAN" {
-			conn.AddRule(&nftables.Rule{
-				Table: natTable,
-				Chain: natChain,
-				Exprs: []expr.Any{
-					&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1},
-					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName(iface.Name)},
-					&expr.Masq{},
-				},
-			})
-			log.Printf("[RealFirewall] Configured NAT masquerade on WAN interface: %s", iface.Name)
-		}
-	}
+	conn.AddRule(&nftables.Rule{
+		Table: natTable,
+		Chain: natChain,
+		Exprs: []expr.Any{
+			&expr.Meta{Key: expr.MetaKeyMARK, Register: 1},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{0x01, 0x00, 0x00, 0x00}},
+			&expr.Masq{},
+		},
+	})
+	log.Printf("[RealFirewall] Configured policy-based source NAT (masquerade on fwmark 0x1)")
 
 	// Commit everything to the Linux Kernel
 	if err := conn.Flush(); err != nil {
@@ -732,6 +734,7 @@ func buildRuleExpressions(
 	svcName, proto string,
 	action string,
 	logEnabled bool,
+	nat bool,
 	logPrefix string,
 	addrsMap map[string]model.AddressObject,
 	svcsMap map[string]model.ServiceObject,
@@ -873,6 +876,19 @@ func buildRuleExpressions(
 	// buffer for the Forward Traffic page. Snaplen keeps only the headers we parse.
 	if logEnabled {
 		exprs = append(exprs, forwardLogExpr(logPrefix))
+	}
+
+	// 7.5. Source NAT mark (policy-based NAT).
+	// When the policy has NAT enabled and accepts the traffic, tag the packet
+	// with fwmark 0x1 in the forward chain. The pigate_nat postrouting chain
+	// masquerades every packet carrying this mark to the outgoing interface
+	// address ("Use Outgoing Interface Address"). Netfilter evaluates
+	// forward(filter) before postrouting(nat), so the mark is always visible in
+	// time. Only meaningful on ACCEPT — a DROPped packet never reaches
+	// postrouting, so we skip the mark for anything else.
+	if nat && action == "ACCEPT" {
+		exprs = append(exprs, &expr.Immediate{Register: 1, Data: []byte{0x01, 0x00, 0x00, 0x00}})
+		exprs = append(exprs, &expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 1})
 	}
 
 	// 8. Add Verdict

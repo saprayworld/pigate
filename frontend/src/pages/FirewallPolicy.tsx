@@ -228,6 +228,21 @@ function SortableRow({ rule, index, interfaces, onEdit, onDelete, onToggleStatus
         </Badge>
       </TableCell>
 
+      {/* 6.5 NAT */}
+      <TableCell className="py-3">
+        {rule.nat ? (
+          <Badge
+            variant="outline"
+            className="rounded border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary"
+            title="Source NAT: Use Outgoing Interface Address (masquerade)"
+          >
+            NAT
+          </Badge>
+        ) : (
+          <span className="text-xs text-muted-foreground">-</span>
+        )}
+      </TableCell>
+
       {/* 7. Log Switch */}
       <TableCell className="py-3">
         <Switch
@@ -423,6 +438,7 @@ export default function FirewallPolicy() {
   const [formService, setFormService] = useState<string[]>([])
   const [formAction, setFormAction] = useState<"ACCEPT" | "DROP">("ACCEPT")
   const [formLog, setFormLog] = useState<boolean>(false)
+  const [formNat, setFormNat] = useState<boolean>(false)
   const [formStatus, setFormStatus] = useState<boolean>(true)
 
   // --- Dialog control triggers ---
@@ -436,6 +452,7 @@ export default function FirewallPolicy() {
     setFormService([])
     setFormAction("ACCEPT")
     setFormLog(false)
+    setFormNat(false)
     setFormStatus(true)
     setIsModalOpen(true)
   }
@@ -450,6 +467,7 @@ export default function FirewallPolicy() {
     setFormService([...rule.service])
     setFormAction(rule.action)
     setFormLog(rule.log)
+    setFormNat(rule.nat)
     setFormStatus(rule.status)
     setIsModalOpen(true)
   }
@@ -473,6 +491,7 @@ export default function FirewallPolicy() {
           service: parsedSvcs,
           action: formAction,
           log: formLog,
+          nat: formAction === "ACCEPT" ? formNat : false,
           status: formStatus
         })
       } else {
@@ -486,6 +505,7 @@ export default function FirewallPolicy() {
           service: parsedSvcs,
           action: formAction,
           log: formLog,
+          nat: formAction === "ACCEPT" ? formNat : false,
           status: formStatus
         })
       }
@@ -684,6 +704,7 @@ export default function FirewallPolicy() {
                   <TableHead className="w-[15%] text-xs font-medium text-muted-foreground">Destination</TableHead>
                   <TableHead className="w-[14%] text-xs font-medium text-muted-foreground">Service / Port</TableHead>
                   <TableHead className="w-[8%] text-xs font-medium text-muted-foreground">Action</TableHead>
+                  <TableHead className="w-[6%] text-xs font-medium text-muted-foreground">NAT</TableHead>
                   <TableHead className="w-[6%] text-xs font-medium text-muted-foreground">Log</TableHead>
                   <TableHead className="w-[10%] text-xs font-medium text-muted-foreground">Status</TableHead>
                   <TableHead className="w-[8%] text-right text-xs font-medium text-muted-foreground"></TableHead>
@@ -692,7 +713,7 @@ export default function FirewallPolicy() {
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={11} className="py-12 text-center text-xs text-muted-foreground">
+                    <TableCell colSpan={12} className="py-12 text-center text-xs text-muted-foreground">
                       <div className="flex flex-col items-center justify-center gap-2 py-4">
                         <Loader2 className="h-6 w-6 animate-spin text-primary" />
                         <span>กำลังโหลดข้อมูล...</span>
@@ -701,7 +722,7 @@ export default function FirewallPolicy() {
                   </TableRow>
                 ) : filteredRules.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={11} className="py-8 text-center text-xs text-muted-foreground">
+                    <TableCell colSpan={12} className="py-8 text-center text-xs text-muted-foreground">
                       ไม่พบนโยบายไฟร์วอลล์ที่ค้นหา
                     </TableCell>
                   </TableRow>
@@ -748,6 +769,7 @@ export default function FirewallPolicy() {
                       DROP
                     </Badge>
                   </TableCell>
+                  <TableCell className="py-3">-</TableCell>
                   <TableCell className="py-3">-</TableCell>
                   <TableCell className="py-3">
                     <Badge variant="secondary" className="rounded px-1.5 py-0.5 text-[10px]">
@@ -983,7 +1005,7 @@ export default function FirewallPolicy() {
                   </TabsList>
                 </Tabs>
               </div>
-              <div className="flex items-center gap-6 pb-2.5">
+              <div className="flex flex-wrap items-center gap-6 pb-2.5">
                 <div className="flex items-center gap-2">
                   <Switch
                     id="form-log"
@@ -991,6 +1013,25 @@ export default function FirewallPolicy() {
                     onCheckedChange={setFormLog}
                   />
                   <Label htmlFor="form-log" className="cursor-pointer text-xs font-medium text-muted-foreground">บันทึกล็อก (Log)</Label>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id="form-nat"
+                    checked={formAction === "ACCEPT" && formNat}
+                    disabled={formAction !== "ACCEPT"}
+                    onCheckedChange={setFormNat}
+                  />
+                  <Label
+                    htmlFor="form-nat"
+                    className={cn(
+                      "cursor-pointer text-xs font-medium text-muted-foreground",
+                      formAction !== "ACCEPT" && "cursor-not-allowed opacity-50"
+                    )}
+                    title="Use Outgoing Interface Address (masquerade). ใช้ได้เฉพาะกฎ ACCEPT"
+                  >
+                    NAT
+                  </Label>
                 </div>
 
                 <div className="flex items-center gap-2">
