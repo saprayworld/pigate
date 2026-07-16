@@ -500,9 +500,50 @@ func (s *InterfaceService) GetDataLayerInterface() ([]model.NetworkInterface, er
 	return result, nil
 }
 
-// GetDataLayerInterfaceByID finds a specific interface in the data layer.
-func (s *InterfaceService) GetDataLayerInterfaceByID(id string) (*model.NetworkInterface, error) {
+// appendOfflineRows returns dataLayer plus any DB-configured interface whose name is not
+// present in the data layer (i.e. it has a config row but no live kernel link — a VLAN
+// whose parent vanished, a USB NIC that was unplugged). Offline rows are marked
+// Status="offline" and Managed=true so the UI can show them with a badge and offer delete.
+// Pure function: it does not touch the kernel or DB, so it can be unit-tested directly
+// (the mock kernel mirrors every DB row into the kernel list, so offline can't arise there).
+func appendOfflineRows(dataLayer []model.NetworkInterface, dbIfaces []model.NetworkInterface) []model.NetworkInterface {
+	present := make(map[string]bool, len(dataLayer))
+	for _, item := range dataLayer {
+		present[item.Name] = true
+	}
+	result := dataLayer
+	for _, dbIface := range dbIfaces {
+		if present[dbIface.Name] {
+			continue
+		}
+		dbIface.Status = "offline"
+		dbIface.Managed = true
+		result = append(result, dbIface)
+	}
+	return result
+}
+
+// GetDataLayerInterfaceIncludingOffline returns the normal data layer plus DB-configured
+// interfaces that have no live kernel link (see appendOfflineRows). This is used ONLY by
+// the interfaces API surface — other consumers (firewall sync, dhcpcd, hostname, dashboard)
+// must keep using GetDataLayerInterface so they never act on a phantom interface.
+func (s *InterfaceService) GetDataLayerInterfaceIncludingOffline() ([]model.NetworkInterface, error) {
 	list, err := s.GetDataLayerInterface()
+	if err != nil {
+		return nil, err
+	}
+	dbIfaces, err := s.repo.GetInterfacesFromDB()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get interfaces configuration from DB: %w", err)
+	}
+	return appendOfflineRows(list, dbIfaces), nil
+}
+
+// GetDataLayerInterfaceByID finds a specific interface in the data layer. It includes
+// offline rows so the delete/reset/guard paths in the API can resolve a DB-only interface
+// (returning nil, as before, when nothing matches).
+func (s *InterfaceService) GetDataLayerInterfaceByID(id string) (*model.NetworkInterface, error) {
+	list, err := s.GetDataLayerInterfaceIncludingOffline()
 	if err != nil {
 		return nil, err
 	}
@@ -815,36 +856,49 @@ func (s *InterfaceService) DeleteVlanInterface(id string) error {
 	if iface.Subtype != "vlan" {
 		return fmt.Errorf("interface %q is not a vlan", iface.Name)
 	}
-	if err := s.network.DeleteVlan(iface.Name); err != nil {
-		return fmt.Errorf("failed to delete vlan link: %w", err)
+
+	// The kernel link may already be gone (parent interface removed, offline VLAN). The
+	// goal here is to delete the config, so only attempt the netlink delete when the link
+	// is actually present; otherwise skip straight to removing the DB row.
+	if s.kernelInterfaceNameSet()[iface.Name] {
+		if err := s.network.DeleteVlan(iface.Name); err != nil {
+			return fmt.Errorf("failed to delete vlan link: %w", err)
+		}
+	} else {
+		log.Printf("[Interface] VLAN %s has no kernel link; deleting DB config only.", iface.Name)
 	}
+
 	if err := s.repo.DeleteInterface(id); err != nil {
 		return err
 	}
 
-	// Explicit user deletion of a VLAN removes any DNS Server binding to it, so the
-	// name doesn't linger as a dangling "Missing" chip. This is an explicit user
-	// action (not auto-heal), which is why it's allowed to drop user config here.
-	// A failure is non-fatal: the interface is already gone and the leftover name is
-	// tolerated by HandleUpdateDNSServerSettings anyway.
-	if saved, err := s.repo.GetDNSServerInterfaces(); err != nil {
-		log.Printf("[Interface] Warning: failed to load DNS server settings after deleting VLAN %s: %v", iface.Name, err)
-	} else {
-		pruned := make([]string, 0, len(saved))
-		changed := false
-		for _, name := range saved {
-			if name == iface.Name {
-				changed = true
-				continue
-			}
-			pruned = append(pruned, name)
+	s.PruneDNSServerBinding(iface.Name)
+	return nil
+}
+
+// PruneDNSServerBinding removes name from the persisted DNS Server interface bindings, so
+// an explicitly deleted interface doesn't linger as a dangling "Missing" chip. This is an
+// explicit user action (not auto-heal), which is why it's allowed to drop user config. A
+// failure is non-fatal: the interface is already gone and the leftover name is tolerated by
+// HandleUpdateDNSServerSettings anyway.
+func (s *InterfaceService) PruneDNSServerBinding(name string) {
+	saved, err := s.repo.GetDNSServerInterfaces()
+	if err != nil {
+		log.Printf("[Interface] Warning: failed to load DNS server settings after deleting %s: %v", name, err)
+		return
+	}
+	pruned := make([]string, 0, len(saved))
+	changed := false
+	for _, saved := range saved {
+		if saved == name {
+			changed = true
+			continue
 		}
-		if changed {
-			if err := s.repo.SetDNSServerInterfaces(pruned); err != nil {
-				log.Printf("[Interface] Warning: failed to prune DNS server settings after deleting VLAN %s: %v", iface.Name, err)
-			}
+		pruned = append(pruned, saved)
+	}
+	if changed {
+		if err := s.repo.SetDNSServerInterfaces(pruned); err != nil {
+			log.Printf("[Interface] Warning: failed to prune DNS server settings after deleting %s: %v", name, err)
 		}
 	}
-
-	return nil
 }

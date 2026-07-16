@@ -161,6 +161,9 @@ export default function Interfaces() {
   const { alert, confirm } = useAlert()
   // --- State ---
   const [interfaces, setInterfaces] = useState<NetworkInterface[]>([])
+  // Offline interfaces (config row in DB, no live kernel link) are hidden by default;
+  // the toolbar switch reveals them so their config can be deleted (issue #49).
+  const [showOffline, setShowOffline] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState("")
@@ -454,22 +457,6 @@ export default function Interfaces() {
     }
   }
 
-  const handleResetInterface = async (id: string, name: string) => {
-    const ok = await confirm(
-      "ยืนยันการรีเซ็ตการตั้งค่า",
-      `คุณต้องการรีเซ็ตการตั้งค่าของอินเทอร์เฟซ ${name} กลับไปเป็นค่าเริ่มต้นใช่หรือไม่?`
-    )
-    if (!ok) return
-
-    try {
-      await interfaceService.reset(id)
-      await alert("สำเร็จ", "รีเซ็ตการตั้งค่าอินเทอร์เฟซเรียบร้อยแล้ว")
-      await loadData()
-    } catch (err) {
-      await alert("ข้อผิดพลาด", "Failed to reset interface settings: " + getErrorMessage(err))
-    }
-  }
-
   const handleDeleteInterface = async (id: string, name: string) => {
     const ok = await confirm(
       "ยืนยันการลบอินเทอร์เฟซ",
@@ -486,9 +473,24 @@ export default function Interfaces() {
     }
   }
 
-  // Eligible VLAN parents: ethernet interfaces that are not themselves VLANs.
+  // Offline interfaces are hidden unless the toolbar switch is on. offlineCount drives the
+  // "N hidden" hint shown next to the switch.
+  const offlineCount = useMemo(
+    () => interfaces.filter((i) => i.status === "offline").length,
+    [interfaces]
+  )
+  const visibleInterfaces = useMemo(
+    () => (showOffline ? interfaces : interfaces.filter((i) => i.status !== "offline")),
+    [interfaces, showOffline]
+  )
+
+  // Eligible VLAN parents: ethernet interfaces that are not themselves VLANs and are not
+  // offline (can't build a VLAN on a phantom parent).
   const vlanParentOptions = useMemo(
-    () => interfaces.filter((i) => i.type === "ethernet" && i.subtype !== "vlan"),
+    () =>
+      interfaces.filter(
+        (i) => i.type === "ethernet" && i.subtype !== "vlan" && i.status !== "offline"
+      ),
     [interfaces]
   )
 
@@ -757,6 +759,20 @@ export default function Interfaces() {
             Interface List
           </CardTitle>
           <div className="flex items-center gap-2">
+            <div className="mr-1 flex items-center gap-2">
+              <Switch
+                id="show-offline"
+                checked={showOffline}
+                onCheckedChange={setShowOffline}
+                className="cursor-pointer"
+              />
+              <Label htmlFor="show-offline" className="cursor-pointer text-xs text-muted-foreground">
+                แสดง offline interfaces
+                {offlineCount > 0 && (
+                  <span className="ml-1 font-semibold text-warning">({offlineCount})</span>
+                )}
+              </Label>
+            </div>
             <Button
               size="sm"
               onClick={openCreateVlanDialog}
@@ -792,14 +808,14 @@ export default function Interfaces() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {interfaces.length === 0 ? (
+              {visibleInterfaces.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={8} className="py-8 text-center text-xs text-muted-foreground">
                     ไม่พบอินเทอร์เฟซเครือข่าย
                   </TableCell>
                 </TableRow>
               ) : (
-                interfaces.map((iface) => (
+                visibleInterfaces.map((iface) => (
                   <TableRow key={iface.id}>
                     {/* Port Icon */}
                     <TableCell className="py-3 text-center">
@@ -956,58 +972,53 @@ export default function Interfaces() {
                     <TableCell className="py-3 text-right">
                       <div className="flex items-center justify-end gap-4">
                         {iface.status === "offline" ? (
-                          <div className="flex items-center gap-2">
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              onClick={() => handleResetInterface(iface.id, iface.name)}
-                              className="cursor-pointer text-warning hover:bg-warning/10 hover:text-warning"
-                              title="รีเซ็ตการตั้งค่าเป็นค่าเริ่มต้น"
-                            >
-                              <RotateCcw className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              onClick={() => handleDeleteInterface(iface.id, iface.name)}
-                              className="cursor-pointer text-destructive hover:bg-destructive/10 hover:text-destructive"
-                              title="ลบอินเทอร์เฟซออกจากฐานข้อมูล"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-muted-foreground">{iface.status === "up" ? "ON" : "OFF"}</span>
-                            <Switch
-                              checked={iface.status === "up"}
-                              onCheckedChange={() => handleToggleStatus(iface.id)}
-                            />
-                          </div>
-                        )}
-                        {/* VLAN sub-interfaces created by pigate can be deleted at any
-                            time (link + config), unlike physical ports which must be
-                            offline first. */}
-                        {iface.subtype === "vlan" && iface.managed !== false && (
+                          // Offline row: the config exists in the DB but has no live kernel
+                          // link, so the only meaningful action is to delete that config.
+                          // Reset/edit/toggle and the separate VLAN-delete button are all
+                          // omitted here — they'd either duplicate this or 409 (edit).
                           <Button
                             variant="ghost"
                             size="icon-sm"
-                            onClick={() => handleDeleteVlan(iface.id, iface.name)}
+                            onClick={() => handleDeleteInterface(iface.id, iface.name)}
                             className="cursor-pointer text-destructive hover:bg-destructive/10 hover:text-destructive"
-                            title="ลบ VLAN"
+                            title="ลบ config ออกจากฐานข้อมูล"
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
+                        ) : (
+                          <>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-muted-foreground">{iface.status === "up" ? "ON" : "OFF"}</span>
+                              <Switch
+                                checked={iface.status === "up"}
+                                onCheckedChange={() => handleToggleStatus(iface.id)}
+                              />
+                            </div>
+                            {/* VLAN sub-interfaces created by pigate can be deleted at any
+                                time (link + config), unlike physical ports which must be
+                                offline first. */}
+                            {iface.subtype === "vlan" && iface.managed !== false && (
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                onClick={() => handleDeleteVlan(iface.id, iface.name)}
+                                className="cursor-pointer text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                title="ลบ VLAN"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="icon-sm"
+                              onClick={() => openEditDialog(iface)}
+                              className="cursor-pointer text-muted-foreground hover:text-foreground"
+                              title="แก้ไขอินเทอร์เฟซ"
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                          </>
                         )}
-                        <Button
-                          variant="outline"
-                          size="icon-sm"
-                          onClick={() => openEditDialog(iface)}
-                          className="cursor-pointer text-muted-foreground hover:text-foreground"
-                          title="แก้ไขอินเทอร์เฟซ"
-                        >
-                          <Edit className="h-4 w-4" />
-                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -1028,7 +1039,7 @@ export default function Interfaces() {
         </CardHeader>
         <CardContent>
           <div className="grid gap-2 sm:grid-cols-2">
-            {interfaces.map((iface) => (
+            {visibleInterfaces.map((iface) => (
               <div key={iface.id} className="flex flex-col justify-between gap-2 rounded-lg border border-border bg-muted/50 px-3 py-2 sm:flex-row sm:items-center">
                 <div className="flex items-center gap-2">
                   {iface.type === "ethernet" ? (
