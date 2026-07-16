@@ -3,6 +3,8 @@ package service
 import (
 	"fmt"
 	"log"
+	"sync"
+
 	"pigate/internal/db"
 	"pigate/internal/kernel"
 	"pigate/internal/model"
@@ -11,6 +13,16 @@ import (
 type DNSService struct {
 	repo   *db.Repository
 	dnsMgr kernel.DNSManager
+
+	// mu guards lastSig against concurrent ApplyDNSConfig calls — it is invoked
+	// both from the HTTP handler (UpdateDNSConfig) and from the netlink event bus
+	// goroutine (InterfaceAdded self-heal), which can race.
+	mu sync.Mutex
+	// lastSig is the signature of the config last applied successfully. When an
+	// incoming apply matches it, we skip the work entirely — most importantly the
+	// systemd-resolved restart — so a Wi-Fi flap storm no longer thrashes DNS
+	// while the config never actually changed (issue #57).
+	lastSig string
 }
 
 func NewDNSService(repo *db.Repository, dnsMgr kernel.DNSManager) *DNSService {
@@ -78,6 +90,19 @@ func (s *DNSService) ApplyDNSConfig() error {
 		return fmt.Errorf("failed to query network interfaces: %w", err)
 	}
 
+	// Idempotency guard: skip the whole apply (and the systemd-resolved restart it
+	// triggers) when nothing changed since the last successful apply. This is what
+	// stops a Wi-Fi scan/reconnect flap from restarting DNS repeatedly while the
+	// config is identical (issue #57). The signature covers every field that
+	// affects the resolved drop-in.
+	sig := fmt.Sprintf("%s|%s|%s|%s", cfg.Mode, cfg.PrimaryDNS, cfg.SecondaryDNS, cfg.LocalDomain)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sig == s.lastSig {
+		log.Printf("[DNSService] DNS config unchanged, skipping re-apply (no resolved restart)")
+		return nil
+	}
+
 	if cfg.Mode == "static" {
 		var servers []string
 		if cfg.PrimaryDNS != "" {
@@ -87,19 +112,15 @@ func (s *DNSService) ApplyDNSConfig() error {
 			servers = append(servers, cfg.SecondaryDNS)
 		}
 
+		// Global drop-in only. We intentionally do NOT push per-link DNS via
+		// resolve1.Link.SetDNS: it requires a per-link Polkit privilege the pigate
+		// user lacks (it was failing with "Permission denied" on every call), so
+		// working resolution already comes entirely from the global drop-in. The
+		// per-link loop only produced noise and errors — see issue #57.
 		log.Printf("[DNSService] Applying global static DNS: %v, Local domain: %s", servers, cfg.LocalDomain)
 		if err := s.dnsMgr.SetGlobalDNS(servers, cfg.LocalDomain); err != nil {
 			log.Printf("[DNSService] Warning: SetGlobalDNS failed: %v", err)
-		}
-
-		// Configure static DNS for each WAN link
-		for _, iface := range interfaces {
-			if iface.Role == "WAN" {
-				log.Printf("[DNSService] Applying DNS %v to WAN link %s", servers, iface.Name)
-				if err := s.dnsMgr.SetLinkDNS(iface.Name, servers); err != nil {
-					log.Printf("[DNSService] Warning: Failed to set link DNS for %s: %v", iface.Name, err)
-				}
-			}
+			return fmt.Errorf("failed to apply global DNS: %w", err)
 		}
 	} else {
 		log.Printf("[DNSService] Restoring dynamic DHCP DNS mode. Clearing static configuration.")
@@ -119,5 +140,7 @@ func (s *DNSService) ApplyDNSConfig() error {
 		}
 	}
 
+	// Record what we just applied so an identical subsequent call short-circuits.
+	s.lastSig = sig
 	return nil
 }
