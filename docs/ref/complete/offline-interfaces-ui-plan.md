@@ -6,6 +6,7 @@
 > การลบเป็นการตัดสินใจของผู้ใช้เท่านั้น ห้ามลบอัตโนมัติ)
 >
 > เขียนเมื่อ: 2026-07-15 · Reference branch: `feat/offline-interfaces-ui` (แตกจาก `main` หลัง merge PR #54)
+> สถานะ: **เสร็จสมบูรณ์** — merged เข้า `main` ผ่าน PR #55 (2026-07-16)
 
 ## 0. Goal and Scope
 
