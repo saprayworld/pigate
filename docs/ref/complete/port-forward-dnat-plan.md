@@ -179,19 +179,27 @@ Firewall Policy)
 
 ## 6. Summary Checklist (Definition of Done)
 
-- [ ] `model/types.go` — `PortForward` + `PortForwardInput` + validation helper
-      (IP/port/proto + range↔InternalPort + uniqueness/overlap — Caution 4, 9, 10)
-- [ ] `kernel/interfaces.go` + `real_firewall.go` + `mock.go` — `ApplyRules` รับ port-forwards;
+> ✅ **เสร็จสมบูรณ์** (branch `feat/port-forward-dnat`, issue #44). ทุกข้อทำครบยกเว้น
+> LAB บนเครื่องจริง (ต้องมี CAP_NET_ADMIN + WAN จริง — เป็นขั้นตอน manual ของเจ้าของ);
+> แทนที่ด้วยการทดสอบ e2e บน mock backend (login→change-password→create/list/delete/
+> validation/overlap/backup-export) + unit test ของ DNAT/forward-accept expression builders
+
+- [x] `model/types.go` — `PortForward` + `PortForwardInput` + validation helper
+      (`port_forward_validate.go`: IP/port/proto + range↔InternalPort + overlap — Caution 4, 9, 10)
+- [x] `kernel/interfaces.go` + `real_firewall.go` + `mock.go` — `ApplyRules` รับ port-forwards;
       real เพิ่ม prerouting DNAT (`fib daddr type local`) + auto forward-accept (ก่อน user rules);
       mock log-only
-- [ ] `db/connection.go` — `CREATE TABLE port_forwards`; `db/repository.go` — CRUD
-- [ ] `service/firewall.go` — ดึง+ส่ง port-forwards เข้า ApplyRules
-- [ ] `api/handlers.go` + `router.go` — 4 endpoint ใหม่
-- [ ] `service/backup.go` — รวม PortForwards ใน export/import
-- [ ] `go build ./...` + `go test ./...` ผ่าน (test: DNAT rule ถูก + auto forward-accept ถูก + validation)
-- [ ] `docs/openapi.yaml` + `frontend/public/openapi.yaml` — endpoint ใหม่ (sync)
-- [ ] frontend: หน้า PortForwarding + service + เมนู; `yarn build`+`yarn lint` ผ่าน
-- [ ] ทดสอบเครื่องจริง: มี **LAB** ยิงจากภายนอกเข้า ext-addr:port → เข้าเครื่องใน LAN ได้;
+- [x] `db/connection.go` — `CREATE TABLE port_forwards`; `db/repository.go` — CRUD + overlap guard
+- [x] `service/firewall.go` — ดึง+ส่ง port-forwards เข้า ApplyRules; CRUD auto re-apply firewall
+- [x] `api/handlers.go` + `router.go` — 4 endpoint ใหม่ (`GET/POST/PUT/DELETE /api/port-forwards`)
+- [x] `service/backup.go` + `db/backup_repo.go` + `model/backup.go` — รวม PortForwards ใน
+      export/import (`json:"portForwards,omitempty"` — Caution 8, ไม่ bump schema)
+- [x] `go build ./...` + `go test ./...` ผ่าน (DNAT rule + auto forward-accept + validation tests)
+- [x] `docs/openapi.yaml` + `frontend/public/openapi.yaml` — endpoint + schema ใหม่ (sync)
+- [x] frontend: หน้า PortForwarding + `portForwardService.ts` + เมนู (Waypoints icon);
+      `yarn build`+`yarn lint` ผ่าน
+- [ ] ทดสอบเครื่องจริง: **LAB** ยิงจากภายนอกเข้า ext-addr:port → เข้าเครื่องใน LAN ได้;
       ปิด entry → เข้าไม่ได้; ตรวจ `nft list table ip pigate_nat` เห็น prerouting DNAT
-- [ ] README Feature Status: เพิ่ม Port Forwarding
-- [ ] เสร็จแล้วย้ายแผนไป `docs/ref/complete/`
+      *(manual — ต้องรันบน RPi ที่มี WAN จริง; e2e mock ครอบคลุมส่วนที่เหลือแล้ว)*
+- [x] README Feature Status: เพิ่ม Port Forwarding (DNAT)
+- [x] เสร็จแล้วย้ายแผนไป `docs/ref/complete/`

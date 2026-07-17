@@ -1153,6 +1153,102 @@ func (s *Server) syncFirewallRules() error {
 	return s.firewallService.SyncFirewallRules()
 }
 
+// =========================================================================
+// Port Forwarding (DNAT) Handlers
+// =========================================================================
+
+func (s *Server) HandleGetPortForwards(w http.ResponseWriter, r *http.Request) {
+	list, err := s.firewallService.GetPortForwards()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, list)
+}
+
+func (s *Server) HandleCreatePortForward(w http.ResponseWriter, r *http.Request) {
+	var input model.PortForwardInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	id, err := randomID("pf-")
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Could not generate ID")
+		return
+	}
+	pf := model.PortForward{
+		ID:           id,
+		Name:         input.Name,
+		InInterface:  input.InInterface,
+		ExternalPort: input.ExternalPort,
+		Protocol:     input.Protocol,
+		InternalIP:   input.InternalIP,
+		InternalPort: input.InternalPort,
+		Status:       input.Status,
+	}
+
+	if err := s.firewallService.CreatePortForward(pf); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.port_forward_created", model.EventSeverityInfo,
+		pf.Name, "Port forward \""+pf.Name+"\" created")
+	s.writeJSON(w, http.StatusOK, pf)
+}
+
+func (s *Server) HandleUpdatePortForward(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	existing, err := s.firewallService.GetPortForwardByID(id)
+	if err != nil || existing == nil {
+		s.writeError(w, http.StatusNotFound, "Port forward not found")
+		return
+	}
+
+	var input model.PortForwardInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	pf := model.PortForward{
+		ID:           id,
+		Name:         input.Name,
+		InInterface:  input.InInterface,
+		ExternalPort: input.ExternalPort,
+		Protocol:     input.Protocol,
+		InternalIP:   input.InternalIP,
+		InternalPort: input.InternalPort,
+		Status:       input.Status,
+	}
+
+	if err := s.firewallService.UpdatePortForward(pf); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.port_forward_updated", model.EventSeverityInfo,
+		pf.Name, "Port forward \""+pf.Name+"\" updated")
+	s.writeJSON(w, http.StatusOK, pf)
+}
+
+func (s *Server) HandleDeletePortForward(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	target := id
+	if pf, _ := s.firewallService.GetPortForwardByID(id); pf != nil {
+		target = pf.Name
+	}
+	if err := s.firewallService.DeletePortForward(id); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.port_forward_deleted", model.EventSeverityInfo,
+		target, "Port forward \""+target+"\" deleted")
+	s.writeJSON(w, http.StatusOK, true)
+}
+
 func (s *Server) HandleApplyPolicies(w http.ResponseWriter, r *http.Request) {
 	if err := s.syncFirewallRules(); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "OS Firewall update failed: "+err.Error())

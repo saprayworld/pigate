@@ -11,6 +11,7 @@ import Interfaces from "@/pages/Interfaces"
 import StaticRoutes from "@/pages/StaticRoutes"
 import DhcpServer from "@/pages/DhcpServer"
 import FirewallPolicy from "@/pages/FirewallPolicy"
+import PortForwarding from "@/pages/PortForwarding"
 import Addresses from "@/pages/Addresses"
 import Services from "@/pages/Services"
 import SettingsMaintenance from "@/pages/SettingsMaintenance"
@@ -154,6 +155,7 @@ export default function App() {
                   {/* Policy & Objects Routes */}
                   <Route path="policy">
                     <Route path="firewall" element={<FirewallPolicy />} />
+                    <Route path="port-forwarding" element={<PortForwarding />} />
                     <Route path="addresses" element={<Addresses />} />
                     <Route path="services" element={<Services />} />
                   </Route>

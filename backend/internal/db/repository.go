@@ -908,6 +908,137 @@ func (r *Repository) DeletePolicy(id string) error {
 	return tx.Commit()
 }
 
+// =========================================================================
+// Port Forwarding (DNAT) CRUD
+// =========================================================================
+
+func (r *Repository) GetPortForwards() ([]model.PortForward, error) {
+	rows, err := r.db.Query("SELECT id, name, in_interface, external_port, protocol, internal_ip, internal_port, status FROM port_forwards ORDER BY name ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	list := []model.PortForward{}
+	for rows.Next() {
+		var pf model.PortForward
+		var statInt int
+		if err := rows.Scan(&pf.ID, &pf.Name, &pf.InInterface, &pf.ExternalPort, &pf.Protocol, &pf.InternalIP, &pf.InternalPort, &statInt); err != nil {
+			return nil, err
+		}
+		pf.Status = statInt == 1
+		list = append(list, pf)
+	}
+	return list, rows.Err()
+}
+
+func (r *Repository) GetPortForwardByID(id string) (*model.PortForward, error) {
+	row := r.db.QueryRow("SELECT id, name, in_interface, external_port, protocol, internal_ip, internal_port, status FROM port_forwards WHERE id = ?", id)
+	var pf model.PortForward
+	var statInt int
+	err := row.Scan(&pf.ID, &pf.Name, &pf.InInterface, &pf.ExternalPort, &pf.Protocol, &pf.InternalIP, &pf.InternalPort, &statInt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	pf.Status = statInt == 1
+	return &pf, nil
+}
+
+// validatePortForwardWithOverlap runs field validation and rejects an entry that
+// overlaps an existing enabled entry on (interface, protocol, external port).
+// excludeID skips a row (used on update so an entry doesn't clash with itself).
+func (r *Repository) validatePortForwardWithOverlap(pf model.PortForward, excludeID string) error {
+	if err := model.ValidatePortForward(pf); err != nil {
+		return err
+	}
+	if !pf.Status {
+		return nil // disabled entries generate no rule, so no conflict possible
+	}
+	existing, err := r.GetPortForwards()
+	if err != nil {
+		return err
+	}
+	for _, e := range existing {
+		if e.ID == excludeID || !e.Status {
+			continue
+		}
+		if model.PortForwardsConflict(pf, e) {
+			return fmt.Errorf("port-forward overlaps existing entry %q on %s %s port %s", e.Name, e.InInterface, e.Protocol, e.ExternalPort)
+		}
+	}
+	return nil
+}
+
+func (r *Repository) CreatePortForward(pf model.PortForward) error {
+	if err := r.validatePortForwardWithOverlap(pf, ""); err != nil {
+		return err
+	}
+	statVal := 0
+	if pf.Status {
+		statVal = 1
+	}
+	_, err := r.db.Exec("INSERT INTO port_forwards (id, name, in_interface, external_port, protocol, internal_ip, internal_port, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		pf.ID, pf.Name, pf.InInterface, pf.ExternalPort, strings.ToLower(pf.Protocol), pf.InternalIP, pf.InternalPort, statVal)
+	return err
+}
+
+func (r *Repository) UpdatePortForward(pf model.PortForward) error {
+	if err := r.validatePortForwardWithOverlap(pf, pf.ID); err != nil {
+		return err
+	}
+	statVal := 0
+	if pf.Status {
+		statVal = 1
+	}
+	res, err := r.db.Exec("UPDATE port_forwards SET name = ?, in_interface = ?, external_port = ?, protocol = ?, internal_ip = ?, internal_port = ?, status = ? WHERE id = ?",
+		pf.Name, pf.InInterface, pf.ExternalPort, strings.ToLower(pf.Protocol), pf.InternalIP, pf.InternalPort, statVal, pf.ID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("port-forward %q not found", pf.ID)
+	}
+	return nil
+}
+
+func (r *Repository) DeletePortForward(id string) error {
+	_, err := r.db.Exec("DELETE FROM port_forwards WHERE id = ?", id)
+	return err
+}
+
+// ReplaceAllPortForwards wipes and reinserts every port-forward. Used by config
+// import (backup restore). It validates each entry but skips overlap checks
+// between the incoming set (the imported config is trusted as a coherent whole).
+func (r *Repository) ReplaceAllPortForwards(pfs []model.PortForward) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM port_forwards"); err != nil {
+		return err
+	}
+	for _, pf := range pfs {
+		if err := model.ValidatePortForward(pf); err != nil {
+			return fmt.Errorf("invalid port-forward %q: %w", pf.Name, err)
+		}
+		statVal := 0
+		if pf.Status {
+			statVal = 1
+		}
+		if _, err := tx.Exec("INSERT INTO port_forwards (id, name, in_interface, external_port, protocol, internal_ip, internal_port, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			pf.ID, pf.Name, pf.InInterface, pf.ExternalPort, strings.ToLower(pf.Protocol), pf.InternalIP, pf.InternalPort, statVal); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (r *Repository) SaveAllPolicies(policies []model.PolicyRule) error {
 	tx, err := r.db.Begin()
 	if err != nil {

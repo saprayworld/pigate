@@ -73,6 +73,14 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("POST /api/policies/{id}/toggle-status", s.HandleTogglePolicyStatus)
 	authRoute("POST /api/policies/apply", s.HandleApplyPolicies)
 
+	// 4.1 Port Forwarding (DNAT / Virtual IP). Flat path per convention (like
+	// /api/policies). Mutations re-apply the firewall automatically and are
+	// blocked for read-only roles / -disable-edit by RoleReadOnlyMiddleware.
+	authRoute("GET /api/port-forwards", s.HandleGetPortForwards)
+	authRoute("POST /api/port-forwards", s.HandleCreatePortForward)
+	authRoute("PUT /api/port-forwards/{id}", s.HandleUpdatePortForward)
+	authRoute("DELETE /api/port-forwards/{id}", s.HandleDeletePortForward)
+
 	// 5. Address Objects
 	authRoute("GET /api/addresses", s.HandleGetAddresses)
 	authRoute("POST /api/addresses", s.HandleCreateAddress)

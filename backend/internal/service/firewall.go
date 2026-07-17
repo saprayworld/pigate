@@ -76,6 +76,45 @@ func (s *FirewallService) TogglePolicyStatus(id string) (*model.PolicyRule, erro
 	return s.repo.GetPolicyByID(id)
 }
 
+// =========================================================================
+// Port Forwarding (DNAT) Methods
+// =========================================================================
+
+// GetPortForwards retrieves all port-forward entries from the database.
+func (s *FirewallService) GetPortForwards() ([]model.PortForward, error) {
+	return s.repo.GetPortForwards()
+}
+
+// GetPortForwardByID retrieves a specific port-forward entry by its ID.
+func (s *FirewallService) GetPortForwardByID(id string) (*model.PortForward, error) {
+	return s.repo.GetPortForwardByID(id)
+}
+
+// CreatePortForward inserts a new port-forward entry and re-applies the firewall
+// so the DNAT + forward-accept rules take effect immediately.
+func (s *FirewallService) CreatePortForward(pf model.PortForward) error {
+	if err := s.repo.CreatePortForward(pf); err != nil {
+		return err
+	}
+	return s.SyncFirewallRules()
+}
+
+// UpdatePortForward updates an existing port-forward entry and re-applies the firewall.
+func (s *FirewallService) UpdatePortForward(pf model.PortForward) error {
+	if err := s.repo.UpdatePortForward(pf); err != nil {
+		return err
+	}
+	return s.SyncFirewallRules()
+}
+
+// DeletePortForward removes a port-forward entry and re-applies the firewall.
+func (s *FirewallService) DeletePortForward(id string) error {
+	if err := s.repo.DeletePortForward(id); err != nil {
+		return err
+	}
+	return s.SyncFirewallRules()
+}
+
 // SyncFirewallRules pulls all policies, interfaces, address objects, and service objects
 // from the database and applies them to the kernel via the FirewallManager.
 func (s *FirewallService) SyncFirewallRules() error {
@@ -115,7 +154,12 @@ func (s *FirewallService) SyncFirewallRules() error {
 		return fmt.Errorf("failed to load DNS Server interfaces: %w", err)
 	}
 
-	if err := s.firewall.ApplyRules(rules, ifaces, addrs, svcs, dhcpServerIfaces, dnsServerIfaces); err != nil {
+	portForwards, err := s.repo.GetPortForwards()
+	if err != nil {
+		return fmt.Errorf("failed to load port forwards: %w", err)
+	}
+
+	if err := s.firewall.ApplyRules(rules, ifaces, addrs, svcs, dhcpServerIfaces, dnsServerIfaces, portForwards); err != nil {
 		return fmt.Errorf("failed to apply firewall rules: %w", err)
 	}
 	return nil

@@ -127,6 +127,32 @@ type PolicyRuleInput struct {
 	Status       bool     `json:"status"`
 }
 
+// PortForward represents a DNAT / port-forward entry (FortiGate VIP style).
+// Traffic hitting InInterface's local address on ExternalPort (proto Protocol)
+// is translated to InternalIP:InternalPort. See docs/ref/complete port-forward
+// design and kernel/real_firewall.go for the prerouting DNAT + auto forward-accept.
+type PortForward struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	InInterface  string `json:"inInterface"`  // external interface, e.g. "eth0"
+	ExternalPort string `json:"externalPort"` // single ("8080") or range ("8000-8010", keep-port only)
+	Protocol     string `json:"protocol"`     // "tcp" | "udp"
+	InternalIP   string `json:"internalIP"`   // LAN target IPv4
+	InternalPort string `json:"internalPort"` // single port; empty => keep original port (required for ranges)
+	Status       bool   `json:"status"`       // Enabled/Disabled
+}
+
+// PortForwardInput represents input parameters to create or edit a port-forward.
+type PortForwardInput struct {
+	Name         string `json:"name"`
+	InInterface  string `json:"inInterface"`
+	ExternalPort string `json:"externalPort"`
+	Protocol     string `json:"protocol"`
+	InternalIP   string `json:"internalIP"`
+	InternalPort string `json:"internalPort"`
+	Status       bool   `json:"status"`
+}
+
 // NetworkInterface represents hardware or virtual network cards configuration
 type NetworkInterface struct {
 	ID             string   `json:"id"`

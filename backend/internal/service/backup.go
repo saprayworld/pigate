@@ -97,6 +97,9 @@ func (s *BackupService) Export(includeUsers bool, passphrase string) (*model.Bac
 	if cfg.Policies, err = s.repo.GetPolicies(); err != nil {
 		return nil, fmt.Errorf("read policies: %w", err)
 	}
+	if cfg.PortForwards, err = s.repo.GetPortForwards(); err != nil {
+		return nil, fmt.Errorf("read port forwards: %w", err)
+	}
 	if cfg.DhcpConfigs, err = s.repo.GetDHCPConfigs(); err != nil {
 		return nil, fmt.Errorf("read dhcp configs: %w", err)
 	}
@@ -656,6 +659,12 @@ func validateConfig(cfg model.BackupConfig) error {
 		}
 	}
 
+	for _, pf := range cfg.PortForwards {
+		if err := model.ValidatePortForward(pf); err != nil {
+			return fmt.Errorf("port forward %q: %w", pf.Name, err)
+		}
+	}
+
 	if cfg.SystemDns.Mode != "" && cfg.SystemDns.Mode != "wan" && cfg.SystemDns.Mode != "static" {
 		return fmt.Errorf("invalid system DNS mode %q", cfg.SystemDns.Mode)
 	}
@@ -693,6 +702,7 @@ func configCounts(cfg model.BackupConfig) map[string]int {
 		"addresses":        len(cfg.Addresses),
 		"serviceObjects":   len(cfg.ServiceObjects),
 		"policies":         len(cfg.Policies),
+		"portForwards":     len(cfg.PortForwards),
 		"dhcpConfigs":      len(cfg.DhcpConfigs),
 		"dhcpReservations": len(cfg.DhcpReservations),
 		"dnsZones":         len(cfg.DnsZones),

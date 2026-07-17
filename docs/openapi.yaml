@@ -1042,6 +1042,90 @@ paths:
                 example: true
 
   # =========================================================================
+  # PORT FORWARDING (DNAT / Virtual IP)
+  # =========================================================================
+  /port-forwards:
+    get:
+      tags:
+        - Port Forwarding
+      summary: Retrieve all port-forward (DNAT) entries
+      responses:
+        '200':
+          description: List of port-forward entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PortForward'
+    post:
+      tags:
+        - Port Forwarding
+      summary: Create a new port-forward entry (re-applies the firewall)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PortForwardInput'
+      responses:
+        '200':
+          description: Port-forward created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortForward'
+        '400':
+          description: Validation error (bad IP/port/protocol, unsupported range translation, or overlap with an existing entry)
+
+  /port-forwards/{id}:
+    put:
+      tags:
+        - Port Forwarding
+      summary: Update an existing port-forward entry (re-applies the firewall)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PortForwardInput'
+      responses:
+        '200':
+          description: Port-forward updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortForward'
+        '400':
+          description: Validation error
+        '404':
+          description: Port-forward not found
+    delete:
+      tags:
+        - Port Forwarding
+      summary: Delete a port-forward entry (re-applies the firewall)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Port-forward deleted successfully
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  # =========================================================================
   # ADDRESS OBJECTS
   # =========================================================================
   /addresses:
@@ -3320,6 +3404,81 @@ components:
           type: boolean
           description: Source NAT (masquerade to outgoing interface address)
           example: false
+        status:
+          type: boolean
+          example: true
+
+    # --- Port Forwarding (DNAT) Schemas ---
+    PortForward:
+      type: object
+      required:
+        - id
+        - name
+        - inInterface
+        - externalPort
+        - protocol
+        - internalIP
+        - status
+      properties:
+        id:
+          type: string
+          example: pf-a1b2
+        name:
+          type: string
+          example: WebServer
+        inInterface:
+          type: string
+          description: External (WAN) interface receiving the traffic
+          example: eth0
+        externalPort:
+          type: string
+          description: Single port ("8080") or range ("8000-8010", keep-port only)
+          example: '8080'
+        protocol:
+          type: string
+          enum: [tcp, udp]
+          example: tcp
+        internalIP:
+          type: string
+          description: Internal LAN target IPv4 address
+          example: 192.168.1.10
+        internalPort:
+          type: string
+          description: Translated destination port; empty keeps the original port (required-empty for ranges)
+          example: '80'
+        status:
+          type: boolean
+          example: true
+
+    PortForwardInput:
+      type: object
+      required:
+        - name
+        - inInterface
+        - externalPort
+        - protocol
+        - internalIP
+        - status
+      properties:
+        name:
+          type: string
+          example: WebServer
+        inInterface:
+          type: string
+          example: eth0
+        externalPort:
+          type: string
+          example: '8080'
+        protocol:
+          type: string
+          enum: [tcp, udp]
+          example: tcp
+        internalIP:
+          type: string
+          example: 192.168.1.10
+        internalPort:
+          type: string
+          example: '80'
         status:
           type: boolean
           example: true
