@@ -2,8 +2,9 @@ import { useState } from "react"
 import { getErrorMessage } from "@/lib/errors"
 import type { FormEvent } from "react"
 import { useNavigate } from "react-router-dom"
-import { Shield, Lock, User, AlertCircle, Loader2 } from "lucide-react"
+import { Lock, User, AlertCircle, Loader2 } from "lucide-react"
 import { authService } from "@/services/authService"
+import { PiGateLogo } from "@/components/PiGateLogo"
 
 export default function Login() {
   const [username, setUsername] = useState("")
@@ -30,11 +31,11 @@ export default function Login() {
     <div className="flex min-h-svh flex-col items-center justify-center bg-background px-4 py-12 sm:px-6 lg:px-8">
       <div className="w-full max-w-md space-y-8 rounded-2xl border border-border bg-card p-8">
         <div className="flex flex-col items-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 border border-primary/20 text-primary">
-            <Shield className="h-6 w-6" />
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl ">
+            <PiGateLogo className="size-12 shrink-0" />
           </div>
           <h2 className="mt-6 text-center text-3xl font-extrabold tracking-tight text-foreground">
-            PiGate Gateway
+            PiGate
           </h2>
           <p className="mt-2 text-center text-sm text-muted-foreground">
             Enter credentials to access administrative panel

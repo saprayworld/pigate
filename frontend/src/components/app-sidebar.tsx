@@ -97,7 +97,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               className="h-8 data-[slot=sidebar-menu-button]:p-1.5! data-[slot=sidebar-menu-button]:pl-0!"
             >
               <NavLink to="/dashboard">
-                <PiGateLogo className="size-8 shrink-0" />
+                <div className="flex aspect-square size-8 items-center justify-center rounded-lg">
+                  <PiGateLogo className="shrink-0 h-[28px]! w-[28px]!" />
+                </div>
                 <div className="grid flex-1 text-left text-xs leading-tight">
                   <span className="truncate text-sm font-bold tracking-wider">PiGate</span>
                   <span className="truncate text-xs text-muted-foreground font-mono">{hostname}</span>
