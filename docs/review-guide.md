@@ -3,7 +3,7 @@
 > เอกสารนี้เป็น "วิธีการที่ทำซ้ำได้" สำหรับรีวิวความปลอดภัยของ PiGate
 > ผู้รีวิวคนถัดไปควรทำตามลำดับในเอกสารนี้ได้โดยไม่ต้องรู้ประวัติของโปรเจคมาก่อน
 > ฉบับภาษาอังกฤษ: `docs/review-guide-eng.md`
-> อัปเดตล่าสุด: 2026-07-08 (อ้างอิงสถานะโค้ด ณ branch `feat/dialog-to-drawer`)
+> อัปเดตล่าสุด: 2026-07-17 (อ้างอิงสถานะโค้ด ณ branch `main` @ `ec1e1d0`; รอบก่อนหน้า: 2026-07-08 บน `feat/dialog-to-drawer`)
 
 ---
 
@@ -236,21 +236,22 @@ cd ../frontend && yarn audit
 
 | หัวข้อ | เกรด | สรุปสถานะ | วิธีตรวจ (หมวด) |
 |---|---|---|---|
-| Authentication | B+ | bcrypt, error แบบ generic ไม่ leak account, บังคับเปลี่ยนรหัสครั้งแรก, รหัสเริ่มต้นสุ่ม; หักคะแนน: เพิกเฉย error ของ `rand.Read`, ไม่มี lockout ต่อบัญชี | A |
-| Session Management | C | token **ไม่หมดอายุฝั่ง server** จนกว่า restart; ที่ดี: เช็ค DB ทุก request, purge session เมื่อลบบัญชี/import config | A |
-| Authorization | A- | RBAC แบบ fail-closed, guard rails ครบพร้อม test; ระวัง GET ที่มี side effect หลุด role read-only | B |
+| Authentication | B+ | bcrypt, error แบบ generic ไม่ leak account, บังคับเปลี่ยนรหัสครั้งแรก, รหัสเริ่มต้นสุ่ม; error ของ `rand.Read` fail-closed แล้ว; หักคะแนน: ไม่มี lockout ต่อบัญชี | A |
+| Session Management | A- | มี sliding idle TTL (15 นาที) + absolute cap (7 วัน) + cap ต่อผู้ใช้ (5, evict ตัวเก่าสุด) + sweeper; เช็ค DB ทุก request, purge เมื่อลบบัญชี/import config | A |
+| Authorization | A- | RBAC แบบ fail-closed, guard rails ครบพร้อม test; route ใหม่ทั้งหมด (port-forward, VLAN, event/traffic log, metrics SSE) ครอบ middleware ถูกต้อง, clear audit log เป็น super_admin เท่านั้น; ยังต้องระวัง GET ที่มี side effect | B |
 | Password Hashing | A- | bcrypt cost 10 ใช้สม่ำเสมอทั้ง create/login/reset | A |
-| CSRF | B | หลัง cookie-only auth: กันด้วย `SameSite=Strict` กลไกเดียว (ตัด Bearer แล้ว) — ควรเพิ่มเช็ค `Origin` เป็น defense-in-depth เพราะไม่มี backstop | C.1 |
-| Cookie Security | B | `HttpOnly` + `SameSite=Strict` ถูกต้อง และ token ไม่ซ้ำใน `localStorage` อีก (ประโยชน์ HttpOnly กลับมาเต็ม); เหลือประเด็น `Secure` ที่ผูกกับ HTTPS (`r.TLS`) | C |
-| CORS | B+ | whitelist แบบ exact match ไม่ใช่ wildcard; ติดที่ dev origins ยัง active ใน production | B, C |
-| Rate Limiting | B- | มีที่ login (ถูกจุด); map ไม่มี eviction, endpoint แพง (scan/apply) ไม่มี limit | A, G |
+| CSRF | B | cookie-only auth กันด้วย `SameSite=Strict` กลไกเดียว (ตัด Bearer แล้ว); ยังแนะนำเพิ่มเช็ค `Origin`/`Sec-Fetch-Site` เป็น defense-in-depth (ยังไม่ทำ) | C.1 |
+| Cookie Security | A- | `HttpOnly` + `SameSite=Strict`, `Secure` ตั้งราย request จาก `r.TLS` (มีผลจริงภายใต้ HTTPS), รวมศูนย์ที่ `setSessionCookie`, ไม่มี token ใน `localStorage` | C |
+| CORS | A- | whitelist แบบ exact match ไม่ใช่ wildcard; dev origins ถูก gate ด้วย `-allow-dev-cors` (ปิดใน production); ตัด `Authorization` ออกจาก allowed headers | B, C |
+| Rate Limiting | B | limiter ที่ login มี `lastSeen` eviction ต่อรายการ + hard cap 4096; endpoint แพง (scan/apply) ยังไม่มี limit | A, G |
 | File Upload | A- | มีทางเดียวคือ config import: super_admin only, cap 10 MB, transaction เดียว + snapshot, purge session หลัง import; ไม่มีการเขียนไฟล์ upload ลง filesystem | F |
-| Secrets | B+ | mask password ทุก response, export จำกัด super_admin, backup crypto ถูกตำรา; เสี่ยงอนาคต: `SendWpaCommand` log command เต็ม | F |
-| TLS/HTTPS | **F** | **ไม่มีเลย — ช่องโหว่อันดับหนึ่ง** รหัสผ่าน/token วิ่ง plaintext ใน LAN | C |
-| Input Validation | B | SQL parameterized, wpa sanitize + test, `ParseIP`/`ParseMAC`; ค้าง audit เส้นทาง dnsmasq (zone/record/hostname) ให้ครบ | D, E |
+| Secrets | A- | mask password ทุก response ของ interface (ตรวจแล้ว), export จำกัด super_admin, backup crypto ถูกตำรา, `redactWpaCommand` ตัด PSK ก่อน log, traffic log parse เฉพาะ packet header (ไม่มี payload/ความลับ) | F |
+| TLS/HTTPS | A- | **มีแล้ว** — self-signed ECDSA P-256 cert generate ตอน startup (key 0600, ไม่เก็บใน DB/backup), HTTPS เป็นหลักที่ :443 (TLS 1.2+) + server timeouts, HTTP→HTTPS 308 redirect, มี plain-HTTP fallback ท้ายสุด; หักคะแนน: self-signed อย่างเดียว (ยังไม่มี ACME/CA), ตัด HSTS ออกเพื่อคง fallback | C |
+| Input Validation | B | SQL parameterized, wpa sanitize, `ParseIP`/`ParseMAC`; เส้นทาง dnsmasq ฝั่ง DNS (zone/record/reservation/interface) validate ครบ 3 ชั้น (handler + import + generation); **ช่องใหม่: ฟิลด์ scope ของ DHCP (`startIp`/`endIp`/`gateway`/`netmask`/`dns1`/`dns2`) ยังไม่ validate → inject directive dnsmasq ได้ (finding 11)** | D, E |
 
-**ลำดับความสำคัญของการแก้:** TLS (F) → ~~เลิกส่ง token สองทางให้เหลือ HttpOnly cookie อย่างเดียว~~
-(**เสร็จแล้ว** — cookie-only-session-auth-plan; ยกเกรด Cookie/CSRF ไปแล้ว) → session TTL → audit เส้นทาง dnsmasq ให้จบ
+**ลำดับความสำคัญของการแก้:** ~~TLS~~ (**เสร็จแล้ว** — https-server-foundation) → ~~session TTL~~
+(**เสร็จแล้ว** — server-side-session-ttl) → **validate scope ของ DHCP (finding 11 — ใหม่, config injection)** →
+อัปเกรด Go toolchain เป็น ≥1.26.5 (finding 12) → เพิ่มเช็ค `Origin`/`Sec-Fetch-Site` กัน CSRF
 
 ## 6. สิ่งที่ทำได้ดีแล้ว (ณ รอบรีวิวนี้ — คงไว้ อย่าถอยหลัง)
 
@@ -265,14 +266,19 @@ cd ../frontend && yarn audit
 9. **รันด้วย capabilities ไม่ใช่ root** + user แยก + Polkit/sudoers จำกัดขอบเขต
 10. **dnsmasq `--test` ก่อน apply** เป็น safety net อีกชั้น
 11. **Frontend แทบไม่มี XSS sink** — จุด `dangerouslySetInnerHTML` เดียวเป็นของ shadcn chart ที่ไม่รับ user input
+12. **มี TLS เป็นค่าเริ่มต้น** — self-signed ECDSA P-256 cert generate อัตโนมัติตอน startup (private key 0600, ไม่เก็บใน DB/backup), HTTPS เป็นหลักที่ :443 (TLS 1.2+) + server timeouts ครบ, HTTP→HTTPS 308 redirect, มี plain-HTTP fallback เพื่อไม่ให้ cert ล้มเหลวแล้วแอดมินเข้าไม่ได้
+13. **Session ฝั่ง server แข็งแรง** — sliding idle TTL + absolute cap + cap ต่อผู้ใช้ + sweeper และมี `SessionAlive` สำหรับ SSE ที่ไม่ต่ออายุตอน heartbeat
+14. **เส้นทาง dnsmasq ฝั่ง DNS validate ครบ** — whitelist ของ zone/record/reservation/interface บังคับ 3 ชั้น (handler, backup import, generation-time) พร้อม test (เหลือเฉพาะ scope fields เป็นช่องเดียว — finding 11)
+15. **Security headers + body cap** — CSP เข้ม (`script-src 'self'`), `X-Frame-Options: DENY`, nosniff, `Referrer-Policy: no-referrer` ทุก response; body cap กลาง 1 MB (import คง 10 MB); map ของ rate limiter มีขอบเขตแล้ว (idle eviction + hard cap 4096); ตัด HSTS ออกโดยตั้งใจเพื่อคง HTTP fallback
+16. **Port-forward / NAT สร้างผ่าน netlink expression + validate ก่อน persist** — `ValidatePortForward` (interface/protocol/IPv4/port-range/conflict) รันที่ชั้น repository และ import; กฎ DNAT/SNAT เป็น expression ของ google/nftables ไม่ใช่ string ของ shell — ไม่มี surface ให้ inject
 
 ## 7. จุดที่ต้องปรับปรุง (Findings เรียงตามความรุนแรง)
 
 | # | ระดับ | ปัญหา | ที่อยู่ | แนวทางแก้ |
 |---|---|---|---|---|
-| 1 | สูง | ไม่มี TLS — รหัสผ่าน/token วิ่งเป็น plaintext ใน LAN, cookie `Secure:false` | `cmd/pigate/main.go`, `handlers.go` | self-signed cert ตอน install + flag TLS + `Secure:true` |
+| 1 | ~~สูง~~ **แก้แล้ว** | ~~ไม่มี TLS — รหัสผ่าน/token วิ่งเป็น plaintext ใน LAN, cookie `Secure:false`~~ → self-signed ECDSA cert generate ตอน startup (`service/tls_cert.go`), HTTPS เป็นหลักที่ :443 (TLS 1.2+), HTTP→HTTPS 308 redirect, cookie `Secure` จาก `r.TLS`; คง plain-HTTP fallback เพื่อไม่ให้ cert ล้มเหลวแล้วแอดมินเข้าไม่ได้ | `cmd/pigate/main.go`, `service/tls_cert.go`, `api/session.go`, `install.sh` | **เสร็จ** (https-server-foundation) |
 | 2 | ~~สูง~~ **แก้แล้ว** | ~~token เก็บใน `localStorage` และถูกส่งใน JSON body ทั้งที่มี HttpOnly cookie แล้ว — XSS ใดๆ ขโมย session ได้~~ → cookie-only auth: `LoginResponse` ไม่มี `token`, frontend เลิกเก็บ `localStorage` (เหลือ flag `pigate_logged_in` ที่ไม่ลับ), `AuthMiddleware`/logout อ่าน cookie ทางเดียว | `authService.ts`, `HandleLogin`, `middleware.go` | **เสร็จ** (cookie-only-session-auth-plan) — cookie เป็นช่องทางเดียว, `credentials: "include"` |
-| 3 | กลาง–สูง | session ไม่มีวันหมดอายุฝั่ง server จนกว่าจะ restart | `middleware.go` (`activeSessions`) | เพิ่ม TTL + sweeper |
+| 3 | ~~กลาง–สูง~~ **แก้แล้ว** | ~~session ไม่มีวันหมดอายุฝั่ง server จนกว่าจะ restart~~ → `api/session.go`: sliding idle TTL (15 นาที) + absolute cap (7 วัน) + cap ต่อผู้ใช้ (5, evict ตัวเก่าสุด) + `StartSessionSweeper`; SSE heartbeat ใช้ `SessionAlive` เพื่อไม่ให้ stream ที่เปิดค้างต่ออายุ session ตลอดไป | `api/session.go`, `middleware.go` | **เสร็จ** (server-side-session-ttl) |
 | 4 | ~~กลาง~~ **แก้แล้ว** | ~~ไม่มี server timeouts (slowloris); body size limit มีเฉพาะ import (10 MB) ส่วน endpoint อื่นไม่มี~~ → timeout เพิ่มแล้วตั้งแต่งาน HTTPS; เพิ่ม `BodyLimitMiddleware` cap 1 MB ทุก endpoint (import คง 10 MB) และ SSE log stream เคลียร์ write deadline รายคอนเนกชันเพื่อไม่ให้ `WriteTimeout` ตัดทุก 60 วินาที | `main.go`, `middleware.go`, `handlers.go` | **เสร็จ** (http-server-hardening-plan) |
 | 5 | ~~กลาง~~ **แก้แล้ว** | ~~rate limiter map โตได้ไม่จำกัด (ไม่มี eviction)~~ → เพิ่ม `lastSeen` รายรายการ + `StartLimiterSweeper` (idle 10 นาที) + hard cap 4096; key ด้วย `net.SplitHostPort` | `middleware.go` | **เสร็จ** (rate-limiter-eviction-plan) |
 | 6 | ~~กลาง~~ **แก้แล้ว** | ~~ไม่มี security headers (`Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`) บนหน้า SPA~~ → `SecurityHeadersMiddleware` ตั้ง CSP (`script-src 'self'` เข้ม) + XFO + nosniff + Referrer-Policy ทุก response; ตัด HSTS ออกโดยตั้งใจเพื่อคง HTTP fallback | middleware | **เสร็จ** (security-headers-middleware-plan) |
@@ -280,6 +286,8 @@ cd ../frontend && yarn audit
 | 8 | ~~ต่ำ~~ **แก้แล้ว** | ~~`_, _ = rand.Read(b)` เพิกเฉย error ตอนสร้าง token~~ → `generateRandomToken` คืน `(string, error)`; login และจุดสร้าง resource ID ทั้ง 7 fail-closed ด้วย 500 แทนการคืนค่าที่เดาได้ | `handlers.go` | **เสร็จ** (security-hardening-cleanups-plan) |
 | 9 | ~~ต่ำ~~ **แก้แล้ว** | ~~CORS อนุญาต origin dev (`localhost:5173`) แม้ใน production binary~~ → echo dev origin เฉพาะเมื่อมี flag `-allow-dev-cors` (default off); production ไม่ echo cross-origin | `middleware.go` | **เสร็จ** (security-hardening-cleanups-plan) |
 | 10 | ~~ต่ำ~~ **แก้แล้ว** | ~~ไม่มี audit log ว่าใครแก้ config อะไรเมื่อไร~~ → `EventLogService` (`SystemEvent.Actor`) มีอยู่แล้ว จึงเป็นการปิดช่องว่าง coverage — QoS (เดิม log 0) + address/service/DNS zone+record/DNS settings/DHCP reservation+scope/interface-reset บันทึก event พร้อม actor แล้ว | service layer / `handlers.go` | **เสร็จ** (security-hardening-cleanups-plan) |
+| 11 | กลาง | **DHCP scope config injection (ใหม่).** ฟิลด์ `startIp`/`endIp`/`gateway`/`netmask`/`dns1`/`dns2` ถูกเขียนลง `pigate-dhcp.conf` (`dhcp-range=`/`dhcp-option=`) โดย **ไม่มี validation** ทั้งบน `POST`/`PUT /api/dhcp/configs` **และ** บน backup import — ค่าที่มี newline จะ inject directive dnsmasq ตามใจ (เช่น `dhcp-script=/tmp/x` → รันคำสั่งทุกครั้งที่มี lease event). Reservation กับ DNS record validate แล้ว แต่เส้นทาง scope ตกหล่น. `dnsmasq --test` ผ่านเพราะบรรทัดที่ inject มา syntax ถูกต้อง. ทดสอบจริง: `gateway:"192.168.1.1\ndhcp-script=…"` → HTTP 200 และเก็บลง DB ตามตัวอักษร | `api/handlers.go` (`HandleCreateDHCPConfig`/`HandleUpdateDHCPConfigByID`), `service/backup.go` (ลูป validation ของ import), `kernel/dhcp_server.go` | เพิ่ม `ValidateDhcpConfig` (interface ผ่าน `ValidateInterfaceName`, IP ผ่าน `net.ParseIP`) แล้วเรียกทั้งใน 2 handler, ในลูป import ถัดจาก `ValidateReservation`, และเป็น defense-in-depth ตอน generate ใน `dhcp_server.go` (skip/reject scope ที่ผิดเหมือน reservation ที่บรรทัด 92) |
+| 12 | ต่ำ | **Go stdlib TLS vuln (ใหม่).** `govulncheck` แจ้ง GO-2026-5856 (Encrypted Client Hello privacy leak ใน `crypto/tls`) เข้าถึงได้ผ่าน `http.Server.ServeTLS` ที่เพิ่งเพิ่ม. PiGate ใช้ self-signed ไม่มี ECH จึงเสี่ยงจริงน้อย แต่ call path มีอยู่ | toolchain (`go1.26.4`) | build ใหม่ด้วย Go ≥ 1.26.5 (รุ่นที่แก้แล้ว) แล้วรัน `govulncheck` ยืนยันว่าเคลียร์ |
 
 > เมื่อแก้ finding ใดแล้ว ให้ย้ายไปหมวด 6 พร้อมระบุ commit และปรับเกรดในหมวด 5 — เอกสารนี้คือ living document
 

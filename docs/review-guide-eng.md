@@ -3,7 +3,7 @@
 > This document is a **repeatable methodology** for security-reviewing PiGate.
 > The next reviewer should be able to follow it start-to-finish without prior project history.
 > Thai version: `docs/review-guide.md`
-> Last updated: 2026-07-08 (reflects code state on branch `feat/dialog-to-drawer`)
+> Last updated: 2026-07-17 (reflects code state on branch `main` @ `ec1e1d0`; previous round: 2026-07-08 on `feat/dialog-to-drawer`)
 
 ---
 
@@ -326,22 +326,22 @@ must **re-grade every round**, using the referenced checklist areas as the how-t
 
 | Topic | Grade | Status summary | How to check (area) |
 |---|---|---|---|
-| Authentication | B+ | bcrypt, generic errors (no account enumeration), forced initial password change, random default password; deductions: ignored `rand.Read` error, no per-account lockout | A |
-| Session Management | C | Tokens **never expire server-side** until restart; good: per-request DB check, session purge on account delete/config import | A |
-| Authorization | A- | Fail-closed RBAC, complete guard rails with tests; watch GETs with side effects slipping past the read-only role | B |
+| Authentication | B+ | bcrypt, generic errors (no account enumeration), forced initial password change, random default password; `rand.Read` failure now fails closed; deductions: no per-account lockout | A |
+| Session Management | A- | Sliding idle TTL (15 min) + absolute cap (7 d) + per-user cap (5, evict-oldest) + sweeper; per-request DB check; purge on account delete/config import | A |
+| Authorization | A- | Fail-closed RBAC, complete guard rails with tests; all new routes (port-forward, VLAN, event/traffic logs, metrics SSE) correctly wrapped; audit-log clear is super_admin-only. Still watch GETs with side effects | B |
 | Password Hashing | A- | bcrypt cost 10, used consistently across create/login/reset | A |
-| CSRF | B | After cookie-only auth: guarded by `SameSite=Strict` alone (Bearer removed) — add an `Origin` check as defense-in-depth since there is no backstop | C.1 |
-| Cookie Security | B | `HttpOnly` + `SameSite=Strict` correct, and the token is no longer duplicated into `localStorage` (HttpOnly benefit fully restored); the remaining item is `Secure`, tied to HTTPS (`r.TLS`) | C |
-| CORS | B+ | Exact-match whitelist, no wildcard; dev origins still active in production | B, C |
-| Rate Limiting | B- | Present at login (the right place); limiter map has no eviction, expensive endpoints (scan/apply) unlimited | A, G |
+| CSRF | B | Cookie-only auth guarded by `SameSite=Strict` alone (Bearer removed); an `Origin`/`Sec-Fetch-Site` check is still the recommended defense-in-depth (not yet added) | C.1 |
+| Cookie Security | A- | `HttpOnly` + `SameSite=Strict`, `Secure` now set per-request from `r.TLS` (live under HTTPS), single `setSessionCookie` source, no `localStorage` token | C |
+| CORS | A- | Exact-match whitelist, no wildcard; dev origins gated behind `-allow-dev-cors` (off in production); `Authorization` dropped from allowed headers | B, C |
+| Rate Limiting | B | Login limiter present with per-entry `lastSeen` eviction + 4096 hard cap; expensive endpoints (scan/apply) still unlimited | A, G |
 | File Upload | A- | Single path: config import — super_admin only, 10 MB cap, single transaction + snapshot, session purge after import; no uploaded files ever written to the filesystem | F |
-| Secrets | B+ | Passwords masked in every response, export super_admin only, textbook backup crypto; future risk: `SendWpaCommand` logs full commands | F |
-| TLS/HTTPS | **F** | **Absent — the number-one weakness**; passwords/tokens travel plaintext on the LAN | C |
-| Input Validation | B | Parameterized SQL, wpa sanitization with tests, `ParseIP`/`ParseMAC`; pending: complete the dnsmasq path audit (zone/record/hostname) | D, E |
+| Secrets | A- | Passwords masked in every interface response (verified), export super_admin only, textbook backup crypto, `redactWpaCommand` strips PSK before logging, traffic log parses packet headers only (no payload/secrets) | F |
+| TLS/HTTPS | A- | **Now present** — self-signed ECDSA P-256 cert generated at startup (key 0600), HTTPS primary on :443 with TLS 1.2+ and server timeouts, HTTP→HTTPS 308 redirect, plain-HTTP last-resort fallback; deduction: self-signed only (no ACME/CA path), HSTS deliberately omitted for the fallback | C |
+| Input Validation | B | Parameterized SQL, wpa sanitization, `ParseIP`/`ParseMAC`; dnsmasq DNS path (zone/record/reservation/interface) now validated at handler + import + generation layers; **NEW GAP: DHCP scope fields (`startIp`/`endIp`/`gateway`/`netmask`/`dns1`/`dns2`) unvalidated → dnsmasq directive injection (finding 11)** | D, E |
 
-**Fix priority:** TLS (F) → ~~drop the dual token delivery in favor of HttpOnly-cookie-only auth~~
-(**done** — cookie-only-session-auth-plan; Cookie/CSRF grades already raised) → session TTL →
-finish the dnsmasq path audit.
+**Fix priority:** ~~TLS~~ (**done** — https-server-foundation) → ~~session TTL~~ (**done** —
+server-side-session-ttl) → **DHCP scope validation (finding 11 — new, config injection)** →
+bump Go toolchain to ≥1.26.5 (finding 12) → add an `Origin`/`Sec-Fetch-Site` CSRF check.
 
 ## 6. What Is Already Done Well (as of this review — preserve, don't regress)
 
@@ -365,14 +365,29 @@ finish the dnsmasq path audit.
 10. **dnsmasq `--test` before apply** as an extra safety net.
 11. **Frontend nearly free of XSS sinks** — the single `dangerouslySetInnerHTML` is shadcn's chart
     component, which takes no user input.
+12. **TLS by default** — self-signed ECDSA P-256 cert auto-generated at startup (private key 0600,
+    never in DB/backup), HTTPS primary on :443 with TLS 1.2+ and full server timeouts, HTTP→HTTPS
+    308 redirect, plain-HTTP fallback so a cert failure never bricks admin access.
+13. **Robust server-side sessions** — sliding idle TTL + absolute cap + per-user cap + sweeper, and
+    an `SSE`-safe `SessionAlive` check that does not renew on heartbeat.
+14. **dnsmasq DNS path fully validated** — zone/record/reservation/interface whitelists enforced at
+    three layers (handler, backup import, and generation-time defense-in-depth) with tests. (Scope
+    fields remain the one gap — finding 11.)
+15. **Security headers + body caps** — strict CSP (`script-src 'self'`), `X-Frame-Options: DENY`,
+    nosniff, `Referrer-Policy: no-referrer` on every response; 1 MB global body cap (import keeps its
+    own 10 MB); rate-limiter map now bounded (idle eviction + 4096 hard cap). HSTS intentionally
+    omitted to preserve the HTTP fallback.
+16. **Port-forward / NAT built via netlink expressions, validated before persist** — `ValidatePortForward`
+    (interface/protocol/IPv4/port-range/conflict) runs at the repository and import layers; DNAT/SNAT
+    rules are google/nftables expressions, not shell strings — no injection surface.
 
 ## 7. Findings — What Needs Improvement (by severity)
 
 | # | Severity | Issue | Location | Remediation |
 |---|---|---|---|---|
-| 1 | High | No TLS — passwords/tokens travel plaintext on the LAN; cookie `Secure:false` | `cmd/pigate/main.go`, `handlers.go` | Self-signed cert at install + TLS flags + `Secure:true` |
+| 1 | ~~High~~ **Fixed** | ~~No TLS — passwords/tokens travel plaintext on the LAN; cookie `Secure:false`~~ → self-signed ECDSA cert generated at startup (`service/tls_cert.go`), HTTPS primary on :443 (TLS 1.2+), HTTP→HTTPS 308 redirect, cookie `Secure` from `r.TLS`; plain-HTTP fallback kept so a cert failure never locks the admin out | `cmd/pigate/main.go`, `service/tls_cert.go`, `api/session.go`, `install.sh` | **Done** (https-server-foundation) |
 | 2 | ~~High~~ **Fixed** | ~~Token stored in `localStorage` and returned in the JSON body despite the HttpOnly cookie — any XSS steals the session~~ → cookie-only auth: `LoginResponse` drops `token`, the frontend keeps only a non-secret `pigate_logged_in` flag, `AuthMiddleware`/logout read the cookie only | `authService.ts`, `HandleLogin`, `middleware.go` | **Done** (cookie-only-session-auth-plan) — cookie is the single channel, `credentials: "include"` |
-| 3 | Med–High | Sessions never expire server-side until restart | `middleware.go` (`activeSessions`) | Add TTL + sweeper |
+| 3 | ~~Med–High~~ **Fixed** | ~~Sessions never expire server-side until restart~~ → `api/session.go`: sliding idle TTL (15 min) + absolute cap (7 d) + per-user cap (5, evict-oldest) + `StartSessionSweeper`; `SessionAlive` used by the SSE heartbeat so a long-lived stream cannot keep a session alive forever | `api/session.go`, `middleware.go` | **Done** (server-side-session-ttl) |
 | 4 | ~~Medium~~ **Fixed** | ~~No server timeouts (slowloris); body size limit exists only on import (10 MB), not other endpoints~~ → timeouts added in the HTTPS work; a 1 MB `BodyLimitMiddleware` now caps every endpoint (import keeps its own 10 MB), and the SSE log stream clears its per-connection write deadline so `WriteTimeout` no longer kills it every 60s | `main.go`, `middleware.go`, `handlers.go` | **Done** (http-server-hardening-plan) |
 | 5 | ~~Medium~~ **Fixed** | ~~Rate-limiter map grows unboundedly (no eviction)~~ → per-entry `lastSeen` + `StartLimiterSweeper` (10-min idle) + hard cap 4096; keyed by `net.SplitHostPort` | `middleware.go` | **Done** (rate-limiter-eviction-plan) |
 | 6 | ~~Medium~~ **Fixed** | ~~No security headers (`Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`) on the SPA~~ → `SecurityHeadersMiddleware` sets CSP (strict `script-src 'self'`) + XFO + nosniff + Referrer-Policy on every response; HSTS deliberately omitted to preserve the HTTP fallback | middleware | **Done** (security-headers-middleware-plan) |
@@ -380,6 +395,8 @@ finish the dnsmasq path audit.
 | 8 | ~~Low~~ **Fixed** | ~~`_, _ = rand.Read(b)` ignores the error during token generation~~ → `generateRandomToken` now returns `(string, error)`; the login path and all 7 resource-ID sites fail closed with 500 rather than mint a predictable value | `handlers.go` | **Done** (security-hardening-cleanups-plan) |
 | 9 | ~~Low~~ **Fixed** | ~~CORS allows dev origins (`localhost:5173`) even in the production binary~~ → dev-origin echo gated behind `-allow-dev-cors` (default off); production binary echoes no cross-origin | `middleware.go` | **Done** (security-hardening-cleanups-plan) |
 | 10 | ~~Low~~ **Fixed** | ~~No audit log of who changed which config when (only the firewall event ring buffer)~~ → the central `EventLogService` (with `SystemEvent.Actor`) already existed; this closed the coverage gaps — QoS (previously logged nothing) plus address/service/DNS zone+record/DNS settings/DHCP reservation+scope/interface-reset now emit actor-stamped audit events | service layer / `handlers.go` | **Done** (security-hardening-cleanups-plan) |
+| 11 | Medium | **DHCP scope config injection (NEW).** `startIp`/`endIp`/`gateway`/`netmask`/`dns1`/`dns2` are written into `pigate-dhcp.conf` (`dhcp-range=`/`dhcp-option=`) with **no validation** on `POST`/`PUT /api/dhcp/configs` **or** on backup import — a newline injects an arbitrary dnsmasq directive (e.g. `dhcp-script=/tmp/x` → command execution on every lease event). Reservations and DNS records *are* validated; the scope path was missed. `dnsmasq --test` passes because the injected line is syntactically valid. Verified live: `gateway:"192.168.1.1\ndhcp-script=…"` → HTTP 200 and persisted verbatim | `api/handlers.go` (`HandleCreateDHCPConfig`/`HandleUpdateDHCPConfigByID`), `service/backup.go` (import validation loop), `kernel/dhcp_server.go` | Add a `ValidateDhcpConfig` (interface via `ValidateInterfaceName`, IPs via `net.ParseIP`) and call it in both handlers, in the backup-import loop next to `ValidateReservation`, and as generation-time defense-in-depth in `dhcp_server.go` (skip/reject invalid scope like reservations at line 92) |
+| 12 | Low | **Go stdlib TLS vuln (NEW).** `govulncheck` flags GO-2026-5856 (Encrypted Client Hello privacy leak in `crypto/tls`), reachable via the new `http.Server.ServeTLS`. PiGate uses self-signed certs without ECH so real exposure is minimal, but the call path is present | toolchain (`go1.26.4`) | Rebuild with Go ≥ 1.26.5 (fixed release); re-run `govulncheck` to confirm clear |
 
 > When a finding is fixed, move it to section 6 with the commit reference and adjust the grade in
 > section 5 — this is a living document.
