@@ -16,6 +16,7 @@ type FirewallManager interface {
 		svcs []model.ServiceObject,
 		dhcpServerIfaces []string,
 		dnsServerIfaces []string,
+		portForwards []model.PortForward,
 	) error
 }
 

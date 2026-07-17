@@ -67,6 +67,12 @@ type BackupConfig struct {
 	SystemTime        SystemTimeSettings     `json:"systemTime"`
 	SystemHostname    SystemHostnameSettings `json:"systemHostname"`
 	Users             []BackupUser           `json:"users,omitempty"`
+	// PortForwards MUST stay omitempty: the importer verifies a backup's checksum
+	// by re-marshaling the decoded BackupConfig, so a non-omitempty field would
+	// serialise as "portForwards":null for older v2 backups (which lack the key)
+	// and break their checksum. omitempty keeps nil/empty slices out of the JSON,
+	// preserving byte-for-byte compatibility without a schema-version bump.
+	PortForwards []PortForward `json:"portForwards,omitempty"`
 }
 
 // BackupUser mirrors a users row for backup purposes. Unlike model.User it

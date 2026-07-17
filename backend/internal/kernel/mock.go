@@ -34,9 +34,10 @@ func (m *MockFirewall) ApplyRules(
 	svcs []model.ServiceObject,
 	dhcpServerIfaces []string,
 	dnsServerIfaces []string,
+	portForwards []model.PortForward,
 ) error {
 	m.ApplyCount++
-	log.Printf("[MockFirewall] Applying %d rules to mock kernel (Docker Compatibility: %t, Addresses: %d, Services: %d):", len(rules), m.dockerCompat, len(addrs), len(svcs))
+	log.Printf("[MockFirewall] Applying %d rules to mock kernel (Docker Compatibility: %t, Addresses: %d, Services: %d, PortForwards: %d):", len(rules), m.dockerCompat, len(addrs), len(svcs), len(portForwards))
 	if m.dockerCompat {
 		log.Printf("  [Docker Compat] Bypassing docker0 and br-* interfaces")
 	}
@@ -53,6 +54,18 @@ func (m *MockFirewall) ApplyRules(
 		}
 		log.Printf("  [%s] Name: %s, In: %s, Out: %s, Src: %v, Dest: %v, Svc: %v, Action: %s, Log: %t",
 			statusStr, r.Name, r.InInterface, r.OutInterface, r.Source, r.Destination, r.Service, r.Action, r.Log)
+	}
+	for _, pf := range portForwards {
+		statusStr := "DISABLED"
+		if pf.Status {
+			statusStr = "ENABLED"
+		}
+		internal := pf.InternalIP
+		if pf.InternalPort != "" {
+			internal += ":" + pf.InternalPort
+		}
+		log.Printf("  [PortForward %s] Name: %s, In: %s, %s dport %s -> %s",
+			statusStr, pf.Name, pf.InInterface, pf.Protocol, pf.ExternalPort, internal)
 	}
 	return nil
 }

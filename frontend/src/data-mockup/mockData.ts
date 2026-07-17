@@ -112,6 +112,21 @@ export interface PolicyRule {
 // Initial mockup rules for Firewall Policy
 export const initialPolicyRules: PolicyRule[] = []
 
+// Types for Port Forwarding (DNAT / Virtual IP)
+export interface PortForward {
+  id: string
+  name: string
+  inInterface: string // external (WAN) interface, e.g. "eth0"
+  externalPort: string // single ("8080") or range ("8000-8010", keep-port only)
+  protocol: "tcp" | "udp"
+  internalIP: string // internal LAN target IPv4
+  internalPort: string // translated port; empty = keep original port (required-empty for ranges)
+  status: boolean // true = Enabled, false = Disabled
+}
+
+// Initial mockup data for Port Forwarding
+export const initialPortForwards: PortForward[] = []
+
 // Types for Address Objects
 export interface AddressObject {
   id: string

@@ -269,6 +269,17 @@ func migrate(db *sql.DB) error {
 			FOREIGN KEY (service_id) REFERENCES service_objects(id) ON DELETE RESTRICT
 		);`,
 
+		`CREATE TABLE IF NOT EXISTS port_forwards (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			in_interface TEXT NOT NULL,
+			external_port TEXT NOT NULL,
+			protocol TEXT NOT NULL CHECK(protocol IN ('tcp', 'udp')),
+			internal_ip TEXT NOT NULL,
+			internal_port TEXT NOT NULL DEFAULT '',
+			status INTEGER DEFAULT 1 CHECK(status IN (0, 1))
+		);`,
+
 		`CREATE TABLE IF NOT EXISTS static_routes (
 			id TEXT PRIMARY KEY,
 			destination TEXT NOT NULL,

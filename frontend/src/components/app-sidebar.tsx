@@ -15,6 +15,7 @@ import {
   Users,
   ScrollText,
   ArrowRightLeft,
+  Waypoints,
 } from "lucide-react"
 
 import { NavUser } from "@/components/nav-user"
@@ -60,6 +61,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       title: "Policy & Objects",
       items: [
         { path: "/policy/firewall", label: "Firewall Policy", icon: Flame },
+        { path: "/policy/port-forwarding", label: "Port Forwarding", icon: Waypoints },
         { path: "/policy/addresses", label: "Addresses", icon: BookOpen },
         { path: "/policy/services", label: "Services", icon: Sliders },
       ],

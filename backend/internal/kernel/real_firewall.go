@@ -32,9 +32,10 @@ func (rf *RealFirewall) ApplyRules(
 	svcs []model.ServiceObject,
 	dhcpServerIfaces []string,
 	dnsServerIfaces []string,
+	portForwards []model.PortForward,
 ) error {
-	log.Printf("[RealFirewall] Applying %d rules to Linux kernel via Netlink (Docker Compatibility: %t, Addresses: %d, Services: %d)",
-		len(rules), rf.dockerCompat, len(addrs), len(svcs))
+	log.Printf("[RealFirewall] Applying %d rules to Linux kernel via Netlink (Docker Compatibility: %t, Addresses: %d, Services: %d, PortForwards: %d)",
+		len(rules), rf.dockerCompat, len(addrs), len(svcs), len(portForwards))
 
 	// Connect to nftables netlink interface
 	conn, err := nftables.New()
@@ -455,6 +456,32 @@ func (rf *RealFirewall) ApplyRules(
 		})
 	}
 
+	// Port-forward auto forward-accept rules.
+	// A DNAT'd packet (dst rewritten to the internal host in prerouting) still
+	// traverses this forward(filter) chain and would hit the final drop-log
+	// unless explicitly accepted. We inject one accept per enabled port-forward
+	// here — AFTER the docker-compat bypass but BEFORE the user policy rules — so
+	// a broad user DROP rule can never shadow a port-forward the operator turned
+	// on (disable is done on the entry itself). No fwmark 0x1 is set, so these
+	// flows are NOT masqueraded by the policy-SNAT postrouting rule and the
+	// internal server sees the external client's real source IP. See the
+	// port-forward plan §2 and Caution 1/2.
+	for _, pf := range portForwards {
+		if !pf.Status {
+			continue
+		}
+		exprs, err := buildPortForwardAcceptExprs(pf)
+		if err != nil {
+			log.Printf("[RealFirewall] Skip port-forward %q forward-accept: %v", pf.Name, err)
+			continue
+		}
+		conn.AddRule(&nftables.Rule{
+			Table: table,
+			Chain: forwardChain,
+			Exprs: exprs,
+		})
+	}
+
 	// User rules in forward
 	for _, r := range rules {
 		if !r.Status {
@@ -557,6 +584,41 @@ func (rf *RealFirewall) ApplyRules(
 	})
 	log.Printf("[RealFirewall] Configured policy-based source NAT (masquerade on fwmark 0x1)")
 
+	// Prerouting DNAT chain for port-forwarding (FortiGate VIP).
+	// This MUST be added in the same apply/flush pass as the postrouting chain
+	// above: pigate_nat is flushed and rebuilt on every ApplyRules, so a separate
+	// method would wipe one of the two chains (plan Caution 5). Priority
+	// NATDest runs DNAT before the routing decision, so the rewritten internal
+	// destination is what routing/forward see.
+	dnatChain := conn.AddChain(&nftables.Chain{
+		Name:     "prerouting",
+		Table:    natTable,
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookPrerouting,
+		Priority: nftables.ChainPriorityNATDest,
+	})
+
+	dnatCount := 0
+	for _, pf := range portForwards {
+		if !pf.Status {
+			continue
+		}
+		exprs, err := buildPortForwardDNATExprs(pf)
+		if err != nil {
+			log.Printf("[RealFirewall] Skip port-forward %q DNAT: %v", pf.Name, err)
+			continue
+		}
+		conn.AddRule(&nftables.Rule{
+			Table: natTable,
+			Chain: dnatChain,
+			Exprs: exprs,
+		})
+		dnatCount++
+	}
+	if dnatCount > 0 {
+		log.Printf("[RealFirewall] Configured %d port-forward DNAT rule(s) in prerouting", dnatCount)
+	}
+
 	// Commit everything to the Linux Kernel
 	if err := conn.Flush(); err != nil {
 		log.Printf("[RealFirewall] Error committing rules to kernel: %v", err)
@@ -593,6 +655,189 @@ func uint32ToBytes(val uint32) []byte {
 	b := make([]byte, 4)
 	binary.NativeEndian.PutUint32(b, val)
 	return b
+}
+
+// portToBytes converts a port number to 2 big-endian bytes (network order),
+// matching how ports are compared/loaded elsewhere in this file.
+func portToBytes(p int) []byte {
+	return []byte{byte(p >> 8), byte(p & 0xFF)}
+}
+
+// protoNumber maps a port-forward protocol string to its IP protocol number.
+func protoNumber(proto string) (byte, error) {
+	switch strings.ToLower(strings.TrimSpace(proto)) {
+	case "tcp":
+		return 6, nil
+	case "udp":
+		return 17, nil
+	default:
+		return 0, fmt.Errorf("unsupported protocol %q (expected tcp/udp)", proto)
+	}
+}
+
+// parsePortSpec parses a "8080" or "8000-8010" spec into an inclusive range.
+// single ports return start==end.
+func parsePortSpec(spec string) (start, end int, err error) {
+	spec = strings.TrimSpace(spec)
+	parts := strings.Split(spec, "-")
+	switch len(parts) {
+	case 1:
+		p, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil || p < 1 || p > 65535 {
+			return 0, 0, fmt.Errorf("invalid port %q", spec)
+		}
+		return p, p, nil
+	case 2:
+		s, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+		e, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err1 != nil || err2 != nil || s < 1 || e > 65535 || s >= e {
+			return 0, 0, fmt.Errorf("invalid port range %q", spec)
+		}
+		return s, e, nil
+	default:
+		return 0, 0, fmt.Errorf("invalid port spec %q", spec)
+	}
+}
+
+// dportMatchExprs builds the transport-header destination-port match for a
+// single port or a range (payload @ transport header offset 2, len 2).
+func dportMatchExprs(spec string) ([]expr.Any, error) {
+	start, end, err := parsePortSpec(spec)
+	if err != nil {
+		return nil, err
+	}
+	load := &expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2}
+	if start == end {
+		return []expr.Any{
+			load,
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: portToBytes(start)},
+		}, nil
+	}
+	return []expr.Any{
+		load,
+		&expr.Cmp{Op: expr.CmpOpGte, Register: 1, Data: portToBytes(start)},
+		&expr.Cmp{Op: expr.CmpOpLte, Register: 1, Data: portToBytes(end)},
+	}, nil
+}
+
+// buildPortForwardDNATExprs builds the prerouting DNAT rule for one port-forward:
+//
+//	iifname==<ext> && fib daddr type local && <proto> dport==<extPort>
+//	  => dnat to internalIP[:internalPort]
+//
+// The `fib daddr type local` guard is essential: without it, traffic merely
+// transiting the external interface (destined elsewhere) would also be DNAT'd.
+// When InternalPort is empty the port is kept (keep-port DNAT), which is the
+// only supported shape for a port range (plan Caution 9).
+func buildPortForwardDNATExprs(pf model.PortForward) ([]expr.Any, error) {
+	protoVal, err := protoNumber(pf.Protocol)
+	if err != nil {
+		return nil, err
+	}
+	ip := net.ParseIP(strings.TrimSpace(pf.InternalIP)).To4()
+	if ip == nil {
+		return nil, fmt.Errorf("invalid internal IPv4 %q", pf.InternalIP)
+	}
+
+	exprs := []expr.Any{
+		// iifname == external interface
+		&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName(pf.InInterface)},
+		// fib daddr type local (only DNAT packets addressed to this host)
+		&expr.Fib{Register: 1, ResultADDRTYPE: true, FlagDADDR: true},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: uint32ToBytes(2)}, // RTN_LOCAL = 2
+		// ip protocol == tcp/udp
+		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 9, Len: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{protoVal}},
+	}
+
+	dport, err := dportMatchExprs(pf.ExternalPort)
+	if err != nil {
+		return nil, fmt.Errorf("externalPort: %w", err)
+	}
+	exprs = append(exprs, dport...)
+
+	exprs = append(exprs, &expr.Counter{})
+
+	// Destination address into reg 1.
+	exprs = append(exprs, &expr.Immediate{Register: 1, Data: ip})
+
+	internal := strings.TrimSpace(pf.InternalPort)
+	if internal == "" {
+		// keep-port DNAT: rewrite address only, conntrack preserves the port.
+		exprs = append(exprs, &expr.NAT{
+			Type:       expr.NATTypeDestNAT,
+			Family:     unix.NFPROTO_IPV4,
+			RegAddrMin: 1,
+		})
+		return exprs, nil
+	}
+
+	// Translated single port: dnat to internalIP:internalPort.
+	start, end, err := parsePortSpec(pf.ExternalPort)
+	if err != nil {
+		return nil, fmt.Errorf("externalPort: %w", err)
+	}
+	if start != end {
+		return nil, fmt.Errorf("port-range translation to a fixed internalPort is unsupported; leave internalPort empty to keep the port")
+	}
+	p, err := strconv.Atoi(internal)
+	if err != nil || p < 1 || p > 65535 {
+		return nil, fmt.Errorf("invalid internalPort %q", pf.InternalPort)
+	}
+	exprs = append(exprs, &expr.Immediate{Register: 2, Data: portToBytes(p)})
+	exprs = append(exprs, &expr.NAT{
+		Type:        expr.NATTypeDestNAT,
+		Family:      unix.NFPROTO_IPV4,
+		RegAddrMin:  1,
+		RegProtoMin: 2,
+	})
+	return exprs, nil
+}
+
+// buildPortForwardAcceptExprs builds the forward-chain accept rule that lets a
+// DNAT'd packet through (its dst is now internalIP:<port>):
+//
+//	iif==<ext> && ip daddr==internalIP && <proto> dport==<port> counter accept
+//
+// The matched dport is the *post-DNAT* port: internalPort when translated, or
+// the (kept) external port spec otherwise.
+func buildPortForwardAcceptExprs(pf model.PortForward) ([]expr.Any, error) {
+	protoVal, err := protoNumber(pf.Protocol)
+	if err != nil {
+		return nil, err
+	}
+	ip := net.ParseIP(strings.TrimSpace(pf.InternalIP)).To4()
+	if ip == nil {
+		return nil, fmt.Errorf("invalid internal IPv4 %q", pf.InternalIP)
+	}
+
+	exprs := []expr.Any{
+		// iifname == external interface
+		&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName(pf.InInterface)},
+		// ip daddr == internal host
+		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 16, Len: 4},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: ip},
+		// ip protocol == tcp/udp
+		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 9, Len: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{protoVal}},
+	}
+
+	// Post-DNAT destination port: translated port (single) or kept external spec.
+	portSpec := strings.TrimSpace(pf.InternalPort)
+	if portSpec == "" {
+		portSpec = pf.ExternalPort
+	}
+	dport, err := dportMatchExprs(portSpec)
+	if err != nil {
+		return nil, fmt.Errorf("internalPort: %w", err)
+	}
+	exprs = append(exprs, dport...)
+
+	exprs = append(exprs, &expr.Counter{})
+	exprs = append(exprs, &expr.Verdict{Kind: expr.VerdictAccept})
+	return exprs, nil
 }
 
 func resolveService(name string, svcsMap map[string]model.ServiceObject) (model.ServiceObject, bool) {

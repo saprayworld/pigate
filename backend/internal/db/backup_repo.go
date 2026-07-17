@@ -88,6 +88,7 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 		"DELETE FROM policy_services",
 		"DELETE FROM policy_addresses",
 		"DELETE FROM firewall_policies",
+		"DELETE FROM port_forwards",
 		"DELETE FROM address_objects WHERE system = 0",
 		"DELETE FROM service_objects WHERE type = 'custom'",
 		"DELETE FROM static_routes WHERE type NOT IN ('system', 'defaultgateway')",
@@ -142,6 +143,16 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 		}
 		if err := restorePolicyRelations(tx, p); err != nil {
 			return err
+		}
+	}
+
+	// --- 4.1 Port forwards (DNAT) ----------------------------------------
+	for _, pf := range cfg.PortForwards {
+		if _, err := tx.Exec(
+			"INSERT INTO port_forwards (id, name, in_interface, external_port, protocol, internal_ip, internal_port, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			pf.ID, pf.Name, pf.InInterface, pf.ExternalPort, strings.ToLower(pf.Protocol), pf.InternalIP, pf.InternalPort, boolToInt(pf.Status),
+		); err != nil {
+			return fmt.Errorf("restore port forward %q: %w", pf.Name, err)
 		}
 	}
 

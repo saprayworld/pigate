@@ -15,6 +15,7 @@ type trackingFirewallManager struct {
 	appliedSvcs             []model.ServiceObject
 	appliedDhcpServerIfaces []string
 	appliedDnsServerIfaces  []string
+	appliedPortForwards     []model.PortForward
 }
 
 func (t *trackingFirewallManager) ApplyRules(
@@ -24,6 +25,7 @@ func (t *trackingFirewallManager) ApplyRules(
 	svcs []model.ServiceObject,
 	dhcpServerIfaces []string,
 	dnsServerIfaces []string,
+	portForwards []model.PortForward,
 ) error {
 	t.appliedRules = rules
 	t.appliedIfaces = ifaces
@@ -31,6 +33,7 @@ func (t *trackingFirewallManager) ApplyRules(
 	t.appliedSvcs = svcs
 	t.appliedDhcpServerIfaces = dhcpServerIfaces
 	t.appliedDnsServerIfaces = dnsServerIfaces
+	t.appliedPortForwards = portForwards
 	return nil
 }
 
