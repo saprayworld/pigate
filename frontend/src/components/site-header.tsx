@@ -1,11 +1,10 @@
-import { useEffect, useState } from "react"
 import { useLocation } from "react-router-dom"
 import { Thermometer } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
-import { dashboardService } from "@/services/dashboardService"
+import { useMetrics } from "@/hooks/useMetrics"
 import { cn } from "@/lib/utils"
 
 const TITLES: Record<string, string> = {
@@ -29,28 +28,13 @@ export function SiteHeader() {
   const title = TITLES[location.pathname] ?? "PiGate Controller"
 
   // Live SoC temperature badge (unavailable on hosts without a thermal zone).
-  const [temp, setTemp] = useState<number | null>(null)
-  const [tempAvailable, setTempAvailable] = useState(true)
-
-  useEffect(() => {
-    let active = true
-    const fetchPerf = async () => {
-      try {
-        const perf = await dashboardService.getPerformanceMetrics()
-        if (!active) return
-        setTempAvailable(perf.tempDetail.available)
-        setTemp(perf.tempDetail.available ? perf.tempDetail.celsius : null)
-      } catch {
-        /* silently ignore */
-      }
-    }
-    fetchPerf()
-    const id = setInterval(fetchPerf, 5000)
-    return () => {
-      active = false
-      clearInterval(id)
-    }
-  }, [])
+  // Sourced from the shared SSE metrics stream (MetricsProvider) — no own poll.
+  // Before the first snapshot arrives, keep the badge shown with a "—" placeholder
+  // rather than hiding it, so it doesn't flash in on connect.
+  const { metrics } = useMetrics()
+  const tempAvailable = metrics ? metrics.tempDetail.available : true
+  const temp =
+    metrics && metrics.tempDetail.available ? metrics.tempDetail.celsius : null
 
   const tempColor =
     temp !== null && temp >= 70

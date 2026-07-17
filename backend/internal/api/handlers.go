@@ -2424,6 +2424,67 @@ func (s *Server) HandleLogStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// HandleMetricsStream pushes live host telemetry (SystemMetrics: CPU/mem/temp/
+// storage) over SSE, replacing the Dashboard StatGrid + site-header temp badge
+// polling of GET /dashboard/performance. Unlike the log stream, metrics are
+// sampled values: each push is a full snapshot the client replaces wholesale, so
+// there is no dedupe/snapshot-merge and no separate heartbeat is needed — a
+// snapshot every metricsPushInterval (~3s) already keeps the connection warm.
+func (s *Server) HandleMetricsStream(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
+		return
+	}
+
+	// Same WriteTimeout escape as the log stream — without this the global 60s
+	// WriteTimeout silently kills the stream every ~60s (#33 regression guard).
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
+	var token string
+	if c, err := r.Cookie(SessionKey); err == nil {
+		token = c.Value
+	}
+
+	metrics, cancel := s.systemStatus.SubscribeMetrics(4)
+	defer cancel()
+
+	// Handshake + an immediate snapshot so the UI paints at once instead of
+	// waiting up to one push interval for the first tick.
+	_, _ = w.Write([]byte("event: connected\ndata: connection established\n\n"))
+	if data, err := json.Marshal(s.systemStatus.GetSystemMetrics()); err == nil {
+		_, _ = w.Write([]byte("data: " + string(data) + "\n\n"))
+	}
+	flusher.Flush()
+
+	clientDone := r.Context().Done()
+
+	for {
+		select {
+		case <-clientDone:
+			return
+		case snap := <-metrics:
+			// Re-check the session on every push WITHOUT sliding its idle deadline
+			// (SessionAlive, not ValidateSession). Since a snapshot arrives ~every 3s,
+			// a revoked/expired session tears the stream down within ~3s. No separate
+			// heartbeat ticker is needed.
+			if token == "" || !SessionAlive(token) {
+				return
+			}
+			data, err := json.Marshal(snap)
+			if err != nil {
+				continue
+			}
+			_, _ = w.Write([]byte("data: " + string(data) + "\n\n"))
+			flusher.Flush()
+		}
+	}
+}
+
 // =============================================================================
 // QoS Handlers
 // =============================================================================

@@ -162,3 +162,61 @@ func TestBucketRolloverAndCap(t *testing.T) {
 		t.Errorf("cap: len = %d, want %d", len(s.buckets), trafficBucketMax)
 	}
 }
+
+// A metrics subscriber receives snapshots that the broadcaster fans out.
+func TestSubscribeMetricsReceives(t *testing.T) {
+	s := newTestService(t, &fakeStats{snaps: []*model.CPUSnapshot{{Idle: 1, Total: 2}}})
+	ch, cancel := s.SubscribeMetrics(4)
+	defer cancel()
+
+	s.broadcastMetrics(model.SystemMetrics{CPU: 42})
+
+	select {
+	case snap := <-ch:
+		if snap.CPU != 42 {
+			t.Fatalf("got CPU %v, want 42", snap.CPU)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("subscriber did not receive the broadcast")
+	}
+}
+
+// A slow subscriber (buffer 1, never drained) must not block the broadcaster;
+// snapshots beyond its buffer are dropped.
+func TestBroadcastMetricsDoesNotBlock(t *testing.T) {
+	s := newTestService(t, &fakeStats{snaps: []*model.CPUSnapshot{{Idle: 1, Total: 2}}})
+	_, cancel := s.SubscribeMetrics(1) // never read
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 1000; i++ {
+			s.broadcastMetrics(model.SystemMetrics{CPU: float64(i)})
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("broadcastMetrics blocked on a full slow-subscriber channel")
+	}
+}
+
+// After cancel the subscriber is removed (no leak) and receives nothing further;
+// cancel is idempotent.
+func TestSubscribeMetricsCancel(t *testing.T) {
+	s := newTestService(t, &fakeStats{snaps: []*model.CPUSnapshot{{Idle: 1, Total: 2}}})
+	ch, cancel := s.SubscribeMetrics(4)
+	cancel()
+	cancel() // idempotent — must not panic
+
+	if s.hasMetricsSubs() {
+		t.Fatal("subscriber not removed after cancel")
+	}
+	s.broadcastMetrics(model.SystemMetrics{CPU: 1})
+	select {
+	case snap := <-ch:
+		t.Fatalf("received %v after cancel, want nothing", snap.CPU)
+	case <-time.After(100 * time.Millisecond):
+	}
+}

@@ -43,17 +43,19 @@ import {
 } from "@/services/dashboardService"
 import { interfaceService } from "@/services/interfaceService"
 import { useLiveLogs } from "@/hooks/useLiveLogs"
+import { useMetrics } from "@/hooks/useMetrics"
 import type { NetworkInterface, FirewallLog } from "@/data-mockup/mockData"
 
 /* -------------------------------------------------------------------------- */
 /*  Polling intervals (see design doc §11)                                    */
 /* -------------------------------------------------------------------------- */
 
-const METRICS_INTERVAL = 5_000
 const INFO_INTERVAL = 30_000
 const TRAFFIC_INTERVAL = 60_000
 const INTERFACES_INTERVAL = 30_000
 // Recent Logs no longer polls — it rides the live SSE stream via useLiveLogs.
+// Performance metrics no longer poll either — they ride the shared SSE metrics
+// stream via useMetrics() (MetricsProvider at the layout level).
 
 /** usePoll fetches immediately, then on `intervalMs`, and again when
  *  `refreshKey` changes. Errors are swallowed so a transient failure doesn't
@@ -608,7 +610,8 @@ export default function Dashboard() {
     return () => clearInterval(id)
   }, [])
 
-  const perf = usePoll(dashboardService.getPerformanceMetrics, METRICS_INTERVAL, refreshKey)
+  // Performance metrics come from the shared SSE stream (MetricsProvider), not a poll.
+  const { metrics: perf } = useMetrics()
   const traffic = usePoll(dashboardService.getTrafficHistory, TRAFFIC_INTERVAL, refreshKey)
   const interfaces = usePoll(interfaceService.getAll, INTERFACES_INTERVAL, refreshKey)
   // Recent Logs stream live over SSE; the Refresh button still reseeds via refreshKey.

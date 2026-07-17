@@ -329,6 +329,61 @@ export const dashboardService = {
     };
   },
 
+  /**
+   * Connect to the SSE stream for live host performance metrics
+   * (CPU/RAM/temp/storage). Each message is a full `PerformanceMetrics` snapshot
+   * the caller replaces wholesale — no dedupe/merge. Auth rides on the session
+   * cookie (withCredentials).
+   *
+   * In mock mode there is no EventSource: `onMetrics` is driven on an interval
+   * from the same generator that `getPerformanceMetrics` uses, and `onOpen`
+   * fires once so a consumer behaves the same as against a real stream.
+   *
+   * @returns a cleanup function that stops the stream.
+   */
+  connectSSEMetrics: (handlers: {
+    onMetrics: (m: PerformanceMetrics) => void;
+    onOpen?: () => void;
+    onError?: (err: Event) => void;
+  }): (() => void) => {
+    const { onMetrics, onOpen, onError } = handlers;
+
+    if (IS_MOCK_MODE) {
+      const openTimer = setTimeout(() => onOpen?.(), 0);
+      const emit = () => {
+        void dashboardService.getPerformanceMetrics().then(onMetrics);
+      };
+      emit(); // paint immediately, like the real stream's first snapshot
+      const intervalId = setInterval(emit, 3000);
+      return () => {
+        clearTimeout(openTimer);
+        clearInterval(intervalId);
+      };
+    }
+
+    const url = `${API_BASE_URL}/dashboard/performance/stream`;
+    const es = new EventSource(url, { withCredentials: true });
+
+    if (onOpen) es.onopen = () => onOpen();
+
+    es.onmessage = (event) => {
+      try {
+        const m: PerformanceMetrics = JSON.parse(event.data);
+        onMetrics(m);
+      } catch (e) {
+        console.warn("[SSE] Failed to parse metrics event:", e);
+      }
+    };
+
+    if (onError) {
+      es.onerror = onError;
+    }
+
+    return () => {
+      es.close();
+    };
+  },
+
   // Generate a mock log entry and save it (to simulate live SSE log appending in mock mode)
   generateMockLog: (): SSELogEntry => {
     const randomSrc = mockSources[Math.floor(Math.random() * mockSources.length)];

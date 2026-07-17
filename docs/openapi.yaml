@@ -288,6 +288,40 @@ paths:
               schema:
                 $ref: '#/components/schemas/PerformanceMetrics'
 
+  /dashboard/performance/stream:
+    get:
+      tags:
+        - Dashboard
+      summary: SSE stream for live hardware performance metrics (CPU/RAM/temp/storage)
+      description: |
+        Establishes a `text/event-stream` connection that pushes a full
+        `PerformanceMetrics` snapshot every ~3s (server-sampled, not client
+        polling). Auth rides on the `pigate_session` cookie (`withCredentials`).
+
+        Event format:
+        - `event: connected` — one handshake frame on connect, immediately
+          followed by one default message carrying the first snapshot so the UI
+          paints without waiting a full interval.
+        - default message (no event name) — `data:` is a `PerformanceMetrics`
+          JSON object. Each is a complete snapshot the client replaces wholesale
+          (no dedupe/merge needed). Consume via `EventSource.onmessage`.
+
+        The server re-checks the session on every push **without** sliding its
+        idle deadline, and closes the stream within ~3s once the session is
+        revoked, deleted, or idles out. EventSource reconnects automatically; the
+        next tick delivers a fresh snapshot, so no snapshot refetch is required.
+        The plain `GET /dashboard/performance` endpoint is retained as the mock
+        fallback and reconnect 401 probe.
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: SSE stream initiated
+          headers:
+            Content-Type:
+              schema:
+                type: string
+                example: text/event-stream
   /dashboard/traffic:
     get:
       tags:
