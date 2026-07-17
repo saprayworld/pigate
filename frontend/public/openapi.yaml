@@ -334,8 +334,28 @@ paths:
     get:
       tags:
         - Dashboard
-      summary: Server-Sent Events (SSE) stream for live firewall block logs
-      description: Establishes a text/event-stream connection to push live firewall logs.
+      summary: Server-Sent Events (SSE) stream for live firewall/forward-traffic logs
+      description: |
+        Establishes a `text/event-stream` connection that pushes each new
+        firewall/forward-traffic log entry the moment it is recorded in the RAM
+        ring buffer (real push via pub/sub — not polling). Auth rides on the
+        `pigate_session` cookie (`withCredentials`).
+
+        Event format:
+        - `event: connected` — one handshake frame sent immediately on connect.
+        - default message (no event name) — `data:` is a single `FirewallLog`
+          JSON object for one new entry. Consume via `EventSource.onmessage`.
+        - `event: clear` — the buffer was wiped (someone hit Clear); `data:` is
+          `{}`. Clients should empty their local list. Broadcast to every open
+          stream.
+        - `: ping` comment lines — heartbeat (~every 25s) to keep the connection
+          alive and detect dead peers.
+
+        The server re-checks the session on each heartbeat **without** sliding
+        its idle deadline, and closes the stream within ~1 heartbeat once the
+        session is revoked, deleted, or idles out. EventSource reconnects
+        automatically; clients should refetch a snapshot (`GET /dashboard/logs`
+        or `GET /logs/traffic`) on (re)connect and dedupe by `id`.
       security:
         - cookieAuth: []
       responses:

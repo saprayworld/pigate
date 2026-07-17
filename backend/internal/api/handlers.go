@@ -2365,8 +2365,26 @@ func (s *Server) HandleLogStream(w http.ResponseWriter, r *http.Request) {
 	// the stream just keeps the old 60s behavior — no worse than before.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
+	// Read the session token at connect time so the heartbeat can re-check that
+	// the session is still alive without touching request state. The route is
+	// already behind AuthMiddleware, so a token is present here; a stream that
+	// outlives its session (logout / revoke / idle timeout) is torn down below.
+	var token string
+	if c, err := r.Cookie(SessionKey); err == nil {
+		token = c.Value
+	}
+
+	// Subscribe to the ring buffer for real push. A small buffer absorbs short
+	// bursts; if this client stalls, the producer drops events (non-blocking, see
+	// RingBuffer.notifyLocked) and the client re-syncs from its next snapshot
+	// fetch — the NFLOG watcher loop is never stalled by a slow browser.
+	events, cancel := s.logs.Subscribe(64)
+	defer cancel()
+
+	// Heartbeat: a comment line keeps intermediaries from idle-closing the stream
+	// and lets us notice a dead peer; it also drives the periodic session re-check.
+	heartbeat := time.NewTicker(25 * time.Second)
+	defer heartbeat.Stop()
 
 	// Initial message
 	_, _ = w.Write([]byte("event: connected\ndata: connection established\n\n"))
@@ -2378,16 +2396,30 @@ func (s *Server) HandleLogStream(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-clientDone:
 			return
-		case <-ticker.C:
-			// Stream live block logs from our circular memory buffer
-			logsList := s.logs.GetAll()
-			if len(logsList) > 0 {
-				data, err := json.Marshal(logsList[0]) // stream latest log
-				if err == nil {
-					_, _ = w.Write([]byte("data: " + string(data) + "\n\n"))
-					flusher.Flush()
+		case ev := <-events:
+			switch ev.Kind {
+			case "log":
+				data, err := json.Marshal(ev.Entry)
+				if err != nil {
+					continue
 				}
+				// Default message event — the frontend's es.onmessage consumes it
+				// as a FirewallLog, so no custom event name here.
+				_, _ = w.Write([]byte("data: " + string(data) + "\n\n"))
+				flusher.Flush()
+			case "clear":
+				_, _ = w.Write([]byte("event: clear\ndata: {}\n\n"))
+				flusher.Flush()
 			}
+		case <-heartbeat.C:
+			// Re-check the session WITHOUT sliding its idle deadline (SessionAlive,
+			// not ValidateSession — see plan Caution 2). A revoked/expired session
+			// tears the stream down within ~1 heartbeat.
+			if token == "" || !SessionAlive(token) {
+				return
+			}
+			_, _ = w.Write([]byte(": ping\n\n"))
+			flusher.Flush()
 		}
 	}
 }

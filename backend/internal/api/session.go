@@ -161,6 +161,29 @@ func ValidateSession(token string) (username string, renewExpiry time.Time, ok b
 	return username, renewExpiry, true
 }
 
+// SessionAlive reports whether a token currently maps to a live session, WITHOUT
+// touching its idle deadline. This is the read-only counterpart to
+// ValidateSession, meant for callers that must re-check a long-lived connection
+// on a timer (the SSE log stream heartbeat) without renewing it — using
+// ValidateSession there would slide the sliding-idle deadline on every heartbeat,
+// so a stream left open would keep the session alive forever and defeat the
+// server-side idle logout entirely (see plan Caution 2). Takes only a read-lock
+// and never mutates the entry.
+func SessionAlive(token string) bool {
+	now := time.Now()
+	sessionMutex.RLock()
+	defer sessionMutex.RUnlock()
+	e, found := activeSessions[token]
+	if !found {
+		return false
+	}
+	// Dead if past the idle deadline or the absolute cap.
+	if now.After(e.expiresAt) || now.After(e.createdAt.Add(sessionAbsoluteMax)) {
+		return false
+	}
+	return true
+}
+
 // setSessionCookie writes the session cookie with the canonical attributes used
 // by BOTH login and mid-session renewal. This must stay the single source: a
 // cookie re-issued with any differing attribute is treated by the browser as a

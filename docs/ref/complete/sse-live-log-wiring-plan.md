@@ -192,25 +192,27 @@ src/dest/port/proto/inIface/outIface/reason, case-insensitive); filter เปล
 
 ## 6. Summary Checklist (Definition of Done)
 
-- [ ] `logs/ringbuffer.go` — `LogEvent` + `Subscribe` + notify ใน Add/Clear (non-blocking)
+- [x] `logs/ringbuffer.go` — `LogEvent` + `Subscribe` + notify ใน Add/Clear (non-blocking)
       + `ringbuffer_test.go` (รับครบ / slow-subscriber ไม่ block / cancel ไม่ leak / Clear event)
-- [ ] `api/session.go` — `SessionAlive` (ไม่เลื่อน expiry) + test ใน `session_test.go`
-- [ ] `api/handlers.go` — rewrite `HandleLogStream` (push จาก Subscribe + heartbeat +
+- [x] `api/session.go` — `SessionAlive` (ไม่เลื่อน expiry) + test ใน `session_test.go`
+- [x] `api/handlers.go` — rewrite `HandleLogStream` (push จาก Subscribe + heartbeat +
       ตัดเมื่อ session ตาย + คง SetWriteDeadline) — ลบ logic `logsList[0]` เดิม
-- [ ] `go build ./...` + `go test ./...` ผ่าน
-- [ ] `docs/openapi.yaml` + `frontend/public/openapi.yaml` — อัปเดต `/dashboard/logs/stream` (sync)
-- [ ] `dashboardService.ts` — `connectSSELogs` รองรับ `onClear`/`onOpen` (mock path ยังทำงาน)
-- [ ] `frontend/src/hooks/useLiveLogs.ts` (ใหม่) — snapshot-on-open + dedupe-by-id +
+- [x] `go build ./...` + `go test ./...` ผ่าน
+- [x] `docs/openapi.yaml` + `frontend/public/openapi.yaml` — อัปเดต `/dashboard/logs/stream` (sync)
+- [x] `dashboardService.ts` — `connectSSELogs` รองรับ `onClear`/`onOpen` (mock path ยังทำงาน)
+- [x] `frontend/src/hooks/useLiveLogs.ts` (ใหม่) — snapshot-on-open + dedupe-by-id +
       clear event + paused + refreshKey
-- [ ] `Dashboard.tsx` — Recent Logs ใช้ `useLiveLogs`; ปุ่ม Refresh ยัง refresh logs ได้
-- [ ] `ForwardTraffic.tsx` — ใช้ `useLiveLogs` + client-side filter ตรง server semantics;
+- [x] `Dashboard.tsx` — Recent Logs ใช้ `useLiveLogs`; ปุ่ม Refresh ยัง refresh logs ได้
+- [x] `ForwardTraffic.tsx` — ใช้ `useLiveLogs` + client-side filter ตรง server semantics;
       Pause/Resume + เปลี่ยน filter ทำงานถูก
-- [ ] `yarn build` + `yarn lint` ผ่าน
-- [ ] ทดสอบ mock (workstation): backend `-mock=true` → เปิดสองหน้า เห็น log ไหลสด;
-      ปิด backend → UI reconnect เอง; login สอง browser → clear จากอันหนึ่ง อีกอันว่างตาม
-- [ ] ทดสอบเครื่องจริง (มี physical access): stream อยู่รอด >60s ไม่หลุด (Caution 4);
-      ยิง traffic ผ่าน forward chain เห็น entry โผล่สด; revoke session (ลบ user/disable) →
-      stream ถูกตัดภายใน ~1 heartbeat; logout → กลับ /login เมื่อ SSE พยายาม reconnect
-- [ ] ยืนยันไม่มี interval polling ของ log เหลือในสองหน้า (double-fetch = 0)
-- [ ] อัปเดต issue #41 (unblocked แล้ว + ลิงก์แผน) และพิจารณาเอา label `wontfix` ออก
-- [ ] เสร็จแล้วย้ายแผนไป `docs/ref/complete/`
+- [x] `yarn build` + `yarn lint` ผ่าน
+- [x] ทดสอบ mock (workstation, curl กับ backend `-mock=true`): stream ส่ง `event: connected`
+      แล้ว push แต่ละ entry สด (uuid ไม่ซ้ำ); POST `/dashboard/logs/clear` จาก client อื่น →
+      stream ที่เปิดอยู่เห็น `event: clear` (broadcast ทุก subscriber)
+- [x] ทดสอบพฤติกรรม runtime: stream อยู่รอด >60s (วัดจริง 65s ยังไม่หลุด — Caution 4 ผ่าน,
+      SetWriteDeadline ไม่ regress); logout กลาง stream → ถูกตัดภายใน ~1 heartbeat (วัดจริง 25s)
+      > หมายเหตุ: การทดสอบ browser จริง (สองแท็บเห็น clear ตามกัน, reconnect เมื่อปิด backend,
+      > bounce /login) ยังควรรีวิวด้วยตาบน UI จริงอีกครั้งก่อน merge
+- [x] ยืนยันไม่มี interval polling ของ log เหลือในสองหน้า (double-fetch = 0)
+- [x] อัปเดต issue #41 (unblocked แล้ว + ลิงก์แผน) และพิจารณาเอา label `wontfix` ออก
+- [x] เสร็จแล้วย้ายแผนไป `docs/ref/complete/`

@@ -13,6 +13,17 @@ export interface TrafficData {
   outbound: number;
 }
 
+/**
+ * A log entry as delivered over the SSE stream — the full backend
+ * model.FirewallLog shape (superset of the Dashboard's FirewallLog and the
+ * Forward Traffic TrafficLog). inIface/outIface are optional so a Dashboard
+ * consumer that ignores them stays type-compatible.
+ */
+export interface SSELogEntry extends FirewallLog {
+  inIface?: string;
+  outIface?: string;
+}
+
 export interface CpuDetail {
   usagePercent: number;
   cores: number;
@@ -255,41 +266,59 @@ export const dashboardService = {
   },
 
   /**
-   * Connect to Server-Sent Events stream for live firewall logs.
-   * Returns an EventSource instance (for non-mock mode).
-   * In mock mode, returns null and calls `onLog` via a simulated interval.
+   * Connect to the Server-Sent Events stream for live firewall/forward-traffic
+   * logs. Auth rides on the HttpOnly session cookie (withCredentials); the
+   * backend pushes each new entry as a default message event, a `clear` event
+   * when the buffer is wiped, and `: ping` heartbeat comments.
    *
-   * @param onLog  - Callback fired each time a new log entry arrives
-   * @param onError - Callback fired on connection error
-   * @returns A cleanup function to stop the stream
+   * In mock mode there is no real EventSource — new entries are synthesized on
+   * an interval and `onOpen` fires once so the consumer can seed its snapshot,
+   * exactly as the real `open` event would.
+   *
+   * @returns a cleanup function that stops the stream.
    */
-  connectSSELogs: (
-    onLog: (log: FirewallLog) => void,
-    onError?: (err: Event) => void
-  ): (() => void) => {
+  connectSSELogs: (handlers: {
+    onLog: (log: SSELogEntry) => void;
+    onClear?: () => void;
+    onOpen?: () => void;
+    onError?: (err: Event) => void;
+  }): (() => void) => {
+    const { onLog, onClear, onOpen, onError } = handlers;
+
     if (IS_MOCK_MODE) {
-      // In mock mode, simulate SSE with interval-based generation
+      // Simulate SSE with interval-based generation. Fire onOpen on the next
+      // tick so a consumer that refetches its snapshot onOpen behaves the same
+      // as against a real stream.
+      const openTimer = setTimeout(() => onOpen?.(), 0);
       const intervalId = setInterval(() => {
-        const newLog = dashboardService.generateMockLog();
-        onLog(newLog);
+        onLog(dashboardService.generateMockLog());
       }, 4500);
-      return () => clearInterval(intervalId);
+      return () => {
+        clearTimeout(openTimer);
+        clearInterval(intervalId);
+      };
     }
 
-    // Real SSE connection. Auth rides on the HttpOnly session cookie —
-    // withCredentials makes EventSource send it (needed for the dev
-    // cross-origin case; production is same-origin). No token in the URL.
+    // Real SSE connection. withCredentials makes EventSource send the session
+    // cookie (needed for the dev cross-origin case; production is same-origin).
+    // No token in the URL.
     const url = `${API_BASE_URL}/dashboard/logs/stream`;
     const es = new EventSource(url, { withCredentials: true });
 
+    if (onOpen) es.onopen = () => onOpen();
+
     es.onmessage = (event) => {
       try {
-        const log: FirewallLog = JSON.parse(event.data);
+        const log: SSELogEntry = JSON.parse(event.data);
         onLog(log);
       } catch (e) {
         console.warn("[SSE] Failed to parse log event:", e);
       }
     };
+
+    if (onClear) {
+      es.addEventListener("clear", () => onClear());
+    }
 
     if (onError) {
       es.onerror = onError;
@@ -301,7 +330,7 @@ export const dashboardService = {
   },
 
   // Generate a mock log entry and save it (to simulate live SSE log appending in mock mode)
-  generateMockLog: (): FirewallLog => {
+  generateMockLog: (): SSELogEntry => {
     const randomSrc = mockSources[Math.floor(Math.random() * mockSources.length)];
     const randomDest = mockDestinations[Math.floor(Math.random() * mockDestinations.length)];
     const randomSvc = mockLogServices[Math.floor(Math.random() * mockLogServices.length)];
@@ -314,7 +343,9 @@ export const dashboardService = {
       ":" +
       String(t.getSeconds()).padStart(2, "0");
 
-    const newLog: FirewallLog = {
+    // Include inIface/outIface so a Forward Traffic consumer of the simulated
+    // stream renders complete rows in mock mode too (Dashboard ignores them).
+    const newLog: SSELogEntry = {
       id: "log-" + Math.random().toString(36).substring(2, 9),
       time: timeStr,
       action: randomSvc.action as "PASS" | "DROP",
@@ -322,6 +353,8 @@ export const dashboardService = {
       dest: randomDest,
       port: randomSvc.port,
       proto: randomSvc.proto,
+      inIface: randomSvc.action === "DROP" ? "eth0" : "wlan0",
+      outIface: "eth1",
       reason: randomSvc.reason,
     };
 

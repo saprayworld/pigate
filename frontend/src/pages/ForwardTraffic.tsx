@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import {
   ArrowRightLeft,
   Search,
@@ -28,15 +28,33 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useAlert } from "@/hooks/useAlert"
+import { useLiveLogs } from "@/hooks/useLiveLogs"
 import { getErrorMessage } from "@/lib/errors"
 import { authService } from "@/services/authService"
+import { type SSELogEntry } from "@/services/dashboardService"
 import {
   trafficLogService,
   type TrafficLog,
 } from "@/services/trafficLogService"
 
-const POLL_INTERVAL = 5_000
 const FETCH_LIMIT = 200
+
+/* Client-side mirror of the server's forward-traffic filter (handlers.go
+ * HandleGetTrafficLogs): action equality + a case-insensitive substring across
+ * src/dest/port/proto/inIface/outIface/reason. Kept in lockstep so a row pushed
+ * over SSE is shown only when it would also pass the server filter (Caution 8). */
+function matchesFilter(l: SSELogEntry, action: string, needle: string): boolean {
+  if (action !== "all" && (l.action ?? "").toUpperCase() !== action.toUpperCase()) {
+    return false
+  }
+  if (needle) {
+    const hay = [l.src, l.dest, l.port, l.proto, l.inIface ?? "", l.outIface ?? "", l.reason]
+      .join(" ")
+      .toLowerCase()
+    if (!hay.includes(needle.toLowerCase())) return false
+  }
+  return true
+}
 
 const ACTION_OPTIONS = [
   { value: "all", label: "All verdicts" },
@@ -73,10 +91,11 @@ export default function ForwardTraffic() {
   const { alert, confirm } = useAlert()
   const canClear = authService.getRole() === "super_admin"
 
-  const [logs, setLogs] = useState<TrafficLog[]>([])
-  const [isLoading, setIsLoading] = useState(true)
   const [isClearing, setIsClearing] = useState(false)
   const [isPaused, setIsPaused] = useState(false)
+  // Bumped on Clear to force an immediate snapshot refetch even while paused (the
+  // clear SSE event covers the streaming case; this covers the paused one).
+  const [clearNonce, setClearNonce] = useState(0)
 
   // Filters
   const [action, setAction] = useState("all")
@@ -89,40 +108,22 @@ export default function ForwardTraffic() {
     return () => clearTimeout(id)
   }, [search])
 
-  const loadLogs = useCallback(
-    async (showLoading: boolean) => {
-      if (showLoading) setIsLoading(true)
-      try {
-        const data = await trafficLogService.getTrafficLogs({
-          action: action === "all" ? "" : action,
-          q: debouncedSearch,
-          limit: FETCH_LIMIT,
-        })
-        setLogs(data)
-      } catch (err) {
-        if (showLoading) {
-          await alert("ข้อผิดพลาด", "ไม่สามารถโหลด Forward Traffic Log ได้: " + getErrorMessage(err))
-        }
-        // Polling errors are swallowed — keep the last known rows.
-      } finally {
-        if (showLoading) setIsLoading(false)
-      }
-    },
-    [action, debouncedSearch, alert]
-  )
-
-  const loadLogsRef = useRef(loadLogs)
-  useEffect(() => {
-    loadLogsRef.current = loadLogs
+  // Live feed over SSE. The snapshot is server-filtered; incoming pushed rows are
+  // filtered client-side by the same predicate so filtered rows never leak in.
+  const { logs, isLoading } = useLiveLogs<TrafficLog>({
+    fetchSnapshot: () =>
+      trafficLogService.getTrafficLogs({
+        action: action === "all" ? "" : action,
+        q: debouncedSearch,
+        limit: FETCH_LIMIT,
+      }),
+    refreshKey: `${action}|${debouncedSearch}|${clearNonce}`,
+    paused: isPaused,
+    transform: (raw) =>
+      matchesFilter(raw, action, debouncedSearch)
+        ? ({ ...raw, inIface: raw.inIface ?? "-", outIface: raw.outIface ?? "-" } as TrafficLog)
+        : null,
   })
-
-  // Initial + filter-driven fetch, then background polling unless paused.
-  useEffect(() => {
-    loadLogsRef.current(true)
-    if (isPaused) return
-    const id = setInterval(() => loadLogsRef.current(false), POLL_INTERVAL)
-    return () => clearInterval(id)
-  }, [action, debouncedSearch, isPaused])
 
   const handleClear = async () => {
     const ok = await confirm(
@@ -133,7 +134,7 @@ export default function ForwardTraffic() {
     setIsClearing(true)
     try {
       await trafficLogService.clearTrafficLogs()
-      await loadLogs(false)
+      setClearNonce((n) => n + 1)
     } catch (err) {
       await alert("ข้อผิดพลาด", "ไม่สามารถล้าง log ได้: " + getErrorMessage(err))
     } finally {
