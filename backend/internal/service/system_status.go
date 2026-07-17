@@ -23,6 +23,10 @@ const (
 	trafficBucketSpan   = 5 * time.Minute
 	trafficBucketMax    = 288 // 288 × 5min = 24h
 	diskUsagePath       = "/"
+	// metricsPushInterval is how often the SSE broadcaster composes and fans out a
+	// full SystemMetrics snapshot. Aligned with cpuSampleInterval so a push never
+	// carries a CPU figure older than one sampler tick.
+	metricsPushInterval = 3 * time.Second
 )
 
 // SystemStatusService owns host-telemetry sampling for the dashboard. It runs
@@ -46,6 +50,15 @@ type SystemStatusService struct {
 	lastCounters map[string]model.NetCounters // baseline for delta computation
 	totalIn      uint64                       // cumulative WAN rx since boot
 	totalOut     uint64                       // cumulative WAN tx since boot
+
+	// Metrics SSE subscribers. The broadcaster goroutine fans a full snapshot to
+	// each on a timer; a slow subscriber is dropped rather than stalling the loop.
+	subMu       sync.Mutex
+	metricsSubs map[*metricsSub]struct{}
+}
+
+type metricsSub struct {
+	ch chan model.SystemMetrics
 }
 
 // NewSystemStatusService constructs the service. version is the build-time
@@ -64,6 +77,7 @@ func NewSystemStatusService(
 		timeSvc:      timeSvc,
 		version:      version,
 		lastCounters: make(map[string]model.NetCounters),
+		metricsSubs:  make(map[*metricsSub]struct{}),
 	}
 }
 
@@ -88,7 +102,74 @@ func (s *SystemStatusService) Start(ctx context.Context) {
 
 	go s.runCPUSampler(ctx)
 	go s.runTrafficCollector(ctx)
-	log.Printf("[SystemStatus] Started CPU sampler (%s) and traffic collector (%s)", cpuSampleInterval, trafficPollInterval)
+	go s.runMetricsBroadcaster(ctx)
+	log.Printf("[SystemStatus] Started CPU sampler (%s), traffic collector (%s), metrics broadcaster (%s)", cpuSampleInterval, trafficPollInterval, metricsPushInterval)
+}
+
+// SubscribeMetrics registers an SSE listener and returns its receive channel plus
+// a cancel func that unregisters it (idempotent). buf is the channel buffer; the
+// broadcaster never blocks on a full channel — the snapshot is dropped instead
+// (the next tick carries a fresh full snapshot anyway), so a slow/stalled client
+// can't stall the broadcaster loop.
+func (s *SystemStatusService) SubscribeMetrics(buf int) (<-chan model.SystemMetrics, func()) {
+	if buf < 1 {
+		buf = 1
+	}
+	sub := &metricsSub{ch: make(chan model.SystemMetrics, buf)}
+
+	s.subMu.Lock()
+	s.metricsSubs[sub] = struct{}{}
+	s.subMu.Unlock()
+
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			s.subMu.Lock()
+			delete(s.metricsSubs, sub)
+			s.subMu.Unlock()
+		})
+	}
+	return sub.ch, cancel
+}
+
+// runMetricsBroadcaster composes one SystemMetrics snapshot per tick and fans it
+// out to every subscriber without blocking. Composing once per tick (rather than
+// per connection) keeps /proc reads to a single pass regardless of connection
+// count. Stops when ctx is cancelled (shutdown).
+func (s *SystemStatusService) runMetricsBroadcaster(ctx context.Context) {
+	t := time.NewTicker(metricsPushInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if !s.hasMetricsSubs() {
+				continue // nobody listening — skip the compose entirely
+			}
+			s.broadcastMetrics(s.GetSystemMetrics())
+		}
+	}
+}
+
+func (s *SystemStatusService) hasMetricsSubs() bool {
+	s.subMu.Lock()
+	defer s.subMu.Unlock()
+	return len(s.metricsSubs) > 0
+}
+
+// broadcastMetrics fans a snapshot out to every subscriber without blocking. Split
+// out from the goroutine so tests can drive it directly without the 3s ticker.
+func (s *SystemStatusService) broadcastMetrics(snapshot model.SystemMetrics) {
+	s.subMu.Lock()
+	defer s.subMu.Unlock()
+	for sub := range s.metricsSubs {
+		select {
+		case sub.ch <- snapshot:
+		default:
+			// Subscriber's buffer full — drop; next tick carries a fresh snapshot.
+		}
+	}
 }
 
 func (s *SystemStatusService) runCPUSampler(ctx context.Context) {
