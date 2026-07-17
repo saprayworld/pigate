@@ -42,6 +42,7 @@ import {
   type TrafficHistory,
 } from "@/services/dashboardService"
 import { interfaceService } from "@/services/interfaceService"
+import { useLiveLogs } from "@/hooks/useLiveLogs"
 import type { NetworkInterface, FirewallLog } from "@/data-mockup/mockData"
 
 /* -------------------------------------------------------------------------- */
@@ -52,7 +53,7 @@ const METRICS_INTERVAL = 5_000
 const INFO_INTERVAL = 30_000
 const TRAFFIC_INTERVAL = 60_000
 const INTERFACES_INTERVAL = 30_000
-const LOGS_INTERVAL = 10_000
+// Recent Logs no longer polls — it rides the live SSE stream via useLiveLogs.
 
 /** usePoll fetches immediately, then on `intervalMs`, and again when
  *  `refreshKey` changes. Errors are swallowed so a transient failure doesn't
@@ -610,7 +611,11 @@ export default function Dashboard() {
   const perf = usePoll(dashboardService.getPerformanceMetrics, METRICS_INTERVAL, refreshKey)
   const traffic = usePoll(dashboardService.getTrafficHistory, TRAFFIC_INTERVAL, refreshKey)
   const interfaces = usePoll(interfaceService.getAll, INTERFACES_INTERVAL, refreshKey)
-  const logs = usePoll(dashboardService.getRecentLogs, LOGS_INTERVAL, refreshKey)
+  // Recent Logs stream live over SSE; the Refresh button still reseeds via refreshKey.
+  const { logs } = useLiveLogs<FirewallLog>({
+    fetchSnapshot: dashboardService.getRecentLogs,
+    refreshKey,
+  })
 
   // System info is polled together with the client-side fetch timestamp so the
   // uptime/clock can advance locally between polls (no extra state/effect).
@@ -624,7 +629,7 @@ export default function Dashboard() {
 
   const metrics = useMemo(() => buildMetrics(perf), [perf])
   const chartData = useMemo(() => aggregateHourly(traffic), [traffic])
-  const alerts = useMemo(() => logsToAlerts(logs ?? []), [logs])
+  const alerts = useMemo(() => logsToAlerts(logs), [logs])
   const ifaces = interfaces ?? []
 
   return (

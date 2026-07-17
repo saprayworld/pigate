@@ -162,6 +162,49 @@ func TestSweepExpiredSessions(t *testing.T) {
 	}
 }
 
+// TestSessionAliveDoesNotSlideExpiry is the core guarantee behind the SSE
+// heartbeat re-check: a live session reads as alive without its idle deadline
+// moving (unlike ValidateSession, which renews). Otherwise a stream held open
+// would keep renewing the session forever (plan Caution 2).
+func TestSessionAliveDoesNotSlideExpiry(t *testing.T) {
+	token := "alive-noslide"
+	now := time.Now()
+	// Deliberately near expiry (< sessionRenewAfter left) — ValidateSession would
+	// renew this; SessionAlive must not.
+	expiry := now.Add(sessionRenewAfter / 2)
+	addSessionWithTimes(token, "u1", now, expiry)
+	defer RemoveSession(token)
+
+	if !SessionAlive(token) {
+		t.Fatal("expected a live session to read as alive")
+	}
+	sessionMutex.RLock()
+	got := activeSessions[token].expiresAt
+	sessionMutex.RUnlock()
+	if !got.Equal(expiry) {
+		t.Fatalf("SessionAlive slid expiresAt from %v to %v", expiry, got)
+	}
+}
+
+func TestSessionAliveExpiredAndMissing(t *testing.T) {
+	now := time.Now()
+	// Past the idle deadline.
+	addSessionWithTimes("alive-expired", "u1", now.Add(-sessionTTL), now.Add(-time.Second))
+	defer RemoveSession("alive-expired")
+	if SessionAlive("alive-expired") {
+		t.Fatal("expected an expired session to read as dead")
+	}
+	// Past the absolute cap even though the idle deadline is in the future.
+	addSessionWithTimes("alive-abscap", "u1", now.Add(-sessionAbsoluteMax-time.Hour), now.Add(sessionTTL))
+	defer RemoveSession("alive-abscap")
+	if SessionAlive("alive-abscap") {
+		t.Fatal("expected a session past the absolute cap to read as dead")
+	}
+	if SessionAlive("no-such-token") {
+		t.Fatal("expected a missing token to read as dead")
+	}
+}
+
 // TestAuthMiddlewareRenewsCookie drives a real request through the router to
 // confirm the renewal cookie is actually written on the response.
 func TestAuthMiddlewareRenewsCookie(t *testing.T) {
