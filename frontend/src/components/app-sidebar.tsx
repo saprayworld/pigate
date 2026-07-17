@@ -19,6 +19,7 @@ import {
 } from "lucide-react"
 
 import { NavUser } from "@/components/nav-user"
+import { PiGateLogo } from "@/components/PiGateLogo"
 import { authService } from "@/services/authService"
 import { useHostname } from "@/hooks/useHostname"
 import {
@@ -96,9 +97,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               className="h-8 data-[slot=sidebar-menu-button]:p-1.5! data-[slot=sidebar-menu-button]:pl-0!"
             >
               <NavLink to="/dashboard">
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                  <Flame className="size-5 fill-primary/20" />
-                </div>
+                <PiGateLogo className="size-8 shrink-0" />
                 <div className="grid flex-1 text-left text-xs leading-tight">
                   <span className="truncate text-sm font-bold tracking-wider">PiGate</span>
                   <span className="truncate text-xs text-muted-foreground font-mono">{hostname}</span>
