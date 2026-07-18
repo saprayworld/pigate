@@ -166,6 +166,55 @@ func ValidateReservationName(name string) error {
 	return nil
 }
 
+// ValidateDhcpConfig validates every DhcpConfig field that is written to the
+// dnsmasq config (pigate-dhcp.conf): the interface name and the scope's IP
+// addresses. Like the reservation validator it REJECTS rather than strips — a
+// single newline in e.g. StartIP would otherwise inject an arbitrary dnsmasq
+// directive (`1.2.3.4\naddress=/evil/6.6.6.6`), which `dnsmasq --test` cannot
+// catch because the injected line is itself valid. net.ParseIP rejects any
+// value containing a control char, space, or newline, which is the property we
+// rely on. StartIP/EndIP are always written and required; gateway/netmask/dns
+// are written only when non-empty (matching kernel/dhcp_server.go), so empty is
+// allowed there and a non-empty value must parse as an IP.
+//
+// Values are validated exactly as the writer emits them — no trimming — so a
+// value with edge whitespace (e.g. "192.168.1.10\n", which would break the
+// generated file) is rejected here instead of passing a trimmed check and then
+// being written raw.
+//
+// Note: Netmask is not itself written to the dnsmasq file (it only drives subnet
+// mapping in the service layer), but it is validated here for consistency and to
+// keep a malformed mask from corrupting that mapping.
+func ValidateDhcpConfig(cfg DhcpConfig) error {
+	if err := ValidateInterfaceName(cfg.Interface); err != nil {
+		return err
+	}
+	fields := []struct {
+		name     string
+		val      string
+		required bool
+	}{
+		{"startIp", cfg.StartIP, true},
+		{"endIp", cfg.EndIP, true},
+		{"gateway", cfg.Gateway, false},
+		{"netmask", cfg.Netmask, false},
+		{"dns1", cfg.DNS1, false},
+		{"dns2", cfg.DNS2, false},
+	}
+	for _, f := range fields {
+		if f.val == "" {
+			if f.required {
+				return fmt.Errorf("dhcp %s must not be empty", f.name)
+			}
+			continue
+		}
+		if net.ParseIP(f.val) == nil {
+			return fmt.Errorf("dhcp %s %q is not a valid IP address", f.name, f.val)
+		}
+	}
+	return nil
+}
+
 // ValidateReservation validates every field of a reservation that is written to
 // the dnsmasq config: the MAC address, the reserved IP, and the device name.
 // MAC and IP are validated only when both are set, matching the writer, which

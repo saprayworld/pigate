@@ -273,6 +273,43 @@ func TestImportRejectsDnsmasqInjection(t *testing.T) {
 	}
 }
 
+// TestImportRejectsDhcpConfigInjection ensures a crafted backup carrying a DHCP
+// scope with an embedded newline in an IP field (a dnsmasq directive injection)
+// is rejected before any DB mutation — mirroring the DNS-record guard above but
+// for the DhcpConfig path, which previously had no import-time validation.
+func TestImportRejectsDhcpConfigInjection(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	file.Config.DhcpConfigs = append(file.Config.DhcpConfigs, model.DhcpConfig{
+		ID: "dhcp-evil", Enabled: true, Interface: "eth0",
+		StartIP: "192.168.1.10\naddress=/evil/6.6.6.6", EndIP: "192.168.1.200",
+	})
+	sum, _ := configChecksum(*file.Config)
+	file.Meta.Checksum = sum
+	raw, _ := json.Marshal(file)
+
+	beforeCfgs, _ := repo.GetDHCPConfigs()
+
+	if _, err := bs.Import(raw, model.ImportOptions{}); err == nil {
+		t.Fatalf("expected import to be rejected on injected DHCP config")
+	}
+
+	afterCfgs, _ := repo.GetDHCPConfigs()
+	if len(afterCfgs) != len(beforeCfgs) {
+		t.Errorf("DB changed despite rejected import: dhcp configs before=%d after=%d", len(beforeCfgs), len(afterCfgs))
+	}
+	for _, c := range afterCfgs {
+		if c.ID == "dhcp-evil" {
+			t.Errorf("injected DHCP config leaked into DB")
+		}
+	}
+}
+
 func TestImportLegacyV1(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 

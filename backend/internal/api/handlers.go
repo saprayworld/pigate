@@ -1652,6 +1652,11 @@ func (s *Server) HandleUpdateDHCPConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if err := model.ValidateDhcpConfig(cfg); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	if err := s.repo.UpdateDHCPConfig(cfg); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1802,6 +1807,11 @@ func (s *Server) HandleCreateDHCPConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if err := model.ValidateDhcpConfig(cfg); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	if err := s.repo.CreateDHCPConfig(cfg); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1819,6 +1829,11 @@ func (s *Server) HandleUpdateDHCPConfigByID(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	cfg.ID = id
+
+	if err := model.ValidateDhcpConfig(cfg); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	if err := s.repo.UpdateDHCPConfigByID(cfg); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())

@@ -688,6 +688,11 @@ func validateConfig(cfg model.BackupConfig) error {
 			return fmt.Errorf("dhcp reservation %q: %w", res.DeviceName, err)
 		}
 	}
+	for _, c := range cfg.DhcpConfigs {
+		if err := model.ValidateDhcpConfig(c); err != nil {
+			return fmt.Errorf("dhcp config %q: %w", c.Interface, err)
+		}
+	}
 	return nil
 }
 
