@@ -42,7 +42,7 @@ func main() {
 	allowEditSystemRoutes := flag.Bool("allow-edit-system-routes", false, "Allow editing and deleting system predefined static routes")
 	enableEditSystemRoute := flag.Bool("enable-edit-system-route", false, "Enable direct kernel management of system/kernel-only routes without database")
 	prioritizeKernelRoutes := flag.Bool("prioritize-kernel-routes", false, "Prioritize kernel route information over database if duplicate")
-	dockerCompat := flag.Bool("docker-compat", true, "Enable Docker compatibility (bypass docker0 and br-* interfaces)")
+	dockerCompat := flag.Bool("docker-compat", false, "Enable Docker compatibility (bypass docker0 and br-* interfaces). Off by default; opt in only on a gateway that also runs Docker/bridge networks.")
 	httpsPort := flag.Int("https-port", 0, "HTTPS port (0 = HTTP only; the systemd unit passes 443 to make HTTPS the primary channel)")
 	tlsDir := flag.String("tls-dir", "", "Directory for the self-signed TLS cert/key (default: <dir of -db>/tls)")
 	allowDevCORS := flag.Bool("allow-dev-cors", false, "Echo CORS headers for frontend dev-server origins (localhost:5173/3000). Off by default; only needed when running `yarn dev` against this backend.")
