@@ -166,25 +166,19 @@ func ValidateReservationName(name string) error {
 	return nil
 }
 
-// ValidateDhcpConfig validates every DhcpConfig field that is written to the
-// dnsmasq config (pigate-dhcp.conf): the interface name and the scope's IP
-// addresses. Like the reservation validator it REJECTS rather than strips — a
-// single newline in e.g. StartIP would otherwise inject an arbitrary dnsmasq
-// directive (`1.2.3.4\naddress=/evil/6.6.6.6`), which `dnsmasq --test` cannot
-// catch because the injected line is itself valid. net.ParseIP rejects any
-// value containing a control char, space, or newline, which is the property we
-// rely on. StartIP/EndIP are always written and required; gateway/netmask/dns
-// are written only when non-empty (matching kernel/dhcp_server.go), so empty is
-// allowed there and a non-empty value must parse as an IP.
+// ValidateDhcpConfig validates the DhcpConfig fields that are written verbatim
+// into the dnsmasq config (pigate-dhcp.conf): the interface name and the scope's
+// IPv4 addresses. It REJECTS rather than strips or trims, so a value carrying a
+// newline or edge whitespace can never reach the generated file.
 //
-// Values are validated exactly as the writer emits them — no trimming — so a
-// value with edge whitespace (e.g. "192.168.1.10\n", which would break the
-// generated file) is rejected here instead of passing a trimmed check and then
-// being written raw.
+// StartIP/EndIP are required; gateway/dns1/dns2 are optional (empty is allowed,
+// matching the writer, which emits their directives only when non-empty) but must
+// be a valid IPv4 address when present. IPv6 is rejected: dnsmasq's dhcp-range is
+// IPv4-only here, and a v6 value would fail `dnsmasq --test` for the whole file.
 //
-// Note: Netmask is not itself written to the dnsmasq file (it only drives subnet
-// mapping in the service layer), but it is validated here for consistency and to
-// keep a malformed mask from corrupting that mapping.
+// Netmask is intentionally not validated: it is never written to the dnsmasq file
+// (it only drives subnet mapping in the service layer), so it is not an injection
+// surface. Subnet-mask sanity is a separate correctness concern, out of scope here.
 func ValidateDhcpConfig(cfg DhcpConfig) error {
 	if err := ValidateInterfaceName(cfg.Interface); err != nil {
 		return err
@@ -197,7 +191,6 @@ func ValidateDhcpConfig(cfg DhcpConfig) error {
 		{"startIp", cfg.StartIP, true},
 		{"endIp", cfg.EndIP, true},
 		{"gateway", cfg.Gateway, false},
-		{"netmask", cfg.Netmask, false},
 		{"dns1", cfg.DNS1, false},
 		{"dns2", cfg.DNS2, false},
 	}
@@ -208,8 +201,12 @@ func ValidateDhcpConfig(cfg DhcpConfig) error {
 			}
 			continue
 		}
-		if net.ParseIP(f.val) == nil {
-			return fmt.Errorf("dhcp %s %q is not a valid IP address", f.name, f.val)
+		// No TrimSpace: the value is interpolated verbatim into the config file,
+		// so edge whitespace must be rejected, not silently accepted then written.
+		// net.ParseIP already rejects any control char/space/newline; .To4()
+		// additionally rejects IPv6 (see doc comment).
+		if ip := net.ParseIP(f.val); ip == nil || ip.To4() == nil {
+			return fmt.Errorf("dhcp %s %q is not a valid IPv4 address", f.name, f.val)
 		}
 	}
 	return nil

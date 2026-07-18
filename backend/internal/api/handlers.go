@@ -1857,6 +1857,29 @@ func (s *Server) HandleDeleteDHCPConfig(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) HandleToggleDHCPConfig(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+
+	// If this toggle would ENABLE the scope, validate it first. Create/update
+	// reject invalid scopes, but a malformed legacy row (saved before this
+	// validator existed) could otherwise be flipped live here only to be silently
+	// skipped at apply time — reporting "active" in the UI while the LAN gets no
+	// DHCP. Fail with 400 instead so the reason is visible.
+	cfgs, err := s.repo.GetDHCPConfigs()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, c := range cfgs {
+		if c.ID == id {
+			if !c.Enabled { // currently disabled → about to be enabled
+				if err := model.ValidateDhcpConfig(c); err != nil {
+					s.writeError(w, http.StatusBadRequest, err.Error())
+					return
+				}
+			}
+			break
+		}
+	}
+
 	if err := s.repo.ToggleDHCPConfig(id); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return

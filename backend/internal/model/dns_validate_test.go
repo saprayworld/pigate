@@ -151,12 +151,19 @@ func TestValidateDhcpConfig(t *testing.T) {
 		{"startIp injection", func(c *DhcpConfig) { c.StartIP = "192.168.1.10\naddress=/evil/6.6.6.6" }, true},
 		{"startIp trailing newline", func(c *DhcpConfig) { c.StartIP = "192.168.1.10\n" }, true},
 		{"startIp leading space", func(c *DhcpConfig) { c.StartIP = " 192.168.1.10" }, true},
+		{"startIp trailing space", func(c *DhcpConfig) { c.StartIP = "192.168.1.10 " }, true},
+		{"startIp ipv6 rejected", func(c *DhcpConfig) { c.StartIP = "fe80::1" }, true},
+		{"startIp zero-padded rejected", func(c *DhcpConfig) { c.StartIP = "192.168.001.100" }, true},
 		{"gateway whitespace only", func(c *DhcpConfig) { c.Gateway = " " }, true},
+		{"gateway ipv6 rejected", func(c *DhcpConfig) { c.Gateway = "2001:db8::1" }, true},
 		{"endIp injection", func(c *DhcpConfig) { c.EndIP = "192.168.1.200\ndhcp-option=x" }, true},
 		{"gateway injection", func(c *DhcpConfig) { c.Gateway = "192.168.1.1\ndhcp-option=x" }, true},
-		{"netmask injection", func(c *DhcpConfig) { c.Netmask = "255.255.255.0\nx" }, true},
 		{"dns1 injection", func(c *DhcpConfig) { c.DNS1 = "1.1.1.1\nserver=/x/y" }, true},
 		{"dns2 injection", func(c *DhcpConfig) { c.DNS2 = "8.8.8.8\nx" }, true},
+		// Netmask is intentionally not validated (never written to the dnsmasq
+		// file), so even a value carrying a newline is accepted here.
+		{"netmask not validated", func(c *DhcpConfig) { c.Netmask = "255.255.255.0\nx" }, false},
+		{"netmask garbage not validated", func(c *DhcpConfig) { c.Netmask = "not-a-mask" }, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

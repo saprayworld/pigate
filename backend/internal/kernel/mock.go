@@ -180,6 +180,18 @@ func NewMockDhcp() *MockDhcp {
 }
 
 func (m *MockDhcp) ApplyConfig(cfgs []model.DhcpConfig, reservations []model.DhcpReservation) error {
+	// Mirror RealDhcpManager.ApplyConfig's validate-and-skip so a -mock=true dev
+	// loop surfaces the same behavior: an enabled-but-invalid scope is skipped
+	// (with a log line), not silently treated as applied.
+	for _, cfg := range cfgs {
+		if !cfg.Enabled {
+			continue
+		}
+		if err := model.ValidateDhcpConfig(cfg); err != nil {
+			log.Printf("[MockDhcp] Skipping invalid DHCP config (iface=%q start=%q end=%q): %v", cfg.Interface, cfg.StartIP, cfg.EndIP, err)
+			continue
+		}
+	}
 	return nil
 }
 

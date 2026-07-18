@@ -200,3 +200,34 @@ error ทั่วไป ไม่ใช่ schema ใหม่)
 - [x] ไม่ต้องแก้ `docs/openapi.yaml` / `frontend/public/openapi.yaml` (ไม่มี schema ใหม่)
 - [ ] อัปเดต `docs/review-guide.md` ว่า Finding #11 ปิดแล้ว (ถ้าต้องการ track)
 - [ ] แยก branch `fix/dhcp-scope-injection` → PR เข้า main (code change ห้าม push ตรง)
+
+## 7. รีวิวรอบสอง (2026-07-18) — ผลและการปิดงาน
+
+รีวิวรอบสองบนโค้ดที่ทำไปแล้ว (`review-result.json`, 10 ข้อ) พบว่ามีของจริงทั้งหมด
+สองข้อที่เป็น policy ต่อระบบ production เจ้าของตัดสินใจ: **(A) validate เข้มทุก scope เสมอ**
+(รวม disabled — ไม่ผ่อนปรน import/PUT) และ **(B) reject IP zero-padded ตามมาตรฐาน Go**
+(ไม่ canonicalize) การปิดงานต่อข้อ:
+
+| # | จุด | ข้อสังเกต | การแก้ |
+|---|---|---|---|
+| 1 | `dns_validate.go` รับ IPv6 → `dnsmasq --test` ล้มทั้งไฟล์ | ยืนยัน: `net.ParseIP("fe80::1")` ผ่าน | ✅ บังคับ IPv4 ด้วย `ip == nil \|\| ip.To4() == nil` (idiom เดียวกับ `port_forward_validate.go:40`) |
+| 4 | zero-padded `192.168.001.100` ถูก reject | ยืนยัน: Go 1.17+ reject | ✅ **คงพฤติกรรม reject** (decision B) — ระบุใน release note ว่า IP ต้อง canonical |
+| 5 | kernel skip ทั้ง scope เพราะ Netmask (ที่ไม่เคยเขียนลงไฟล์) | ยืนยัน: writer ไม่เขียน netmask | ✅ **ถอด Netmask ออกจาก validator** — ไม่ใช่ช่อง injection, kernel เลิก skip เพราะ netmask |
+| 6 | doc comment อ้างว่ากัน netmask เพี้ยน (เท็จ; `0.0.0.0` ผ่าน) | ยืนยัน: `ParseIP("0.0.0.0")` ผ่าน | ✅ ลบคำอ้าง — ระบุชัดว่า netmask ไม่ถูก validate (subnet sanity เป็นงานแยก) |
+| 10 | doc comment ย่อหน้าแรกซ้ำ package header | — | ✅ ตัดเหลือ fact เฉพาะฟังก์ชัน |
+| 3 | toggle เปิด row เสีย → apply สำเร็จ แต่ LAN ไม่มี DHCP (silent skip) | toggle ไม่ validate | ✅ `HandleToggleDHCPConfig` validate ก่อน enable → คืน **400** ชัด (สอดคล้อง decision A) |
+| 9 | `MockDhcp.ApplyConfig` no-op ไม่ validate-skip | — | ✅ เพิ่ม loop validate-and-skip + log ให้ parity (กติกา CLAUDE.md real+mock) |
+| 7 | frontend ส่งค่าดิบไม่ trim แต่ backend reject edge whitespace | reservation form trim แต่ config form ไม่ | ✅ `handleSaveConfig` trim ทุกฟิลด์ก่อน submit |
+| 2 | import validate DhcpConfigs หมดรวม disabled/v1 → restore backup เก่าล้ม | — | ⚠️ **ยอมรับตาม decision A** (เข้มทุก scope) — backup เก่าที่มี scope ค่าเพี้ยนต้องแก้ก่อน restore |
+| 8 | PUT validate แม้ `enabled:false` → ปิด row เสียด้วย PUT ไม่ได้ | — | ⚠️ **ยอมรับตาม decision A** — ปิด row เสียใช้ toggle/DELETE; ระบุใน release note |
+
+**Release note ที่ควรมีใน PR:**
+- DHCP scope ที่มี IP ผิดรูป (รวม IPv6, zero-padded เช่น `192.168.001.100`) จะถูก reject ตอน
+  create/update/toggle-enable และถูก skip ตอน apply — ค่าเหล่านี้ต้องแก้เป็น IPv4 canonical
+- backup เก่าที่มี DhcpConfig ค่าเพี้ยน (แม้ scope นั้น disabled) จะ restore ไม่ได้ทั้งไฟล์
+  จนกว่าจะแก้ค่าในไฟล์ backup ให้ผ่าน validator
+- Netmask ไม่ถูก validate อีกต่อไป (ไม่เคยถูกเขียนลงไฟล์ dnsmasq); ความสมเหตุสมผลของ subnet
+  mask เป็นงาน correctness แยก
+
+**สถานะ build/test:** `go build ./... && go vet ./... && go test ./...` เขียว (รวมเทสต์
+injection เดิม + เคสใหม่ IPv6/zero-padded/edge-space/netmask-not-validated); `yarn build` ผ่าน
