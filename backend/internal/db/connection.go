@@ -469,6 +469,24 @@ func migrate(db *sql.DB) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_system_events_category ON system_events(category);`,
 		`CREATE INDEX IF NOT EXISTS idx_system_events_severity ON system_events(severity);`,
+
+		// Saved Wi-Fi networks ("known networks" library, issue #66). A preset is
+		// just a template: applying it copies its fields into the target
+		// interface's primary/backup Wi-Fi slot (network_interfaces) — it is not a
+		// live link, so editing a preset afterwards does not touch interfaces that
+		// already applied it. Password is plaintext (matches
+		// network_interfaces.wifi_password) but write-only from the API's
+		// perspective — see model.WifiPreset.
+		`CREATE TABLE IF NOT EXISTS wifi_presets (
+			id TEXT PRIMARY KEY,
+			name TEXT UNIQUE NOT NULL,
+			ssid TEXT NOT NULL,
+			security TEXT NOT NULL DEFAULT 'WPA2',
+			password TEXT DEFAULT '',
+			mac_mode TEXT DEFAULT '' CHECK(mac_mode IN ('', 'hardware', 'randomized', 'laa')),
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
 	}
 
 	for _, query := range queries {

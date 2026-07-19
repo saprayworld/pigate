@@ -130,6 +130,12 @@ func (s *BackupService) Export(includeUsers bool, passphrase string) (*model.Bac
 		return nil, fmt.Errorf("read qos rules: %w", err)
 	}
 
+	// Presets carry their plaintext password into the backup — same treatment
+	// as network_interfaces' wifi_password fields above (interfaces).
+	if cfg.Presets, err = s.repo.GetWifiPresets(); err != nil {
+		return nil, fmt.Errorf("read wifi presets: %w", err)
+	}
+
 	sysTime, err := s.repo.GetSystemTimeSettings()
 	if err != nil {
 		return nil, fmt.Errorf("read system time: %w", err)
@@ -699,6 +705,15 @@ func validateConfig(cfg model.BackupConfig) error {
 			return fmt.Errorf("dhcp config %q: %w", c.Interface, err)
 		}
 	}
+	// Wi-Fi presets carry a plaintext password that later feeds
+	// GenerateWpaConfig (kernel/wpa.go) via /apply — validate the same way as
+	// DhcpConfigs/DnsZones above: one bad preset rejects the whole import
+	// before any write (fail-closed).
+	for _, p := range cfg.Presets {
+		if err := model.ValidateWifiPreset(p); err != nil {
+			return fmt.Errorf("wifi preset %q: %w", p.Name, err)
+		}
+	}
 	return nil
 }
 
@@ -720,6 +735,7 @@ func configCounts(cfg model.BackupConfig) map[string]int {
 		"dnsRecords":       records,
 		"qosRules":         len(cfg.QosRules),
 		"users":            len(cfg.Users),
+		"wifiPresets":      len(cfg.Presets),
 	}
 }
 

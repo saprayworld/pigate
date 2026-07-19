@@ -941,6 +941,159 @@ paths:
           description: Interface is offline (has no live kernel link); only delete is allowed
 
   # =========================================================================
+  # WI-FI PRESETS (SAVED NETWORKS)
+  # =========================================================================
+  /wifi-presets:
+    get:
+      tags:
+        - Wi-Fi Presets
+      summary: List all saved Wi-Fi presets (super_admin only)
+      description: >-
+        Returns the saved-network library. The stored password is write-only and
+        is NEVER included in the response; each item carries a `hasPassword`
+        boolean instead.
+      responses:
+        '200':
+          description: List of Wi-Fi presets (no passwords)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WifiPreset'
+        '403':
+          description: Caller is not a super_admin
+    post:
+      tags:
+        - Wi-Fi Presets
+      summary: Create a new Wi-Fi preset (super_admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WifiPresetInput'
+      responses:
+        '200':
+          description: Preset created (response has no password)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WifiPreset'
+        '400':
+          description: Validation failed (empty name/ssid, bad security/macMode, or newline/quote in ssid/password)
+        '403':
+          description: Caller is not a super_admin
+        '409':
+          description: A preset with the same name already exists
+
+  /wifi-presets/{id}:
+    put:
+      tags:
+        - Wi-Fi Presets
+      summary: Update an existing Wi-Fi preset (super_admin only)
+      description: >-
+        Submit an empty `password` to keep the currently stored password
+        unchanged; a non-empty value replaces it.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WifiPresetInput'
+      responses:
+        '200':
+          description: Preset updated (response has no password)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WifiPreset'
+        '400':
+          description: Validation failed
+        '403':
+          description: Caller is not a super_admin
+        '404':
+          description: Preset not found
+        '409':
+          description: Another preset already uses the requested name
+    delete:
+      tags:
+        - Wi-Fi Presets
+      summary: Delete a Wi-Fi preset (super_admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Preset deleted
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+        '403':
+          description: Caller is not a super_admin
+        '404':
+          description: Preset not found
+
+  /wifi-presets/{id}/apply:
+    post:
+      tags:
+        - Wi-Fi Presets
+      summary: Apply a preset to an interface's primary or backup Wi-Fi slot (super_admin only)
+      description: >-
+        Server-side apply — the backend reads the preset's password from the DB
+        and drives the existing wpa_supplicant configuration flow itself. The
+        password never travels through the browser: the request body carries only
+        `interfaceId` and `slot`, and the returned interface has its passwords
+        masked.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - interfaceId
+                - slot
+              properties:
+                interfaceId:
+                  type: string
+                  example: iface-wlan0
+                slot:
+                  type: string
+                  enum: [primary, backup]
+                  example: primary
+      responses:
+        '200':
+          description: Preset applied; the updated interface is returned with passwords masked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NetworkInterface'
+        '400':
+          description: Invalid slot, or the target interface is not wireless
+        '403':
+          description: Caller is not a super_admin
+        '404':
+          description: Preset or interface not found
+
+  # =========================================================================
   # FIREWALL POLICIES
   # =========================================================================
   /policies:
@@ -3629,6 +3782,74 @@ components:
           type: string
           example: Local LAN network subnet card
 
+    # --- Wi-Fi Preset Schemas ---
+    WifiPreset:
+      type: object
+      description: >-
+        A saved Wi-Fi network. Returned by GET/create/update responses — the
+        password is write-only and is never present here; `hasPassword` reports
+        whether one is stored.
+      required:
+        - id
+        - name
+        - ssid
+        - security
+        - hasPassword
+      properties:
+        id:
+          type: string
+          example: wifi-preset-3f9a
+        name:
+          type: string
+          example: Home
+        ssid:
+          type: string
+          example: MyHomeNetwork
+        security:
+          type: string
+          enum: [Open, WPA2, WPA2-PSK, WPA3, WPA2/WPA3]
+          example: WPA2
+        macMode:
+          type: string
+          enum: ["", hardware, randomized, laa]
+          description: Optional MAC address mode to apply with this preset; empty leaves it untouched.
+          example: hardware
+        hasPassword:
+          type: boolean
+          description: Read-only; true when a password is stored. The plaintext value is never returned.
+          example: true
+
+    WifiPresetInput:
+      type: object
+      required:
+        - name
+        - ssid
+        - security
+      properties:
+        name:
+          type: string
+          example: Home
+        ssid:
+          type: string
+          example: MyHomeNetwork
+        security:
+          type: string
+          enum: [Open, WPA2, WPA2-PSK, WPA3, WPA2/WPA3]
+          example: WPA2
+        password:
+          type: string
+          format: password
+          writeOnly: true
+          description: >-
+            Write-only. Stored plaintext in the DB (same as interface Wi-Fi) and
+            never returned. On update, submit an empty string to keep the existing
+            password. Must not contain newline or double-quote characters.
+          example: s3cr3t-passphrase
+        macMode:
+          type: string
+          enum: ["", hardware, randomized, laa]
+          example: hardware
+
     # --- Service Object Schemas ---
     ServiceObject:
       type: object
@@ -4271,7 +4492,7 @@ components:
             Typed configuration sections (present only when NOT encrypted). Arrays
             reuse the same item schemas as their live endpoints (interfaces,
             staticRoutes, addresses, serviceObjects, policies, dhcpConfigs,
-            dhcpReservations, dnsZones, qosRules) plus singletons
+            dhcpReservations, dnsZones, qosRules, presets) plus singletons
             dnsServerSettings, systemDns, systemTime, systemHostname, and an
             optional users array.
           properties:
@@ -4315,6 +4536,14 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/QosRule'
+            presets:
+              type: array
+              description: >-
+                Saved Wi-Fi presets. Unlike the API's GET responses, backup
+                entries DO carry the plaintext `password` (a backup must be
+                restorable) — same as interface Wi-Fi passwords in this file.
+              items:
+                $ref: '#/components/schemas/WifiPresetInput'
             systemTime:
               $ref: '#/components/schemas/SystemTimeSettings'
             systemHostname:

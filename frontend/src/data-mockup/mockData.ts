@@ -370,6 +370,49 @@ export const mockWifiScanResults: WifiScanResult[] = [
   { ssid: "Office_5G_Secured", signal: 62, security: "WPA2-Enterprise", channel: 149, frequency: "5 GHz" }
 ]
 
+// Wi-Fi Saved-Networks (Preset) library — see docs/ref/todo/wifi-presets-plan.md.
+// Password is intentionally never part of this type: the backend never returns
+// it (only `hasPassword`), so the mock layer mirrors that shape exactly.
+export type WifiPresetSecurity = "Open" | "WPA2" | "WPA2-PSK" | "WPA3" | "WPA2/WPA3"
+export type WifiPresetMacMode = "" | "hardware" | "randomized" | "laa"
+
+export interface WifiPreset {
+  id: string
+  name: string
+  ssid: string
+  security: WifiPresetSecurity
+  macMode?: WifiPresetMacMode
+  hasPassword: boolean
+}
+
+// Mock seed presets — no real plaintext passwords, only the hasPassword flag.
+export const initialWifiPresets: WifiPreset[] = [
+  {
+    id: "wifi-preset-home5g",
+    name: "Home 5G",
+    ssid: "MyHome_5G",
+    security: "WPA2",
+    macMode: "hardware",
+    hasPassword: true,
+  },
+  {
+    id: "wifi-preset-office",
+    name: "Office",
+    ssid: "Office_5G_Secured",
+    security: "WPA2/WPA3",
+    macMode: "randomized",
+    hasPassword: true,
+  },
+  {
+    id: "wifi-preset-guest",
+    name: "Guest Open",
+    ssid: "Cafe_Free_WiFi",
+    security: "Open",
+    macMode: "",
+    hasPassword: false,
+  },
+]
+
 // Types for Static Routing
 export interface StaticRoute {
   id: string

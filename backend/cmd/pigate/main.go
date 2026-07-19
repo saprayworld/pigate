@@ -157,6 +157,11 @@ func main() {
 
 	// 5. Instantiate Server & Router
 	ifaceService := service.NewInterfaceService(repo, net)
+	// Wi-Fi saved-networks (preset) library (issue #66). No kernel capability of
+	// its own — apply just prepares a NetworkInterface and reuses ifaceService's
+	// existing ApplyInterfaceConfig path, so there is nothing to apply at startup
+	// (interfaces retain their own copy once a preset has been applied to them).
+	wifiPresetService := service.NewWifiPresetService(repo, ifaceService)
 	dhcpcdService := service.NewDhcpcdService(repo, ifaceService, dhcpcd)
 	routingService := service.NewRoutingService(repo, rt)
 	routingService.SetEnableEditSystemRoute(cfg.EnableEditSystemRoute)
@@ -287,7 +292,7 @@ func main() {
 		netlinkMonitor,
 	)
 
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker, wifiPresetService)
 
 	// Apply config form database to kernel
 
