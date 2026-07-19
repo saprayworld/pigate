@@ -554,6 +554,9 @@ func (s *Server) HandleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 	if updates.RandomizeOnReconnect != nil {
 		iface.RandomizeOnReconnect = updates.RandomizeOnReconnect
 	}
+	if updates.Prefer5GHz != nil {
+		iface.Prefer5GHz = updates.Prefer5GHz
+	}
 	if updates.BackupSSID != nil {
 		iface.BackupSSID = updates.BackupSSID
 	}
@@ -759,6 +762,7 @@ func (s *Server) HandlePatchInterface(w http.ResponseWriter, r *http.Request) {
 	updatePtrString("macMode", &iface.MacMode)
 	updatePtrString("laaMacAddress", &iface.LaaMacAddress)
 	updatePtrBool("randomizeOnReconnect", &iface.RandomizeOnReconnect)
+	updatePtrBool("prefer5GHz", &iface.Prefer5GHz)
 	updatePtrBool("failoverEnabled", &iface.FailoverEnabled)
 	updatePtrString("backupSsid", &iface.BackupSSID)
 	updatePtrString("backupWifiSecurity", &iface.BackupWifiSecurity)
