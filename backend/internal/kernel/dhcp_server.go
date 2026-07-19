@@ -52,6 +52,14 @@ func (m *RealDhcpManager) ApplyConfig(cfgs []model.DhcpConfig, reservations []mo
 			continue
 		}
 
+		// Defense-in-depth: skip any scope whose interface/IP fields would inject
+		// a dnsmasq directive. Handler + import paths reject these first; this is
+		// the last line before the values reach the config file.
+		if err := model.ValidateDhcpConfig(cfg); err != nil {
+			log.Printf("[DHCP Server] Skipping invalid DHCP config (iface=%q start=%q end=%q): %v", cfg.Interface, cfg.StartIP, cfg.EndIP, err)
+			continue
+		}
+
 		// Verify if interface exists in the OS
 		if _, err := os.Stat("/sys/class/net/" + cfg.Interface); os.IsNotExist(err) {
 			log.Printf("[DHCP Server] Interface %s does not exist in OS, skipping config", cfg.Interface)

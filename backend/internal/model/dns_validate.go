@@ -166,6 +166,52 @@ func ValidateReservationName(name string) error {
 	return nil
 }
 
+// ValidateDhcpConfig validates the DhcpConfig fields that are written verbatim
+// into the dnsmasq config (pigate-dhcp.conf): the interface name and the scope's
+// IPv4 addresses. It REJECTS rather than strips or trims, so a value carrying a
+// newline or edge whitespace can never reach the generated file.
+//
+// StartIP/EndIP are required; gateway/dns1/dns2 are optional (empty is allowed,
+// matching the writer, which emits their directives only when non-empty) but must
+// be a valid IPv4 address when present. IPv6 is rejected: dnsmasq's dhcp-range is
+// IPv4-only here, and a v6 value would fail `dnsmasq --test` for the whole file.
+//
+// Netmask is intentionally not validated: it is never written to the dnsmasq file
+// (it only drives subnet mapping in the service layer), so it is not an injection
+// surface. Subnet-mask sanity is a separate correctness concern, out of scope here.
+func ValidateDhcpConfig(cfg DhcpConfig) error {
+	if err := ValidateInterfaceName(cfg.Interface); err != nil {
+		return err
+	}
+	fields := []struct {
+		name     string
+		val      string
+		required bool
+	}{
+		{"startIp", cfg.StartIP, true},
+		{"endIp", cfg.EndIP, true},
+		{"gateway", cfg.Gateway, false},
+		{"dns1", cfg.DNS1, false},
+		{"dns2", cfg.DNS2, false},
+	}
+	for _, f := range fields {
+		if f.val == "" {
+			if f.required {
+				return fmt.Errorf("dhcp %s must not be empty", f.name)
+			}
+			continue
+		}
+		// No TrimSpace: the value is interpolated verbatim into the config file,
+		// so edge whitespace must be rejected, not silently accepted then written.
+		// net.ParseIP already rejects any control char/space/newline; .To4()
+		// additionally rejects IPv6 (see doc comment).
+		if ip := net.ParseIP(f.val); ip == nil || ip.To4() == nil {
+			return fmt.Errorf("dhcp %s %q is not a valid IPv4 address", f.name, f.val)
+		}
+	}
+	return nil
+}
+
 // ValidateReservation validates every field of a reservation that is written to
 // the dnsmasq config: the MAC address, the reserved IP, and the device name.
 // MAC and IP are validated only when both are set, matching the writer, which

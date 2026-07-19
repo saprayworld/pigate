@@ -311,15 +311,17 @@ export default function DhcpServer() {
     }
 
     try {
+      // Trim before sending: the backend validates the values verbatim (no trim)
+      // and rejects edge whitespace, matching how the reservation form submits.
       const cfgPayload: DhcpConfig = {
         enabled: editingConfig ? editingConfig.enabled : true,
-        interface: formInterface,
-        startIp: formStartIp,
-        endIp: formEndIp,
-        gateway: formGateway,
-        netmask: formNetmask,
-        dns1: formDns1,
-        dns2: formDns2,
+        interface: formInterface.trim(),
+        startIp: formStartIp.trim(),
+        endIp: formEndIp.trim(),
+        gateway: formGateway.trim(),
+        netmask: formNetmask.trim(),
+        dns1: formDns1.trim(),
+        dns2: formDns2.trim(),
         leaseTime: leaseTimeVal
       }
 

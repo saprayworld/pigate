@@ -1,0 +1,62 @@
+[
+  {
+    "file": "backend/internal/model/dns_validate.go",
+    "line": 211,
+    "summary": "ValidateDhcpConfig ใช้ net.ParseIP เปล่า ๆ จึงยอมรับ IPv6 — scope เดียวที่มีค่า IPv6 ทำให้ dnsmasq --test ล้มและบล็อกการ apply DHCP ของทุก interface",
+    "failure_scenario": "POST /api/dhcp/configs ด้วย StartIP=\"fe80::1\" → 200 และถูกบันทึก; ทุกครั้งที่ apply, writer เขียน dhcp-range=eth0,fe80::1,... → dnsmasq --test fail (\"bad dhcp-range\", ยืนยันด้วยการรันจริง) → ApplyConfig ล้มทั้งก้อน /api/dhcp/apply คืน 500 และ DHCP ทุก interface ไม่ถูก apply จนกว่าจะลบ row นั้น — แก้ด้วย idiom `ip == nil || ip.To4() == nil` ที่ package นี้ใช้อยู่แล้ว (port_forward_validate.go:40, dns_validate.go:94)"
+  },
+  {
+    "file": "backend/internal/service/backup.go",
+    "line": 691,
+    "summary": "Import validate DhcpConfigs ทุกตัวรวม disabled scope โดยไม่มี grandfathering ทำให้ backup เก่า (รวม legacy v1) restore ไม่ได้ทั้งไฟล์",
+    "failure_scenario": "Export ไม่ validate แต่ import validate หมด: DB ที่มี disabled scope ค่าว่าง/เพี้ยน (สร้างผ่าน API ยุคก่อน validate) export ได้แต่ re-import ล้มทั้งไฟล์ (\"dhcp endIp must not be empty\") ทั้งที่ scope นั้น inert (writer ข้าม !Enabled ก่อน validate อยู่แล้ว); mapLegacyV1 (backup.go:611) ห่อ v1 dhcp config แม้เป็น zero-value → backup v1 เก่า restore ไม่ได้เลย — ต่างจาก ValidateReservation ที่ข้ามคู่ MAC/IP ว่าง"
+  },
+  {
+    "file": "backend/internal/kernel/dhcp_server.go",
+    "line": 58,
+    "summary": "การ skip เงียบ ๆ ใน kernel + toggle handler ที่ไม่ validate ทำให้ scope เสียถูกเปิดใช้และ apply รายงานสำเร็จทั้งที่ LAN ไม่มี DHCP",
+    "failure_scenario": "Row เก่าที่ไม่ผ่าน validator: HandleToggleDHCPConfig (handlers.go:1858) เปิด enabled ได้ 200 (UPDATE ตรงไม่ validate), ApplyConfig ข้าม scope แล้ว return nil → /api/dhcp/apply คืน 200, UI โชว์ ACTIVE แต่ไม่มี lease แจก — ที่ HEAD เคสพัง syntax เคยได้ 500 ชัด ๆ จาก dnsmasq --test (เคส injection เท่านั้นที่เคยรอด --test)"
+  },
+  {
+    "file": "backend/internal/model/dns_validate.go",
+    "line": 211,
+    "summary": "ParseIP แบบเข้ม (ไม่รับ zero-padded octet/whitespace ขอบ) reject ค่าที่ handler ยุคเก่าเคยบันทึกและ frontend ยังถือว่า valid",
+    "failure_scenario": "Row เดิมใน DB เช่น \"192.168.001.100\" (frontend isValidIp regex ยอมรับ, dnsmasq ใช้ได้จริง, ทำงานที่ HEAD): หลังอัปเกรดถูก skip เงียบ ๆ ตอน ApplyConfig (DHCP interface นั้นดับ, เหลือแค่ log), แก้ผ่าน UI โดน 400 ทุกครั้งจนกว่าจะพิมพ์ IP ใหม่, และ export ของ DB นั้น import กลับไม่ได้"
+  },
+  {
+    "file": "backend/internal/kernel/dhcp_server.go",
+    "line": 58,
+    "summary": "Defense-in-depth ชั้น kernel เข้มกว่าที่ writer เขียนจริง — Netmask ไม่เคยถูกเขียนลงไฟล์แต่ทำ scope ทั้งอันถูก skip ได้",
+    "failure_scenario": "Row เก่ามี Netmask \"24\" หรือ \" 255.255.255.0\" (ช่อง netmask เป็น free-text Input): ที่ HEAD scope นี้แจก lease ปกติ (writer ไม่แตะ netmask, findInterfaceForIP ก็ nil-check อยู่แล้ว) แต่หลังอัปเกรด boot-time InitApplyConfig skip ทั้ง scope → LAN ดับ — ชั้น kernel ควรเช็คเฉพาะฟิลด์ที่ถูก interpolate ลงไฟล์จริง"
+  },
+  {
+    "file": "backend/internal/model/dns_validate.go",
+    "line": 192,
+    "summary": "คำอ้างใน doc comment ว่า validation กัน netmask เพี้ยนไม่ให้พัง subnet mapping ไม่เป็นจริง — IP ที่ไม่ใช่ mask (0.0.0.0, 8.8.8.8) ผ่านและพัง mapping ได้",
+    "failure_scenario": "Netmask=\"0.0.0.0\" ผ่าน ParseIP → findInterfaceForIP สร้าง network /0 ซึ่ง Contains() ทุก IP (ยืนยันเชิงประจักษ์) → lease event ทุกตัวถูก map เข้า interface ของ scope แรกที่เจอ — ควรเช็คเป็น contiguous IPv4 mask หรือแก้ comment ไม่ให้อ้างเกินจริง"
+  },
+  {
+    "file": "frontend/src/pages/DhcpServer.tsx",
+    "line": 317,
+    "summary": "Frontend validate ด้วยค่า trim แล้ว แต่ส่งค่าดิบไม่ trim ให้ backend ที่ตอนนี้ reject whitespace ขอบ",
+    "failure_scenario": "ผู้ใช้ paste \"192.168.1.10 \" (space ท้าย): isValidIp (utils.ts:10) trim ก่อนเช็คเลยผ่าน, handleSaveConfig ส่ง formStartIp ดิบ → 400 พร้อม error ภาษาอังกฤษดิบในฟอร์มภาษาไทย — ฟอร์ม reservation ในไฟล์เดียวกัน trim ก่อนส่ง (:408) แต่ config form ไม่ trim"
+  },
+  {
+    "file": "backend/internal/api/handlers.go",
+    "line": 1833,
+    "summary": "PUT handlers validate แม้ enabled:false — API client ที่เคย PUT ปิด row เก่าที่เพี้ยนเพื่อ neutralize จะโดน 400 (เคยสำเร็จที่ HEAD)",
+    "failure_scenario": "PUT /api/dhcp/configs/{id} ด้วย row เดิมที่ EndIP ว่าง + enabled:false → 400 \"dhcp endIp must not be empty\"; ทางออกเหลือแค่ toggle/DELETE — พฤติกรรมนี้ defensible (กัน toggle เปิดกลับ) แต่เป็น behavior change ที่ควรระบุใน release note"
+  },
+  {
+    "file": "backend/internal/kernel/mock.go",
+    "line": 182,
+    "summary": "MockDhcp.ApplyConfig เป็น no-op ไม่มี validate-and-skip ทำให้พฤติกรรม skip ของ real kernel มองไม่เห็นใน dev loop แบบ -mock=true",
+    "failure_scenario": "นักพัฒนาเทสต์ด้วย -mock=true เห็น config apply ผ่านหมด แต่บนบอร์ดจริง scope เดียวกันถูก skip เงียบ ๆ — เพิ่ม loop validate เดียวกัน (log-and-skip) ใน mock เป็น parity ราคาถูกตามกติกา CLAUDE.md เรื่อง implement ทั้ง real และ mock"
+  },
+  {
+    "file": "backend/internal/model/dns_validate.go",
+    "line": 169,
+    "summary": "ย่อหน้าแรกของ doc comment (ตัวอย่าง injection + dnsmasq --test + REJECT-not-strip) ซ้ำกับ package header แทบคำต่อคำ",
+    "failure_scenario": "Rationale เดียวกันอยู่ 2 ที่ในไฟล์เดียว — แก้ policy แล้วอีกจุด drift; sibling validators ใช้ comment 3-5 บรรทัดเฉพาะข้อเท็จจริงของฟังก์ชัน — ควรเหลือเฉพาะส่วน no-trim/required-vs-optional/Netmask note"
+  }
+]

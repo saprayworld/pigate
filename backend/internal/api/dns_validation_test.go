@@ -59,4 +59,19 @@ func TestDNSAndDHCPInjectionRejected(t *testing.T) {
 	}); code == http.StatusBadRequest {
 		t.Errorf("valid reservation was rejected with 400")
 	}
+
+	// Injected DHCP scope startIp → 400.
+	if code := post("/api/dhcp/configs", model.DhcpConfig{
+		Interface: "eth0", StartIP: "192.168.1.10\naddress=/evil/6.6.6.6", EndIP: "192.168.1.200",
+	}); code != http.StatusBadRequest {
+		t.Errorf("injected DHCP config startIp: expected 400, got %d", code)
+	}
+
+	// Clean DHCP scope → not 400.
+	if code := post("/api/dhcp/configs", model.DhcpConfig{
+		Interface: "eth0", StartIP: "192.168.1.10", EndIP: "192.168.1.200",
+		Gateway: "192.168.1.1", Netmask: "255.255.255.0", DNS1: "1.1.1.1",
+	}); code == http.StatusBadRequest {
+		t.Errorf("valid DHCP config was rejected with 400")
+	}
 }
