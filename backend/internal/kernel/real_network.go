@@ -100,9 +100,9 @@ func (r *RealNetwork) ToggleInterface(name string, up bool) error {
 }
 
 // ConfigureWifi writes the wpa_supplicant config file atomically and reloads/starts the service.
-func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string, backupSecurity string, macMode string) error {
-	log.Printf("[RealNetwork] ConfigureWifi started: interface=%s, SSID=%q, Security=%s, BackupSSID=%q, BackupSecurity=%s, MacMode=%s",
-		name, ssid, security, backupSSID, backupSecurity, macMode)
+func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string, backupSecurity string, macMode string, prefer5GHz bool) error {
+	log.Printf("[RealNetwork] ConfigureWifi started: interface=%s, SSID=%q, Security=%s, BackupSSID=%q, BackupSecurity=%s, MacMode=%s, Prefer5GHz=%t",
+		name, ssid, security, backupSSID, backupSecurity, macMode, prefer5GHz)
 
 	// Validate interface name to prevent traversal or command parameter injection
 	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "..") {
@@ -115,7 +115,7 @@ func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, s
 	}
 
 	// Generate the wpa_supplicant config content
-	configContent := GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode)
+	configContent := GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode, prefer5GHz)
 
 	// Determine the paths
 	configPath := filepath.Join(wpaConfigDir, fmt.Sprintf("wpa_supplicant-%s.conf", name))

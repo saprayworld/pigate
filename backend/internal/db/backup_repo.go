@@ -343,16 +343,20 @@ func restoreInterface(tx *sql.Tx, iface model.NetworkInterface) error {
 	if iface.FailoverEnabled != nil && *iface.FailoverEnabled {
 		fo = 1
 	}
+	prefer5GHz := 0
+	if iface.Prefer5GHz != nil && *iface.Prefer5GHz {
+		prefer5GHz = 1
+	}
 	res, err := tx.Exec(`UPDATE network_interfaces SET
 		alias = ?, role = ?, addressing_mode = ?, ip = ?, netmask = ?, gateway = ?, metric = ?, admin_access = ?,
 		mac_mode = ?, randomized_mac = ?, laa_mac_address = ?, randomize_on_reconnect = ?,
 		connected_ssid = ?, wifi_password = ?, wifi_security = ?, failover_enabled = ?, backup_ssid = ?, backup_wifi_password = ?, backup_wifi_security = ?,
-		ip_check_timeout = ?, primary_max_retries = ?, failover_cooldown = ?
+		ip_check_timeout = ?, primary_max_retries = ?, failover_cooldown = ?, prefer_5ghz = ?
 		WHERE id = ?`,
 		iface.Alias, iface.Role, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.Metric, adminAccess,
 		iface.MacMode, iface.RandomizedMac, iface.LaaMacAddress, recon,
 		iface.WifiSSID, iface.WifiPassword, iface.WifiSecurity, fo, iface.BackupSSID, iface.BackupWifiPassword, iface.BackupWifiSecurity,
-		iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown, iface.ID)
+		iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown, prefer5GHz, iface.ID)
 	if err != nil {
 		return fmt.Errorf("restore interface %q: %w", iface.Name, err)
 	}
@@ -367,12 +371,12 @@ func restoreInterface(tx *sql.Tx, iface model.NetworkInterface) error {
 			id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, metric, mac_address, admin_access, status, speed,
 			mac_mode, randomized_mac, laa_mac_address, randomize_on_reconnect,
 			connected_ssid, wifi_password, wifi_security, failover_enabled, backup_ssid, backup_wifi_password, backup_wifi_security,
-			ip_check_timeout, primary_max_retries, failover_cooldown, vlan_parent, vlan_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			ip_check_timeout, primary_max_retries, failover_cooldown, vlan_parent, vlan_id, prefer_5ghz
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			iface.ID, iface.Name, iface.Alias, iface.Role, iface.Type, iface.Subtype, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.Metric, iface.MacAddress, adminAccess, iface.Status, iface.Speed,
 			iface.MacMode, iface.RandomizedMac, iface.LaaMacAddress, recon,
 			iface.WifiSSID, iface.WifiPassword, iface.WifiSecurity, fo, iface.BackupSSID, iface.BackupWifiPassword, iface.BackupWifiSecurity,
-			iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown, iface.VlanParent, iface.VlanID); err != nil {
+			iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown, iface.VlanParent, iface.VlanID, prefer5GHz); err != nil {
 			return fmt.Errorf("restore vlan interface %q: %w", iface.Name, err)
 		}
 	}

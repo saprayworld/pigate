@@ -180,7 +180,8 @@ type NetworkInterface struct {
 	WifiSSID             *string `json:"wifiSSID,omitempty"`
 	WifiPassword         *string `json:"wifiPassword,omitempty"`
 	WifiSecurity         *string `json:"wifiSecurity,omitempty"`
-	MacMode              *string `json:"macMode,omitempty"` // "hardware", "randomized", "laa"
+	MacMode              *string `json:"macMode,omitempty"`    // "hardware", "randomized", "laa"
+	Prefer5GHz           *bool   `json:"prefer5GHz,omitempty"` // true = restrict radio to 5GHz channels (freq_list) in wpa_supplicant config
 	RealMacAddress       *string `json:"realMacAddress,omitempty"`
 	RandomizedMac        *string `json:"randomizedMac,omitempty"`
 	LaaMacAddress        *string `json:"laaMacAddress,omitempty"`

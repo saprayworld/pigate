@@ -88,8 +88,9 @@ func (m *MockNetwork) ConfigureInterface(name string, mode string, ip string, ne
 	return nil
 }
 
-func (m *MockNetwork) ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string, backupSecurity string, macMode string) error {
+func (m *MockNetwork) ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string, backupSecurity string, macMode string, prefer5GHz bool) error {
 	// Mock success
+	log.Printf("[MockNetwork] ConfigureWifi: %s SSID=%q Security=%s MacMode=%s Prefer5GHz=%t", name, ssid, security, macMode, prefer5GHz)
 	return nil
 }
 

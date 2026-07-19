@@ -743,6 +743,9 @@ paths:
                 macMode:
                   type: string
                   enum: [hardware, randomized, laa]
+                prefer5GHz:
+                  type: boolean
+                  description: Lock Wi-Fi scanning to 5GHz channels only (adds freq_list to wpa_supplicant network block) for maximum speed.
                 laaMacAddress:
                   type: string
                 randomizeOnReconnect:
@@ -3242,6 +3245,9 @@ components:
             - randomized: let wpa_supplicant randomize MAC per-connection (preassoc_mac_addr=1, mac_addr=1)
             - laa: use a locally administered address (LAA) specified in laaMacAddress
           example: hardware
+        prefer5GHz:
+          type: boolean
+          description: Lock Wi-Fi scanning to 5GHz channels only (adds freq_list to wpa_supplicant network block) for maximum speed.
         realMacAddress:
           type: string
           description: The actual hardware MAC burned into the NIC

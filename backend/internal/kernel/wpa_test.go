@@ -30,19 +30,53 @@ func TestSanitizeWpaInput(t *testing.T) {
 	}
 }
 
+// assertGlobalHeaderAndScanStability verifies the mandatory global header
+// ordering (ctrl_interface first, update_config second) and that the
+// scan-stability lines added for issue #72 are present outside any
+// network={} block.
+func assertGlobalHeaderAndScanStability(t *testing.T, cfg string) {
+	t.Helper()
+
+	lines := strings.Split(cfg, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("Config too short to contain mandatory header lines:\n%s", cfg)
+	}
+	if lines[0] != "ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev" {
+		t.Errorf("Expected ctrl_interface as the first line, got: %q", lines[0])
+	}
+	if lines[1] != "update_config=1" {
+		t.Errorf("Expected update_config=1 as the second line, got: %q", lines[1])
+	}
+
+	// The scan-stability lines must appear before the first network={} block
+	// (i.e. in the global header section), not inside it.
+	headerEnd := strings.Index(cfg, "network={")
+	if headerEnd == -1 {
+		t.Fatalf("Expected at least one network={} block in config:\n%s", cfg)
+	}
+	header := cfg[:headerEnd]
+
+	for _, want := range []string{"ap_scan=1", "autoscan=periodic:10", "disable_scan_offload=1"} {
+		if !strings.Contains(header, want) {
+			t.Errorf("Expected global header to contain %q, got header:\n%s", want, header)
+		}
+	}
+}
+
 // TestGenerateWpaConfig tests configuration file structure generation
 func TestGenerateWpaConfig(t *testing.T) {
 	// 1. Open Wifi
-	cfgOpen := GenerateWpaConfig("OpenSSID", "", "Open", "", "", "Open", "hardware")
+	cfgOpen := GenerateWpaConfig("OpenSSID", "", "Open", "", "", "Open", "hardware", false)
 	if !strings.Contains(cfgOpen, "ssid=\"OpenSSID\"") {
 		t.Errorf("Expected ssid OpenSSID in config, got:\n%s", cfgOpen)
 	}
 	if !strings.Contains(cfgOpen, "key_mgmt=NONE") {
 		t.Errorf("Expected key_mgmt=NONE in config, got:\n%s", cfgOpen)
 	}
+	assertGlobalHeaderAndScanStability(t, cfgOpen)
 
 	// 2. WPA2-PSK
-	cfgWpa2 := GenerateWpaConfig("Wpa2SSID", "wpa2pass", "WPA2-PSK", "", "", "WPA2", "hardware")
+	cfgWpa2 := GenerateWpaConfig("Wpa2SSID", "wpa2pass", "WPA2-PSK", "", "", "WPA2", "hardware", false)
 	if !strings.Contains(cfgWpa2, "ssid=\"Wpa2SSID\"") {
 		t.Errorf("Expected ssid Wpa2SSID in config, got:\n%s", cfgWpa2)
 	}
@@ -52,18 +86,20 @@ func TestGenerateWpaConfig(t *testing.T) {
 	if !strings.Contains(cfgWpa2, "key_mgmt=WPA-PSK") {
 		t.Errorf("Expected key_mgmt=WPA-PSK in config, got:\n%s", cfgWpa2)
 	}
+	assertGlobalHeaderAndScanStability(t, cfgWpa2)
 
 	// 3. WPA3-SAE
-	cfgWpa3 := GenerateWpaConfig("Wpa3SSID", "wpa3pass", "WPA3", "", "", "WPA2", "hardware")
+	cfgWpa3 := GenerateWpaConfig("Wpa3SSID", "wpa3pass", "WPA3", "", "", "WPA2", "hardware", false)
 	if !strings.Contains(cfgWpa3, "key_mgmt=SAE") {
 		t.Errorf("Expected key_mgmt=SAE in config, got:\n%s", cfgWpa3)
 	}
 	if !strings.Contains(cfgWpa3, "ieee80211w=2") {
 		t.Errorf("Expected ieee80211w=2 in config, got:\n%s", cfgWpa3)
 	}
+	assertGlobalHeaderAndScanStability(t, cfgWpa3)
 
 	// 4. Backup SSIDs
-	cfgBackup := GenerateWpaConfig("PrimarySSID", "primpass", "WPA2-PSK", "BackupSSID", "backpass", "WPA2", "hardware")
+	cfgBackup := GenerateWpaConfig("PrimarySSID", "primpass", "WPA2-PSK", "BackupSSID", "backpass", "WPA2", "hardware", false)
 	if !strings.Contains(cfgBackup, "priority=10") {
 		t.Errorf("Expected priority 10 in config, got:\n%s", cfgBackup)
 	}
@@ -76,9 +112,10 @@ func TestGenerateWpaConfig(t *testing.T) {
 	if !strings.Contains(cfgBackup, "priority=5") {
 		t.Errorf("Expected priority 5 in config, got:\n%s", cfgBackup)
 	}
+	assertGlobalHeaderAndScanStability(t, cfgBackup)
 
 	// 5. Randomized MAC Mode
-	cfgRand := GenerateWpaConfig("PrimarySSID", "primpass", "WPA2-PSK", "BackupSSID", "backpass", "WPA2", "randomized")
+	cfgRand := GenerateWpaConfig("PrimarySSID", "primpass", "WPA2-PSK", "BackupSSID", "backpass", "WPA2", "randomized", false)
 	if !strings.Contains(cfgRand, "preassoc_mac_addr=1") {
 		t.Errorf("Expected preassoc_mac_addr=1 in config, got:\n%s", cfgRand)
 	}
@@ -87,6 +124,45 @@ func TestGenerateWpaConfig(t *testing.T) {
 	if count != 2 {
 		t.Errorf("Expected mac_addr=1 to appear exactly 2 times (primary & backup), got %d times in config:\n%s", count, cfgRand)
 	}
+	assertGlobalHeaderAndScanStability(t, cfgRand)
+
+	// 6. Prefer 5GHz disabled: freq_list must not appear anywhere
+	cfgNo5GHz := GenerateWpaConfig("PrimarySSID", "primpass", "WPA2-PSK", "BackupSSID", "backpass", "WPA2", "hardware", false)
+	if strings.Contains(cfgNo5GHz, "freq_list") {
+		t.Errorf("Expected no freq_list when prefer5GHz=false, got:\n%s", cfgNo5GHz)
+	}
+	assertGlobalHeaderAndScanStability(t, cfgNo5GHz)
+
+	// 7. Prefer 5GHz enabled: freq_list must appear inside both the primary and
+	// backup network={} blocks, never in the global header.
+	cfg5GHz := GenerateWpaConfig("PrimarySSID", "primpass", "WPA2-PSK", "BackupSSID", "backpass", "WPA2", "hardware", true)
+	freqLine := "    freq_list=" + freqList5GHz
+	freqCount := strings.Count(cfg5GHz, freqLine)
+	if freqCount != 2 {
+		t.Errorf("Expected freq_list to appear exactly 2 times (primary & backup), got %d times in config:\n%s", freqCount, cfg5GHz)
+	}
+	headerEnd := strings.Index(cfg5GHz, "network={")
+	if headerEnd == -1 {
+		t.Fatalf("Expected at least one network={} block in config:\n%s", cfg5GHz)
+	}
+	if strings.Contains(cfg5GHz[:headerEnd], "freq_list") {
+		t.Errorf("freq_list must not appear in the global header, got header:\n%s", cfg5GHz[:headerEnd])
+	}
+	// Verify freq_list sits inside a network={} block, before its closing "}".
+	blocks := strings.Split(cfg5GHz, "network={")
+	for i, block := range blocks {
+		if i == 0 {
+			continue // pre-block header, already checked above
+		}
+		closeIdx := strings.Index(block, "}")
+		if closeIdx == -1 {
+			t.Fatalf("network={} block %d missing closing brace:\n%s", i, block)
+		}
+		if !strings.Contains(block[:closeIdx], "freq_list="+freqList5GHz) {
+			t.Errorf("Expected freq_list inside network={} block %d, got:\n%s", i, block[:closeIdx])
+		}
+	}
+	assertGlobalHeaderAndScanStability(t, cfg5GHz)
 }
 
 // TestSendWpaCommand tests UNIX domain datagram socket communication
@@ -247,7 +323,7 @@ func TestConfigureWifiAtomicWrite(t *testing.T) {
 	// To prevent executing real 'systemctl' command errors failing the test, we'll verify the config is created.
 	// Since wlan_test is not a systemctl service, starting it will fail, which is expected.
 	// Let's call ConfigureWifi and expect an error from systemctl, but check if the config file was written correctly!
-	err = netMgr.ConfigureWifi("wlan_test", "MyHomeSSID", "secpass", "WPA2-PSK", "BackupSSID", "backpass", "WPA2", "hardware")
+	err = netMgr.ConfigureWifi("wlan_test", "MyHomeSSID", "secpass", "WPA2-PSK", "BackupSSID", "backpass", "WPA2", "hardware", false)
 
 	// The file should have been written despite systemctl service failing to start
 	configPath := filepath.Join(tmpDir, "wpa_supplicant-wlan_test.conf")
@@ -347,7 +423,7 @@ func TestConfigureWifiCleansStaleSocket(t *testing.T) {
 
 	netMgr := NewRealNetwork()
 	// Call ConfigureWifi which will trigger the start path (since fake systemctl returns inactive)
-	_ = netMgr.ConfigureWifi("wlan_test_stale", "MyHomeSSID", "secpass", "WPA2-PSK", "", "", "WPA2", "hardware")
+	_ = netMgr.ConfigureWifi("wlan_test_stale", "MyHomeSSID", "secpass", "WPA2-PSK", "", "", "WPA2", "hardware", false)
 
 	// The stale socket file should have been deleted
 	if _, err := os.Stat(staleSocketPath); !os.IsNotExist(err) {

@@ -191,6 +191,9 @@ export default function Interfaces() {
   // Wi-Fi MAC Address Randomization & LAA Form State
   const [formMacMode, setFormMacMode] = useState<"hardware" | "randomized">("hardware")
 
+  // Wi-Fi Radio Band Preference
+  const [formPrefer5GHz, setFormPrefer5GHz] = useState(false)
+
   // Wi-Fi Backup & Failover Form State
   const [formFailoverEnabled, setFormFailoverEnabled] = useState(false)
   const [formBackupSSID, setFormBackupSSID] = useState("")
@@ -321,6 +324,9 @@ export default function Interfaces() {
 
     // MAC fields
     setFormMacMode(iface.macMode === "randomized" ? "randomized" : "hardware")
+
+    // Radio band preference
+    setFormPrefer5GHz(iface.prefer5GHz ?? false)
 
     // Failover fields
     setFormFailoverEnabled(iface.failoverEnabled ?? false)
@@ -694,6 +700,7 @@ export default function Interfaces() {
       if (editingIface.type === "wireless") {
         updates.wifiSSID = formSSID
         updates.macMode = formMacMode
+        updates.prefer5GHz = formPrefer5GHz
         updates.randomizedMac = ""
         updates.laaMacAddress = ""
         updates.randomizeOnReconnect = false
@@ -1402,6 +1409,24 @@ export default function Interfaces() {
                           : (editingIface && wifiLiveStatuses[editingIface.id]?.activeMac) || "สุ่มอัตโนมัติเมื่อเชื่อมต่อ"}
                       </span>
                     </div>
+                  </div>
+
+                  {/* Radio Band Preference */}
+                  <div className="flex items-center justify-between border-t border-border/50 pt-3">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="form-prefer-5ghz" className="block text-xs font-medium text-foreground">
+                        Prefer 5GHz
+                      </Label>
+                      <p className="text-[10px] text-muted-foreground">
+                        ล็อกจับเฉพาะคลื่น 5GHz เพื่อความเร็วสูงสุด
+                      </p>
+                    </div>
+                    <Switch
+                      id="form-prefer-5ghz"
+                      size="sm"
+                      checked={formPrefer5GHz}
+                      onCheckedChange={setFormPrefer5GHz}
+                    />
                   </div>
                 </div>
 
