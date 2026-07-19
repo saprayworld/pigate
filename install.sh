@@ -324,6 +324,26 @@ EOF
     log_ok "สร้างไฟล์ ${DHCPCD_CONF_FILE} สำเร็จ"
 fi
 
+# สร้างไฟล์ bootstrap config /var/lib/pigate/pigate.conf หากยังไม่มี (อ่านโดย
+# pigate ผ่าน -config ใน ExecStart ดู STEP 7) — ค่า production เท่านั้นที่ระบุ
+# ตรงนี้ (mock=false, db, https-port=443, docker-compat=false); คีย์อื่นที่ไม่ระบุ
+# จะใช้ code default (ดู backend/internal/config/config.go: Defaults()).
+# ค่าจาก CLI flag ใน ExecStart ยังชนะไฟล์นี้เสมอ (ดู docs/ref/todo/config-file-loader-plan.md)
+# ถ้ามีไฟล์อยู่แล้ว (เช่น admin แก้เอง หรือ update ซ้ำ) จะไม่ทับ
+PIGATE_CONF_FILE="/var/lib/pigate/pigate.conf"
+if [[ ! -f "${PIGATE_CONF_FILE}" ]]; then
+    cat > "${PIGATE_CONF_FILE}" << 'EOF'
+# Managed by PiGate installer. แก้ไขค่าได้ที่ไฟล์นี้; ค่าจาก CLI flag จะชนะค่านี้
+mock=false
+db=/var/lib/pigate/pigate.db
+https-port=443
+docker-compat=false
+EOF
+    chown pigate:netdev "${PIGATE_CONF_FILE}"
+    chmod 0644 "${PIGATE_CONF_FILE}"
+    log_ok "สร้างไฟล์ ${PIGATE_CONF_FILE} สำเร็จ"
+fi
+
 # dhcpcd persists its DUID, IPv6 privacy secret, and lease files under /var/lib/dhcpcd.
 # ตั้งแต่ปรับให้ dhcpcd รันผ่าน dhcpcd@.service เป็น root ของตัวเอง (ดู STEP 2.2)
 # ไดเรกทอรีนี้ไม่จำเป็นต้องเป็นของ user pigate อีกต่อไป (root เขียนได้อยู่แล้ว
@@ -543,7 +563,7 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
 RuntimeDirectory=pigate dhcpcd
 RuntimeDirectoryMode=0755
-ExecStart=/usr/local/bin/pigate -mock=false -db=/var/lib/pigate/pigate.db -https-port=443
+ExecStart=/usr/local/bin/pigate -config=/var/lib/pigate/pigate.conf -mock=false -db=/var/lib/pigate/pigate.db -https-port=443
 Restart=on-failure
 RestartSec=5s
 

@@ -24,6 +24,8 @@ sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend   # required for real 
 ```
 Other relevant `main.go` flags: `-mock-from-real` (mock layer seeded from real kernel state), `-allow-edit-system-routes`, `-enable-edit-system-route`, `-prioritize-kernel-routes`, `-docker-compat`, `-allow-dev-cors` (echo CORS headers for the `localhost:5173/3000` frontend dev servers; off by default — pass it when running `yarn dev` against this backend, otherwise the browser blocks the cross-origin API calls).
 
+**Config file (`-config`)**: any of the above flags can also be set from a `key=value` file (keys are the flag names 1:1, minus the leading `-`; comments start with `#`). Precedence is **code default < config file < CLI flag explicitly passed** — a flag you actually pass always wins over the file, so a flag left in the systemd unit silently overrides the same key in the file (relevant because the installed `ExecStart` keeps `-mock=false -db=… -https-port=443` as belt-and-suspenders; editing those three keys in the file has no effect while they stay in the unit). Resolution lives in the pure `internal/config` package (`Parse`/`Resolve`/`Write`), so `main.go` stays thin. With `-config=/path` a missing file is a hard error; with no `-config` the default path `/var/lib/pigate/pigate.conf` is auto-created from code defaults on first run (a write failure only warns). `install.sh` seeds that file with production values (`mock=false`, `db=/var/lib/pigate/pigate.db`, `https-port=443`, `docker-compat=false`) before first start.
+
 ### Frontend (React 19 + Vite + Tailwind + shadcn/ui, in `frontend/`)
 ```bash
 cd frontend
