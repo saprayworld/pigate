@@ -58,6 +58,11 @@ func GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword, bac
 	sb.WriteString("ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\n")
 	sb.WriteString("update_config=1\n")
 	sb.WriteString("country=TH\n")
+	// Scan-stability settings (issue #72): background scans left uncontrolled
+	// cause periodic Wi-Fi stalls, so pin these explicitly and unconditionally.
+	sb.WriteString("ap_scan=1\n")
+	sb.WriteString("autoscan=periodic:10\n")
+	sb.WriteString("disable_scan_offload=1\n")
 	if macMode == "randomized" {
 		sb.WriteString("preassoc_mac_addr=1\n")
 	}
