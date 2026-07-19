@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"flag"
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -20,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"pigate/internal/api"
+	"pigate/internal/config"
 	"pigate/internal/db"
 	"pigate/internal/kernel"
 	"pigate/internal/logs"
@@ -27,43 +30,63 @@ import (
 	"pigate/internal/service"
 )
 
+// defaultConfigPath is used when -config is not passed on the command line.
+// If the file doesn't exist there yet, main() writes the code defaults to it
+// (see resolveConfig) rather than failing — unlike an explicitly-passed
+// -config path, which must already exist.
+const defaultConfigPath = "/var/lib/pigate/pigate.conf"
+
 // version is the PiGate build version. It is overridable at build time via
 // -ldflags "-X main.version=<tag>" (see build.sh); the default applies to plain
 // `go build` / `go run` during development.
 var version = "v0.1.0-pre"
 
 func main() {
-	// 1. Parse CLI flags
-	port := flag.Int("port", 2479, "Port to run the API server on")
-	dbPath := flag.String("db", "pigate.db", "Path to SQLite database file")
-	mockOS := flag.Bool("mock", true, "Use mocked kernel operations (default true on PC)")
-	mockFromReal := flag.Bool("mock-from-real", false, "Mock operations but initialize/pull from real kernel data at startup")
-	disableEdit := flag.Bool("disable-edit", false, "Disable edit operations (Read-only mode)")
-	allowEditSystemRoutes := flag.Bool("allow-edit-system-routes", false, "Allow editing and deleting system predefined static routes")
-	enableEditSystemRoute := flag.Bool("enable-edit-system-route", false, "Enable direct kernel management of system/kernel-only routes without database")
-	prioritizeKernelRoutes := flag.Bool("prioritize-kernel-routes", false, "Prioritize kernel route information over database if duplicate")
-	dockerCompat := flag.Bool("docker-compat", false, "Enable Docker compatibility (bypass docker0 and br-* interfaces). Off by default; opt in only on a gateway that also runs Docker/bridge networks.")
-	httpsPort := flag.Int("https-port", 0, "HTTPS port (0 = HTTP only; the systemd unit passes 443 to make HTTPS the primary channel)")
-	tlsDir := flag.String("tls-dir", "", "Directory for the self-signed TLS cert/key (default: <dir of -db>/tls)")
-	allowDevCORS := flag.Bool("allow-dev-cors", false, "Echo CORS headers for frontend dev-server origins (localhost:5173/3000). Off by default; only needed when running `yarn dev` against this backend.")
+	// 1. Register CLI flags. Their default values here must stay 1:1 with
+	// config.Defaults() (see internal/config/config.go). The returned pointers
+	// are intentionally not captured for most of these: flag.Parse() still
+	// validates/parses them (e.g. -port=abc still fails fast the same way it
+	// always has), but the resolved value each subsystem actually uses comes
+	// from cfg.* below (code default < config file < CLI flag explicitly
+	// passed — see resolveConfig). Only -v and -config are needed as values
+	// before cfg exists, so only those two are kept as named pointers.
+	flag.Int("port", 2479, "Port to run the API server on")
+	flag.String("db", "pigate.db", "Path to SQLite database file")
+	flag.Bool("mock", true, "Use mocked kernel operations (default true on PC)")
+	flag.Bool("mock-from-real", false, "Mock operations but initialize/pull from real kernel data at startup")
+	flag.Bool("disable-edit", false, "Disable edit operations (Read-only mode)")
+	flag.Bool("allow-edit-system-routes", false, "Allow editing and deleting system predefined static routes")
+	flag.Bool("enable-edit-system-route", false, "Enable direct kernel management of system/kernel-only routes without database")
+	flag.Bool("prioritize-kernel-routes", false, "Prioritize kernel route information over database if duplicate")
+	flag.Bool("docker-compat", false, "Enable Docker compatibility (bypass docker0 and br-* interfaces). Off by default; opt in only on a gateway that also runs Docker/bridge networks.")
+	flag.Int("https-port", 0, "HTTPS port (0 = HTTP only; the systemd unit passes 443 to make HTTPS the primary channel)")
+	flag.String("tls-dir", "", "Directory for the self-signed TLS cert/key (default: <dir of -db>/tls)")
+	flag.Bool("allow-dev-cors", false, "Echo CORS headers for frontend dev-server origins (localhost:5173/3000). Off by default; only needed when running `yarn dev` against this backend.")
 	printVersion := flag.Bool("v", false, "Print Version")
+	configPath := flag.String("config", "", "Path to a key=value bootstrap config file (default: "+defaultConfigPath+"). CLI flags explicitly passed always override the file.")
 	flag.Parse()
 	if *printVersion {
 		log.Printf("PiGate Server version %s", version)
 		return
 	}
+
+	// 1b. Resolve bootstrap config: code defaults < config file < CLI flags
+	// explicitly passed on this invocation. See internal/config and
+	// docs/ref/todo/config-file-loader-plan.md for the full precedence/rationale.
+	cfg := resolveConfig(*configPath)
+
 	log.Printf("[Main] Starting PiGate Backend Server (Go v1.26.4)...")
-	log.Printf("[Main] Port: %d", *port)
-	log.Printf("[Main] Database: %s", *dbPath)
-	log.Printf("[Main] Mock OS Integration: %t", *mockOS)
-	log.Printf("[Main] Mock From Real Data: %t", *mockFromReal)
-	log.Printf("[Main] Disable Edit Mode: %t", *disableEdit)
-	log.Printf("[Main] Allow Dev CORS Origins: %t", *allowDevCORS)
-	log.Printf("[Main] Allow Edit System Routes: %t", *allowEditSystemRoutes)
-	log.Printf("[Main] Enable Edit System Route (Bypass DB): %t", *enableEditSystemRoute)
-	log.Printf("[Main] Prioritize Kernel Routes: %t", *prioritizeKernelRoutes)
-	log.Printf("[Main] Docker Compatibility: %t", *dockerCompat)
-	log.Printf("[Main] HTTPS Port: %d (0 = HTTP only)", *httpsPort)
+	log.Printf("[Main] Port: %d", cfg.Port)
+	log.Printf("[Main] Database: %s", cfg.DBPath)
+	log.Printf("[Main] Mock OS Integration: %t", cfg.Mock)
+	log.Printf("[Main] Mock From Real Data: %t", cfg.MockFromReal)
+	log.Printf("[Main] Disable Edit Mode: %t", cfg.DisableEdit)
+	log.Printf("[Main] Allow Dev CORS Origins: %t", cfg.AllowDevCORS)
+	log.Printf("[Main] Allow Edit System Routes: %t", cfg.AllowEditSystemRoutes)
+	log.Printf("[Main] Enable Edit System Route (Bypass DB): %t", cfg.EnableEditSystemRoute)
+	log.Printf("[Main] Prioritize Kernel Routes: %t", cfg.PrioritizeKernelRoutes)
+	log.Printf("[Main] Docker Compatibility: %t", cfg.DockerCompat)
+	log.Printf("[Main] HTTPS Port: %d (0 = HTTP only)", cfg.HTTPSPort)
 
 	// 2. Initialize in-memory forward-traffic logs circular buffer (Ring Buffer).
 	// Fed live by the TrafficLogManager watcher below (real NFLOG or mock
@@ -74,16 +97,16 @@ func main() {
 	ringBuffer := logs.NewRingBuffer(500)
 
 	// 3. Initialize SQLite DB & run migrations
-	sqliteDB, err := db.InitDB(*dbPath, *mockOS)
+	sqliteDB, err := db.InitDB(cfg.DBPath, cfg.Mock)
 	if err != nil {
 		log.Fatalf("Fatal error initializing SQLite DB: %v", err)
 	}
 	defer sqliteDB.Close()
 
 	repo := db.NewRepository(sqliteDB)
-	repo.SetMockMode(*mockOS, *mockFromReal)
-	repo.SetAllowEditSystemRoutes(*allowEditSystemRoutes)
-	repo.SetPrioritizeKernelRoutes(*prioritizeKernelRoutes)
+	repo.SetMockMode(cfg.Mock, cfg.MockFromReal)
+	repo.SetAllowEditSystemRoutes(cfg.AllowEditSystemRoutes)
+	repo.SetPrioritizeKernelRoutes(cfg.PrioritizeKernelRoutes)
 
 	// 4. Instantiate Kernel managers (Force Mock layer for now)
 	var fw kernel.FirewallManager
@@ -98,15 +121,15 @@ func main() {
 	var sysStats kernel.SystemStatsManager
 	var powerMgr kernel.PowerManager
 	var trafficLog kernel.TrafficLogManager
-	dns := kernel.NewDNSManager(*mockOS)
+	dns := kernel.NewDNSManager(cfg.Mock)
 
-	if *mockOS || *mockFromReal {
-		fw = kernel.NewMockFirewall(*dockerCompat)
+	if cfg.Mock || cfg.MockFromReal {
+		fw = kernel.NewMockFirewall(cfg.DockerCompat)
 		net = kernel.NewMockNetwork()
 		rt = kernel.NewMockRouting()
 		qos = kernel.NewMockQos()
 		mDhcp := kernel.NewMockDhcp()
-		mDhcp.MockFromReal = *mockFromReal
+		mDhcp.MockFromReal = cfg.MockFromReal
 		dhcp = mDhcp
 		dnsServer = kernel.NewMockDNSServerManager()
 		dhcpcd = kernel.NewMockDhcpcdManager()
@@ -118,9 +141,9 @@ func main() {
 	} else {
 		// Real kernel integrations via netlink — used on Raspberry Pi 5 production.
 		// Requires: sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
-		fw = kernel.NewRealFirewall(*dockerCompat)
+		fw = kernel.NewRealFirewall(cfg.DockerCompat)
 		net = kernel.NewRealNetwork()
-		rt = kernel.NewRealRouting(*allowEditSystemRoutes)
+		rt = kernel.NewRealRouting(cfg.AllowEditSystemRoutes)
 		qos = kernel.NewRealQos()
 		dhcp = kernel.NewRealDhcpManager()
 		dnsServer = kernel.NewRealDNSServerManager()
@@ -136,7 +159,7 @@ func main() {
 	ifaceService := service.NewInterfaceService(repo, net)
 	dhcpcdService := service.NewDhcpcdService(repo, ifaceService, dhcpcd)
 	routingService := service.NewRoutingService(repo, rt)
-	routingService.SetEnableEditSystemRoute(*enableEditSystemRoute)
+	routingService.SetEnableEditSystemRoute(cfg.EnableEditSystemRoute)
 	firewallService := service.NewFirewallService(repo, fw, ifaceService)
 	dnsService := service.NewDNSService(repo, dns)
 	qosService := service.NewQosService(repo, qos)
@@ -245,13 +268,13 @@ func main() {
 	netlinkMonitor := service.NewNetlinkMonitor(repo, eventBus)
 
 	backupService := service.NewBackupService(
-		repo, *dbPath, version,
+		repo, cfg.DBPath, version,
 		ifaceService, routingService, firewallService, dnsService, dnsServerService,
 		qosService, dhcpServerService, dhcpcdService, hostnameService, timeService,
 		netlinkMonitor,
 	)
 
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, *disableEdit, *allowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService)
 
 	// Apply config form database to kernel
 
@@ -331,7 +354,7 @@ func main() {
 	}
 
 	// Start D-Bus lease watcher in production mode (non-mock)
-	if !*mockOS {
+	if !cfg.Mock {
 		go func() {
 			if err := dhcpServerService.StartLeaseWatcher(monitorCtx); err != nil {
 				log.Printf("[Main] Warning: DHCP lease watcher encountered error: %v", err)
@@ -387,12 +410,12 @@ func main() {
 	//         able to reach the box no matter what).
 	//   httpsPort == 0 (dev/mock, no flag): HTTP :<port> serves the real handler —
 	//     identical to the legacy behavior.
-	httpAddr := ":" + strconv.Itoa(*port)
+	httpAddr := ":" + strconv.Itoa(cfg.Port)
 
-	if *httpsPort > 0 {
-		tlsDirResolved := *tlsDir
+	if cfg.HTTPSPort > 0 {
+		tlsDirResolved := cfg.TLSDir
 		if tlsDirResolved == "" {
-			tlsDirResolved = filepath.Join(filepath.Dir(*dbPath), "tls")
+			tlsDirResolved = filepath.Join(filepath.Dir(cfg.DBPath), "tls")
 		}
 
 		hostname := "pigate"
@@ -402,16 +425,16 @@ func main() {
 
 		certPath, keyPath, tlsErr := setupTLS(tlsDirResolved, hostname, eventLogService)
 		if tlsErr == nil {
-			httpsAddr := ":" + strconv.Itoa(*httpsPort)
+			httpsAddr := ":" + strconv.Itoa(cfg.HTTPSPort)
 			// Probe-bind :443 up front: if it fails we fall through to the HTTP
 			// fallback instead of dying after HTTP has already become a redirect.
 			// (bindTCP wraps net.Listen; the local kernel manager variable named
 			// "net" shadows the net package inside main.)
 			ln, bindErr := bindTCP(httpsAddr)
 			if bindErr == nil {
-				redirect := newHTTPSRedirectHandler(*httpsPort)
+				redirect := newHTTPSRedirectHandler(cfg.HTTPSPort)
 				startRedirectListener(httpAddr, redirect)
-				if *httpsPort == 443 {
+				if cfg.HTTPSPort == 443 {
 					// Bonus: catch users who type the bare http://<ip> (port 80).
 					startRedirectListener(":80", redirect)
 				}
@@ -455,6 +478,86 @@ func main() {
 	if err := httpServer.ListenAndServe(); err != nil {
 		log.Fatalf("Server listener failed: %v", err)
 	}
+}
+
+// resolveConfig implements the bootstrap config precedence described in
+// docs/ref/todo/config-file-loader-plan.md: code default < config file < CLI
+// flag explicitly passed on this invocation.
+//
+//   - explicitPath == "" (the -config flag was not passed): the config file
+//     path defaults to defaultConfigPath. If no file exists there yet, its
+//     absence is not an error — resolveConfig writes the code defaults to it
+//     (so the operator has something to edit next time) and continues with
+//     an empty file layer. A write failure here is only a warning (common on
+//     a dev workstation with no /var/lib/pigate) — never fatal.
+//   - explicitPath != "" (the -config flag was passed): that exact file must
+//     exist. A missing file here means the operator made a typo, so it is a
+//     fatal, fail-fast error rather than silently falling back to defaults.
+//
+// Any config file that does exist must parse and type-convert cleanly —
+// malformed syntax or a malformed int/bool value is always fatal, regardless
+// of which of the two cases above produced the path. Unknown keys are
+// logged as warnings but do not stop startup.
+func resolveConfig(explicitPath string) config.Config {
+	path := explicitPath
+	useDefaultPath := path == ""
+	if useDefaultPath {
+		path = defaultConfigPath
+	}
+
+	var fileVals map[string]string
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		parsed, perr := config.Parse(bytes.NewReader(data))
+		if perr != nil {
+			log.Fatalf("[Main] Failed to parse config file %s: %v", path, perr)
+		}
+		fileVals = parsed
+	case os.IsNotExist(err) && !useDefaultPath:
+		// The user passed -config explicitly and it doesn't exist: fail fast
+		// rather than silently booting on defaults (docs plan Caution: "-config
+		// ที่ไฟล์ไม่มี ต้อง fail ชัด ไม่ auto-create").
+		log.Fatalf("[Main] Config file %q (from -config) not found", path)
+	case os.IsNotExist(err):
+		// Default path missing: write the code defaults so there's something
+		// to edit next time, then continue booting on those same defaults
+		// (fileVals stays nil). A write failure (e.g. dev workstation with no
+		// /var/lib/pigate) is only a warning, never fatal.
+		var buf bytes.Buffer
+		if werr := config.Write(&buf, config.Defaults()); werr == nil {
+			werr = os.WriteFile(path, buf.Bytes(), 0644)
+			if werr != nil {
+				log.Printf("[Main] Warning: could not write default config file %s: %v", path, werr)
+			} else {
+				log.Printf("[Main] Wrote default config file %s", path)
+			}
+		} else {
+			log.Printf("[Main] Warning: could not render default config file %s: %v", path, werr)
+		}
+	default:
+		log.Fatalf("[Main] Failed to read config file %s: %v", path, err)
+	}
+
+	// Only flags the user actually passed on this invocation must win over the
+	// file — flag.Visit (not flag.VisitAll) is what gives us that distinction.
+	// "config" and "v" are not config-file keys and must be excluded.
+	explicit := map[string]string{}
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "config" || f.Name == "v" {
+			return
+		}
+		explicit[f.Name] = f.Value.String()
+	})
+
+	cfg, warnings, err := config.Resolve(config.Defaults(), fileVals, explicit)
+	if err != nil {
+		log.Fatalf("[Main] Invalid configuration: %v", err)
+	}
+	for _, w := range warnings {
+		log.Printf("[Main] Warning: %s", w)
+	}
+	return cfg
 }
 
 // bindTCP opens a TCP listener on addr. It exists so main() can bind a socket
