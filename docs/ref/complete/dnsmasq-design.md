@@ -184,6 +184,9 @@ WatchLeases(ctx, callback):
 - ใช้ godbus/dbus เหมือน kernel/dns.go
 ```
 
+> ⚠️ **base config ต้องมี `enable-dbus`** — dnsmasq จะ own bus name `uk.org.thekelleys.dnsmasq` และยิง signal `DhcpLease{Added,Updated,Deleted}` **ก็ต่อเมื่อ** มี directive `enable-dbus` ในคอนฟิก ถ้าไม่มี `WatchLeases` จะ block รอ signal ที่ไม่มีวันมา → ไม่มี lease event เข้า log เลย `enable-dbus` จึงถูกเขียนไว้ใน `ensureDnsmasqBaseConfig` (`kernel/dnsmasq_base.go`) ซึ่ง rewrite `pigate-base.conf` ทุกครั้งที่ ApplyConfig/ApplyZones แล้ว restart dnsmasq ต่อ (issue #67). บนบอร์ดจริง dnsmasq (รันเป็น root) ต้อง own bus name นี้ได้ — แพ็กเกจ dnsmasq จาก apt มากับ `/etc/dbus-1/system.d/dnsmasq.conf` อยู่แล้ว; ถ้าไม่มีให้เพิ่ม step วางไฟล์ policy ใน `install.sh`
+
+
 **`backend/internal/kernel/mock.go`** — อัปเดต `MockDhcp` ให้รับ `[]model.DhcpConfig`, เพิ่ม `ReloadConfig() → no-op`
 
 ---
