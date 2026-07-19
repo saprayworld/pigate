@@ -39,7 +39,7 @@ type NetworkManager interface {
 	// metric sets the default-route priority in static mode; metric <= 0 means
 	// "unset" and falls back to the historical default of 100.
 	ConfigureInterface(name string, mode string, ip string, netmask string, gateway string, metric int) error
-	ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string, backupSecurity string, macMode string) error
+	ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string, backupSecurity string, macMode string, prefer5GHz bool) error
 	GetWifiStatus(name string) (*model.WifiConnectionStatus, error)
 	// CreateVlan creates an 802.1Q VLAN sub-interface named "<parent>.<vlanID>"
 	// on top of the given parent interface (e.g. CreateVlan("eth0", 100) -> "eth0.100").

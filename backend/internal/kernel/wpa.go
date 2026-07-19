@@ -15,6 +15,11 @@ var wpaConfigDir = "/etc/wpa_supplicant"
 var wpaSocketDir = "/var/run/wpa_supplicant"
 var wpaLocalSocketDir = "/run/pigate"
 
+// freqList5GHz is the full set of 5GHz channel center frequencies (MHz) used to
+// populate wpa_supplicant's freq_list=... when the "Prefer 5GHz" toggle
+// (issue #72) is enabled, restricting the radio to associate only on 5GHz.
+const freqList5GHz = "5160 5180 5200 5220 5240 5260 5280 5300 5320 5340 5480 5500 5520 5540 5560 5580 5600 5620 5640 5660 5680 5700 5720 5745 5765 5785 5805 5825 5845 5865 5885"
+
 // SanitizeWpaInput strips newlines and double quotes to prevent configuration injection
 func SanitizeWpaInput(val string) string {
 	val = strings.ReplaceAll(val, "\n", "")
@@ -50,32 +55,37 @@ func redactWpaCommand(cmd string) string {
 
 // GenerateWpaConfig constructs the raw text content for a wpa_supplicant configuration file.
 // It incorporates security options (Open, WPA2, WPA3, WPA2/WPA3), MAC randomization, and weight-based priorities.
-func GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode string) string {
-	log.Printf("[WPA Config] Building config layout for SSID=%q (Security=%s, HasPassword=%t), BackupSSID=%q (BackupSecurity=%s, HasBackupPassword=%t), MacMode=%s",
-		ssid, security, password != "", backupSSID, backupSecurity, backupPassword != "", macMode)
+func GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode string, prefer5GHz bool) string {
+	log.Printf("[WPA Config] Building config layout for SSID=%q (Security=%s, HasPassword=%t), BackupSSID=%q (BackupSecurity=%s, HasBackupPassword=%t), MacMode=%s, Prefer5GHz=%t",
+		ssid, security, password != "", backupSSID, backupSecurity, backupPassword != "", macMode, prefer5GHz)
 
 	var sb strings.Builder
 	sb.WriteString("ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\n")
 	sb.WriteString("update_config=1\n")
 	sb.WriteString("country=TH\n")
+	// Scan-stability settings (issue #72): background scans left uncontrolled
+	// cause periodic Wi-Fi stalls, so pin these explicitly and unconditionally.
+	sb.WriteString("ap_scan=1\n")
+	sb.WriteString("autoscan=periodic:10\n")
+	sb.WriteString("disable_scan_offload=1\n")
 	if macMode == "randomized" {
 		sb.WriteString("preassoc_mac_addr=1\n")
 	}
 	sb.WriteString("\n")
 
 	// Primary network block (priority 10)
-	writeNetworkBlock(&sb, ssid, password, security, 10, macMode == "randomized")
+	writeNetworkBlock(&sb, ssid, password, security, 10, macMode == "randomized", prefer5GHz)
 
 	// Backup network block (priority 5)
 	if SanitizeWpaInput(backupSSID) != "" {
 		sb.WriteString("\n")
-		writeNetworkBlock(&sb, backupSSID, backupPassword, backupSecurity, 5, macMode == "randomized")
+		writeNetworkBlock(&sb, backupSSID, backupPassword, backupSecurity, 5, macMode == "randomized", prefer5GHz)
 	}
 
 	return sb.String()
 }
 
-func writeNetworkBlock(sb *strings.Builder, ssid, password, security string, priority int, randomizeMac bool) {
+func writeNetworkBlock(sb *strings.Builder, ssid, password, security string, priority int, randomizeMac bool, prefer5GHz bool) {
 	cleanSSID := SanitizeWpaInput(ssid)
 	cleanPassword := SanitizeWpaInput(password)
 
@@ -114,6 +124,9 @@ func writeNetworkBlock(sb *strings.Builder, ssid, password, security string, pri
 
 	if randomizeMac {
 		sb.WriteString("    mac_addr=1\n")
+	}
+	if prefer5GHz {
+		sb.WriteString(fmt.Sprintf("    freq_list=%s\n", freqList5GHz))
 	}
 	sb.WriteString(fmt.Sprintf("    priority=%d\n", priority))
 	sb.WriteString("}\n")

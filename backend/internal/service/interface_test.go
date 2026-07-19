@@ -50,7 +50,7 @@ func (t *trackingNetworkManager) ConfigureInterface(name string, mode string, ip
 	return nil
 }
 
-func (t *trackingNetworkManager) ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string, backupSecurity string, macMode string) error {
+func (t *trackingNetworkManager) ConfigureWifi(name string, ssid string, password string, security string, backupSSID string, backupPassword string, backupSecurity string, macMode string, prefer5GHz bool) error {
 	t.wifiConfigured = append(t.wifiConfigured, name)
 	return nil
 }

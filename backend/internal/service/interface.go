@@ -123,9 +123,13 @@ func (s *InterfaceService) applyOneInterface(iface model.NetworkInterface) {
 		if iface.MacMode != nil {
 			macMode = *iface.MacMode
 		}
+		prefer5GHz := false
+		if iface.Prefer5GHz != nil {
+			prefer5GHz = *iface.Prefer5GHz
+		}
 
 		log.Printf("[ApplyInterface] Configuring Wi-Fi for interface %s...", iface.Name)
-		if err := s.network.ConfigureWifi(iface.Name, ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode); err != nil {
+		if err := s.network.ConfigureWifi(iface.Name, ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode, prefer5GHz); err != nil {
 			log.Printf("[ApplyInterface] Warning: Failed to configure Wi-Fi for interface %s: %v", iface.Name, err)
 		}
 	}
@@ -467,6 +471,7 @@ func (s *InterfaceService) GetDataLayerInterface() ([]model.NetworkInterface, er
 			kIface.RandomizedMac = dbIface.RandomizedMac
 			kIface.LaaMacAddress = dbIface.LaaMacAddress
 			kIface.RandomizeOnReconnect = dbIface.RandomizeOnReconnect
+			kIface.Prefer5GHz = dbIface.Prefer5GHz
 			kIface.WifiSSID = dbIface.WifiSSID
 			kIface.WifiPassword = dbIface.WifiPassword
 			kIface.WifiSecurity = dbIface.WifiSecurity
@@ -628,8 +633,12 @@ func (s *InterfaceService) ApplyInterfaceConfig(iface model.NetworkInterface) er
 		if iface.MacMode != nil {
 			macMode = *iface.MacMode
 		}
+		prefer5GHz := false
+		if iface.Prefer5GHz != nil {
+			prefer5GHz = *iface.Prefer5GHz
+		}
 
-		if err := s.network.ConfigureWifi(iface.Name, ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode); err != nil {
+		if err := s.network.ConfigureWifi(iface.Name, ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode, prefer5GHz); err != nil {
 			return fmt.Errorf("OS level Wi-Fi configuration failed: %w", err)
 		}
 	}

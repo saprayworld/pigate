@@ -294,6 +294,7 @@ export interface NetworkInterface {
   randomizedMac?: string
   laaMacAddress?: string
   randomizeOnReconnect?: boolean
+  prefer5GHz?: boolean       // lock Wi-Fi scanning to 5GHz channels only (freq_list) for maximum speed
   // Wi-Fi Backup & Failover Settings
   failoverEnabled?: boolean
   backupSsid?: string
