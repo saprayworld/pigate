@@ -471,6 +471,7 @@ func (s *InterfaceService) GetDataLayerInterface() ([]model.NetworkInterface, er
 			kIface.RandomizedMac = dbIface.RandomizedMac
 			kIface.LaaMacAddress = dbIface.LaaMacAddress
 			kIface.RandomizeOnReconnect = dbIface.RandomizeOnReconnect
+			kIface.Prefer5GHz = dbIface.Prefer5GHz
 			kIface.WifiSSID = dbIface.WifiSSID
 			kIface.WifiPassword = dbIface.WifiPassword
 			kIface.WifiSecurity = dbIface.WifiSecurity
