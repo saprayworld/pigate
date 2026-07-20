@@ -220,4 +220,13 @@ self-healing ไม่ใช่ mutation จากผู้ใช้), ไม่
    ชัดเจนจาก log
 8. (บนบอร์ดจริง — ทำโดยเจ้าของโปรเจกต์ตามเงื่อนไข Caution ข้อ 8 เท่านั้น ไม่ใช่หน้าที่ ai-qa)
    ถอดสาย/เสียบสายเร็ว lease ไม่หลุด; ปิด AP นาน dhcpcd stop/start ถูกจังหวะ; ไม่มี log
-   stop ซ้ำสองบรรทัดติด
+   stop ซ้ำสองบรรทัดติด — **ยืนยันแล้ว 2026-07-20** จาก log จริงบนบอร์ด: link flap สั้นๆ
+   ถูก defer แล้ว cancel โดยไม่มี `StopDhcpcd` เกิดขึ้นเลย, ปิด AP ค้าง ~27 วิ (ไม่ associate)
+   ไม่มี stop เกิดขึ้นระหว่างรอ (ตามดีไซน์ wait-only ของ path นี้), และ dhcpcd start ทันที
+   เมื่อ AP กลับมาโดยไม่มี latency เพิ่ม
+
+## 7. Merged
+
+PR [#77](https://github.com/saprayworld/pigate/pull/77) merged เข้า `main` เมื่อ 2026-07-20
+(commit `a900724`, merge commit `099cff6`) หลังผ่าน QA loop 1/3 รอบ (พบ + แก้ race-locking
+ใน sync paths) และผ่านการทดสอบบนบอร์ดจริงตาม Final Acceptance ข้อ 8 ด้านบน
