@@ -194,7 +194,12 @@ func main() {
 		})
 
 	// dhcpcd: must observe every link transition in order (Wi-Fi waits for RUNNING),
-	// so Immediate mode across Added/Changed/Removed.
+	// so Immediate mode across Added/Changed/Removed. HandleLinkEvent itself defers
+	// a "down" decision behind a short settle-window timer (stopSettleDelay in
+	// dhcpcd.go) before actually stopping the client, so a brief link flap never
+	// stops it at all; "up" is never deferred (StartUnit is idempotent), so Wi-Fi
+	// lease acquisition latency is unaffected. See
+	// docs/ref/todo/dhcpcd-event-debounce-plan.md.
 	eventBus.Subscribe("dhcpcd",
 		[]service.NetEventKind{service.InterfaceAdded, service.LinkChanged, service.InterfaceRemoved},
 		service.Immediate,

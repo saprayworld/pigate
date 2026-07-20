@@ -1,6 +1,7 @@
 package service
 
 import (
+	"sync"
 	"testing"
 
 	"pigate/internal/db"
@@ -22,7 +23,13 @@ func (t *trackingHostnameManager) SetHostname(name string) error {
 	return nil
 }
 
+// trackingDhcpcdManager is shared by hostname_test.go and dhcpcd_test.go. It must be
+// thread-safe: dhcpcd_test.go's deferred-stop tests fire a settle timer on its own
+// goroutine (time.AfterFunc callback) that calls StartDhcpcd/StopDhcpcd concurrently
+// with the test goroutine's assertions — a plain slice append/read here would be a
+// data race under `-race` (see dhcpcd-event-debounce-plan.md, Caution 4).
 type trackingDhcpcdManager struct {
+	mu         sync.Mutex
 	shareCalls []bool
 	restarted  []string
 	startCalls []string
@@ -30,23 +37,66 @@ type trackingDhcpcdManager struct {
 }
 
 func (t *trackingDhcpcdManager) StartDhcpcd(ifaceName string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.startCalls = append(t.startCalls, ifaceName)
 	return nil
 }
 
 func (t *trackingDhcpcdManager) StopDhcpcd(ifaceName string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.stopCalls = append(t.stopCalls, ifaceName)
 	return nil
 }
 
 func (t *trackingDhcpcdManager) SetShareHostname(share bool) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.shareCalls = append(t.shareCalls, share)
 	return nil
 }
 
 func (t *trackingDhcpcdManager) RestartDhcpcd(ifaceName string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.restarted = append(t.restarted, ifaceName)
 	return nil
+}
+
+// snapshotStartCalls/snapshotStopCalls return a copy of the recorded calls under
+// lock, so callers (test assertions) never read the backing slice concurrently with
+// a StartDhcpcd/StopDhcpcd write.
+func (t *trackingDhcpcdManager) snapshotStartCalls() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]string, len(t.startCalls))
+	copy(out, t.startCalls)
+	return out
+}
+
+func (t *trackingDhcpcdManager) snapshotStopCalls() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]string, len(t.stopCalls))
+	copy(out, t.stopCalls)
+	return out
+}
+
+func (t *trackingDhcpcdManager) snapshotShareCalls() []bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]bool, len(t.shareCalls))
+	copy(out, t.shareCalls)
+	return out
+}
+
+func (t *trackingDhcpcdManager) snapshotRestarted() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]string, len(t.restarted))
+	copy(out, t.restarted)
+	return out
 }
 
 func newTestHostnameService(t *testing.T) (*HostnameService, *trackingHostnameManager, *trackingDhcpcdManager) {
