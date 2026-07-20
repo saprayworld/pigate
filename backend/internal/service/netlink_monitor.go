@@ -32,6 +32,15 @@ type NetlinkMonitor struct {
 	wg     sync.WaitGroup
 }
 
+// linkState is the subset of link attributes the monitor tracks per index, so it
+// can tell a genuinely new flag transition (should publish) apart from a
+// duplicate RTM_NEWLINK the kernel re-sends with nothing changed (should not).
+type linkState struct {
+	name    string
+	up      bool
+	running bool
+}
+
 func NewNetlinkMonitor(repo *db.Repository, bus *NetEventBus) *NetlinkMonitor {
 	return &NetlinkMonitor{
 		repo: repo,
@@ -85,9 +94,11 @@ func (m *NetlinkMonitor) Start(ctx context.Context) {
 	go func() {
 		defer m.wg.Done()
 
-		// known maps kernel link index -> name for links present at Start plus any
-		// added since. Seeding it means the links that already exist at boot are NOT
-		// reported as InterfaceAdded. Accessed only from this goroutine — no locking.
+		// known maps kernel link index -> last-seen state (name + up/running flags)
+		// for links present at Start plus any added since. Seeding it means the
+		// links that already exist at boot are NOT reported as InterfaceAdded, and
+		// tracking flags lets handleLinkUpdate suppress a duplicate RTM_NEWLINK that
+		// changed nothing. Accessed only from this goroutine — no locking.
 		known := seedKnownLinks()
 
 		for {
@@ -102,7 +113,7 @@ func (m *NetlinkMonitor) Start(ctx context.Context) {
 				if !ok {
 					return
 				}
-				name := known[addrUpdate.LinkIndex]
+				name := known[addrUpdate.LinkIndex].name
 				log.Printf("[NetlinkMonitor] Address event: iface=%q LinkIndex=%d Address=%s NewAddr=%t",
 					name, addrUpdate.LinkIndex, addrUpdate.LinkAddress.String(), addrUpdate.NewAddr)
 				m.bus.Publish(NetEvent{Kind: AddrRouteChanged, Name: name})
@@ -115,7 +126,7 @@ func (m *NetlinkMonitor) Start(ctx context.Context) {
 				if routeUpdate.Dst != nil {
 					dstStr = routeUpdate.Dst.String()
 				}
-				name := known[routeUpdate.LinkIndex]
+				name := known[routeUpdate.LinkIndex].name
 				log.Printf("[NetlinkMonitor] Route event: iface=%q Type=%d Dst=%s Protocol=%d",
 					name, routeUpdate.Type, dstStr, routeUpdate.Protocol)
 				m.bus.Publish(NetEvent{Kind: AddrRouteChanged, Name: name})
@@ -131,8 +142,12 @@ func (m *NetlinkMonitor) Start(ctx context.Context) {
 // handleLinkUpdate classifies a raw link event into a semantic NetEvent and updates
 // the known-index set. It distinguishes a brand-new interface (index never seen ->
 // InterfaceAdded) from a flag change on a known one (-> LinkChanged), and handles
-// removal (RTM_DELLINK -> InterfaceRemoved).
-func (m *NetlinkMonitor) handleLinkUpdate(u netlink.LinkUpdate, known map[int]string) {
+// removal (RTM_DELLINK -> InterfaceRemoved). A known index whose name/up/running are
+// all unchanged from the last-seen state is a duplicate RTM_NEWLINK (the kernel
+// re-sends the same flags e.g. on some flap sequences) and is suppressed: nothing
+// downstream distinguishes it from noise anyway, and every subscriber benefits from
+// not re-processing it (see Cautions on the dhcpcd-event-debounce plan).
+func (m *NetlinkMonitor) handleLinkUpdate(u netlink.LinkUpdate, known map[int]linkState) {
 	attrs := u.Attrs()
 	name := ""
 	var isUp, isRunning bool
@@ -142,6 +157,7 @@ func (m *NetlinkMonitor) handleLinkUpdate(u netlink.LinkUpdate, known map[int]st
 		isRunning = attrs.Flags&net.FlagRunning != 0
 	}
 	idx := int(u.Index)
+	newState := linkState{name: name, up: isUp, running: isRunning}
 
 	switch u.Header.Type {
 	case unix.RTM_DELLINK:
@@ -150,22 +166,32 @@ func (m *NetlinkMonitor) handleLinkUpdate(u netlink.LinkUpdate, known map[int]st
 		m.bus.Publish(NetEvent{Kind: InterfaceRemoved, Name: name})
 
 	case unix.RTM_NEWLINK:
-		if _, seen := known[idx]; !seen {
-			known[idx] = name
+		prev, seen := known[idx]
+		if !seen {
+			known[idx] = newState
 			log.Printf("[NetlinkMonitor] Interface added: iface=%q index=%d up=%t running=%t", name, idx, isUp, isRunning)
 			m.bus.Publish(NetEvent{Kind: InterfaceAdded, Name: name, Up: isUp, Running: isRunning})
-		} else {
-			known[idx] = name // keep name current (a rename also arrives as NEWLINK)
-			log.Printf("[NetlinkMonitor] Link changed: iface=%q index=%d up=%t running=%t", name, idx, isUp, isRunning)
-			m.bus.Publish(NetEvent{Kind: LinkChanged, Name: name, Up: isUp, Running: isRunning})
+			return
 		}
+
+		// attrs == nil means we can't compare (and can't trust an implicit false
+		// flag), so always publish rather than risk swallowing a real change.
+		if attrs != nil && prev == newState {
+			log.Printf("[NetlinkMonitor] Link changed (duplicate, suppressed): iface=%q index=%d up=%t running=%t", name, idx, isUp, isRunning)
+			return
+		}
+
+		known[idx] = newState // keep state current (a rename also arrives as NEWLINK)
+		log.Printf("[NetlinkMonitor] Link changed: iface=%q index=%d up=%t running=%t", name, idx, isUp, isRunning)
+		m.bus.Publish(NetEvent{Kind: LinkChanged, Name: name, Up: isUp, Running: isRunning})
 	}
 }
 
-// seedKnownLinks returns index->name for every link currently in the kernel, so the
-// monitor treats them as already-known (no spurious InterfaceAdded at Start).
-func seedKnownLinks() map[int]string {
-	known := make(map[int]string)
+// seedKnownLinks returns index->state for every link currently in the kernel, so the
+// monitor treats them as already-known (no spurious InterfaceAdded at Start) and has
+// a correct baseline to dedupe the first post-boot RTM_NEWLINK against.
+func seedKnownLinks() map[int]linkState {
+	known := make(map[int]linkState)
 	links, err := netlink.LinkList()
 	if err != nil {
 		log.Printf("[NetlinkMonitor] Warning: failed to seed known links: %v", err)
@@ -173,7 +199,11 @@ func seedKnownLinks() map[int]string {
 	}
 	for _, l := range links {
 		a := l.Attrs()
-		known[a.Index] = a.Name
+		known[a.Index] = linkState{
+			name:    a.Name,
+			up:      a.Flags&net.FlagUp != 0,
+			running: a.Flags&net.FlagRunning != 0,
+		}
 	}
 	return known
 }
