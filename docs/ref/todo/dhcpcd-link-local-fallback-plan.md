@@ -9,6 +9,19 @@
 > เขียนเมื่อ: 2026-07-21 · Reference branch: `fix/usb-wifi-startup-race`
 > อ้างอิง: GitHub issue #78, หมายเหตุเบื้องต้น `docs/ref/todo/dhcpcd-link-local-fallback-notes.md`,
 > ต่อยอดจากงาน issue #76 (PR #79 ยังไม่ merge ณ วันที่เขียน — ดู Caution 8)
+>
+> **อัปเดต 2026-07-21 (หลังเขียนแผนนี้):** ระหว่างทดสอบ real-hardware ของ PR #79 พบหลักฐาน
+> log จริงเคส "ค้างที่ 169.254" ครั้งแรก (ก่อนหน้านี้มีแต่เคส "ไม่มี IP เลย" จาก AP outage) —
+> วิเคราะห์ละเอียดใน `dhcpcd-link-local-fallback-notes.md` §7 เพิ่ม Caution 11/12 ด้านล่าง
+> จากผลนั้น ไม่กระทบ Task/สถาปัตยกรรมที่วางไว้ใน §2-§3 (ยังไม่มีอะไร implement จริง)
+>
+> **อัปเดต 2026-07-21 (รอบ 2 — ตรวจทานแผนกับโค้ดจริงบน `main`):** PR #79 ถูก merge เข้า
+> `main` แล้ว (`4e2168d`, รวมคอมมิตแก้เพิ่ม `c9894af` ที่แตะ `netlink_monitor.go`) — Caution 8
+> เกิดขึ้นจริงตามคาด งานนี้จึงต้อง**แตก branch ใหม่จาก `main`** (เช่น `feat/dhcp-health-checker`)
+> ไม่ใช่ทำต่อบน `fix/usb-wifi-startup-race` อีกแล้ว ไล่ตรวจจุดอ้างอิงทุกจุดในแผนกับ `main`
+> ปัจจุบันแล้ว: **ตรงเป๊ะทุกไฟล์** ยกเว้น `netlink_monitor.go` ที่เลขบรรทัดขยับ (แก้ใน §1 /
+> T-07 / Caution 8 แล้ว) และเพิ่มข้อตัดสินใจ state-machine 3 ข้อเข้า T-09/T-10 (strike reset
+> หลังลงมือ, การจำกัดกิ่ง delete, ความหมาย `runningSince` ใน tick แรก)
 
 ## 0. เป้าหมายและขอบเขต
 
@@ -30,11 +43,11 @@
   - ไม่ทำ IPv6 (169.254 เป็น IPv4 APIPA เท่านั้น; ไม่ตรวจ fe80::/10)
   - ไม่เปลี่ยน parent/child ของ VLAN หรือ Wi-Fi failover logic ใด ๆ
 
-## 1. สภาพโค้ดปัจจุบัน (สำรวจซ้ำบน branch `fix/usb-wifi-startup-race` ณ 2026-07-21)
+## 1. สภาพโค้ดปัจจุบัน (ตรวจทานล่าสุดบน `main` หลัง merge PR #79 ณ 2026-07-21)
 
 | ส่วน | สถานะ | อ้างอิง |
 |---|---|---|
-| `NetlinkMonitor.Start` | มี `missedAtStartup []string` แล้ว (จาก #76, ยัง**ไม่ merge**) — publish synthetic `InterfaceAdded` หลัง seed | `service/netlink_monitor.go:64,111-112,218-228` |
+| `NetlinkMonitor.Start` | มี `missedAtStartup []string` แล้ว (จาก #76, **merge เข้า `main` แล้ว** ผ่าน PR #79) — publish synthetic `InterfaceAdded` หลัง seed | `service/netlink_monitor.go:78,126,255-296` |
 | `InterfaceService.StartupSkippedInterfaces` | มีจาก #76 — ไม่กระทบ checker นี้โดยตรง (เราไม่ฟัง `InterfaceAdded`) | `service/interface.go:38-45,105-116` |
 | `NetEvent`/`NetEventBus` | ไม่มี field address; ไม่มี accessor เช็คสถานะ pause | `service/event_bus.go:51-56,85-94` (ต้องเพิ่ม `IsPaused()`) |
 | Periodic ticker ต้นแบบ | มี `runCPUSampler`/`runTrafficCollector` เป็นแม่แบบ `time.NewTicker`+`select ctx.Done()` | `service/system_status.go:175-198` |
@@ -48,6 +61,7 @@
 | Backup schema v2 pattern เพิ่ม field แบบไม่ bump version | มีแบบอย่างแล้ว (`PortForwards` เป็น `omitempty`) | `model/backup.go:69-75` |
 | จุด restore single-row settings ใน backup | มี block `--- 9. Single-row system settings ---` ให้ต่อแถวใหม่ | `db/backup_repo.go:235-270` |
 | Startup wiring (main.go) | ลำดับ 6.0-6.5 คงเดิมจาก #76 — checker ใหม่เป็น background loop ไม่ใช่ startup-apply จึงไม่ต้องแทรกใน 6.x | `cmd/pigate/main.go:159-172,392-398` |
+| Evidence จริงของอาการ "ค้างที่ 169.254" (ไม่ใช่แค่ "ไม่มี IP เลย") | ยืนยันแล้วบนบอร์ดจริง 2026-07-21 ระหว่างทดสอบ PR #79 — SSID เฉพาะตัวค้างซ้ำสองรอบ restart ติดกัน, cadence re-assert ~11-14s, หลุดได้ด้วย manual toggle ไปตกที่ backup SSID เท่านั้น | `dhcpcd-link-local-fallback-notes.md` §7 |
 
 **สรุป:** ไม่มีส่วนไหนถูกทำไปแล้ว งานใหม่ทั้งหมด กระจุกอยู่ที่ kernel layer (2 เมธอดใหม่ +
 mock), DB settings table ใหม่ 1 ตาราง, service ใหม่ 1 ไฟล์ (ตัว checker) + แก้ `dhcpcd.go`/
@@ -180,7 +194,8 @@ default:
 **File:** `backend/internal/service/event_bus.go` (แก้ไข ต่อจาก `Resume()` ~บรรทัด 193)
 - เพิ่ม `func (b *NetEventBus) IsPaused() bool { return b.paused.Load() }`
 
-**File:** `backend/internal/service/netlink_monitor.go` (แก้ไข ต่อจาก `Resume()` ~บรรทัด 261)
+**File:** `backend/internal/service/netlink_monitor.go` (แก้ไข ต่อจาก `Resume()` ~บรรทัด 303 —
+เลขบรรทัดบน `main` หลัง merge PR #79; `Pause` อยู่ ~298)
 - เพิ่ม `func (m *NetlinkMonitor) IsPaused() bool { return m.bus.IsPaused() }` (delegate
   ตาม pattern เดิมของ `Pause`/`Resume`)
 - **เสร็จเมื่อ:** คอมไพล์ผ่าน — เมธอดนี้ให้ checker เช็คก่อนลงมือทุก tick (T-08)
@@ -213,9 +228,28 @@ default:
   `decideNextState(state *ifaceHealthState, isUp, isRunning, hasReal, hasLinkLocal bool,
   settings model.DhcpHealthSettings, now time.Time) healthAction` (enum: none/deleteAddr/
   restart/restartSkippedBackoff/restartCeilingReached)
+- **ข้อตัดสินใจ state-machine (จากการตรวจทานแผน 2026-07-21 รอบ 2 — บังคับใช้ใน
+  `decideNextState` และต้องมีเทสต์ครอบใน T-10):**
+  1. *Strike reset หลังลงมือ:* ทุกครั้งที่ตัดสินใจ action จริง (deleteAddr **หรือ** restart)
+     ให้ reset `strikes = 0` ทันที — การลงมือครั้งถัดไปต้องสะสม strike ใหม่ครบ
+     `ConsecutiveStrikes` อีกรอบเสมอ (บวก backoff สำหรับกิ่ง restart) ส่วน
+     `restartsSinceRecover`/`ceilingLogged` **ไม่** reset ตรงนี้ — reset เฉพาะเมื่อกลับ
+     healthy จริงตาม Caution 5
+  2. *กิ่ง deleteAddr ไม่มี backoff/เพดานของตัวเอง — ใช้ strike reset จากข้อ 1 เป็นตัวจำกัด
+     ความถี่:* เคสแย่สุด (มีอะไร re-add 169.254 ซ้ำทั้งที่มี IP จริงอยู่ — notes §7 วัด
+     cadence re-assert ได้ ~11-14s) จะลบซ้ำได้ไม่ถี่กว่า `ConsecutiveStrikes ×
+     CheckIntervalSeconds` (~180s ที่ค่า default) ไม่ใช่ทุก tick — ยอมรับได้โดยไม่ต้องเพิ่ม
+     counter แยก เพราะกิ่งนี้เกิดได้เฉพาะตอนมี IP จริงใช้งานอยู่แล้ว (ไม่ใช่ outage)
+  3. *`runningSince` ใน tick แรก:* interface ที่ตรวจพบว่า `isUp && isRunning` อยู่แล้วตั้งแต่
+     tick แรกของ checker (ยังไม่มี state เดิม) ให้ตั้ง `runningSince = now` — ผลคือเลื่อน
+     การนับ strike ออกไปอีกหนึ่งช่วง `MinRunningSeconds` หลัง checker เริ่ม/pigate restart
+     ซึ่งยอมรับได้ (สอดคล้อง known limitation ใน Caution 12 อยู่แล้ว)
 - ทุก action ที่ลงมือจริงต้องเรียก `eventLog.Log(model.EventCategoryDhcp, "dhcp.linklocal_*",
   ...)` (severity warning สำหรับ detect/restart, info สำหรับลบ address สำเร็จ, error สำหรับ
-  ชนเพดาน — log เพดานแค่ครั้งเดียวต่อ episode ด้วย flag `ceilingLogged`)
+  ชนเพดาน — log เพดานแค่ครั้งเดียวต่อ episode ด้วย flag `ceilingLogged`) — ข้อความตอนชนเพดาน
+  ต้อง**actionable** ไม่ใช่ generic เฉย ๆ (ดู Caution 11: evidence จริงชี้ว่า restart dhcpcd
+  ซ้ำอาจไม่ช่วยถ้าปัญหาอยู่ฝั่ง AP/SSID) เช่น ระบุชื่อ SSID ปัจจุบันที่ associate อยู่ และแนะนำ
+  ให้ผู้ใช้ตรวจสอบ AP/DHCP server ของ SSID นั้น ไม่ใช่แค่ "restart ล้มเหลว N ครั้ง"
 - `GetSettings()`/`UpdateSettings(model.DhcpHealthSettings) error`: thin wrapper เรียก
   repository ตรง ๆ พร้อม validate ranges (interval 10-3600s, strikes 1-20, minRunning
   0-600s, backoff 0-3600s, maxRestarts 1-20) — ให้ handler (T-12) เรียกใช้ ไม่ validate
@@ -228,6 +262,10 @@ default:
 - Unit เคส `decideNextState`: strike ไม่ครบยังไม่ลงมือ, ครบแล้วแยกกิ่ง delete/restart ถูกต้อง,
   min-running guard กันไม่ให้นับก่อนเวลา, backoff กันไม่ให้ restart ถี่, เพดานทำงานและ log
   ครั้งเดียว, healthy กลับมาแล้ว state/เพดาน reset
+- Unit เคสข้อตัดสินใจ state-machine (T-09): action ใด ๆ reset `strikes` เป็น 0 แต่**ไม่**
+  reset `restartsSinceRecover`/`ceilingLogged`; กิ่ง deleteAddr ที่ 169.254 ถูก re-add ซ้ำ
+  ทุก tick ลงมือลบได้ไม่ถี่กว่า `ConsecutiveStrikes` tick ต่อครั้ง (ไม่ใช่ทุก tick);
+  interface ที่ running อยู่ก่อนแล้วใน tick แรกต้องผ่าน min-running guard ก่อนเริ่มนับ strike
 - Integration เบา ๆ: เรียก `tick()` ตรงด้วย `kernel.NewMockNetwork()`+`NewMockDhcpcdManager()`
   ยืนยันไม่มี panic และ mock mode ไม่เรียก `netlink.LinkByName` จริง (ผ่านการไม่ crash บน CI
   ที่ไม่มีสิทธิ์ netlink)
@@ -328,16 +366,43 @@ self-heal loop ใด ๆ (ยืนยันจาก `middleware.go:333-334`) 
 7. **ค่า default ต้องไม่ aggressive เกินไป** — `3 strikes × 60s interval + 30s min-running`
    ≈ 210 วินาทีก่อนลงมือครั้งแรก ยาวพอสำหรับ AP reconnect ปกติ (ผลทดสอบ `§6` เห็น cycle
    ~65s ต่อรอบ ไม่ใช่วินาทีเดียว) แต่เจ้าของโปรเจกต์ควรตรวจสอบตัวเลขเหล่านี้อีกครั้งก่อน merge
-   เพราะเป็นตัวเลข "เหมาะสมโดยประมาณ" จากการวิเคราะห์ ไม่ใช่ค่าที่ทดสอบจริงบนบอร์ด
-8. **PR #79 (issue #76) ยัง merge ไม่เสร็จ ณ วันเขียนแผนนี้** — ถ้า merge แล้วมีการแก้ไฟล์ที่
-   แผนนี้อ้างอิง (`netlink_monitor.go`, `interface.go`, `dhcpcd.go`) เพิ่มเติมจากที่สำรวจไว้ใน
-   §1 ให้ ai-developer เปิดไฟล์จริงทวนอีกครั้งก่อนเริ่ม T-07/T-08 (บรรทัดอาจขยับ)
+   เพราะเป็นตัวเลข "เหมาะสมโดยประมาณ" จากการวิเคราะห์ ไม่ใช่ค่าที่ทดสอบจริงบนบอร์ด — **อัปเดต
+   2026-07-21:** เคสค้างที่ 169.254 จริงที่เจอ (`notes.md` §7) อยู่ในหน้าต่างสังเกตได้แค่ ~89
+   วินาทีก่อนมีคนแก้ด้วยมือ ซึ่งสั้นกว่า threshold default (~210s) เล็กน้อย — ยังไม่มีหลักฐาน
+   ว่า default ปัจจุบันทันจับเคสจริงพอดีหรือไม่ ต้องทดสอบยืนยันตอน implement จริง (ไม่ใช่แค่
+   เชื่อเลขจากการวิเคราะห์) ส่วน cadence การ re-assert address เดิมที่วัดได้จริงระหว่างค้าง
+   (~11-14s) ยืนยันว่าไม่ชนปัญหา eligibility-gate aliasing แบบ `§6.3` (ที่อยู่ไม่ toggle
+   up/down ระหว่างค้าง จึงไม่มีความเสี่ยง false-skip จาก tick ที่ดันไปตกช่วง down-blip)
+8. **[เกิดขึ้นจริงแล้ว — ตรวจทานเสร็จ 2026-07-21 รอบ 2]** PR #79 (issue #76) ถูก merge เข้า
+   `main` แล้ว (`4e2168d` รวม `c9894af` ที่แก้ `netlink_monitor.go` เพิ่มจากที่สำรวจไว้เดิม)
+   — ไล่ทวนไฟล์จริงบน `main` แล้ว: `dhcpcd.go`/`interface.go`/kernel/db/api/backup **เลขบรรทัด
+   ตรงตาม §1 ทุกจุด** มีเฉพาะ `netlink_monitor.go` ที่ขยับ (แก้ใน §1 และ T-07 แล้ว: `Start`
+   ~78, `publishMissedStartupLinks` ~255, `Pause`/`Resume` ~298/303) งานนี้ให้แตก branch
+   ใหม่จาก `main` (`feat/dhcp-health-checker`) — branch `fix/usb-wifi-startup-race` จบไปกับ
+   PR #79 แล้ว ไม่ใช้ต่อ
 9. **งานนี้แตะย่าน self-heal/netlink/dhcpcd → sensitive** ตามนโยบายโปรเจกต์ — PR ต้องผ่าน
    review เข้ม โดยเฉพาะเงื่อนไข eligibility gate (ข้อ 3), lock ordering (ข้อ 1), และ
    default thresholds (ข้อ 7)
 10. **ทดสอบบนบอร์ดจริงต้องมี physical access** — การ restart dhcpcd/ลบ address ผิดเงื่อนไข
     อาจตัดการเชื่อมต่อ interface ที่ใช้เข้าถึงตัวเครื่องเอง (โดยเฉพาะถ้า interface ที่ทดสอบคือ
     ตัวที่ใช้ SSH/UI อยู่) ให้ทดสอบผ่าน LAN interface สำรอง หรือมีจอ-คีย์บอร์ดต่อตรงก่อนเสมอ
+11. **"restart dhcpcd" อาจไม่พอสำหรับเคสที่ปัญหาผูกกับ SSID เฉพาะตัว (evidence ใหม่
+    2026-07-21, `notes.md` §7.2):** log จริงเจอกรณี full Wi-Fi reconnect (ผ่าน pigate
+    service restart เต็มรูปแบบ ไม่ใช่แค่ restart dhcpcd) ยัง associate SSID เดิมที่มีปัญหาซ้ำ
+    แล้วได้ 169.254 อีกทั้งสองรอบติดกัน — `RestartForHealthCheck` (T-08) เบากว่านั้นมาก
+    (ขอ lease ใหม่เฉย ๆ ไม่แตะ wpa_supplicant/การเลือก SSID เลย) จึงมีโอกาสไม่ช่วยอะไรเลยถ้า
+    ต้นตอคือ AP/DHCP-server ของ SSID นั้นเอง ไม่ใช่ตัว client — **ไม่ใช่เหตุผลให้ขยาย scope
+    ไปแตะ Wi-Fi failover/SSID-switching** (ยังคงนอก scope ตาม §0 เหมือนเดิม) แต่เป็นเหตุผลที่
+    ต้องเน้นย้ำว่า backoff+เพดาน (decision 3) คือ safety net ไม่ใช่ guarantee ว่าจะ"แก้ได้เสมอ"
+    — ข้อความ event log ตอนชนเพดาน (T-09 `logCeilingOnce`) ควรสื่อสารให้ผู้ใช้เข้าใจว่าอาจต้อง
+    ตรวจฝั่ง AP/SSID เอง ไม่ใช่แค่ "restart แล้วจะหายเอง" — ให้ ai-developer เขียนข้อความ log
+    ให้ actionable กว่าค่า generic ทั่วไป
+12. **RAM-only state ของ checker (T-09 `states map`) reset ทุกครั้งที่ pigate restart** —
+    ระหว่างการทดสอบจริงที่พบ evidence นี้ pigate ถูก restart เอง 3 ครั้งใน ~10 นาที (เพื่อ
+    ทดสอบ #76/#79 คนละเรื่อง) ถ้า checker ทำงานอยู่ `restartsSinceRecover`/เพดานจะ reset ตาม
+    ไปด้วยทุกรอบ restart — ในสภาพใช้งานจริง pigate ไม่ควร restart ถี่ขนาดนี้ตามปกติ จึงยอมรับ
+    เป็น known limitation ไม่ต้องแก้รอบนี้ (เช่น persist state ลง DB) แต่บันทึกไว้เผื่อพบปัญหา
+    ซ้ำบนบอร์ดที่ crash/restart บ่อยผิดปกติในอนาคต
 
 ## 6. Final Acceptance (ทดสอบรวมครั้งเดียวหลังทุก Task เสร็จ — สำหรับ ai-qa)
 
@@ -364,7 +429,8 @@ self-heal loop ใด ๆ (ยืนยันจาก `middleware.go:333-334`) 
       ค่าเดิมถูกต้อง, backup v2 เก่า (ไม่มี field นี้) ยัง import ได้ปกติไม่ผิด checksum
 - [ ] `docs/openapi.yaml` และ `frontend/public/openapi.yaml` มี path/schema ตรงกัน และ
       ตรงกับพฤติกรรมจริงของ handler
-- [ ] Code บน branch `fix/usb-wifi-startup-race` → PR เข้า `main` (ห้าม push ตรง)
+- [ ] Code บน branch ใหม่ที่แตกจาก `main` (เช่น `feat/dhcp-health-checker`) → PR เข้า `main`
+      (ห้าม push ตรง; branch `fix/usb-wifi-startup-race` เดิมจบไปกับ PR #79 แล้ว — Caution 8)
 
 ## 7. Checklist (Definition of Done)
 
