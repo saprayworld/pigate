@@ -395,7 +395,7 @@ func main() {
 	// above (issue #48). A brief drift window between the applies and Start is
 	// acceptable — the startup applies just ran.
 	log.Printf("[Main] Starting Netlink event monitor (self-healing event bus)...")
-	netlinkMonitor.Start(monitorCtx)
+	netlinkMonitor.Start(monitorCtx, ifaceService.StartupSkippedInterfaces())
 
 	handler := api.RegisterRoutes(server)
 

@@ -52,7 +52,16 @@ func NewNetlinkMonitor(repo *db.Repository, bus *NetEventBus) *NetlinkMonitor {
 // (no real kernel to observe). Start should be called only after every subsystem's
 // startup apply has completed, so boot-time link events (dhcpcd bringing links up
 // fires a flurry of them) don't race the startup path (see issue #48 caution).
-func (m *NetlinkMonitor) Start(ctx context.Context) {
+//
+// missedAtStartup is the list of DB-configured interface names that the startup apply
+// (InterfaceService.InitApplyConfigurationAtStartup) skipped because they were not yet
+// present in the kernel — typically a USB Wi-Fi adapter that enumerates late. If one of
+// those names has since appeared (i.e. it is in the kernel snapshot seedKnownLinks just
+// took), it would otherwise be silently seeded as "known" and never get a genuine
+// InterfaceAdded, leaving its config never applied until pigate is restarted (issue
+// #76). Start publishes a synthetic InterfaceAdded for exactly those names so the
+// existing self-heal subscribers pick it up like any other newly-appeared interface.
+func (m *NetlinkMonitor) Start(ctx context.Context, missedAtStartup []string) {
 	if m.repo.IsMockMode() {
 		log.Printf("[NetlinkMonitor] Running in mock mode. Netlink subscriptions disabled.")
 		return
@@ -100,6 +109,7 @@ func (m *NetlinkMonitor) Start(ctx context.Context) {
 		// tracking flags lets handleLinkUpdate suppress a duplicate RTM_NEWLINK that
 		// changed nothing. Accessed only from this goroutine — no locking.
 		known := seedKnownLinks()
+		m.publishMissedStartupLinks(known, missedAtStartup)
 
 		for {
 			select {
@@ -184,6 +194,36 @@ func (m *NetlinkMonitor) handleLinkUpdate(u netlink.LinkUpdate, known map[int]li
 		known[idx] = newState // keep state current (a rename also arrives as NEWLINK)
 		log.Printf("[NetlinkMonitor] Link changed: iface=%q index=%d up=%t running=%t", name, idx, isUp, isRunning)
 		m.bus.Publish(NetEvent{Kind: LinkChanged, Name: name, Up: isUp, Running: isRunning})
+	}
+}
+
+// publishMissedStartupLinks publishes a synthetic InterfaceAdded for each name in
+// missed that is also present in known (the just-taken kernel snapshot) — i.e. an
+// interface the startup apply skipped because it wasn't in the kernel yet, but that
+// has since appeared inside the 6.1->6.5 startup window and would otherwise be seeded
+// as already-known and never get a real InterfaceAdded (issue #76).
+//
+// The condition is deliberately narrow: a name must be in BOTH missed AND known.
+// Publishing for every name in missed regardless of known would re-apply interfaces
+// that never actually reappeared; publishing for every name in known regardless of
+// missed would re-trigger config that startup apply already applied successfully,
+// reintroducing the boot re-apply storm issue #48 fixed.
+//
+// Up/Running are taken from the seeded linkState, never hardcoded: they reflect the
+// interface's real kernel flags at snapshot time (e.g. a Wi-Fi adapter that merely
+// enumerated but has not yet associated is Up=true/Running=false), so downstream
+// self-heal subscribers — in particular dhcpcd, which waits for a genuine RUNNING
+// transition before starting a lease on Wi-Fi (dhcpcd.go) — behave exactly as they
+// would for a real InterfaceAdded.
+func (m *NetlinkMonitor) publishMissedStartupLinks(known map[int]linkState, missed []string) {
+	for _, name := range missed {
+		for _, st := range known {
+			if st.name == name {
+				log.Printf("[NetlinkMonitor] Interface %q appeared during the startup window; publishing synthetic InterfaceAdded (issue #76)", name)
+				m.bus.Publish(NetEvent{Kind: InterfaceAdded, Name: name, Up: st.up, Running: st.running})
+				break
+			}
+		}
 	}
 }
 

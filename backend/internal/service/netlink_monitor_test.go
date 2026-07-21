@@ -152,3 +152,90 @@ func TestNetlinkMonitor_DellinkThenNewlinkIsInterfaceAdded(t *testing.T) {
 	m.handleLinkUpdate(newLinkUpdate(unix.RTM_NEWLINK, 5, "eth0", flags), known)
 	expectEvent(t, ch, InterfaceAdded)
 }
+
+// TestNetlinkMonitor_PublishMissedStartupLinks_MatchInKnownPublishes covers case 1 from the plan
+// (T-04): a name that was skipped at startup and is now present in the seeded known
+// map must get a synthetic InterfaceAdded whose Up/Running come straight from the
+// seeded linkState (issue #76) — never hardcoded.
+func TestNetlinkMonitor_PublishMissedStartupLinks_MatchInKnownPublishes(t *testing.T) {
+	bus := newNetEventBus(10 * time.Millisecond)
+	m := NewNetlinkMonitor(nil, bus)
+	ch := collectEvents(t, bus)
+
+	known := map[int]linkState{
+		7: {name: "wlx0cef1548ff2b", up: true, running: false},
+	}
+
+	m.publishMissedStartupLinks(known, []string{"wlx0cef1548ff2b"})
+
+	e := expectEvent(t, ch, InterfaceAdded)
+	if e.Name != "wlx0cef1548ff2b" {
+		t.Errorf("expected name wlx0cef1548ff2b, got %q", e.Name)
+	}
+	if !e.Up || e.Running {
+		t.Errorf("expected Up/Running to match seeded known state (Up=true, Running=false), got Up=%v Running=%v", e.Up, e.Running)
+	}
+}
+
+// TestNetlinkMonitor_PublishMissedStartupLinks_NotInKnownNoEvent covers case 2: a missed name that
+// has not (yet) appeared in the kernel snapshot must not publish anything — it will
+// get a genuine InterfaceAdded later via the normal handleLinkUpdate path.
+func TestNetlinkMonitor_PublishMissedStartupLinks_NotInKnownNoEvent(t *testing.T) {
+	bus := newNetEventBus(10 * time.Millisecond)
+	m := NewNetlinkMonitor(nil, bus)
+	ch := collectEvents(t, bus)
+
+	known := map[int]linkState{
+		7: {name: "eth0", up: true, running: true},
+	}
+
+	m.publishMissedStartupLinks(known, []string{"wlx0cef1548ff2b"})
+
+	expectNoEvent(t, ch)
+}
+
+// TestNetlinkMonitor_PublishMissedStartupLinks_EmptyMissedNoEvent covers case 3: an empty missed
+// slice (the common case — startup apply skipped nothing) must not publish anything.
+func TestNetlinkMonitor_PublishMissedStartupLinks_EmptyMissedNoEvent(t *testing.T) {
+	bus := newNetEventBus(10 * time.Millisecond)
+	m := NewNetlinkMonitor(nil, bus)
+	ch := collectEvents(t, bus)
+
+	known := map[int]linkState{
+		7: {name: "eth0", up: true, running: true},
+	}
+
+	m.publishMissedStartupLinks(known, nil)
+
+	expectNoEvent(t, ch)
+}
+
+// TestNetlinkMonitor_PublishMissedStartupLinks_ThenRealNewlinkIsDeduped covers case 4: once a
+// synthetic InterfaceAdded has been published for an index already present in known,
+// a subsequent real RTM_NEWLINK for that same index must be treated as a normal
+// flag-change/duplicate (LinkChanged or suppressed), never a second InterfaceAdded —
+// otherwise self-heal subscribers would re-apply twice for one appearance.
+func TestNetlinkMonitor_PublishMissedStartupLinks_ThenRealNewlinkIsDeduped(t *testing.T) {
+	bus := newNetEventBus(10 * time.Millisecond)
+	m := NewNetlinkMonitor(nil, bus)
+	ch := collectEvents(t, bus)
+
+	known := map[int]linkState{
+		7: {name: "wlx0cef1548ff2b", up: true, running: false},
+	}
+
+	m.publishMissedStartupLinks(known, []string{"wlx0cef1548ff2b"})
+	expectEvent(t, ch, InterfaceAdded)
+
+	// Identical flags -> duplicate RTM_NEWLINK, suppressed entirely.
+	m.handleLinkUpdate(newLinkUpdate(unix.RTM_NEWLINK, 7, "wlx0cef1548ff2b", net.FlagUp), known)
+	expectNoEvent(t, ch)
+
+	// A genuine flag change (now RUNNING, e.g. Wi-Fi associated) -> LinkChanged, not
+	// another InterfaceAdded.
+	m.handleLinkUpdate(newLinkUpdate(unix.RTM_NEWLINK, 7, "wlx0cef1548ff2b", net.FlagUp|net.FlagRunning), known)
+	e := expectEvent(t, ch, LinkChanged)
+	if e.Name != "wlx0cef1548ff2b" || !e.Up || !e.Running {
+		t.Errorf("expected LinkChanged for wlx0cef1548ff2b Up=true Running=true, got name=%q Up=%v Running=%v", e.Name, e.Up, e.Running)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"sync"
 
 	"pigate/internal/db"
 	"pigate/internal/kernel"
@@ -33,6 +34,14 @@ var aliasPattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 type InterfaceService struct {
 	repo    *db.Repository
 	network kernel.NetworkManager
+
+	// startupSkippedMu guards startupSkipped, the list of DB-configured interface
+	// names that InitApplyConfigurationAtStartup skipped because they were not yet
+	// present in the kernel (issue #76 — USB Wi-Fi enumerating late). Read by
+	// StartupSkippedInterfaces() so NetlinkMonitor.Start() can publish a synthetic
+	// InterfaceAdded for any of them that appear before the monitor's seed runs.
+	startupSkippedMu sync.Mutex
+	startupSkipped   []string
 }
 
 func NewInterfaceService(repo *db.Repository, network kernel.NetworkManager) *InterfaceService {
@@ -73,15 +82,37 @@ func (s *InterfaceService) InitApplyConfigurationAtStartup() error {
 		s.recreateVlanIfPossible(iface, kernelMap)
 	}
 
+	var skipped []string
 	for _, iface := range ifaces {
 		if !kernelMap[iface.Name] {
 			log.Printf("[Startup] Warning: Interface %s configured in database does not exist in kernel. Skipping.", iface.Name)
+			skipped = append(skipped, iface.Name)
 			continue
 		}
 		s.applyOneInterface(iface)
 	}
+
+	// Record the skip-list for this run (overwrite, not accumulate, so a repeated
+	// call — e.g. from a backup restore — reflects only its own snapshot).
+	s.startupSkippedMu.Lock()
+	s.startupSkipped = skipped
+	s.startupSkippedMu.Unlock()
+
 	log.Printf("[Startup] Successfully applied interface configuration at startup.")
 	return nil
+}
+
+// StartupSkippedInterfaces returns a copy of the interface names that the most recent
+// call to InitApplyConfigurationAtStartup skipped because they were not yet present in
+// the kernel. Used by main.go to seed NetlinkMonitor.Start() so it can publish a
+// synthetic InterfaceAdded event for one of these names if it turns up before the
+// monitor's own kernel snapshot (issue #76).
+func (s *InterfaceService) StartupSkippedInterfaces() []string {
+	s.startupSkippedMu.Lock()
+	defer s.startupSkippedMu.Unlock()
+	out := make([]string, len(s.startupSkipped))
+	copy(out, s.startupSkipped)
+	return out
 }
 
 // applyOneInterface pushes a single interface's DB configuration to the kernel:
