@@ -182,6 +182,34 @@ func TestInitApplyConfigurationAtStartup(t *testing.T) {
 			t.Errorf("Expected real interface %s to be toggled to up=true, but it was not", realIfaceName)
 		}
 	}
+
+	// Verify StartupSkippedInterfaces() records the skipped (not-in-kernel) name and
+	// not the one that was actually present in the kernel (issue #76 T-01/T-02).
+	skipped := svc.StartupSkippedInterfaces()
+	foundNonExistent := false
+	for _, name := range skipped {
+		if name == nonExistentName {
+			foundNonExistent = true
+		}
+		if realIfaceName != "" && name == realIfaceName {
+			t.Errorf("Expected real interface %s to NOT appear in StartupSkippedInterfaces(), but it did", realIfaceName)
+		}
+	}
+	if !foundNonExistent {
+		t.Errorf("Expected %s to appear in StartupSkippedInterfaces(), but it did not", nonExistentName)
+	}
+
+	// Calling InitApplyConfigurationAtStartup again (e.g. a backup restore invoking it
+	// a second time via backup.go's step() helper) must produce a fresh snapshot, not
+	// an accumulation across calls: the skip-list length must stay the same rather than
+	// growing with duplicate entries.
+	if err := svc.InitApplyConfigurationAtStartup(); err != nil {
+		t.Fatalf("second InitApplyConfigurationAtStartup call failed: %v", err)
+	}
+	skippedAgain := svc.StartupSkippedInterfaces()
+	if len(skippedAgain) != len(skipped) {
+		t.Errorf("Expected StartupSkippedInterfaces() to be a fresh snapshot of the same size after a second Init call, got %d entries (first call had %d): %v", len(skippedAgain), len(skipped), skippedAgain)
+	}
 }
 
 func TestInitApplyConfigurationAtStartupWithWireless(t *testing.T) {
