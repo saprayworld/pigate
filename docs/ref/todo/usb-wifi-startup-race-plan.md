@@ -338,13 +338,24 @@ func (a linkState) sameAttrs(b linkState) bool {
 - branch duplicate (`sameAttrs` true) และ branch `LinkChanged` เดิม (ชื่อไม่เปลี่ยนแต่ flag
   เปลี่ยน, หรือ `attrs == nil`) ต้อง reset `settling` เป็น `false` เสมอเมื่อเขียน
   `known[idx]` ใหม่ — เพราะนี่คือ "event ถัดไปหลัง InterfaceAdded" ไม่ว่าจะเป็นอะไรก็ตาม
-  ปิด settling window
+  ปิด settling window — **ข้อควรระวัง (ยืนยันจากการอ่านโค้ดจริง 2026-07-21):** branch
+  duplicate ปัจจุบัน (`sameAttrs` true) แค่ `log` แล้ว `return` ทันที **ไม่เขียน**
+  `known[idx]` เลย นี่คือจุดที่ต้อง**เพิ่มการเขียนเข้าไปใหม่** ไม่ใช่แค่เปลี่ยนตัวเปรียบเทียบ
+  จาก `==` เป็น `sameAttrs()` — ต้องเปลี่ยน branch นี้ให้เขียน
+  `known[idx] = linkState{name: newState.name, up: newState.up, running: newState.running, settling: false}`
+  ก่อน `return` เสมอ มิฉะนั้น `prev.settling` ที่ค้างเป็น `true` มาจากตอน `!seen` จะทำให้
+  rename ที่ตามมาไป match เงื่อนไข `prev.settling` ผิด (จะได้ `InterfaceAdded` ทั้งที่ควร
+  เป็น `LinkChanged`) — ดู `TestNetlinkMonitor_DuplicateThenRenameIsLinkChanged` ใน T-07
+  ที่เขียนไว้ป้องกันเคสนี้โดยตรง
 - แก้ `publishMissedStartupLinks` (`:218-228`): เปลี่ยน loop ด้านในจาก
   `for _, st := range known` เป็น `for idx, st := range known` แล้ว set
-  `st.settling = true; known[idx] = st` ก่อน publish — ปิดเคส compound race ที่ synthetic
-  `InterfaceAdded` ของ T-03 (#76) กับ udev rename เกิดคาบเกี่ยวกัน (residual race ที่ระบุไว้
-  ใน §1.1 ว่า "มี แต่แคบมาก" — จุดนี้คือการปิดให้แน่นขึ้นแบบ defense-in-depth ไม่ใช่
-  โจทย์บังคับ แต่ทำได้ในต้นทุนต่ำมากในตัว refactor นี้พอดี)
+  `st.settling = true; known[idx] = st` ก่อน publish — **จำเป็นต้องทำ** (ไม่ใช่ optional):
+  ปิดเคส compound race ที่ synthetic `InterfaceAdded` ของ T-03 (#76) กับ udev rename
+  เกิดคาบเกี่ยวกัน และ T-07 มีเทสต์
+  `TestNetlinkMonitor_PublishMissedStartupLinks_ThenRenameIsInterfaceAdded` ที่ **บังคับ**
+  ให้พฤติกรรมนี้ผ่าน — ถ้าข้ามขั้นตอนนี้ เทสต์ดังกล่าวจะแดง (แก้ไขจากร่างเดิมที่เขียนว่า
+  "defense-in-depth ไม่ใช่โจทย์บังคับ" ซึ่งขัดกับเกณฑ์ผ่านของ T-07 เอง — ตรวจพบจาก
+  tech-lead review 2026-07-21)
 - **เสร็จเมื่อ:** คอมไพล์ผ่าน; `go vet` สะอาด; grep ยืนยันไม่มีจุดไหนเทียบ `linkState`
   ด้วย `==` ตรง ๆ เหลืออยู่แล้ว
 - **depends_on:** T-03 (แก้ไฟล์เดียวกัน ต้องทำหลัง state ของ T-03 นิ่งแล้ว)
@@ -487,9 +498,9 @@ func (a linkState) sameAttrs(b linkState) bool {
 - [x] T-03 `service/netlink_monitor.go` — `Start(ctx, missed)` + `publishMissedStartupLinks`
 - [x] T-04 `service/netlink_monitor_test.go` — เทสต์ synthetic event + dedupe หลัง synthetic
 - [x] T-05 `cmd/pigate/main.go` — ต่อสาย Start
-- [ ] T-06 `service/netlink_monitor.go` — settling window + `sameAttrs` + fix
+- [x] T-06 `service/netlink_monitor.go` — settling window + `sameAttrs` + fix
       `publishMissedStartupLinks` (บั๊กที่สอง, udev rename race)
-- [ ] T-07 `service/netlink_monitor_test.go` — แก้เทสต์เดิมที่ผิด + เทสต์ settling ใหม่
+- [x] T-07 `service/netlink_monitor_test.go` — แก้เทสต์เดิมที่ผิด + เทสต์ settling ใหม่
 - [ ] Final Acceptance §6 ครบทุกข้อ (รวมข้อใหม่สำหรับบั๊กที่สอง)
 - [ ] ไม่ต้องแก้ openapi/README Feature Status (ไม่มี contract/feature ใหม่) —
       ปิดงานแล้วย้ายไฟล์นี้ไป `docs/ref/complete/`
