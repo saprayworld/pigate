@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,7 +12,7 @@ import (
 
 func newEventLogTestService(t *testing.T) *EventLogService {
 	t.Helper()
-	sqliteDB, err := db.InitDB(":memory:")
+	sqliteDB, err := db.InitDB(filepath.Join(t.TempDir(), "eventlog.db"))
 	if err != nil {
 		t.Fatalf("failed to init memory db: %v", err)
 	}
