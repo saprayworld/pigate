@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react"
+import { useState, useMemo, useCallback, useEffect, useRef } from "react"
 import { getErrorMessage } from "@/lib/errors"
 import {
   Network,
@@ -43,19 +43,12 @@ import {
 } from "@/components/ui/table"
 import {
   Drawer,
+  DrawerNested,
   DrawerContent,
   DrawerDescription,
   DrawerHeader,
   DrawerTitle,
 } from "@/components/ui/drawer"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import {
   Combobox,
   ComboboxContent,
@@ -63,6 +56,7 @@ import {
   ComboboxInput,
   ComboboxItem,
   ComboboxList,
+  useComboboxAnchor,
 } from "@/components/ui/combobox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -178,6 +172,166 @@ function getInterfaceIcon(type: string, subtype?: string, className = "h-5 w-5 m
   }
 }
 
+// Wi-Fi Preset (Saved Network) Create/Edit form body — shared between two
+// overlay instances: a page-level Drawer (opened from the Saved Wi-Fi
+// Networks panel, Edit Drawer closed) and a nested DrawerNested rendered
+// inside the Edit Interface Drawer's own subtree (opened via "บันทึกเป็น
+// Preset" while editing an interface). Only overlay chrome (Drawer/
+// DrawerNested + header) differs between the two call sites — the form
+// fields, validation error, and Cancel/Save buttons are identical.
+interface PresetFormFieldsProps {
+  editingPreset: WifiPreset | null
+  presetFormName: string
+  setPresetFormName: (value: string) => void
+  presetFormSSID: string
+  setPresetFormSSID: (value: string) => void
+  presetFormSecurity: string
+  setPresetFormSecurity: (value: string) => void
+  presetFormMacMode: "" | "hardware" | "randomized" | "laa"
+  setPresetFormMacMode: (value: "" | "hardware" | "randomized" | "laa") => void
+  presetFormPassword: string
+  setPresetFormPassword: (value: string) => void
+  presetFormError: string
+  presetSubmitting: boolean
+  onSubmit: (e: React.FormEvent) => void
+  onCancel: () => void
+}
+
+function PresetFormFields({
+  editingPreset,
+  presetFormName,
+  setPresetFormName,
+  presetFormSSID,
+  setPresetFormSSID,
+  presetFormSecurity,
+  setPresetFormSecurity,
+  presetFormMacMode,
+  setPresetFormMacMode,
+  presetFormPassword,
+  setPresetFormPassword,
+  presetFormError,
+  presetSubmitting,
+  onSubmit,
+  onCancel,
+}: PresetFormFieldsProps) {
+  return (
+    <form onSubmit={onSubmit} className="space-y-4 text-sm">
+      {presetFormError && (
+        <Alert variant="destructive" className="px-3 py-2.5">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription className="text-xs">{presetFormError}</AlertDescription>
+        </Alert>
+      )}
+
+      <div className="space-y-1.5">
+        <Label htmlFor="preset-name" className="block text-xs font-medium text-muted-foreground">
+          ชื่อ Preset <span className="text-destructive">*</span>
+        </Label>
+        <Input
+          id="preset-name"
+          type="text"
+          required
+          value={presetFormName}
+          onChange={(e) => setPresetFormName(e.target.value)}
+          placeholder="เช่น Home, Office"
+          className="h-9 text-sm"
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="preset-ssid" className="block text-xs font-medium text-muted-foreground">
+          SSID <span className="text-destructive">*</span>
+        </Label>
+        <Input
+          id="preset-ssid"
+          type="text"
+          required
+          value={presetFormSSID}
+          onChange={(e) => setPresetFormSSID(e.target.value)}
+          placeholder="ชื่อเครือข่าย Wi-Fi"
+          className="h-9 font-mono text-sm"
+        />
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="preset-security" className="block text-xs font-medium text-muted-foreground">
+            Security
+          </Label>
+          <Select value={presetFormSecurity} onValueChange={setPresetFormSecurity}>
+            <SelectTrigger id="preset-security" className="h-9 w-full text-xs font-medium">
+              <SelectValue placeholder="เลือกประเภทความปลอดภัย" />
+            </SelectTrigger>
+            <SelectContent className="text-xs font-medium">
+              <SelectItem value="Open">Open (ไม่มีรหัสผ่าน)</SelectItem>
+              <SelectItem value="WPA2">WPA2</SelectItem>
+              <SelectItem value="WPA2-PSK">WPA2-PSK</SelectItem>
+              <SelectItem value="WPA3">WPA3 (SAE-only)</SelectItem>
+              <SelectItem value="WPA2/WPA3">WPA2/WPA3 Mixed</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="preset-mac-mode" className="block text-xs font-medium text-muted-foreground">
+            MAC Mode (ไม่บังคับ)
+          </Label>
+          <Select
+            value={presetFormMacMode || "none"}
+            onValueChange={(value) =>
+              setPresetFormMacMode(value === "none" ? "" : (value as "hardware" | "randomized" | "laa"))
+            }
+          >
+            <SelectTrigger id="preset-mac-mode" className="h-9 w-full text-xs font-medium">
+              <SelectValue placeholder="ไม่กำหนด" />
+            </SelectTrigger>
+            <SelectContent className="text-xs font-medium">
+              <SelectItem value="none">ไม่กำหนด (คงค่าเดิมของ interface)</SelectItem>
+              <SelectItem value="hardware">Hardware MAC</SelectItem>
+              <SelectItem value="randomized">Random MAC</SelectItem>
+              <SelectItem value="laa">LAA MAC</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {presetFormSecurity !== "Open" && (
+        <div className="space-y-1.5">
+          <Label htmlFor="preset-password" className="block text-xs font-medium text-muted-foreground">
+            Password (PSK)
+          </Label>
+          <Input
+            id="preset-password"
+            type="password"
+            value={presetFormPassword}
+            onChange={(e) => setPresetFormPassword(e.target.value)}
+            placeholder="••••••••"
+            className="h-9 font-mono text-sm"
+          />
+          <p className="mt-0.5 text-[10px] text-muted-foreground">
+            {editingPreset
+              ? "เว้นว่างหากไม่ต้องการเปลี่ยนรหัสผ่านที่บันทึกไว้"
+              : "รหัสผ่านจะถูกเก็บที่ backend เท่านั้น และจะไม่ถูกส่งกลับมาที่หน้าจอนี้อีก"}
+          </p>
+        </div>
+      )}
+
+      <div className="flex items-center justify-end gap-3 border-t border-border/50 pt-4">
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={onCancel}
+          className="cursor-pointer text-muted-foreground"
+        >
+          Cancel
+        </Button>
+        <Button type="submit" disabled={presetSubmitting} className="cursor-pointer px-6 font-semibold">
+          {presetSubmitting ? "กำลังบันทึก..." : "Save Preset"}
+        </Button>
+      </div>
+    </form>
+  )
+}
+
 export default function Interfaces() {
   const { alert, confirm } = useAlert()
   // --- State ---
@@ -244,12 +398,18 @@ export default function Interfaces() {
   const [presetFormError, setPresetFormError] = useState("")
   const [presetSubmitting, setPresetSubmitting] = useState(false)
 
-  // Apply-from-saved-network Dialog State (opened from within the interface edit drawer)
+  // Apply-from-saved-network Drawer State (nested inside the interface edit drawer)
   const [isApplyPresetOpen, setIsApplyPresetOpen] = useState(false)
   const [applyPresetSelection, setApplyPresetSelection] = useState<{ value: string; label: string } | null>(null)
   const [applyPresetSlot, setApplyPresetSlot] = useState<"primary" | "backup">("primary")
   const [applyPresetError, setApplyPresetError] = useState("")
   const [applyPresetSubmitting, setApplyPresetSubmitting] = useState(false)
+  // Anchor/portal target for the preset Combobox popup: rendering it inside
+  // the nested DrawerContent (container={applyDrawerContentRef}) keeps it
+  // within the same vaul Drawer subtree, so the Drawer's own focus-trap/body
+  // lock doesn't swallow its clicks (see FirewallPolicy.tsx for the same pattern).
+  const applyDrawerContentRef = useRef<HTMLDivElement | null>(null)
+  const applyPresetAnchor = useComboboxAnchor()
 
   // Create VLAN Dialog State
   const [isCreateVlanOpen, setIsCreateVlanOpen] = useState(false)
@@ -1959,238 +2119,227 @@ export default function Interfaces() {
             </div>
           </form>
           </div>
+
+          {/* 5.5. Preset Create/Edit — nested Drawer for the "บันทึกเป็น Preset" path.
+              Must live inside this Edit Drawer's own DrawerContent subtree (vaul's
+              NestedRoot requires a parent Drawer.Root ancestor). Only opens while
+              isEditOpen is true; the sibling page-level Drawer further below (gated
+              !isEditOpen) handles the panel New/Edit Preset path instead — both share
+              isPresetDialogOpen/setIsPresetDialogOpen, but only one can ever be mounted
+              since the two gates are mutually exclusive. */}
+          <DrawerNested
+            direction="right"
+            open={isPresetDialogOpen && isEditOpen}
+            onOpenChange={setIsPresetDialogOpen}
+          >
+            <DrawerContent>
+              <DrawerHeader className="border-b border-border/50">
+                <DrawerTitle className="text-base font-semibold">
+                  {editingPreset ? "แก้ไขเครือข่ายที่บันทึกไว้" : "สร้างเครือข่ายที่บันทึกไว้ใหม่"}
+                </DrawerTitle>
+                <DrawerDescription className="text-xs">
+                  ข้อมูลนี้เป็นแม่แบบสำหรับเติมลงช่อง Primary/Backup ของ Wireless Interface — การแก้ไข Preset ภายหลัง
+                  จะไม่ sync ย้อนกลับไปยัง interface ที่เคย Apply ไปแล้ว
+                </DrawerDescription>
+              </DrawerHeader>
+              <div className="flex-1 overflow-y-auto p-4">
+                <PresetFormFields
+                  editingPreset={editingPreset}
+                  presetFormName={presetFormName}
+                  setPresetFormName={setPresetFormName}
+                  presetFormSSID={presetFormSSID}
+                  setPresetFormSSID={setPresetFormSSID}
+                  presetFormSecurity={presetFormSecurity}
+                  setPresetFormSecurity={setPresetFormSecurity}
+                  presetFormMacMode={presetFormMacMode}
+                  setPresetFormMacMode={setPresetFormMacMode}
+                  presetFormPassword={presetFormPassword}
+                  setPresetFormPassword={setPresetFormPassword}
+                  presetFormError={presetFormError}
+                  presetSubmitting={presetSubmitting}
+                  onSubmit={handleSavePreset}
+                  onCancel={() => setIsPresetDialogOpen(false)}
+                />
+              </div>
+            </DrawerContent>
+          </DrawerNested>
+
+          {/* 5.6. Apply-from-Saved-Network — nested Drawer, also gated to this Edit
+              Drawer's subtree (its only trigger — "โหลดจาก Saved Network" — lives
+              inside this drawer). The Combobox popup is portaled into this same
+              DrawerContent (container={applyDrawerContentRef}, anchor={applyPresetAnchor})
+              so it stays within this Drawer's own subtree — no modal={false} needed,
+              since there's no Dialog left to conflict with (see FirewallPolicy.tsx for
+              the identical pattern). onEscapeKeyDown only blocks the nested Drawer's own
+              close-on-Escape while the Combobox popup is open, letting Escape close the
+              popup first without also collapsing this Drawer. */}
+          <DrawerNested
+            direction="right"
+            open={isApplyPresetOpen}
+            onOpenChange={setIsApplyPresetOpen}
+          >
+            <DrawerContent
+              ref={applyDrawerContentRef}
+              onEscapeKeyDown={(e) => {
+                if (document.querySelector('[data-slot="combobox-content"]')) {
+                  e.preventDefault()
+                }
+              }}
+            >
+              <DrawerHeader className="border-b border-border/50">
+                <DrawerTitle className="text-base font-semibold">โหลดจากเครือข่ายที่บันทึกไว้</DrawerTitle>
+                <DrawerDescription className="text-xs">
+                  เลือก Preset และช่องที่ต้องการเติมค่า ระบบจะ Apply เข้า interface
+                  {editingIface ? ` "${ifaceLabel(editingIface)}"` : ""} ทันทีที่ backend
+                  (รหัสผ่านของ Preset จะไม่ถูกส่งผ่าน browser)
+                </DrawerDescription>
+              </DrawerHeader>
+
+              <div className="flex-1 overflow-y-auto p-4">
+                <div className="space-y-4 text-sm">
+                  {applyPresetError && (
+                    <Alert variant="destructive" className="px-3 py-2.5">
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertDescription className="text-xs">{applyPresetError}</AlertDescription>
+                    </Alert>
+                  )}
+
+                  <div className="space-y-1.5">
+                    <Label className="block text-xs font-medium text-muted-foreground">
+                      เครือข่ายที่บันทึกไว้ <span className="text-destructive">*</span>
+                    </Label>
+                    <Combobox
+                      items={presetComboboxItems}
+                      value={applyPresetSelection}
+                      onValueChange={(value) =>
+                        setApplyPresetSelection(value as { value: string; label: string } | null)
+                      }
+                    >
+                      <div ref={applyPresetAnchor}>
+                        <ComboboxInput placeholder="ค้นหา/เลือกเครือข่าย..." className="h-9 w-full text-sm" />
+                      </div>
+                      <ComboboxContent
+                        anchor={applyPresetAnchor}
+                        container={applyDrawerContentRef}
+                        data-vaul-no-drag
+                        className="text-xs"
+                      >
+                        <ComboboxEmpty className="p-2 text-center text-xs text-muted-foreground">
+                          ไม่พบเครือข่ายที่บันทึกไว้
+                        </ComboboxEmpty>
+                        <ComboboxList>
+                          {(item: { value: string; label: string }) => (
+                            <ComboboxItem key={item.value} value={item} className="cursor-pointer text-xs">
+                              {item.label}
+                            </ComboboxItem>
+                          )}
+                        </ComboboxList>
+                      </ComboboxContent>
+                    </Combobox>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="block text-xs font-medium text-muted-foreground">
+                      ช่องที่ต้องการเติมค่า
+                    </Label>
+                    <div className="flex w-fit gap-0.5 rounded-lg border border-border bg-muted p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setApplyPresetSlot("primary")}
+                        className={`cursor-pointer rounded-md px-4 py-1.5 text-xs font-medium transition ${applyPresetSlot === "primary"
+                          ? "bg-primary text-primary-foreground"
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                          }`}
+                      >
+                        Primary
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setApplyPresetSlot("backup")}
+                        className={`cursor-pointer rounded-md px-4 py-1.5 text-xs font-medium transition ${applyPresetSlot === "backup"
+                          ? "bg-primary text-primary-foreground"
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                          }`}
+                      >
+                        Backup
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex items-center justify-end gap-3 border-t border-border/50 pt-4">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => setIsApplyPresetOpen(false)}
+                    className="cursor-pointer text-muted-foreground"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={handleApplyPreset}
+                    disabled={applyPresetSubmitting || !applyPresetSelection}
+                    className="cursor-pointer px-6 font-semibold"
+                  >
+                    {applyPresetSubmitting ? "กำลัง Apply..." : "Apply"}
+                  </Button>
+                </div>
+              </div>
+            </DrawerContent>
+          </DrawerNested>
         </DrawerContent>
       </Drawer>
 
-      {/* 5.5. Preset Create/Edit Dialog. No Combobox inside (plain Select/Input),
-          so the default modal Dialog behavior is fine (rules_of_work.md). */}
-      <Dialog open={isPresetDialogOpen} onOpenChange={setIsPresetDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
+      {/* 5.5. Preset Create/Edit — page-level Drawer for the panel-triggered path
+          (New Preset button / row Edit button), i.e. the Edit Interface Drawer is
+          closed (!isEditOpen). When triggered instead from inside the Edit Drawer
+          via "บันทึกเป็น Preset" (isEditOpen true), the nested DrawerNested instance
+          rendered inside that Edit Drawer's own DrawerContent subtree is used
+          instead — see the isEditOpen gate there. Both share isPresetDialogOpen/
+          setIsPresetDialogOpen and the same PresetFormFields body, but only one of
+          the two instances is ever mounted since the gates are mutually exclusive. */}
+      <Drawer
+        direction="right"
+        open={isPresetDialogOpen && !isEditOpen}
+        onOpenChange={setIsPresetDialogOpen}
+      >
+        <DrawerContent>
+          <DrawerHeader className="border-b border-border/50">
+            <DrawerTitle className="text-base font-semibold">
               {editingPreset ? "แก้ไขเครือข่ายที่บันทึกไว้" : "สร้างเครือข่ายที่บันทึกไว้ใหม่"}
-            </DialogTitle>
-            <DialogDescription>
+            </DrawerTitle>
+            <DrawerDescription className="text-xs">
               ข้อมูลนี้เป็นแม่แบบสำหรับเติมลงช่อง Primary/Backup ของ Wireless Interface — การแก้ไข Preset ภายหลัง
               จะไม่ sync ย้อนกลับไปยัง interface ที่เคย Apply ไปแล้ว
-            </DialogDescription>
-          </DialogHeader>
-
-          <form onSubmit={handleSavePreset} className="space-y-4 text-sm">
-            {presetFormError && (
-              <Alert variant="destructive" className="px-3 py-2.5">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription className="text-xs">{presetFormError}</AlertDescription>
-              </Alert>
-            )}
-
-            <div className="space-y-1.5">
-              <Label htmlFor="preset-name" className="block text-xs font-medium text-muted-foreground">
-                ชื่อ Preset <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="preset-name"
-                type="text"
-                required
-                value={presetFormName}
-                onChange={(e) => setPresetFormName(e.target.value)}
-                placeholder="เช่น Home, Office"
-                className="h-9 text-sm"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="preset-ssid" className="block text-xs font-medium text-muted-foreground">
-                SSID <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="preset-ssid"
-                type="text"
-                required
-                value={presetFormSSID}
-                onChange={(e) => setPresetFormSSID(e.target.value)}
-                placeholder="ชื่อเครือข่าย Wi-Fi"
-                className="h-9 font-mono text-sm"
-              />
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="preset-security" className="block text-xs font-medium text-muted-foreground">
-                  Security
-                </Label>
-                <Select value={presetFormSecurity} onValueChange={setPresetFormSecurity}>
-                  <SelectTrigger id="preset-security" className="h-9 w-full text-xs font-medium">
-                    <SelectValue placeholder="เลือกประเภทความปลอดภัย" />
-                  </SelectTrigger>
-                  <SelectContent className="text-xs font-medium">
-                    <SelectItem value="Open">Open (ไม่มีรหัสผ่าน)</SelectItem>
-                    <SelectItem value="WPA2">WPA2</SelectItem>
-                    <SelectItem value="WPA2-PSK">WPA2-PSK</SelectItem>
-                    <SelectItem value="WPA3">WPA3 (SAE-only)</SelectItem>
-                    <SelectItem value="WPA2/WPA3">WPA2/WPA3 Mixed</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="preset-mac-mode" className="block text-xs font-medium text-muted-foreground">
-                  MAC Mode (ไม่บังคับ)
-                </Label>
-                <Select
-                  value={presetFormMacMode || "none"}
-                  onValueChange={(value) =>
-                    setPresetFormMacMode(value === "none" ? "" : (value as "hardware" | "randomized" | "laa"))
-                  }
-                >
-                  <SelectTrigger id="preset-mac-mode" className="h-9 w-full text-xs font-medium">
-                    <SelectValue placeholder="ไม่กำหนด" />
-                  </SelectTrigger>
-                  <SelectContent className="text-xs font-medium">
-                    <SelectItem value="none">ไม่กำหนด (คงค่าเดิมของ interface)</SelectItem>
-                    <SelectItem value="hardware">Hardware MAC</SelectItem>
-                    <SelectItem value="randomized">Random MAC</SelectItem>
-                    <SelectItem value="laa">LAA MAC</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            {presetFormSecurity !== "Open" && (
-              <div className="space-y-1.5">
-                <Label htmlFor="preset-password" className="block text-xs font-medium text-muted-foreground">
-                  Password (PSK)
-                </Label>
-                <Input
-                  id="preset-password"
-                  type="password"
-                  value={presetFormPassword}
-                  onChange={(e) => setPresetFormPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="h-9 font-mono text-sm"
-                />
-                <p className="mt-0.5 text-[10px] text-muted-foreground">
-                  {editingPreset
-                    ? "เว้นว่างหากไม่ต้องการเปลี่ยนรหัสผ่านที่บันทึกไว้"
-                    : "รหัสผ่านจะถูกเก็บที่ backend เท่านั้น และจะไม่ถูกส่งกลับมาที่หน้าจอนี้อีก"}
-                </p>
-              </div>
-            )}
-
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => setIsPresetDialogOpen(false)}
-                className="cursor-pointer text-muted-foreground"
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={presetSubmitting} className="cursor-pointer px-6 font-semibold">
-                {presetSubmitting ? "กำลังบันทึก..." : "Save Preset"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* 5.6. Apply-from-Saved-Network Dialog — contains a Combobox, so it MUST
-          use modal={false} (rules_of_work.md: base-ui Combobox's focus/pointer
-          blocker breaks its dropdown clicks under Radix's default modal Dialog). */}
-      <Dialog open={isApplyPresetOpen} onOpenChange={setIsApplyPresetOpen} modal={false}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>โหลดจากเครือข่ายที่บันทึกไว้</DialogTitle>
-            <DialogDescription>
-              เลือก Preset และช่องที่ต้องการเติมค่า ระบบจะ Apply เข้า interface
-              {editingIface ? ` "${ifaceLabel(editingIface)}"` : ""} ทันทีที่ backend
-              (รหัสผ่านของ Preset จะไม่ถูกส่งผ่าน browser)
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 text-sm">
-            {applyPresetError && (
-              <Alert variant="destructive" className="px-3 py-2.5">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription className="text-xs">{applyPresetError}</AlertDescription>
-              </Alert>
-            )}
-
-            <div className="space-y-1.5">
-              <Label className="block text-xs font-medium text-muted-foreground">
-                เครือข่ายที่บันทึกไว้ <span className="text-destructive">*</span>
-              </Label>
-              <Combobox
-                items={presetComboboxItems}
-                value={applyPresetSelection}
-                onValueChange={(value) =>
-                  setApplyPresetSelection(value as { value: string; label: string } | null)
-                }
-              >
-                <ComboboxInput placeholder="ค้นหา/เลือกเครือข่าย..." className="h-9 w-full text-sm" />
-                <ComboboxContent className="text-xs">
-                  <ComboboxEmpty className="p-2 text-center text-xs text-muted-foreground">
-                    ไม่พบเครือข่ายที่บันทึกไว้
-                  </ComboboxEmpty>
-                  <ComboboxList>
-                    {(item: { value: string; label: string }) => (
-                      <ComboboxItem key={item.value} value={item} className="cursor-pointer text-xs">
-                        {item.label}
-                      </ComboboxItem>
-                    )}
-                  </ComboboxList>
-                </ComboboxContent>
-              </Combobox>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label className="block text-xs font-medium text-muted-foreground">
-                ช่องที่ต้องการเติมค่า
-              </Label>
-              <div className="flex w-fit gap-0.5 rounded-lg border border-border bg-muted p-0.5">
-                <button
-                  type="button"
-                  onClick={() => setApplyPresetSlot("primary")}
-                  className={`cursor-pointer rounded-md px-4 py-1.5 text-xs font-medium transition ${applyPresetSlot === "primary"
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                    }`}
-                >
-                  Primary
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setApplyPresetSlot("backup")}
-                  className={`cursor-pointer rounded-md px-4 py-1.5 text-xs font-medium transition ${applyPresetSlot === "backup"
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                    }`}
-                >
-                  Backup
-                </button>
-              </div>
-            </div>
+            </DrawerDescription>
+          </DrawerHeader>
+          <div className="flex-1 overflow-y-auto p-4">
+            <PresetFormFields
+              editingPreset={editingPreset}
+              presetFormName={presetFormName}
+              setPresetFormName={setPresetFormName}
+              presetFormSSID={presetFormSSID}
+              setPresetFormSSID={setPresetFormSSID}
+              presetFormSecurity={presetFormSecurity}
+              setPresetFormSecurity={setPresetFormSecurity}
+              presetFormMacMode={presetFormMacMode}
+              setPresetFormMacMode={setPresetFormMacMode}
+              presetFormPassword={presetFormPassword}
+              setPresetFormPassword={setPresetFormPassword}
+              presetFormError={presetFormError}
+              presetSubmitting={presetSubmitting}
+              onSubmit={handleSavePreset}
+              onCancel={() => setIsPresetDialogOpen(false)}
+            />
           </div>
+        </DrawerContent>
+      </Drawer>
 
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => setIsApplyPresetOpen(false)}
-              className="cursor-pointer text-muted-foreground"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              onClick={handleApplyPreset}
-              disabled={applyPresetSubmitting || !applyPresetSelection}
-              className="cursor-pointer px-6 font-semibold"
-            >
-              {applyPresetSubmitting ? "กำลัง Apply..." : "Apply"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* 5.6. Apply-from-Saved-Network now lives as a nested DrawerNested inside
+          the Edit Interface Drawer's own DrawerContent subtree above (its only
+          trigger, "โหลดจาก Saved Network", is only reachable while that Drawer is
+          open) — see the DrawerNested block right before that Drawer's closing tag. */}
 
       {/* 6. Create VLAN Drawer (right side, mirrors the Edit Interface drawer).
           Uses plain Select (not Combobox), so default behavior is fine. */}
