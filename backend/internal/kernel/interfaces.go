@@ -193,3 +193,18 @@ type PowerManager interface {
 	Reboot() error
 	PowerOff() error
 }
+
+// SystemServiceManager abstracts read/restart control of arbitrary systemd
+// units via D-Bus, for the Settings "Network Services Status" panel. It is a
+// thin, policy-free wrapper around the unit name it is given — it does not
+// know (and must not need to know) which units are safe to expose or restart.
+// That whitelist/catalog policy lives in service.SystemServiceService, not
+// here, mirroring how PowerManager stays free of audit/business logic.
+type SystemServiceManager interface {
+	// GetStatus reads the live ActiveState/LoadState of the given systemd unit.
+	GetStatus(unit string) (model.ServiceRuntimeState, error)
+	// Restart asks systemd to restart the given unit. Callers MUST have
+	// already resolved unit from a server-side whitelist — never pass a raw,
+	// client-supplied string straight through (unit-name injection).
+	Restart(unit string) error
+}

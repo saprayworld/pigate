@@ -335,12 +335,22 @@ type DhcpHealthSettings struct {
 	MaxRestartsBeforePause int  `json:"maxRestartsBeforePause"`
 }
 
+// ServiceRuntimeState carries the live systemd unit state read via D-Bus
+// (org.freedesktop.systemd1.Unit's ActiveState + LoadState properties). It is
+// the kernel layer's raw return value; the service layer maps it into the
+// simpler display status used by NetworkServiceStatus.Status.
+type ServiceRuntimeState struct {
+	ActiveState string // systemd ActiveState, e.g. "active", "inactive", "failed"
+	Loaded      bool   // true when LoadState == "loaded" (unit file exists)
+}
+
 // NetworkServiceStatus represents critical host systemd service status
 type NetworkServiceStatus struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"` // Human-readable
-	ServiceName string `json:"serviceName"`
-	Status      string `json:"status"` // "running", "stopped", "failed"
+	ID             string `json:"id"`
+	Name           string `json:"name"` // Human-readable
+	ServiceName    string `json:"serviceName"`
+	Status         string `json:"status"`         // "running", "stopped", "failed", "unavailable"
+	RestartAllowed bool   `json:"restartAllowed"` // false = read-only entry (e.g. pigate.service itself), no restart button
 }
 
 // FirewallLog represents live packet filter block logs

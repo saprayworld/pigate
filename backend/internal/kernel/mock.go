@@ -445,6 +445,26 @@ func (m *MockPowerManager) PowerOff() error {
 	return nil
 }
 
+// MockSystemServiceManager implements SystemServiceManager for local testing.
+// It MUST NOT have any side effect — dev machines run with -mock=true and a
+// real RestartUnit call here could disrupt the developer's own workstation
+// services. GetStatus always reports every unit as active/loaded; Restart
+// only logs (mirrors MockPowerManager).
+type MockSystemServiceManager struct{}
+
+func NewMockSystemServiceManager() *MockSystemServiceManager {
+	return &MockSystemServiceManager{}
+}
+
+func (m *MockSystemServiceManager) GetStatus(unit string) (model.ServiceRuntimeState, error) {
+	return model.ServiceRuntimeState{ActiveState: "active", Loaded: true}, nil
+}
+
+func (m *MockSystemServiceManager) Restart(unit string) error {
+	log.Printf("[MockSystemService] Simulating restart of %s (no-op)", unit)
+	return nil
+}
+
 // MockTimeManager implements TimeManager in-memory for local testing. It keeps
 // the last-applied timezone/NTP/server values and simulates a synced clock.
 type MockTimeManager struct {

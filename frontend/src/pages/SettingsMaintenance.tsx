@@ -1033,22 +1033,47 @@ export default function SettingsMaintenance() {
                                 Restarting...
                               </span>
                             )}
+                            {srv.status === "failed" && (
+                              <span className="flex items-center gap-1.5 text-xs font-semibold text-destructive">
+                                <span className="h-2 w-2 rounded-full bg-destructive" />
+                                Failed
+                              </span>
+                            )}
+                            {srv.status === "unavailable" && (
+                              <span className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                                <span className="h-2 w-2 rounded-full bg-muted-foreground" />
+                                Not installed
+                              </span>
+                            )}
                           </TableCell>
                           <TableCell className="py-3 text-right">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              disabled={restartingServiceId !== null}
-                              onClick={() => handleRestartService(srv.id)}
-                              className="cursor-pointer gap-1.5"
-                            >
-                              {restartingServiceId === srv.id ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-                              ) : (
+                            {srv.restartAllowed ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={restartingServiceId !== null}
+                                onClick={() => handleRestartService(srv.id)}
+                                className="cursor-pointer gap-1.5"
+                              >
+                                {restartingServiceId === srv.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                                ) : (
+                                  <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
+                                )}
+                                Restart
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled
+                                title="บริการนี้ไม่อนุญาตให้รีสตาร์ทผ่านหน้านี้"
+                                className="gap-1.5"
+                              >
                                 <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
-                              )}
-                              Restart
-                            </Button>
+                                Restart
+                              </Button>
+                            )}
                           </TableCell>
                         </TableRow>
                       ))}
