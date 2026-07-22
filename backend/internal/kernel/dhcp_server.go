@@ -87,6 +87,10 @@ func (m *RealDhcpManager) ApplyConfig(cfgs []model.DhcpConfig, reservations []mo
 				sb.WriteString(fmt.Sprintf("dhcp-option=%s,6,%s\n", cfg.Interface, cfg.DNS1))
 			}
 		}
+
+		if cfg.Domain != "" {
+			sb.WriteString(fmt.Sprintf("dhcp-option=%s,15,%s\n", cfg.Interface, cfg.Domain))
+		}
 		sb.WriteString("\n")
 	}
 

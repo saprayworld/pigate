@@ -4242,6 +4242,12 @@ components:
           type: integer
           description: Lease duration in seconds
           example: 86400
+        domain:
+          type: string
+          description: |
+            Optional domain name advertised to clients in this scope via DHCP
+            option 15. Empty (default) means the option is not emitted.
+          example: home.lan
 
     DhcpReservation:
       type: object

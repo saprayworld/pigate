@@ -209,6 +209,17 @@ func ValidateDhcpConfig(cfg DhcpConfig) error {
 			return fmt.Errorf("dhcp %s %q is not a valid IPv4 address", f.name, f.val)
 		}
 	}
+	// Domain (DHCP option 15) is optional; when present it is interpolated
+	// verbatim into a dhcp-option directive, so it must survive the same
+	// no-trim, whitelist-charset discipline as the other fields above.
+	if cfg.Domain != "" {
+		if len(cfg.Domain) > 253 {
+			return fmt.Errorf("dhcp domain %q exceeds 253 characters", cfg.Domain)
+		}
+		if !reZoneName.MatchString(cfg.Domain) {
+			return fmt.Errorf("dhcp domain %q contains invalid characters (allowed: letters, digits, '.', '-')", cfg.Domain)
+		}
+	}
 	return nil
 }
 
