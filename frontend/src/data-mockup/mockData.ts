@@ -580,7 +580,8 @@ export interface NetworkServiceStatus {
   id: string
   name: string
   serviceName: string
-  status: "running" | "stopped" | "failed"
+  status: "running" | "stopped" | "failed" | "unavailable"
+  restartAllowed: boolean
 }
 
 // Initial mockup data for Settings & Maintenance
@@ -590,24 +591,45 @@ export const initialSystemTimeSettings: SystemTimeSettings = {
   ntpServer: "pool.ntp.org"
 }
 
+// Real identifiers matching the backend catalog (see
+// backend/internal/service/system_service.go). Per-interface rows
+// (wpa_supplicant@<if>, dhcpcd@<if>) aren't meaningful in this static
+// standalone-mock seed, so only the fixed singleton units are listed here.
 export const initialNetworkServices: NetworkServiceStatus[] = [
   {
-    id: "srv-1",
-    name: "Firewall Engine",
-    serviceName: "nftables",
-    status: "running"
+    id: "dnsmasq",
+    name: "DHCP/DNS Forwarder (dnsmasq)",
+    serviceName: "dnsmasq.service",
+    status: "running",
+    restartAllowed: true
   },
   {
-    id: "srv-2",
-    name: "DHCP Server",
-    serviceName: "isc-dhcp-server",
-    status: "running"
+    id: "resolved",
+    name: "DNS Resolver (systemd-resolved)",
+    serviceName: "systemd-resolved.service",
+    status: "running",
+    restartAllowed: true
   },
   {
-    id: "srv-3",
-    name: "Network Core Manager",
-    serviceName: "NetworkManager",
-    status: "running"
+    id: "timesyncd",
+    name: "Time Sync (systemd-timesyncd)",
+    serviceName: "systemd-timesyncd.service",
+    status: "running",
+    restartAllowed: true
+  },
+  {
+    id: "ssh",
+    name: "SSH Daemon (ssh)",
+    serviceName: "ssh.service",
+    status: "running",
+    restartAllowed: true
+  },
+  {
+    id: "pigate",
+    name: "PiGate Controller (pigate)",
+    serviceName: "pigate.service",
+    status: "running",
+    restartAllowed: false
   }
 ]
 

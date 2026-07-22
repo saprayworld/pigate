@@ -121,6 +121,7 @@ func main() {
 	var sysStats kernel.SystemStatsManager
 	var powerMgr kernel.PowerManager
 	var trafficLog kernel.TrafficLogManager
+	var systemServiceMgr kernel.SystemServiceManager
 	dns := kernel.NewDNSManager(cfg.Mock)
 
 	if cfg.Mock || cfg.MockFromReal {
@@ -138,6 +139,7 @@ func main() {
 		sysStats = kernel.NewMockSystemStats()
 		powerMgr = kernel.NewMockPowerManager()
 		trafficLog = kernel.NewMockTrafficLog()
+		systemServiceMgr = kernel.NewMockSystemServiceManager()
 	} else {
 		// Real kernel integrations via netlink — used on Raspberry Pi 5 production.
 		// Requires: sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
@@ -153,6 +155,7 @@ func main() {
 		sysStats = kernel.NewRealSystemStats()
 		powerMgr = kernel.NewRealPowerManager()
 		trafficLog = kernel.NewRealTrafficLog()
+		systemServiceMgr = kernel.NewRealSystemServiceManager()
 	}
 
 	// 5. Instantiate Server & Router
@@ -174,6 +177,7 @@ func main() {
 	timeService := service.NewTimeService(repo, timeMgr)
 	userService := service.NewUserService(repo)
 	powerService := service.NewPowerService(powerMgr)
+	systemServiceService := service.NewSystemServiceService(systemServiceMgr, repo)
 	systemStatusService := service.NewSystemStatusService(sysStats, repo, hostnameService, timeService, version)
 
 	// Central event log: every subsystem funnels audit events through this one
@@ -292,7 +296,7 @@ func main() {
 		netlinkMonitor,
 	)
 
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker, wifiPresetService)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker, wifiPresetService, systemServiceService)
 
 	// Apply config form database to kernel
 

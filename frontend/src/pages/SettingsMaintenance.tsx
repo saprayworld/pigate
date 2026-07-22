@@ -457,12 +457,26 @@ export default function SettingsMaintenance() {
   }
 
   // Restart Service Action
+  //
+  // RestartUnit over D-Bus is async (it only queues a systemd job and
+  // returns immediately), so a single fetch right after the POST usually
+  // lands mid-transition (ActiveState "activating"/"deactivating", which the
+  // backend buckets under "stopped"). Poll until the service settles into a
+  // terminal status (anything other than "stopped") or we give up.
+  const RESTART_POLL_INTERVAL_MS = 1500
+  const RESTART_POLL_MAX_ATTEMPTS = 8 // ~12s, generous margin over a typical systemd restart
+
   const handleRestartService = async (id: string) => {
     setRestartingServiceId(id)
     try {
       await systemService.restartService(id)
-      const updatedServices = await systemService.getServices()
-      setServices(updatedServices)
+      for (let attempt = 0; attempt < RESTART_POLL_MAX_ATTEMPTS; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, RESTART_POLL_INTERVAL_MS))
+        const updatedServices = await systemService.getServices()
+        setServices(updatedServices)
+        const target = updatedServices.find((s) => s.id === id)
+        if (target && target.status !== "stopped") break
+      }
     } catch (err) {
       await alert("ข้อผิดพลาด", "Failed to restart service: " + getErrorMessage(err))
     } finally {
@@ -1030,25 +1044,50 @@ export default function SettingsMaintenance() {
                             {srv.status === "stopped" && (
                               <span className="flex items-center gap-1.5 text-xs font-semibold text-destructive">
                                 <span className="h-2 w-2 rounded-full bg-destructive" />
-                                Restarting...
+                                Stopped
+                              </span>
+                            )}
+                            {srv.status === "failed" && (
+                              <span className="flex items-center gap-1.5 text-xs font-semibold text-destructive">
+                                <span className="h-2 w-2 rounded-full bg-destructive" />
+                                Failed
+                              </span>
+                            )}
+                            {srv.status === "unavailable" && (
+                              <span className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                                <span className="h-2 w-2 rounded-full bg-muted-foreground" />
+                                Not installed
                               </span>
                             )}
                           </TableCell>
                           <TableCell className="py-3 text-right">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              disabled={restartingServiceId !== null}
-                              onClick={() => handleRestartService(srv.id)}
-                              className="cursor-pointer gap-1.5"
-                            >
-                              {restartingServiceId === srv.id ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-                              ) : (
+                            {srv.restartAllowed ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={restartingServiceId !== null}
+                                onClick={() => handleRestartService(srv.id)}
+                                className="cursor-pointer gap-1.5"
+                              >
+                                {restartingServiceId === srv.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                                ) : (
+                                  <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
+                                )}
+                                Restart
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled
+                                title="บริการนี้ไม่อนุญาตให้รีสตาร์ทผ่านหน้านี้"
+                                className="gap-1.5"
+                              >
                                 <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
-                              )}
-                              Restart
-                            </Button>
+                                Restart
+                              </Button>
+                            )}
                           </TableCell>
                         </TableRow>
                       ))}

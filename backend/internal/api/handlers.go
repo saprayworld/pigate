@@ -48,6 +48,7 @@ type Server struct {
 	eventLog          *service.EventLogService
 	dhcpHealthChecker *service.DhcpHealthChecker
 	wifiPresetService *service.WifiPresetService
+	systemServiceSvc  *service.SystemServiceService
 }
 
 func NewServer(
@@ -76,6 +77,7 @@ func NewServer(
 	eventLog *service.EventLogService,
 	dhcpHealthChecker *service.DhcpHealthChecker,
 	wifiPresetService *service.WifiPresetService,
+	systemServiceSvc *service.SystemServiceService,
 ) *Server {
 	return &Server{
 		repo:              repo,
@@ -103,6 +105,7 @@ func NewServer(
 		eventLog:          eventLog,
 		dhcpHealthChecker: dhcpHealthChecker,
 		wifiPresetService: wifiPresetService,
+		systemServiceSvc:  systemServiceSvc,
 	}
 }
 
@@ -2261,19 +2264,39 @@ func (s *Server) HandleToggleUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// HandleGetSystemServices returns the live status of every systemd unit in
+// SystemServiceService's catalog (static singletons + per-interface dynamic
+// entries), read fresh from D-Bus on every call — nothing here is persisted.
+// A read failure (e.g. D-Bus unreachable) is surfaced as 500, never silently
+// downgraded to a fake status, so an admin isn't misled about what's running.
 func (s *Server) HandleGetSystemServices(w http.ResponseWriter, r *http.Request) {
-	// Custom Mock System services
-	list := []model.NetworkServiceStatus{
-		{ID: "srv-1", Name: "Firewall Engine", ServiceName: "nftables", Status: "running"},
-		{ID: "srv-2", Name: "DHCP Server", ServiceName: "isc-dhcp-server", Status: "running"},
-		{ID: "srv-3", Name: "Network Core Manager", ServiceName: "NetworkManager", Status: "running"},
-		{ID: "srv-4", Name: "dnsmasq Daemon", ServiceName: "dnsmasq", Status: "running"},
+	list, err := s.systemServiceSvc.List()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Failed to read system service status: "+err.Error())
+		return
 	}
 	s.writeJSON(w, http.StatusOK, list)
 }
 
+// HandleRestartService restarts one systemd unit selected by {id}, a
+// client-facing slug that SystemServiceService.RestartByID resolves through
+// its server-side catalog whitelist — {id} is NEVER used as a raw systemd
+// unit name (unit-name-injection guard, see the plan doc's Caution 1).
 func (s *Server) HandleRestartService(w http.ResponseWriter, r *http.Request) {
-	// Trigger service restart via systemd Mock
+	id := r.PathValue("id")
+	if err := s.systemServiceSvc.RestartByID(id); err != nil {
+		switch {
+		case errors.Is(err, service.ErrSystemServiceNotFound):
+			s.writeError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, service.ErrSystemServiceRestartForbidden):
+			s.writeError(w, http.StatusForbidden, err.Error())
+		default:
+			s.writeError(w, http.StatusInternalServerError, "Failed to restart service: "+err.Error())
+		}
+		return
+	}
+	s.logEvent(r, model.EventCategorySystem, "service.restarted", model.EventSeverityWarning,
+		id, "Service "+id+" restarted")
 	w.WriteHeader(http.StatusOK)
 }
 

@@ -4585,19 +4585,27 @@ components:
         - name
         - serviceName
         - status
+        - restartAllowed
       properties:
         id:
           type: string
-          example: srv-1
+          example: dnsmasq
         name:
           type: string
-          example: Firewall Engine
+          example: DHCP/DNS Forwarder (dnsmasq)
         serviceName:
           type: string
-          example: nftables
+          example: dnsmasq.service
         status:
           type: string
-          enum: [running, stopped, failed]
+          enum: [running, stopped, failed, unavailable]
+        restartAllowed:
+          type: boolean
+          description: |
+            false for read-only catalog entries (currently only pigate.service
+            itself) — the UI must not offer a restart action, and the server
+            also rejects the restart request with 403 regardless.
+          example: true
           example: running
 
     DNSConfig:
