@@ -457,12 +457,26 @@ export default function SettingsMaintenance() {
   }
 
   // Restart Service Action
+  //
+  // RestartUnit over D-Bus is async (it only queues a systemd job and
+  // returns immediately), so a single fetch right after the POST usually
+  // lands mid-transition (ActiveState "activating"/"deactivating", which the
+  // backend buckets under "stopped"). Poll until the service settles into a
+  // terminal status (anything other than "stopped") or we give up.
+  const RESTART_POLL_INTERVAL_MS = 1500
+  const RESTART_POLL_MAX_ATTEMPTS = 8 // ~12s, generous margin over a typical systemd restart
+
   const handleRestartService = async (id: string) => {
     setRestartingServiceId(id)
     try {
       await systemService.restartService(id)
-      const updatedServices = await systemService.getServices()
-      setServices(updatedServices)
+      for (let attempt = 0; attempt < RESTART_POLL_MAX_ATTEMPTS; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, RESTART_POLL_INTERVAL_MS))
+        const updatedServices = await systemService.getServices()
+        setServices(updatedServices)
+        const target = updatedServices.find((s) => s.id === id)
+        if (target && target.status !== "stopped") break
+      }
     } catch (err) {
       await alert("ข้อผิดพลาด", "Failed to restart service: " + getErrorMessage(err))
     } finally {
@@ -1030,7 +1044,7 @@ export default function SettingsMaintenance() {
                             {srv.status === "stopped" && (
                               <span className="flex items-center gap-1.5 text-xs font-semibold text-destructive">
                                 <span className="h-2 w-2 rounded-full bg-destructive" />
-                                Restarting...
+                                Stopped
                               </span>
                             )}
                             {srv.status === "failed" && (
