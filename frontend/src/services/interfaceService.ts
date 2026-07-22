@@ -226,7 +226,9 @@ export const interfaceService = {
     if (!response.ok) {
       throw new Error(`Failed to scan Wi-Fi: ${response.statusText}`);
     }
-    return response.json();
+    // A scan that finds nothing can serialize to `null` on older backends;
+    // coerce to an empty array so callers can always `.map()` safely.
+    return (await response.json()) ?? [];
   },
 
   // Reset interface configuration to default values

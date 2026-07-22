@@ -433,7 +433,10 @@ func (r *RealNetwork) ScanWifi(name string) ([]model.WifiScanResult, error) {
 		return nil, fmt.Errorf("failed to retrieve bss list: %w", err)
 	}
 
-	var results []model.WifiScanResult
+	// Initialize as an empty (non-nil) slice so a scan that finds nothing — no
+	// APs nearby, or only hidden SSIDs (skipped below) — marshals to `[]` rather
+	// than JSON `null`, which would break the frontend's `.map()` over the result.
+	results := []model.WifiScanResult{}
 	for _, b := range bssList {
 		if b.SSID == "" {
 			continue // skip hidden SSIDs
