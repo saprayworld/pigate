@@ -180,13 +180,13 @@ func Write(w io.Writer, cfg Config) error                // key=value + header c
 
 ## 6. Checklist (Definition of Done)
 
-- [ ] `backend/internal/config/config.go` — `Config`/`Defaults`/`Parse`/`Resolve`/`Write`/`KnownKeys` (stdlib ล้วน)
-- [ ] `backend/internal/config/config_test.go` — Parse/Resolve/Write round-trip + เคส unknown-key/malformed/precedence
-- [ ] `backend/cmd/pigate/main.go` — เพิ่ม `-config`, flow bootstrap (path/read/write/Visit/Resolve), แทน `*ptr`→`cfg.*` ทุกจุด, `-v` return ก่อนแตะไฟล์
-- [ ] `install.sh` — เขียน `/var/lib/pigate/pigate.conf` (mock=false,db,https-port=443,docker-compat=false, 0644, chown pigate:netdev) create-if-missing; ปรับ/พิจารณา ExecStart
-- [ ] (optional) `docs/setup_guide.md`/README — อธิบายไฟล์ config + precedence
-- [ ] `cd backend && go build ./... && go vet ./... && go test ./...` เขียว
-- [ ] ทดสอบ mock: รันเปล่าใน temp dir → เขียน `pigate.conf` + บูต mock=true; แก้ไฟล์ `mock=false` แล้วรัน → ค่าเปลี่ยน; `-mock=true` ทับไฟล์ที่ตั้ง false → mock=true (flag ชนะ)
-- [ ] ทดสอบ error: `-config=/does/not/exist` → fail ชัด; ไฟล์มี `port=abc` → fail fast; ไฟล์มี `unknownkey=1` → warn+รันต่อ
-- [ ] ไม่แตะ `docs/openapi.yaml` / `frontend/public/openapi.yaml` (ไม่มี API ใหม่)
-- [ ] แยก branch `feat/config-file-loader` → PR เข้า main (code change ห้าม push ตรง)
+- [x] `backend/internal/config/config.go` — `Config`/`Defaults`/`Parse`/`Resolve`/`Write`/`KnownKeys` (stdlib ล้วน)
+- [x] `backend/internal/config/config_test.go` — Parse/Resolve/Write round-trip + เคส unknown-key/malformed/precedence
+- [x] `backend/cmd/pigate/main.go` — เพิ่ม `-config`, flow bootstrap (path/read/write/Visit/Resolve), แทน `*ptr`→`cfg.*` ทุกจุด, `-v` return ก่อนแตะไฟล์
+- [x] `install.sh` — เขียน `/var/lib/pigate/pigate.conf` (mock=false,db,https-port=443,docker-compat=false, 0644, chown pigate:netdev) create-if-missing; ปรับ/พิจารณา ExecStart
+- [x] (optional) `docs/setup_guide.md`/README — อธิบายไฟล์ config + precedence (README.md อัปเดตแล้ว)
+- [x] `cd backend && go build ./... && go vet ./... && go test ./...` เขียว
+- [x] ทดสอบ mock: รันเปล่าใน temp dir → เขียน `pigate.conf` + บูต mock=true; แก้ไฟล์ `mock=false` แล้วรัน → ค่าเปลี่ยน; `-mock=true` ทับไฟล์ที่ตั้ง false → mock=true (flag ชนะ)
+- [x] ทดสอบ error: `-config=/does/not/exist` → fail ชัด; ไฟล์มี `port=abc` → fail fast; ไฟล์มี `unknownkey=1` → warn+รันต่อ
+- [x] ไม่แตะ `docs/openapi.yaml` / `frontend/public/openapi.yaml` (ไม่มี API ใหม่)
+- [x] แยก branch `feat/config-file-loader` → PR เข้า main (merged: PR #71, commit `e70f2e1`)
