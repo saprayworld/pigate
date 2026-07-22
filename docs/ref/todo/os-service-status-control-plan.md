@@ -121,23 +121,35 @@ route มีอยู่แล้วทั้งคู่ — ไม่เพิ
 
 ## 6. Summary Checklist (Definition of Done)
 
-- [ ] Step 1: `model/types.go` — `ServiceRuntimeState` + `RestartAllowed` + status `unavailable`
-- [ ] Step 2: `kernel/dbus_systemd.go` — `GetUnitRuntimeState`
-- [ ] Step 3: `kernel/interfaces.go` + `real_system_service.go` — interface + real (sensitive)
-- [ ] Step 4: `kernel/mock.go` — `MockSystemServiceManager` (zero side effect)
-- [ ] Step 5: `service/system_service.go` — catalog + `List` + `RestartByID` guard (sensitive)
-- [ ] Step 6: `main.go` + `handlers.go` — real/mock select + wiring
-- [ ] Step 7: `handlers.go` + `router.go` — handler จริง + audit event + error codes (sensitive)
-- [ ] Step 8: `mockData.ts` — type + seed จริง
-- [ ] Step 9: `SettingsMaintenance.tsx` + `systemService.ts` — restartAllowed/unavailable + mock branch
-- [ ] **Final acceptance (ทดสอบรวมครั้งเดียวหลังครบ Step 1-9):**
-  - [ ] `cd backend && go build ./... && go test ./...` ผ่าน
-  - [ ] `cd frontend && yarn build && yarn lint` ผ่าน
-  - [ ] real backend `-mock=true`: GET คืน unit จริง (ไม่มี nftables/isc-dhcp-server/NetworkManager); `pigate` มี restartAllowed=false; per-interface rows ตรง interface ปัจจุบัน (D1)
-  - [ ] restart happy path: `POST .../dnsmasq/restart` = 200 + มี `service.restarted` event ใน Event Log พร้อม username
-  - [ ] guardrails: id ไม่รู้จัก = 400; `pigate`/restartAllowed=false = 403; ทั้งคู่ไม่เรียก D-Bus
-  - [ ] `grep` ยืนยันไม่มี `exec.Command`/`systemctl` — ผ่าน `dbus_systemd.go` เท่านั้น
-  - [ ] frontend real mode: list จาก API, ซ่อน/disable restart สำหรับ read-only row, badge `unavailable` ทำงาน, restart click round-trip
-  - [ ] frontend standalone mock (`IS_MOCK_MODE`): การ์ดยังทำงานด้วย seed ใหม่
-  - [ ] read-only role restart ไม่ได้ (D2 — RoleReadOnlyMiddleware)
-- [ ] **Docs:** ไม่ต้องแก้ `openapi.yaml` (route เดิม, schema เพิ่มแค่ optional field — เพิ่ม `restartAllowed` ใน schema ทั้งสองไฟล์ให้ตรง); อัปเดต README Feature Status เป็น Completed
+- [x] Step 1: `model/types.go` — `ServiceRuntimeState` + `RestartAllowed` + status `unavailable`
+- [x] Step 2: `kernel/dbus_systemd.go` — `GetUnitRuntimeState`
+- [x] Step 3: `kernel/interfaces.go` + `real_system_service.go` — interface + real (sensitive)
+- [x] Step 4: `kernel/mock.go` — `MockSystemServiceManager` (zero side effect)
+- [x] Step 5: `service/system_service.go` — catalog + `List` + `RestartByID` guard (sensitive)
+- [x] Step 6: `main.go` + `handlers.go` — real/mock select + wiring
+- [x] Step 7: `handlers.go` + `router.go` — handler จริง + audit event + error codes (sensitive)
+- [x] Step 8: `mockData.ts` — type + seed จริง
+- [x] Step 9: `SettingsMaintenance.tsx` + `systemService.ts` — restartAllowed/unavailable + mock branch
+- [x] **Final acceptance (ทดสอบรวมครั้งเดียวหลังครบ Step 1-9):**
+  - [x] `cd backend && go build ./... && go test ./...` ผ่าน
+  - [x] `cd frontend && yarn build && yarn lint` ผ่าน
+  - [x] real backend `-mock=true`: GET คืน unit จริง (ไม่มี nftables/isc-dhcp-server/NetworkManager); `pigate` มี restartAllowed=false; per-interface rows ตรง interface ปัจจุบัน (D1)
+  - [x] restart happy path: `POST .../dnsmasq/restart` = 200 + มี `service.restarted` event ใน Event Log พร้อม username
+  - [x] guardrails: id ไม่รู้จัก = 400; `pigate`/restartAllowed=false = 403; ทั้งคู่ไม่เรียก D-Bus
+  - [x] `grep` ยืนยันไม่มี `exec.Command`/`systemctl` — ผ่าน `dbus_systemd.go` เท่านั้น
+  - [x] frontend real mode: list จาก API, ซ่อน/disable restart สำหรับ read-only row, badge `unavailable` ทำงาน, restart click round-trip
+  - [x] frontend standalone mock (`IS_MOCK_MODE`): การ์ดยังทำงานด้วย seed ใหม่
+  - [x] read-only role restart ไม่ได้ (D2 — RoleReadOnlyMiddleware)
+- [x] **Docs:** เพิ่ม `restartAllowed` ใน schema `docs/openapi.yaml` + `frontend/public/openapi.yaml` (ทั้งสองไฟล์ sync กัน); อัปเดต README Feature Status เป็น Completed
+
+## 7. Post-merge follow-up (พบระหว่างทดสอบจริงบนบอร์ด)
+
+**สถานะ: ปิดงานแล้ว** — ทดสอบบนบอร์ดจริงโดยเจ้าของระบบผ่านทั้งหมด (2026-07-22)
+
+ระหว่างทดสอบจริง เจ้าของระบบพบว่ากดปุ่ม Restart แล้ว badge สถานะค้างที่ "Restarting..." ตลอดไปไม่กลับเป็น Running แม้ service log ฝั่ง backend จะยืนยันว่า `[D-Bus] RestartUnit` สำเร็จตามปกติ
+
+- **สาเหตุ:** `RestartUnit` ผ่าน D-Bus เป็น async (แค่ queue job แล้ว return ทันที) หน้า frontend fetch สถานะครั้งเดียวทันทีหลัง POST จึงมักไปเจอ state ที่กำลัง transition (`activating`/`deactivating` ซึ่งฝั่ง backend map รวมอยู่ใน bucket `"stopped"`) แล้วไม่มีการ fetch ซ้ำอีกเลย — UI จึงค้างอยู่ที่ snapshot ชั่วคราวนั้นตลอดไป นอกจากนี้ badge สำหรับ status `"stopped"` ยังมี label เดิมที่ผิด (hardcode เป็น "Restarting..." ไม่ว่าสาเหตุจริงคืออะไร ซึ่ง QA เคยตั้งข้อสังเกตไว้ว่าเป็น mislabel เดิมที่อยู่นอกขอบเขตของงานหลัก)
+- **การแก้ไข** (`frontend/src/pages/SettingsMaintenance.tsx`, commit `cf2f231`):
+  - `handleRestartService` เปลี่ยนจาก fetch ครั้งเดียวเป็น poll ทุก 1.5 วินาที (สูงสุด 8 ครั้ง ~12 วินาที) จนกว่า status ของ service นั้นจะไม่ใช่ `"stopped"` อีกต่อไป (ออกจาก transitional bucket)
+  - แก้ label badge `"stopped"` จาก "Restarting..." เป็น "Stopped" ให้ตรงความจริง — ตัวบ่งชี้ว่ากำลัง restart อยู่ใช้ spinner บนปุ่ม (`restartingServiceId === srv.id`) แทน ซึ่งแม่นยำกว่า
+- **ยืนยันแล้ว:** `yarn lint` + `yarn build` ผ่าน; เจ้าของระบบทดสอบกดปุ่ม Restart จริงบนบอร์ดแล้วสถานะอัปเดตกลับเป็น Running ถูกต้อง
