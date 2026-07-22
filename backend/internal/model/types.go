@@ -321,6 +321,20 @@ type SystemHostnameSettings struct {
 	ShareWithDhcp bool   `json:"shareWithDhcp"`
 }
 
+// DhcpHealthSettings holds the tunable thresholds for the DHCP link-local
+// (169.254.x.x APIPA) fallback health-checker (issue #78). It controls how
+// aggressively the background checker self-heals interfaces in DHCP mode
+// that are carrier-ready (isUp && isRunning) but stuck without a real IPv4
+// address, via a mix of stray-address deletion and dhcpcd restarts.
+type DhcpHealthSettings struct {
+	Enabled                bool `json:"enabled"`
+	CheckIntervalSeconds   int  `json:"checkIntervalSeconds"`
+	ConsecutiveStrikes     int  `json:"consecutiveStrikes"`
+	MinRunningSeconds      int  `json:"minRunningSeconds"`
+	RestartBackoffSeconds  int  `json:"restartBackoffSeconds"`
+	MaxRestartsBeforePause int  `json:"maxRestartsBeforePause"`
+}
+
 // NetworkServiceStatus represents critical host systemd service status
 type NetworkServiceStatus struct {
 	ID          string `json:"id"`

@@ -2016,6 +2016,37 @@ func (r *Repository) UpdateHostnameSettings(settings model.SystemHostnameSetting
 	return err
 }
 
+// =========================================================================
+// DHCP HEALTH-CHECKER SETTINGS (issue #78)
+// =========================================================================
+
+func (r *Repository) GetDhcpHealthSettings() (*model.DhcpHealthSettings, error) {
+	row := r.db.QueryRow(`SELECT enabled, check_interval_seconds, consecutive_strikes, min_running_seconds,
+		restart_backoff_seconds, max_restarts_before_pause FROM dhcp_health_settings WHERE id = 1`)
+	var settings model.DhcpHealthSettings
+	var enabledInt int
+	err := row.Scan(&enabledInt, &settings.CheckIntervalSeconds, &settings.ConsecutiveStrikes,
+		&settings.MinRunningSeconds, &settings.RestartBackoffSeconds, &settings.MaxRestartsBeforePause)
+	if err != nil {
+		return nil, err
+	}
+	settings.Enabled = enabledInt == 1
+	return &settings, nil
+}
+
+func (r *Repository) UpdateDhcpHealthSettings(settings model.DhcpHealthSettings) error {
+	enabledVal := 0
+	if settings.Enabled {
+		enabledVal = 1
+	}
+	_, err := r.db.Exec(`UPDATE dhcp_health_settings SET enabled = ?, check_interval_seconds = ?,
+		consecutive_strikes = ?, min_running_seconds = ?, restart_backoff_seconds = ?,
+		max_restarts_before_pause = ? WHERE id = 1`,
+		enabledVal, settings.CheckIntervalSeconds, settings.ConsecutiveStrikes,
+		settings.MinRunningSeconds, settings.RestartBackoffSeconds, settings.MaxRestartsBeforePause)
+	return err
+}
+
 // CreateInterfaceForTest inserts a network interface for testing purposes.
 func (r *Repository) CreateInterfaceForTest(iface model.NetworkInterface) error {
 	adminAccessStr := strings.Join(iface.AdminAccess, ",")

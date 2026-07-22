@@ -143,6 +143,12 @@ func (s *BackupService) Export(includeUsers bool, passphrase string) (*model.Bac
 	}
 	cfg.SystemHostname = *sysHostname
 
+	dhcpHealth, err := s.repo.GetDhcpHealthSettings()
+	if err != nil {
+		return nil, fmt.Errorf("read dhcp health settings: %w", err)
+	}
+	cfg.DhcpHealthSettings = dhcpHealth
+
 	if includeUsers {
 		if cfg.Users, err = s.repo.GetBackupUsers(); err != nil {
 			return nil, fmt.Errorf("read users: %w", err)

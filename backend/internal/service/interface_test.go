@@ -74,6 +74,14 @@ func (t *trackingNetworkManager) DeleteVlan(name string) error {
 	return nil
 }
 
+func (t *trackingNetworkManager) GetIPv4Addresses(name string) ([]string, error) {
+	return nil, nil
+}
+
+func (t *trackingNetworkManager) DeleteAddress(name string, cidr string) error {
+	return nil
+}
+
 func TestInitApplyConfigurationAtStartup(t *testing.T) {
 	// Initialize a memory database
 	sqliteDB, err := db.InitDB(":memory:")

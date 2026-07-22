@@ -46,6 +46,7 @@ type Server struct {
 	systemStatus      *service.SystemStatusService
 	powerService      *service.PowerService
 	eventLog          *service.EventLogService
+	dhcpHealthChecker *service.DhcpHealthChecker
 }
 
 func NewServer(
@@ -72,6 +73,7 @@ func NewServer(
 	systemStatus *service.SystemStatusService,
 	powerService *service.PowerService,
 	eventLog *service.EventLogService,
+	dhcpHealthChecker *service.DhcpHealthChecker,
 ) *Server {
 	return &Server{
 		repo:              repo,
@@ -97,6 +99,7 @@ func NewServer(
 		systemStatus:      systemStatus,
 		powerService:      powerService,
 		eventLog:          eventLog,
+		dhcpHealthChecker: dhcpHealthChecker,
 	}
 }
 
@@ -2028,6 +2031,42 @@ func (s *Server) HandleUpdateHostname(w http.ResponseWriter, r *http.Request) {
 	s.logEvent(r, model.EventCategorySystem, "system.hostname_changed", model.EventSeverityInfo,
 		settings.Hostname, "Hostname changed to "+settings.Hostname)
 	s.writeJSON(w, http.StatusOK, settings)
+}
+
+// HandleGetDhcpHealthSettings returns the current DHCP health-checker settings
+// (issue #78: 169.254.x.x link-local fallback self-heal).
+func (s *Server) HandleGetDhcpHealthSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := s.dhcpHealthChecker.GetSettings()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, settings)
+}
+
+// HandleUpdateDhcpHealthSettings updates the DHCP health-checker settings.
+// Range validation happens inside DhcpHealthChecker.UpdateSettings, not here.
+func (s *Server) HandleUpdateDhcpHealthSettings(w http.ResponseWriter, r *http.Request) {
+	var settings model.DhcpHealthSettings
+	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	if err := s.dhcpHealthChecker.UpdateSettings(settings); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	saved, err := s.dhcpHealthChecker.GetSettings()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.logEvent(r, model.EventCategoryDhcp, "dhcp.health_settings_changed", model.EventSeverityInfo,
+		"system", "DHCP health-checker settings updated")
+	s.writeJSON(w, http.StatusOK, saved)
 }
 
 func (s *Server) HandleGetDNSConfig(w http.ResponseWriter, r *http.Request) {

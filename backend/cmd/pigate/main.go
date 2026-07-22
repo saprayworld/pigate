@@ -267,6 +267,14 @@ func main() {
 			}
 		})
 
+	// DHCP health-checker (issue #78): background self-heal loop for
+	// interfaces stuck with only a link-local (169.254.x.x) address or no
+	// IPv4 at all despite being carrier-ready. Constructed here (needs
+	// eventLogService + eventBus, both now available) but started further
+	// down, after the netlink monitor, since it is a background loop rather
+	// than part of the startup-apply sequence.
+	dhcpHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, dhcpcdService, net, eventLogService, eventBus)
+
 	// Netlink monitor is created here (but started later, after startup config is
 	// applied) so it can be injected into the BackupService, which pauses it (and
 	// hence the whole bus) around a config import.
@@ -279,7 +287,7 @@ func main() {
 		netlinkMonitor,
 	)
 
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker)
 
 	// Apply config form database to kernel
 
@@ -396,6 +404,12 @@ func main() {
 	// acceptable — the startup applies just ran.
 	log.Printf("[Main] Starting Netlink event monitor (self-healing event bus)...")
 	netlinkMonitor.Start(monitorCtx, ifaceService.StartupSkippedInterfaces())
+
+	// Start the DHCP health-checker (issue #78) after the netlink monitor: it
+	// is a background self-heal loop reading DB state on its own ticker, not
+	// part of the startup-apply sequence above.
+	log.Printf("[Main] Starting DHCP health-checker (link-local/no-IP self-heal)...")
+	dhcpHealthChecker.Start(monitorCtx)
 
 	handler := api.RegisterRoutes(server)
 

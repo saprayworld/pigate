@@ -379,6 +379,19 @@ func migrate(db *sql.DB) error {
 			share_with_dhcp INTEGER DEFAULT 0 CHECK(share_with_dhcp IN (0,1))
 		);`,
 
+		// dhcp_health_settings: tunable thresholds for the DHCP link-local
+		// (169.254.x.x APIPA) fallback health-checker (issue #78). Single-row
+		// table mirroring system_hostname_settings/system_time_settings.
+		`CREATE TABLE IF NOT EXISTS dhcp_health_settings (
+			id INTEGER PRIMARY KEY CHECK(id = 1),
+			enabled INTEGER DEFAULT 1 CHECK(enabled IN (0,1)),
+			check_interval_seconds INTEGER NOT NULL DEFAULT 60,
+			consecutive_strikes INTEGER NOT NULL DEFAULT 3,
+			min_running_seconds INTEGER NOT NULL DEFAULT 30,
+			restart_backoff_seconds INTEGER NOT NULL DEFAULT 300,
+			max_restarts_before_pause INTEGER NOT NULL DEFAULT 3
+		);`,
+
 		`CREATE TABLE IF NOT EXISTS network_interfaces (
 			id TEXT PRIMARY KEY,
 			name TEXT UNIQUE NOT NULL,
@@ -865,6 +878,19 @@ func seed(db *sql.DB, dsn string, mockMode bool) error {
 			defaultHostname = "pigate"
 		}
 		_, err = db.Exec(`INSERT INTO system_hostname_settings (id, hostname, share_with_dhcp) VALUES (1, ?, 0)`, defaultHostname)
+		if err != nil {
+			return err
+		}
+	}
+
+	// 5.2 Seed Default DHCP Health-Checker Settings (issue #78)
+	var dhcpHealthCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM dhcp_health_settings").Scan(&dhcpHealthCount); err != nil {
+		return err
+	}
+	if dhcpHealthCount == 0 {
+		_, err := db.Exec(`INSERT INTO dhcp_health_settings (id, enabled, check_interval_seconds, consecutive_strikes, min_running_seconds, restart_backoff_seconds, max_restarts_before_pause) VALUES
+			(1, 1, 60, 3, 30, 300, 3)`)
 		if err != nil {
 			return err
 		}

@@ -2194,6 +2194,38 @@ paths:
         '400':
           description: Invalid hostname (RFC 1123 label validation failed)
 
+  /system/dhcp-health:
+    get:
+      tags:
+        - System & Maintenance
+      summary: Get DHCP link-local (169.254.x.x) fallback health-checker settings (issue #78)
+      responses:
+        '200':
+          description: DHCP health-checker settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DhcpHealthSettings'
+    put:
+      tags:
+        - System & Maintenance
+      summary: Update DHCP health-checker thresholds (self-heals interfaces stuck on 169.254.x.x/no IPv4)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DhcpHealthSettings'
+      responses:
+        '200':
+          description: DHCP health-checker settings updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DhcpHealthSettings'
+        '400':
+          description: A threshold value is outside its allowed range
+
   /system/dns:
     get:
       tags:
@@ -4122,6 +4154,57 @@ components:
           type: boolean
           example: false
           description: When true, dhcpcd sends this hostname to the WAN DHCP server via DHCP Option 12
+
+    DhcpHealthSettings:
+      type: object
+      description: >
+        Tunable thresholds for the background DHCP link-local (169.254.x.x APIPA)
+        fallback health-checker (issue #78). It self-heals DHCP-mode interfaces that
+        are carrier-ready (up and running) but stuck without a real IPv4 address:
+        it deletes a stray 169.254 address when a real IP coexists, or restarts
+        dhcpcd for that interface when there is no real IP at all.
+      required:
+        - enabled
+        - checkIntervalSeconds
+        - consecutiveStrikes
+        - minRunningSeconds
+        - restartBackoffSeconds
+        - maxRestartsBeforePause
+      properties:
+        enabled:
+          type: boolean
+          example: true
+          description: Master on/off switch for the health-checker.
+        checkIntervalSeconds:
+          type: integer
+          example: 60
+          minimum: 10
+          maximum: 3600
+          description: How often (seconds) the checker polls every DHCP-mode interface.
+        consecutiveStrikes:
+          type: integer
+          example: 3
+          minimum: 1
+          maximum: 20
+          description: Consecutive unhealthy ticks required before the checker acts.
+        minRunningSeconds:
+          type: integer
+          example: 30
+          minimum: 0
+          maximum: 600
+          description: Grace period after an interface becomes carrier-ready before strikes are counted, so a fresh reconnect isn't penalized.
+        restartBackoffSeconds:
+          type: integer
+          example: 300
+          minimum: 0
+          maximum: 3600
+          description: Minimum time between two dhcpcd restarts for the same interface.
+        maxRestartsBeforePause:
+          type: integer
+          example: 3
+          minimum: 1
+          maximum: 20
+          description: Restart ceiling since the interface was last genuinely healthy; once hit, the checker stops restarting that interface and logs a single actionable event instead of restarting indefinitely.
 
     BackupFile:
       type: object

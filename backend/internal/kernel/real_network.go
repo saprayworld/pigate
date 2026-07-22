@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"pigate/internal/model"
 
@@ -339,6 +340,60 @@ func (r *RealNetwork) DeleteVlan(name string) error {
 		return fmt.Errorf("failed to delete vlan %q: %w", name, err)
 	}
 	log.Printf("[RealNetwork] VLAN %s deleted successfully", name)
+	return nil
+}
+
+// GetIPv4Addresses returns the current IPv4 addresses assigned to the
+// interface as CIDR strings (e.g. "169.254.1.2/16"). Part of the DHCP
+// health-checker (issue #78) support added to NetworkManager.
+func (r *RealNetwork) GetIPv4Addresses(name string) ([]string, error) {
+	link, err := netlink.LinkByName(name)
+	if err != nil {
+		return nil, fmt.Errorf("interface %q not found: %w", name, err)
+	}
+
+	addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list IPv4 addresses for %q: %w", name, err)
+	}
+
+	result := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		result = append(result, a.IPNet.String())
+	}
+	return result, nil
+}
+
+// DeleteAddress removes a single address (given as CIDR) from the interface,
+// leaving any other addresses untouched. Part of the DHCP health-checker
+// (issue #78) support: used to strip a stray 169.254.x.x APIPA address while
+// a real IP coexists on the same interface, without going through
+// ConfigureInterface (which clears every IPv4 address on the link).
+func (r *RealNetwork) DeleteAddress(name string, cidr string) error {
+	log.Printf("[RealNetwork] DeleteAddress called: interface=%s, cidr=%s", name, cidr)
+	link, err := netlink.LinkByName(name)
+	if err != nil {
+		return fmt.Errorf("interface %q not found: %w", name, err)
+	}
+
+	addr, err := netlink.ParseAddr(cidr)
+	if err != nil {
+		return fmt.Errorf("invalid CIDR address %q: %w", cidr, err)
+	}
+
+	if err := netlink.AddrDel(link, addr); err != nil {
+		// The address may have already disappeared (e.g. dhcpcd obtained a
+		// real lease in the split-second between reading the address list
+		// and issuing this delete). That is not a failure — the desired
+		// outcome (no stray address) has already happened — so log and
+		// swallow the error rather than surfacing a false-positive failure.
+		if errors.Is(err, syscall.EADDRNOTAVAIL) || errors.Is(err, syscall.ENOENT) || strings.Contains(strings.ToLower(err.Error()), "cannot assign requested address") {
+			log.Printf("[RealNetwork] DeleteAddress: %s no longer has %s (already removed, likely raced with a new lease): %v", name, cidr, err)
+			return nil
+		}
+		return fmt.Errorf("failed to delete address %q from %q: %w", cidr, name, err)
+	}
+	log.Printf("[RealNetwork] Address %s removed from %s", cidr, name)
 	return nil
 }
 
