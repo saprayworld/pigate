@@ -118,6 +118,21 @@ func (m *MockNetwork) DeleteVlan(name string) error {
 	return nil
 }
 
+// GetIPv4Addresses always returns an empty slice in mock mode: there is no
+// simulated address state to report, and the DHCP health-checker (issue #78)
+// already guards against touching netlink at all in mock mode via
+// repo.IsMockMode(). This is a safety net for any other future caller.
+func (m *MockNetwork) GetIPv4Addresses(name string) ([]string, error) {
+	log.Printf("[MockNetwork] GetIPv4Addresses: %s", name)
+	return []string{}, nil
+}
+
+// DeleteAddress is a log-only no-op in mock mode.
+func (m *MockNetwork) DeleteAddress(name string, cidr string) error {
+	log.Printf("[MockNetwork] DeleteAddress: interface=%s cidr=%s", name, cidr)
+	return nil
+}
+
 func (m *MockNetwork) GetWifiStatus(name string) (*model.WifiConnectionStatus, error) {
 	return &model.WifiConnectionStatus{
 		State:     "COMPLETED",

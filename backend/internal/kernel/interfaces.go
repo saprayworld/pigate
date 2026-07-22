@@ -48,6 +48,16 @@ type NetworkManager interface {
 	// refuse to delete a link whose kernel type is not "vlan" (a guard against
 	// deleting a physical interface such as eth0/wlan0).
 	DeleteVlan(name string) error
+	// GetIPv4Addresses returns the current IPv4 addresses assigned to the
+	// interface as CIDR strings (e.g. "169.254.1.2/16"). Used by the DHCP
+	// health-checker (issue #78) to classify link-local-only/no-IP states
+	// without disturbing other addresses on the interface.
+	GetIPv4Addresses(name string) ([]string, error)
+	// DeleteAddress removes a single address (given as CIDR) from the
+	// interface, leaving any other addresses untouched. Used by the DHCP
+	// health-checker (issue #78) to strip a stray 169.254.x.x APIPA address
+	// while a real IP coexists on the same interface.
+	DeleteAddress(name string, cidr string) error
 }
 
 // RoutingManager abstracts netlink route modifications

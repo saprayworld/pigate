@@ -342,3 +342,28 @@ func (s *DhcpcdService) SyncInterface(name string) {
 
 	s.applyDhcpcdDecisionLocked(name, isWifi, isUp, isRunning)
 }
+
+// RestartForHealthCheck restarts the per-interface dhcpcd client on behalf of
+// the DHCP health-checker (issue #78), which detects an interface stuck with
+// only a link-local (169.254.x.x) address or no IPv4 address at all despite
+// being carrier-ready. It must never call kernel.DhcpcdManager.RestartDhcpcd
+// directly (Caution 1 in the plan): the cancel-pending-stop -> restart
+// sequence below shares the exact same s.mu critical section as every other
+// start/stop path in this file (SyncInterface, syncActiveInterface,
+// applyDhcpcdDecisionDeferred), so a restart triggered by the health-checker
+// can never race a concurrent HandleLinkEvent/SyncActiveInterfaces call for
+// the same interface.
+func (s *DhcpcdService) RestartForHealthCheck(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.cancelPendingStopLocked(name)
+
+	log.Printf("[DhcpcdService] RestartForHealthCheck: restarting dhcpcd for %s", name)
+	if err := s.manager.RestartDhcpcd(name); err != nil {
+		log.Printf("[DhcpcdService] RestartForHealthCheck: failed to restart dhcpcd for %s: %v", name, err)
+		return err
+	}
+	log.Printf("[DhcpcdService] RestartForHealthCheck: dhcpcd restart requested for %s", name)
+	return nil
+}

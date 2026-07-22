@@ -143,6 +143,8 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("POST /api/system/time/manual", s.HandleSetManualTime)
 	authRoute("GET /api/system/hostname", s.HandleGetHostname)
 	authRoute("PUT /api/system/hostname", s.HandleUpdateHostname)
+	authRoute("GET /api/system/dhcp-health", s.HandleGetDhcpHealthSettings)
+	authRoute("PUT /api/system/dhcp-health", s.HandleUpdateDhcpHealthSettings)
 	authRoute("GET /api/system/dns", s.HandleGetDNSConfig)
 	authRoute("PUT /api/system/dns", s.HandleUpdateDNSConfig)
 	authRoute("PUT /api/system/password", s.HandleChangePassword)

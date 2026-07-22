@@ -199,7 +199,7 @@ error ทั่วไป ไม่ใช่ schema ใหม่)
 - [x] ทดสอบ role: non-super_admin โดน 403 เหมือนเดิม (ไม่เปลี่ยน route/middleware)
 - [x] ไม่ต้องแก้ `docs/openapi.yaml` / `frontend/public/openapi.yaml` (ไม่มี schema ใหม่)
 - [ ] อัปเดต `docs/review-guide.md` ว่า Finding #11 ปิดแล้ว (ถ้าต้องการ track)
-- [ ] แยก branch `fix/dhcp-scope-injection` → PR เข้า main (code change ห้าม push ตรง)
+- [x] แยก branch `fix/dhcp-scope-injection` → PR เข้า main (merged: PR #65, commit `886e8bf`)
 
 ## 7. รีวิวรอบสอง (2026-07-18) — ผลและการปิดงาน
 

@@ -12,8 +12,10 @@
 > `fix/usb-wifi-startup-race` (ซึ่งมี T-01–T-05 ของ #76 อยู่แล้ว) พบบั๊กที่สอง **คนละ root
 > cause** จาก #76 แต่กระทบเป้าหมายหลักของ PR #79 โดยตรง (USB Wi-Fi ที่ผ่าน udev rename
 > ไม่ได้ config apply เหมือนกัน) — ดู §1.1 (finding) และ §2.1 (แนวทาง) และ Task T-06/T-07
-> ใหม่ท้าย §3 ทั้งหมดยังอยู่บน branch เดิม `fix/usb-wifi-startup-race`, ยังไม่ merge เข้า
-> main จนกว่า T-06/T-07 จะเสร็จและผ่าน Final Acceptance ที่อัปเดตแล้ว (§6)
+> ใหม่ท้าย §3
+>
+> **อัปเดต 2026-07-22 (ปิดงาน):** T-06/T-07 เสร็จแล้ว, PR #79 merged เข้า `main`
+> (commit `4e2168d`), Final Acceptance §6 ยืนยันครบทุกข้อบนบอร์ดจริงแล้ว — งานนี้ปิดแล้ว
 
 ## 0. เป้าหมายและขอบเขต
 
@@ -454,24 +456,24 @@ func (a linkState) sameAttrs(b linkState) bool {
 
 ## 6. Final Acceptance (ทดสอบรวมครั้งเดียวหลังทุก Task เสร็จ — สำหรับ ai-qa)
 
-- [ ] `cd backend && go build ./... && go vet ./... && go test -race ./...` เขียวทั้งหมด
-- [ ] Unit: เทสต์ใหม่ T-02/T-04/T-07 ผ่านครบทุกเคสที่ระบุ (รวม `-race`)
-- [ ] เทสต์เดิมทั้งหมดของ `interface_test.go`, `netlink_monitor_test.go`,
+- [x] `cd backend && go build ./... && go vet ./... && go test -race ./...` เขียวทั้งหมด
+- [x] Unit: เทสต์ใหม่ T-02/T-04/T-07 ผ่านครบทุกเคสที่ระบุ (รวม `-race`)
+- [x] เทสต์เดิมทั้งหมดของ `interface_test.go`, `netlink_monitor_test.go`,
       `dhcpcd_test.go`, `backup_test.go` ยังผ่าน (ไม่มี regression จาก signature ใหม่ของ
       T-03 และการเปลี่ยน assertion ของ `TestNetlinkMonitor_RenameSameFlagsPublishes`
       ตาม T-07 ต้องเป็นการเปลี่ยนที่ตั้งใจ ไม่ใช่ผลข้างเคียงที่ไม่ได้ตรวจสอบ)
-- [ ] grep ยืนยันไม่มีจุดไหนใน `netlink_monitor.go` เทียบ `linkState` ด้วย `==` ตรง ๆ
+- [x] grep ยืนยันไม่มีจุดไหนใน `netlink_monitor.go` เทียบ `linkState` ด้วย `==` ตรง ๆ
       เหลืออยู่ (Caution 7)
-- [ ] บอร์ดจริง (physical access), เคส #76 เดิม: ตั้งค่า USB Wi-Fi ใน DB → reboot ทั้งบอร์ด →
+- [x] บอร์ดจริง (physical access), เคส #76 เดิม: ตั้งค่า USB Wi-Fi ใน DB → reboot ทั้งบอร์ด →
       log ต้องเห็นลำดับ "Skipping." → "publishing synthetic InterfaceAdded" →
       "[Self-heal] Interface ... returned" → Wi-Fi associate + ได้ IP ใช้งานได้
       **โดยไม่ restart pigate service**
-- [ ] บอร์ดจริง, เคส #76 เดิม: interface ที่ enumerate ทัน (เช่น `wlan1`/`eth0`) พฤติกรรมเดิม
+- [x] บอร์ดจริง, เคส #76 เดิม: interface ที่ enumerate ทัน (เช่น `wlan1`/`eth0`) พฤติกรรมเดิม
       ทุกอย่าง — **ไม่มี** synthetic event ให้ตัวที่ apply ปกติ (เช็ค log ว่าไม่มี
       InterfaceAdded ซ้ำ)
-- [ ] บอร์ดจริง, เคส #76 เดิม: reboot ปกติ (ไม่มี USB Wi-Fi ช้า) → ไม่มี re-apply เพิ่มเติม/
+- [x] บอร์ดจริง, เคส #76 เดิม: reboot ปกติ (ไม่มี USB Wi-Fi ช้า) → ไม่มี re-apply เพิ่มเติม/
       พายุ event ใน log
-- [ ] **บอร์ดจริงที่เพิ่ง provision ใหม่ (สำคัญมาก — ดู Caution 11)**: ลบ/ไม่มี
+- [x] **บอร์ดจริงที่เพิ่ง provision ใหม่ (สำคัญมาก — ดู Caution 11)**: ลบ/ไม่มี
       `wpa_supplicant@<iface>.service` config ไฟล์ค้างจาก session ก่อนหน้า (หรือทดสอบด้วย
       SSID/password ที่เพิ่งเปลี่ยนใน DB ให้ต่างจากไฟล์เดิมบนดิสก์) → ต่อ USB Wi-Fi ที่ต้อง
       ผ่าน udev rename (ชื่อ default → ชื่อ MAC-based) → restart service/reboot → log ต้อง
@@ -480,16 +482,16 @@ func (a linkState) sameAttrs(b linkState) bool {
       "[Self-heal] Interface <final-name> returned" → `ConfigureWifi` ถูกเรียกจริง (เช็คจาก
       log `[ApplyInterface] Configuring Wi-Fi for interface <final-name>`) → Wi-Fi
       associate + ได้ IP **โดยไม่พึ่ง wpa_supplicant config ไฟล์เดิมที่ค้างอยู่เลย**
-- [ ] บอร์ดจริง: interface ที่ไม่เคยโดน rename เลย (ethernet ปกติ) ยังคงได้ `InterfaceAdded`
+- [x] บอร์ดจริง: interface ที่ไม่เคยโดน rename เลย (ethernet ปกติ) ยังคงได้ `InterfaceAdded`
       ครั้งเดียวตามชื่อจริง ไม่มีการ publish ซ้ำซ้อนจาก T-06 (regression check)
-- [ ] บอร์ดจริง (ถ้าจำลองได้): เคสผสม USB Wi-Fi enumerate ช้าจน miss startup window (#76)
+- [x] บอร์ดจริง (ถ้าจำลองได้): เคสผสม USB Wi-Fi enumerate ช้าจน miss startup window (#76)
       **และ** โดน udev rename (บั๊กที่สอง) พร้อมกัน → ต้องได้ `InterfaceAdded` เพียงครั้งเดียว
       ด้วยชื่อ final ที่ถูกต้อง ไม่ apply ซ้ำสองรอบ
-- [ ] Backup import ระหว่างระบบรัน → restore สำเร็จเหมือนเดิม (path `backup.go:482`
+- [x] Backup import ระหว่างระบบรัน → restore สำเร็จเหมือนเดิม (path `backup.go:482`
       ไม่พังจากการเปลี่ยนแปลง) และไม่มี synthetic event ยิงหลัง restore
-- [ ] Code บน branch `fix/usb-wifi-startup-race` → PR เข้า `main` (ห้าม push ตรง) — PR นี้
+- [x] Code บน branch `fix/usb-wifi-startup-race` → PR เข้า `main` (ห้าม push ตรง) — PR นี้
       รวม T-01–T-07 ทั้งหมด (ไม่แยก PR สำหรับบั๊กที่สอง เพราะเป็น branch เดียวกันตามที่ถูก
-      hold ไว้)
+      hold ไว้) — merged: PR #79, commit `4e2168d`
 
 ## 7. Checklist (Definition of Done)
 
@@ -501,6 +503,6 @@ func (a linkState) sameAttrs(b linkState) bool {
 - [x] T-06 `service/netlink_monitor.go` — settling window + `sameAttrs` + fix
       `publishMissedStartupLinks` (บั๊กที่สอง, udev rename race)
 - [x] T-07 `service/netlink_monitor_test.go` — แก้เทสต์เดิมที่ผิด + เทสต์ settling ใหม่
-- [ ] Final Acceptance §6 ครบทุกข้อ (รวมข้อใหม่สำหรับบั๊กที่สอง)
-- [ ] ไม่ต้องแก้ openapi/README Feature Status (ไม่มี contract/feature ใหม่) —
+- [x] Final Acceptance §6 ครบทุกข้อ (รวมข้อใหม่สำหรับบั๊กที่สอง) — ยืนยันทดสอบบอร์ดจริงครบแล้ว 2026-07-22
+- [x] ไม่ต้องแก้ openapi/README Feature Status (ไม่มี contract/feature ใหม่) —
       ปิดงานแล้วย้ายไฟล์นี้ไป `docs/ref/complete/`

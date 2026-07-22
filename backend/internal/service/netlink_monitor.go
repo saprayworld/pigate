@@ -304,6 +304,13 @@ func (m *NetlinkMonitor) Resume() {
 	m.bus.Resume()
 }
 
+// IsPaused reports whether the underlying bus is currently paused. Delegates
+// to the bus, mirroring Pause/Resume. Used by the DHCP health-checker (issue
+// #78) to skip an entire tick while a backup import is in progress.
+func (m *NetlinkMonitor) IsPaused() bool {
+	return m.bus.IsPaused()
+}
+
 // Stop halts the monitor loop and waits for resources to clean up.
 func (m *NetlinkMonitor) Stop() {
 	if m.cancel != nil {

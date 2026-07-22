@@ -268,6 +268,20 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 			return fmt.Errorf("restore hostname: %w", err)
 		}
 	}
+	// DHCP health-checker settings (issue #78) — omitted (nil) in backups
+	// taken before this field existed, so only restore when present.
+	if cfg.DhcpHealthSettings != nil {
+		if _, err := tx.Exec(
+			`UPDATE dhcp_health_settings SET enabled = ?, check_interval_seconds = ?,
+			consecutive_strikes = ?, min_running_seconds = ?, restart_backoff_seconds = ?,
+			max_restarts_before_pause = ? WHERE id = 1`,
+			boolToInt(cfg.DhcpHealthSettings.Enabled), cfg.DhcpHealthSettings.CheckIntervalSeconds,
+			cfg.DhcpHealthSettings.ConsecutiveStrikes, cfg.DhcpHealthSettings.MinRunningSeconds,
+			cfg.DhcpHealthSettings.RestartBackoffSeconds, cfg.DhcpHealthSettings.MaxRestartsBeforePause,
+		); err != nil {
+			return fmt.Errorf("restore dhcp health settings: %w", err)
+		}
+	}
 
 	// --- 10. Interfaces (update-in-place; matched to existing rows) -------
 	for _, iface := range cfg.Interfaces {

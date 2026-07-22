@@ -192,6 +192,14 @@ func (b *NetEventBus) Resume() {
 	log.Printf("[NetEventBus] dispatch resumed")
 }
 
+// IsPaused reports whether dispatch is currently suppressed (e.g. a backup
+// import bracketed by Pause/Resume is in progress). Used by the DHCP
+// health-checker (issue #78) to skip an entire tick rather than restart
+// dhcpcd/delete addresses against a DB that is mid-restore.
+func (b *NetEventBus) IsPaused() bool {
+	return b.paused.Load()
+}
+
 func (s *subscriber) runImmediate() {
 	for e := range s.queue {
 		if s.paused.Load() {

@@ -73,6 +73,10 @@ type BackupConfig struct {
 	// and break their checksum. omitempty keeps nil/empty slices out of the JSON,
 	// preserving byte-for-byte compatibility without a schema-version bump.
 	PortForwards []PortForward `json:"portForwards,omitempty"`
+	// DhcpHealthSettings (issue #78) uses the same pointer + omitempty pattern
+	// as PortForwards for the same reason: keeps older backups (which lack
+	// this key) checksum-compatible without a schema-version bump.
+	DhcpHealthSettings *DhcpHealthSettings `json:"dhcpHealthSettings,omitempty"`
 }
 
 // BackupUser mirrors a users row for backup purposes. Unlike model.User it
