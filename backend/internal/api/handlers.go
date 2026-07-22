@@ -47,6 +47,7 @@ type Server struct {
 	powerService      *service.PowerService
 	eventLog          *service.EventLogService
 	dhcpHealthChecker *service.DhcpHealthChecker
+	wifiPresetService *service.WifiPresetService
 }
 
 func NewServer(
@@ -74,6 +75,7 @@ func NewServer(
 	powerService *service.PowerService,
 	eventLog *service.EventLogService,
 	dhcpHealthChecker *service.DhcpHealthChecker,
+	wifiPresetService *service.WifiPresetService,
 ) *Server {
 	return &Server{
 		repo:              repo,
@@ -100,6 +102,7 @@ func NewServer(
 		powerService:      powerService,
 		eventLog:          eventLog,
 		dhcpHealthChecker: dhcpHealthChecker,
+		wifiPresetService: wifiPresetService,
 	}
 }
 
@@ -2991,4 +2994,191 @@ func (s *Server) HandleUpdateDNSServerSettings(w http.ResponseWriter, r *http.Re
 	s.logEvent(r, model.EventCategoryDns, "dns.server_settings_changed", model.EventSeverityInfo,
 		"dns-server", fmt.Sprintf("DNS server bound to %d interface(s)", len(input.Interfaces)))
 	s.writeJSON(w, http.StatusOK, input)
+}
+
+// =========================================================================
+// WI-FI SAVED NETWORKS (PRESETS) HANDLERS — issue #66
+// =========================================================================
+// SENSITIVE: every response body built in this section MUST run each
+// model.WifiPreset through model.SanitizeWifiPresetForRead before writeJSON,
+// and every response carrying a model.NetworkInterface (the /apply result)
+// MUST run through maskInterfacePasswords first — plaintext password must
+// never reach the browser (wifi-presets-plan.md Caution "password รั่วออก
+// GET"). All five routes are superAdminRoute (router.go), not authRoute.
+
+// HandleGetWifiPresets lists every saved Wi-Fi preset with its password
+// stripped (list.hasPassword substitutes for the plaintext value).
+func (s *Server) HandleGetWifiPresets(w http.ResponseWriter, r *http.Request) {
+	list, err := s.wifiPresetService.GetAll()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sanitized := make([]model.WifiPreset, len(list))
+	for i, p := range list {
+		sanitized[i] = model.SanitizeWifiPresetForRead(p)
+	}
+	s.writeJSON(w, http.StatusOK, sanitized)
+}
+
+// HandleCreateWifiPreset creates a new saved Wi-Fi network. Duplicate names
+// are rejected with 409 (checked explicitly here rather than surfacing the
+// DB's raw UNIQUE constraint error as an opaque 500/400).
+func (s *Server) HandleCreateWifiPreset(w http.ResponseWriter, r *http.Request) {
+	var input model.WifiPreset
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+	input.Name = strings.TrimSpace(input.Name)
+
+	if err := model.ValidateWifiPreset(input); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	exists, err := s.wifiPresetService.NameExists(input.Name)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if exists {
+		s.writeError(w, http.StatusConflict, "a wifi preset with this name already exists")
+		return
+	}
+
+	id, err := randomID("wifi-")
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Could not generate ID")
+		return
+	}
+	input.ID = id
+
+	if err := s.wifiPresetService.Create(input); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	s.logEvent(r, model.EventCategoryNetwork, "network.wifi_preset_created", model.EventSeverityInfo,
+		input.Name, "Wi-Fi preset \""+input.Name+"\" created")
+	// input already carries exactly the password it was just created with, so
+	// sanitizing it directly (rather than re-reading from the DB) is safe here —
+	// unlike Update, there is no "empty means keep existing" ambiguity on create.
+	s.writeJSON(w, http.StatusOK, model.SanitizeWifiPresetForRead(input))
+}
+
+// HandleUpdateWifiPreset updates an existing preset. An empty submitted
+// password means "keep the currently stored credential" (db.UpdateWifiPreset
+// handles that), so the response is built from a fresh GetByID after the
+// write rather than echoing the request body — otherwise HasPassword would
+// wrongly compute false whenever the caller left the password blank to keep
+// it unchanged.
+func (s *Server) HandleUpdateWifiPreset(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	existing, err := s.wifiPresetService.GetByID(id)
+	if err != nil || existing == nil {
+		s.writeError(w, http.StatusNotFound, "Wi-Fi preset not found")
+		return
+	}
+
+	var input model.WifiPreset
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+	input.ID = id
+	input.Name = strings.TrimSpace(input.Name)
+
+	if err := model.ValidateWifiPreset(input); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if input.Name != existing.Name {
+		nameTaken, err := s.wifiPresetService.NameExists(input.Name)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if nameTaken {
+			s.writeError(w, http.StatusConflict, "a wifi preset with this name already exists")
+			return
+		}
+	}
+
+	if err := s.wifiPresetService.Update(input); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	updated, err := s.wifiPresetService.GetByID(id)
+	if err != nil || updated == nil {
+		s.writeError(w, http.StatusInternalServerError, "failed to reload updated wifi preset")
+		return
+	}
+
+	s.logEvent(r, model.EventCategoryNetwork, "network.wifi_preset_updated", model.EventSeverityInfo,
+		updated.Name, "Wi-Fi preset \""+updated.Name+"\" updated")
+	s.writeJSON(w, http.StatusOK, model.SanitizeWifiPresetForRead(*updated))
+}
+
+// HandleDeleteWifiPreset removes a preset. Deleting a preset never touches
+// interfaces that previously applied it (a preset is a template, not a live
+// link — wifi-presets-plan.md section 0).
+func (s *Server) HandleDeleteWifiPreset(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	existing, err := s.wifiPresetService.GetByID(id)
+	if err != nil || existing == nil {
+		s.writeError(w, http.StatusNotFound, "Wi-Fi preset not found")
+		return
+	}
+
+	if err := s.wifiPresetService.Delete(id); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.logEvent(r, model.EventCategoryNetwork, "network.wifi_preset_deleted", model.EventSeverityWarning,
+		existing.Name, "Wi-Fi preset \""+existing.Name+"\" deleted")
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
+}
+
+// HandleApplyWifiPreset is the SENSITIVE server-side apply flow: it reads the
+// preset's password from the DB and writes it straight into the target
+// interface via WifiPresetService.ApplyPresetToInterface — the request body
+// only ever carries {interfaceId, slot}, never a password, and the response
+// interface is masked the same way HandleUpdateInterface's is
+// (wifi-presets-plan.md section 2.3 / Caution "/apply ต้องผ่าน review เข้ม").
+func (s *Server) HandleApplyWifiPreset(w http.ResponseWriter, r *http.Request) {
+	presetID := r.PathValue("id")
+
+	var body struct {
+		InterfaceID string `json:"interfaceId"`
+		Slot        string `json:"slot"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	iface, err := s.wifiPresetService.ApplyPresetToInterface(presetID, body.InterfaceID, body.Slot)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrWifiPresetInvalidSlot):
+			s.writeError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, service.ErrWifiPresetNotFound), errors.Is(err, service.ErrWifiPresetInterfaceNotFound):
+			s.writeError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, service.ErrWifiPresetNotWireless):
+			s.writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	s.logEvent(r, model.EventCategoryNetwork, "network.wifi_preset_applied", model.EventSeverityInfo,
+		iface.Name, "Wi-Fi preset applied to interface \""+iface.Name+"\" ("+body.Slot+" slot)")
+
+	maskInterfacePasswords(iface)
+	s.writeJSON(w, http.StatusOK, iface)
 }

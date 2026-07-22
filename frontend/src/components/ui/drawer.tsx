@@ -9,6 +9,16 @@ function Drawer({
   return <DrawerPrimitive.Root data-slot="drawer" {...props} />
 }
 
+// A Drawer opened from *inside* another Drawer's content (e.g. "save as
+// preset" triggered from within the Edit Interface Drawer). Must be rendered
+// as a React descendant of a parent `<Drawer>`'s `<DrawerContent>` subtree —
+// vaul throws "Drawer.NestedRoot must be placed in another drawer" otherwise.
+function DrawerNested({
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.NestedRoot>) {
+  return <DrawerPrimitive.NestedRoot data-slot="drawer-nested" {...props} />
+}
+
 function DrawerTrigger({
   ...props
 }: React.ComponentProps<typeof DrawerPrimitive.Trigger>) {
@@ -117,6 +127,7 @@ function DrawerDescription({
 
 export {
   Drawer,
+  DrawerNested,
   DrawerPortal,
   DrawerOverlay,
   DrawerTrigger,

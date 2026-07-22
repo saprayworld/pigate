@@ -69,6 +69,9 @@ func seedCustomConfig(t *testing.T, repo *db.Repository) {
 	if _, err := repo.CreateQosRule(model.QosRuleInput{Name: "CapLab", Interface: "eth0", EgressRateMbps: 50, EgressCeilMbps: 100, Priority: 10, Status: true}); err != nil {
 		t.Fatalf("create qos rule: %v", err)
 	}
+	if err := repo.CreateWifiPreset(model.WifiPreset{ID: "preset-1", Name: "HomeWifi", SSID: "MyHomeSSID", Security: "WPA2", Password: "supersecret1", MacMode: "randomized"}); err != nil {
+		t.Fatalf("create wifi preset: %v", err)
+	}
 }
 
 func TestExportIncludesAllSections(t *testing.T) {
@@ -116,6 +119,9 @@ func TestExportIncludesAllSections(t *testing.T) {
 	}
 	if len(c.Users) != 0 {
 		t.Errorf("users must be excluded when includeUsers=false, got %d", len(c.Users))
+	}
+	if len(c.Presets) != 1 || c.Presets[0].Password != "supersecret1" {
+		t.Errorf("wifi presets not exported with plaintext password: %+v", c.Presets)
 	}
 
 	withUsers, err := bs.Export(true, "")
@@ -170,6 +176,102 @@ func TestImportRoundTrip(t *testing.T) {
 		if a.Name == "StrayNet" {
 			t.Errorf("StrayNet survived import — replace semantics violated")
 		}
+	}
+
+	// Wi-Fi preset round-trip: name/ssid/security/macMode/password all restored
+	// verbatim, including the plaintext password (needed so a later /apply still
+	// works against the restored preset).
+	presets, err := repo.GetWifiPresets()
+	if err != nil {
+		t.Fatalf("get wifi presets: %v", err)
+	}
+	if len(presets) != 1 {
+		t.Fatalf("wifi presets after import = %d, want 1", len(presets))
+	}
+	p := presets[0]
+	if p.Name != "HomeWifi" || p.SSID != "MyHomeSSID" || p.Security != "WPA2" || p.MacMode != "randomized" {
+		t.Errorf("wifi preset fields not restored correctly: %+v", p)
+	}
+	if p.Password != "supersecret1" {
+		t.Errorf("wifi preset password not restored: got %q", p.Password)
+	}
+	if !p.HasPassword {
+		t.Errorf("wifi preset HasPassword should be true after restore")
+	}
+}
+
+// TestImportRejectsInvalidWifiPreset ensures a backup carrying one broken preset
+// (SSID with an embedded newline — a wpa_supplicant config-injection vector) is
+// rejected in full, fail-closed: no partial write, existing presets untouched.
+// Mirrors TestImportRejectsDnsmasqInjection/TestImportRejectsDhcpConfigInjection.
+func TestImportRejectsInvalidWifiPreset(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	file.Config.Presets = append(file.Config.Presets, model.WifiPreset{
+		ID: "preset-evil", Name: "Evil", SSID: "bad\nssid", Security: "WPA2",
+	})
+	sum, _ := configChecksum(*file.Config)
+	file.Meta.Checksum = sum
+	raw, _ := json.Marshal(file)
+
+	beforePresets, _ := repo.GetWifiPresets()
+
+	if _, err := bs.Import(raw, model.ImportOptions{}); err == nil {
+		t.Fatalf("expected import to be rejected on invalid wifi preset")
+	}
+
+	afterPresets, _ := repo.GetWifiPresets()
+	if len(afterPresets) != len(beforePresets) {
+		t.Errorf("DB changed despite rejected import: presets before=%d after=%d", len(beforePresets), len(afterPresets))
+	}
+	for _, p := range afterPresets {
+		if p.ID == "preset-evil" {
+			t.Errorf("invalid preset leaked into DB")
+		}
+	}
+}
+
+// TestImportLegacyBackupWithoutPresets ensures a v2 backup produced before this
+// feature existed (no "presets" key at all) still imports cleanly — Presets must
+// stay nil/omitempty-safe and the import must not crash or reject.
+func TestImportLegacyBackupWithoutPresets(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	// Simulate an older exporter: drop presets entirely before marshalling, as
+	// if the field never existed. omitempty means Presets == nil already
+	// produces no "presets" key, but clear it explicitly for clarity.
+	file.Config.Presets = nil
+	sum, _ := configChecksum(*file.Config)
+	file.Meta.Checksum = sum
+	raw, _ := json.Marshal(file)
+	if strings.Contains(string(raw), `"presets"`) {
+		t.Fatalf("test setup invalid: raw backup still contains a presets key: %s", raw)
+	}
+
+	res, err := bs.Import(raw, model.ImportOptions{})
+	if err != nil {
+		t.Fatalf("import of legacy backup without presets must succeed, got: %v", err)
+	}
+	if res.Counts["wifiPresets"] != 0 {
+		t.Errorf("wifiPresets count = %d, want 0", res.Counts["wifiPresets"])
+	}
+
+	presets, err := repo.GetWifiPresets()
+	if err != nil {
+		t.Fatalf("get wifi presets: %v", err)
+	}
+	if len(presets) != 0 {
+		t.Errorf("expected no presets after importing a legacy backup, got %d", len(presets))
 	}
 }
 

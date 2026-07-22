@@ -77,6 +77,13 @@ type BackupConfig struct {
 	// as PortForwards for the same reason: keeps older backups (which lack
 	// this key) checksum-compatible without a schema-version bump.
 	DhcpHealthSettings *DhcpHealthSettings `json:"dhcpHealthSettings,omitempty"`
+	// Presets carries every saved Wi-Fi network, INCLUDING its plaintext
+	// password (unlike the API's GET path, a backup must be restorable, so it
+	// cannot rely on SanitizeWifiPresetForRead — mirrors how Interfaces already
+	// exports WifiPassword/BackupWifiPassword in plaintext). MUST stay
+	// omitempty for the same checksum-compatibility reason as PortForwards
+	// above: older v2 backups lack this key entirely.
+	Presets []WifiPreset `json:"presets,omitempty"`
 }
 
 // BackupUser mirrors a users row for backup purposes. Unlike model.User it

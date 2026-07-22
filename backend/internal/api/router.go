@@ -64,6 +64,17 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("GET /api/interfaces/{id}/scan", s.HandleScanWifi)
 	authRoute("GET /api/interfaces/{id}/wifi-status", s.HandleGetWifiStatus)
 
+	// 3.1 Wi-Fi Saved Networks (presets, issue #66) — SENSITIVE: every route
+	// here (including the list GET) handles Wi-Fi credentials, so all five are
+	// explicit superAdminRoute rather than authRoute, unlike most list/read
+	// endpoints elsewhere in this file (decision locked in
+	// wifi-presets-plan.md section 0.1).
+	superAdminRoute("GET /api/wifi-presets", s.HandleGetWifiPresets)
+	superAdminRoute("POST /api/wifi-presets", s.HandleCreateWifiPreset)
+	superAdminRoute("PUT /api/wifi-presets/{id}", s.HandleUpdateWifiPreset)
+	superAdminRoute("DELETE /api/wifi-presets/{id}", s.HandleDeleteWifiPreset)
+	superAdminRoute("POST /api/wifi-presets/{id}/apply", s.HandleApplyWifiPreset)
+
 	// 4. Firewall Policies
 	authRoute("GET /api/policies", s.HandleGetPolicies)
 	authRoute("POST /api/policies", s.HandleCreatePolicy)

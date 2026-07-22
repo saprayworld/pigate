@@ -97,6 +97,7 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 		"DELETE FROM dhcp_configs",
 		"DELETE FROM dns_records",
 		"DELETE FROM dns_zones",
+		"DELETE FROM wifi_presets",
 	}
 	for _, q := range wipes {
 		if _, err := tx.Exec(q); err != nil {
@@ -229,6 +230,16 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 			); err != nil {
 				return fmt.Errorf("restore dns record %q: %w", rec.Name, err)
 			}
+		}
+	}
+
+	// --- 8.1 Wi-Fi presets (plaintext password, restore-only path) -------
+	for _, p := range cfg.Presets {
+		if _, err := tx.Exec(
+			"INSERT INTO wifi_presets (id, name, ssid, security, password, mac_mode) VALUES (?, ?, ?, ?, ?, ?)",
+			p.ID, p.Name, p.SSID, p.Security, p.Password, p.MacMode,
+		); err != nil {
+			return fmt.Errorf("restore wifi preset %q: %w", p.Name, err)
 		}
 	}
 
