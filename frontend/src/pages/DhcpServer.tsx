@@ -610,13 +610,13 @@ export default function DhcpServer() {
                       <span className="block text-[10px] font-medium text-muted-foreground">Lease Time</span>
                       <span className="font-mono font-medium text-foreground">{cfg.leaseTime}s ({Math.round(cfg.leaseTime / 3600)}h)</span>
                     </div>
-                    <div className="col-span-2">
+                    <div className="min-w-0">
                       <span className="block text-[10px] font-medium text-muted-foreground">DNS Servers</span>
                       <span className="block truncate font-mono font-medium text-foreground">
                         {cfg.dns1}{cfg.dns2 ? `, ${cfg.dns2}` : ""}
                       </span>
                     </div>
-                    <div className="col-span-2">
+                    <div className="min-w-0">
                       <span className="block text-[10px] font-medium text-muted-foreground">Domain</span>
                       <span className="block truncate font-mono font-medium text-foreground">{cfg.domain || "—"}</span>
                     </div>
