@@ -1,6 +1,9 @@
 package model
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestValidateDNSZone(t *testing.T) {
 	tests := []struct {
@@ -164,6 +167,11 @@ func TestValidateDhcpConfig(t *testing.T) {
 		// file), so even a value carrying a newline is accepted here.
 		{"netmask not validated", func(c *DhcpConfig) { c.Netmask = "255.255.255.0\nx" }, false},
 		{"netmask garbage not validated", func(c *DhcpConfig) { c.Netmask = "not-a-mask" }, false},
+		{"domain empty", func(c *DhcpConfig) { c.Domain = "" }, false},
+		{"domain valid", func(c *DhcpConfig) { c.Domain = "home.lan" }, false},
+		{"domain with space", func(c *DhcpConfig) { c.Domain = "home lan" }, true},
+		{"domain injection newline", func(c *DhcpConfig) { c.Domain = "home.lan\ndhcp-option=x" }, true},
+		{"domain too long", func(c *DhcpConfig) { c.Domain = strings.Repeat("a", 254) }, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

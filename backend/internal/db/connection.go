@@ -319,6 +319,7 @@ func migrate(db *sql.DB) error {
 			dns1        TEXT NOT NULL DEFAULT '8.8.8.8',
 			dns2        TEXT NOT NULL DEFAULT '1.1.1.1',
 			lease_time  INTEGER NOT NULL DEFAULT 86400,
+			domain      TEXT NOT NULL DEFAULT '',
 			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,
@@ -492,6 +493,15 @@ func migrate(db *sql.DB) error {
 	for _, query := range queries {
 		if _, err := db.Exec(query); err != nil {
 			return err
+		}
+	}
+
+	// Add domain column to dhcp_configs if it doesn't exist (DHCP option 15 support).
+	var sqlDhcpDomain string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='dhcp_configs'").Scan(&sqlDhcpDomain)
+	if err == nil && !strings.Contains(sqlDhcpDomain, "domain") {
+		if _, err = db.Exec("ALTER TABLE dhcp_configs ADD COLUMN domain TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("failed to add domain column: %w", err)
 		}
 	}
 

@@ -33,3 +33,11 @@ export function isValidIpRange(range: string): boolean {
   return ipToLong(start) <= ipToLong(end)
 }
 
+// Mirrors backend reZoneName (model.ValidateDhcpConfig / ValidateDNSZone):
+// letters, digits, '.', '-' only, full-match (so no space/newline), max 253
+// chars (RFC 1035). Used for the DHCP scope Domain field (option 15).
+export function isValidDomain(domain: string): boolean {
+  if (domain.length > 253) return false
+  return /^[a-zA-Z0-9.-]+$/.test(domain)
+}
+

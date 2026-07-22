@@ -484,6 +484,7 @@ export interface DhcpConfig {
   dns1: string
   dns2: string
   leaseTime: number // in seconds
+  domain: string // DHCP option 15, empty = not advertised
 }
 
 export interface DhcpReservation {
@@ -515,7 +516,8 @@ export const initialDhcpConfigs: DhcpConfig[] = [
     netmask: "255.255.255.0",
     dns1: "8.8.8.8",
     dns2: "1.1.1.1",
-    leaseTime: 86400 // 24 hours
+    leaseTime: 86400, // 24 hours
+    domain: ""
   }
 ]
 

@@ -1336,10 +1336,10 @@ func (r *Repository) ToggleRouteStatus(id string) error {
 // =========================================================================
 
 func (r *Repository) GetDHCPConfig() (*model.DhcpConfig, error) {
-	row := r.db.QueryRow("SELECT id, enabled, interface, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time FROM dhcp_configs LIMIT 1")
+	row := r.db.QueryRow("SELECT id, enabled, interface, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time, domain FROM dhcp_configs LIMIT 1")
 	var cfg model.DhcpConfig
 	var enabledInt int
-	err := row.Scan(&cfg.ID, &enabledInt, &cfg.Interface, &cfg.StartIP, &cfg.EndIP, &cfg.Gateway, &cfg.Netmask, &cfg.DNS1, &cfg.DNS2, &cfg.LeaseTime)
+	err := row.Scan(&cfg.ID, &enabledInt, &cfg.Interface, &cfg.StartIP, &cfg.EndIP, &cfg.Gateway, &cfg.Netmask, &cfg.DNS1, &cfg.DNS2, &cfg.LeaseTime, &cfg.Domain)
 	if err != nil {
 		return nil, err
 	}
@@ -1352,15 +1352,15 @@ func (r *Repository) UpdateDHCPConfig(cfg model.DhcpConfig) error {
 	if cfg.Enabled {
 		enabledVal = 1
 	}
-	_, err := r.db.Exec(`UPDATE dhcp_configs SET 
-		enabled = ?, interface = ?, start_ip = ?, end_ip = ?, gateway = ?, netmask = ?, dns1 = ?, dns2 = ?, lease_time = ? 
+	_, err := r.db.Exec(`UPDATE dhcp_configs SET
+		enabled = ?, interface = ?, start_ip = ?, end_ip = ?, gateway = ?, netmask = ?, dns1 = ?, dns2 = ?, lease_time = ?, domain = ?
 		WHERE id = 'dhcp-cfg-default' OR id = ?`,
-		enabledVal, cfg.Interface, cfg.StartIP, cfg.EndIP, cfg.Gateway, cfg.Netmask, cfg.DNS1, cfg.DNS2, cfg.LeaseTime, cfg.ID)
+		enabledVal, cfg.Interface, cfg.StartIP, cfg.EndIP, cfg.Gateway, cfg.Netmask, cfg.DNS1, cfg.DNS2, cfg.LeaseTime, cfg.Domain, cfg.ID)
 	return err
 }
 
 func (r *Repository) GetDHCPConfigs() ([]model.DhcpConfig, error) {
-	rows, err := r.db.Query("SELECT id, enabled, interface, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time FROM dhcp_configs")
+	rows, err := r.db.Query("SELECT id, enabled, interface, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time, domain FROM dhcp_configs")
 	if err != nil {
 		return nil, err
 	}
@@ -1370,7 +1370,7 @@ func (r *Repository) GetDHCPConfigs() ([]model.DhcpConfig, error) {
 	for rows.Next() {
 		var cfg model.DhcpConfig
 		var enabledInt int
-		err := rows.Scan(&cfg.ID, &enabledInt, &cfg.Interface, &cfg.StartIP, &cfg.EndIP, &cfg.Gateway, &cfg.Netmask, &cfg.DNS1, &cfg.DNS2, &cfg.LeaseTime)
+		err := rows.Scan(&cfg.ID, &enabledInt, &cfg.Interface, &cfg.StartIP, &cfg.EndIP, &cfg.Gateway, &cfg.Netmask, &cfg.DNS1, &cfg.DNS2, &cfg.LeaseTime, &cfg.Domain)
 		if err != nil {
 			return nil, err
 		}
@@ -1381,10 +1381,10 @@ func (r *Repository) GetDHCPConfigs() ([]model.DhcpConfig, error) {
 }
 
 func (r *Repository) GetDHCPConfigByInterface(iface string) (*model.DhcpConfig, error) {
-	row := r.db.QueryRow("SELECT id, enabled, interface, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time FROM dhcp_configs WHERE interface = ?", iface)
+	row := r.db.QueryRow("SELECT id, enabled, interface, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time, domain FROM dhcp_configs WHERE interface = ?", iface)
 	var cfg model.DhcpConfig
 	var enabledInt int
-	err := row.Scan(&cfg.ID, &enabledInt, &cfg.Interface, &cfg.StartIP, &cfg.EndIP, &cfg.Gateway, &cfg.Netmask, &cfg.DNS1, &cfg.DNS2, &cfg.LeaseTime)
+	err := row.Scan(&cfg.ID, &enabledInt, &cfg.Interface, &cfg.StartIP, &cfg.EndIP, &cfg.Gateway, &cfg.Netmask, &cfg.DNS1, &cfg.DNS2, &cfg.LeaseTime, &cfg.Domain)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1403,10 +1403,10 @@ func (r *Repository) CreateDHCPConfig(cfg model.DhcpConfig) error {
 	if cfg.ID == "" {
 		cfg.ID = fmt.Sprintf("dhcp-cfg-%s", cfg.Interface)
 	}
-	_, err := r.db.Exec(`INSERT INTO dhcp_configs 
-		(id, interface, enabled, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time) 
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		cfg.ID, cfg.Interface, enabledVal, cfg.StartIP, cfg.EndIP, cfg.Gateway, cfg.Netmask, cfg.DNS1, cfg.DNS2, cfg.LeaseTime)
+	_, err := r.db.Exec(`INSERT INTO dhcp_configs
+		(id, interface, enabled, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time, domain)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		cfg.ID, cfg.Interface, enabledVal, cfg.StartIP, cfg.EndIP, cfg.Gateway, cfg.Netmask, cfg.DNS1, cfg.DNS2, cfg.LeaseTime, cfg.Domain)
 	return err
 }
 
@@ -1415,10 +1415,10 @@ func (r *Repository) UpdateDHCPConfigByID(cfg model.DhcpConfig) error {
 	if cfg.Enabled {
 		enabledVal = 1
 	}
-	_, err := r.db.Exec(`UPDATE dhcp_configs SET 
-		interface = ?, enabled = ?, start_ip = ?, end_ip = ?, gateway = ?, netmask = ?, dns1 = ?, dns2 = ?, lease_time = ?, updated_at = CURRENT_TIMESTAMP 
+	_, err := r.db.Exec(`UPDATE dhcp_configs SET
+		interface = ?, enabled = ?, start_ip = ?, end_ip = ?, gateway = ?, netmask = ?, dns1 = ?, dns2 = ?, lease_time = ?, domain = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?`,
-		cfg.Interface, enabledVal, cfg.StartIP, cfg.EndIP, cfg.Gateway, cfg.Netmask, cfg.DNS1, cfg.DNS2, cfg.LeaseTime, cfg.ID)
+		cfg.Interface, enabledVal, cfg.StartIP, cfg.EndIP, cfg.Gateway, cfg.Netmask, cfg.DNS1, cfg.DNS2, cfg.LeaseTime, cfg.Domain, cfg.ID)
 	return err
 }
 

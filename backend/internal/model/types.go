@@ -270,6 +270,7 @@ type DhcpConfig struct {
 	DNS1      string `json:"dns1"`
 	DNS2      string `json:"dns2"`
 	LeaseTime int    `json:"leaseTime"`
+	Domain    string `json:"domain"`
 }
 
 // DhcpReservation represents MAC to reserved IP bindings

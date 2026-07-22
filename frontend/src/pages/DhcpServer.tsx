@@ -46,7 +46,7 @@ import {
 } from "@/data-mockup/mockData"
 import { dhcpService } from "@/services/dhcpService"
 import { useAlert } from "@/hooks/useAlert"
-import { isValidIp } from "@/lib/utils"
+import { isValidIp, isValidDomain } from "@/lib/utils"
 import { formatIfaceLabel, type IfaceLabelSource } from "@/lib/ifaceLabel"
 import { interfaceService } from "@/services/interfaceService"
 
@@ -113,6 +113,7 @@ export default function DhcpServer() {
   const [formDns1, setFormDns1] = useState("8.8.8.8")
   const [formDns2, setFormDns2] = useState("1.1.1.1")
   const [formLeaseTime, setFormLeaseTime] = useState("86400")
+  const [formDomain, setFormDomain] = useState("")
   const [configError, setConfigError] = useState("")
 
   // Form states - Static Reservation Modal
@@ -215,6 +216,7 @@ export default function DhcpServer() {
       setFormDns1("8.8.8.8")
       setFormDns2("1.1.1.1")
       setFormLeaseTime("86400")
+      setFormDomain("")
       setConfigError("")
       setIsConfigModalOpen(true)
     } catch (e) {
@@ -232,6 +234,7 @@ export default function DhcpServer() {
     setFormDns1(cfg.dns1)
     setFormDns2(cfg.dns2)
     setFormLeaseTime(cfg.leaseTime.toString())
+    setFormDomain(cfg.domain || "")
     setConfigError("")
     setIsConfigModalOpen(true)
   }
@@ -303,6 +306,11 @@ export default function DhcpServer() {
       setIsSavingConfig(false)
       return
     }
+    if (formDomain.trim() && !isValidDomain(formDomain.trim())) {
+      setConfigError("Domain ไม่ถูกต้อง")
+      setIsSavingConfig(false)
+      return
+    }
 
     if (ipToNum(formStartIp) > ipToNum(formEndIp)) {
       setConfigError("Starting IP ต้องมีค่าน้อยกว่าหรือเท่ากับ Ending IP")
@@ -322,7 +330,8 @@ export default function DhcpServer() {
         netmask: formNetmask.trim(),
         dns1: formDns1.trim(),
         dns2: formDns2.trim(),
-        leaseTime: leaseTimeVal
+        leaseTime: leaseTimeVal,
+        domain: formDomain.trim()
       }
 
       if (editingConfig) {
@@ -601,11 +610,15 @@ export default function DhcpServer() {
                       <span className="block text-[10px] font-medium text-muted-foreground">Lease Time</span>
                       <span className="font-mono font-medium text-foreground">{cfg.leaseTime}s ({Math.round(cfg.leaseTime / 3600)}h)</span>
                     </div>
-                    <div className="col-span-2">
+                    <div className="min-w-0">
                       <span className="block text-[10px] font-medium text-muted-foreground">DNS Servers</span>
                       <span className="block truncate font-mono font-medium text-foreground">
                         {cfg.dns1}{cfg.dns2 ? `, ${cfg.dns2}` : ""}
                       </span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="block text-[10px] font-medium text-muted-foreground">Domain</span>
+                      <span className="block truncate font-mono font-medium text-foreground">{cfg.domain || "—"}</span>
                     </div>
                   </div>
                 </div>
@@ -997,6 +1010,21 @@ export default function DhcpServer() {
                 value={formLeaseTime}
                 onChange={(e) => setFormLeaseTime(e.target.value)}
                 placeholder="86400 (24 ชั่วโมง)"
+                className="h-9 font-mono text-sm"
+              />
+            </div>
+
+            {/* Domain */}
+            <div className="space-y-1.5">
+              <Label htmlFor="modal-domain" className="block text-xs font-medium text-muted-foreground">
+                Domain (Optional)
+              </Label>
+              <Input
+                id="modal-domain"
+                type="text"
+                value={formDomain}
+                onChange={(e) => setFormDomain(e.target.value)}
+                placeholder="home.lan"
                 className="h-9 font-mono text-sm"
               />
             </div>
