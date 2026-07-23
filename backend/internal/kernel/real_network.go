@@ -467,6 +467,7 @@ func (r *RealNetwork) scanWifiOnce(name string) ([]model.WifiScanResult, error) 
 	// Trigger a scan in the kernel. This must happen at most once per call: the poll loop
 	// below only issues read-only GET_SCAN dumps so we never fight wpa_supplicant's own
 	// scans while it is trying to associate.
+	scanStart := time.Now()
 	log.Printf("[RealNetwork] ScanWifi: triggering scan on %s", name)
 	scanErr := c.Scan(ctx, ifi)
 	var pendingErr error
@@ -495,8 +496,8 @@ func (r *RealNetwork) scanWifiOnce(name string) ([]model.WifiScanResult, error) 
 	for attempt := 0; ; attempt++ {
 		if bssList, err := c.AccessPoints(ifi); err == nil {
 			if results := mapWifiScanResults(bssList); len(results) > 0 {
-				log.Printf("[RealNetwork] ScanWifi: %s found %d network(s) after %d poll(s) (%s)",
-					name, len(results), attempt, time.Since(pollStart).Round(time.Millisecond))
+				log.Printf("[RealNetwork] ScanWifi: %s found %d network(s) after %d poll(s), %s polling (%s total since trigger)",
+					name, len(results), attempt, time.Since(pollStart).Round(time.Millisecond), time.Since(scanStart).Round(time.Millisecond))
 				return results, nil
 			}
 		}
