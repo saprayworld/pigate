@@ -1,6 +1,8 @@
 package kernel
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
@@ -53,13 +55,12 @@ func redactWpaCommand(cmd string) string {
 	return fields[0] + " [redacted]"
 }
 
-// GenerateWpaConfig constructs the raw text content for a wpa_supplicant configuration file.
-// It incorporates security options (Open, WPA2, WPA3, WPA2/WPA3), MAC randomization, and weight-based priorities.
-func GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode string, prefer5GHz bool) string {
-	log.Printf("[WPA Config] Building config layout for SSID=%q (Security=%s, HasPassword=%t), BackupSSID=%q (BackupSecurity=%s, HasBackupPassword=%t), MacMode=%s, Prefer5GHz=%t",
-		ssid, security, password != "", backupSSID, backupSecurity, backupPassword != "", macMode, prefer5GHz)
-
-	var sb strings.Builder
+// writeWpaHeader writes the wpa_supplicant global directives shared by every
+// config file PiGate generates — both full user configs (GenerateWpaConfig)
+// and the bootstrap placeholder-only config (GenerateMinimalWpaConfig) — so
+// the country code and scan-stability directives (issue #72) are defined in
+// exactly one place instead of being duplicated across generators.
+func writeWpaHeader(sb *strings.Builder) {
 	sb.WriteString("ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\n")
 	sb.WriteString("update_config=1\n")
 	sb.WriteString("country=TH\n")
@@ -68,6 +69,16 @@ func GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword, bac
 	sb.WriteString("ap_scan=1\n")
 	sb.WriteString("autoscan=periodic:10\n")
 	sb.WriteString("disable_scan_offload=1\n")
+}
+
+// GenerateWpaConfig constructs the raw text content for a wpa_supplicant configuration file.
+// It incorporates security options (Open, WPA2, WPA3, WPA2/WPA3), MAC randomization, and weight-based priorities.
+func GenerateWpaConfig(ssid, password, security, backupSSID, backupPassword, backupSecurity, macMode string, prefer5GHz bool) string {
+	log.Printf("[WPA Config] Building config layout for SSID=%q (Security=%s, HasPassword=%t), BackupSSID=%q (BackupSecurity=%s, HasBackupPassword=%t), MacMode=%s, Prefer5GHz=%t",
+		ssid, security, password != "", backupSSID, backupSecurity, backupPassword != "", macMode, prefer5GHz)
+
+	var sb strings.Builder
+	writeWpaHeader(&sb)
 	if macMode == "randomized" {
 		sb.WriteString("preassoc_mac_addr=1\n")
 	}
@@ -130,6 +141,64 @@ func writeNetworkBlock(sb *strings.Builder, ssid, password, security string, pri
 	}
 	sb.WriteString(fmt.Sprintf("    priority=%d\n", priority))
 	sb.WriteString("}\n")
+}
+
+// randomHexChars returns a cryptographically random hex string of exactly
+// length characters, generated via crypto/rand. Hex output is guaranteed safe
+// to embed in a quoted wpa_supplicant config value (no '"' or newline can ever
+// appear).
+func randomHexChars(length int) (string, error) {
+	buf := make([]byte, (length+1)/2)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf)[:length], nil
+}
+
+// GenerateMinimalWpaConfig builds the content of a bootstrap wpa_supplicant
+// config used only to get wpa_supplicant to start and attach to a wireless
+// interface that has never had a real network saved for it (issue #88 —
+// the on-board brcmfmac chip only returns nl80211 scan results once
+// wpa_supplicant is attached to the interface; a header-only config was
+// confirmed on real hardware to NOT be enough to reach that attached state).
+//
+// It contains the same header as GenerateWpaConfig plus exactly one
+// placeholder network block that is enabled (required) but can never
+// actually associate anywhere:
+//   - key_mgmt=WPA-PSK (never NONE): forces a WPA 4-way handshake, so even if
+//     an unrelated nearby AP happens to broadcast a colliding SSID, the
+//     handshake can never succeed against it — an open/NONE network would
+//     instead associate successfully to such an AP.
+//   - never disabled=1: a disabled network is equivalent to having no
+//     enabled network block at all, which is the header-only case already
+//     confirmed on hardware to not unlock scanning.
+//   - ssid/psk are generated fresh via crypto/rand every time this is called
+//     — never hardcoded, since this is a public repository and a fixed
+//     value could be pre-matched by an attacker-controlled AP.
+//
+// EnsureWpaConfig is the only intended caller, and only writes this output
+// once, when no config file exists yet for the interface.
+func GenerateMinimalWpaConfig() (string, error) {
+	ssid, err := randomHexChars(32)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate placeholder ssid: %w", err)
+	}
+	psk, err := randomHexChars(63)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate placeholder psk: %w", err)
+	}
+
+	var sb strings.Builder
+	writeWpaHeader(&sb)
+	sb.WriteString("\n")
+	sb.WriteString("network={\n")
+	sb.WriteString(fmt.Sprintf("    ssid=\"%s\"\n", ssid))
+	sb.WriteString("    key_mgmt=WPA-PSK\n")
+	sb.WriteString(fmt.Sprintf("    psk=\"%s\"\n", psk))
+	sb.WriteString("    priority=0\n")
+	sb.WriteString("}\n")
+
+	return sb.String(), nil
 }
 
 // SendWpaCommand sends a control command to the wpa_supplicant UNIX domain datagram socket.

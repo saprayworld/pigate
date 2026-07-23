@@ -382,6 +382,7 @@ export default function Interfaces() {
   const [isScanning, setIsScanning] = useState(false)
   const [scanResults, setScanResults] = useState<WifiScanResult[]>([])
   const [showScanResults, setShowScanResults] = useState(false)
+  const [scanError, setScanError] = useState<string | null>(null)
 
   // Wi-Fi Saved Networks (Presets) State
   const [presets, setPresets] = useState<WifiPreset[]>([])
@@ -574,6 +575,7 @@ export default function Interfaces() {
     setFormError("")
     setScanResults([])
     setShowScanResults(false)
+    setScanError(null)
     setIsEditOpen(true)
   }, [])
 
@@ -723,12 +725,13 @@ export default function Interfaces() {
     if (!editingIface) return
     setIsScanning(true)
     setScanResults([])
+    setScanError(null)
     setShowScanResults(true)
     try {
       const results = await interfaceService.scanWifi(editingIface.id)
       setScanResults(results)
     } catch (err) {
-      setFormError(getErrorMessage(err) || "Failed to scan Wi-Fi.")
+      setScanError(getErrorMessage(err) || "Failed to scan Wi-Fi.")
     } finally {
       setIsScanning(false)
     }
@@ -1789,6 +1792,14 @@ export default function Interfaces() {
                         <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
                           <RefreshCw className="h-4 w-4 animate-spin text-primary" />
                           กำลังค้นหาเครือข่าย Wi-Fi...
+                        </div>
+                      ) : scanError ? (
+                        <div className="flex items-center justify-center py-6 text-xs text-destructive">
+                          {scanError}
+                        </div>
+                      ) : scanResults.length === 0 ? (
+                        <div className="flex items-center justify-center py-6 text-xs text-muted-foreground">
+                          ไม่พบเครือข่าย Wi-Fi
                         </div>
                       ) : (
                         <div className="max-h-[200px] overflow-y-auto">
