@@ -224,7 +224,8 @@ export const interfaceService = {
 
     const response = await fetch(`${API_BASE_URL}/interfaces/${id}/scan`);
     if (!response.ok) {
-      throw new Error(`Failed to scan Wi-Fi: ${response.statusText}`);
+      const errBody = await response.json().catch(() => ({}));
+      throw new Error(errBody.message || response.statusText || "Failed to scan Wi-Fi");
     }
     return response.json();
   },

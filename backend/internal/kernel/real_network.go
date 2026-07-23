@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"pigate/internal/model"
 
@@ -398,6 +399,14 @@ func (r *RealNetwork) DeleteAddress(name string, cidr string) error {
 }
 
 // ScanWifi scans for nearby Wi-Fi networks using Netlink (nl80211).
+//
+// AccessPoints() only dumps whatever BSS entries the kernel currently has cached
+// (GET_SCAN) — it does not itself trigger a scan. On a cold cache (e.g. right after the
+// interface came up, or after wpa_supplicant flushed it) a single trigger-then-read-once
+// races the kernel and returns empty. So ScanWifi fires TRIGGER_SCAN at most once, then
+// polls the (read-only) cache for up to ~10s until it sees a non-empty result, tolerating
+// EBUSY from a concurrent scan (most commonly wpa_supplicant associating on the same
+// interface) instead of failing immediately.
 func (r *RealNetwork) ScanWifi(name string) ([]model.WifiScanResult, error) {
 	c, err := wifi.New()
 	if err != nil {
@@ -421,18 +430,60 @@ func (r *RealNetwork) ScanWifi(name string) ([]model.WifiScanResult, error) {
 		return nil, fmt.Errorf("wifi interface %s not found", name)
 	}
 
-	// Trigger a scan in the kernel
-	ctx := context.TODO()
-	if err := c.Scan(ctx, ifi); err != nil {
-		return nil, fmt.Errorf("wifi scan trigger failed: %w", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Trigger a scan in the kernel. This must happen at most once per call: the poll loop
+	// below only issues read-only GET_SCAN dumps so we never fight wpa_supplicant's own
+	// scans while it is trying to associate.
+	log.Printf("[RealNetwork] ScanWifi: triggering scan on %s", name)
+	scanErr := c.Scan(ctx, ifi)
+	var pendingErr error
+	switch {
+	case scanErr == nil:
+		// Triggered successfully.
+	case errors.Is(scanErr, syscall.EBUSY):
+		// Another scan (commonly wpa_supplicant associating) is already in flight on this
+		// interface. Not fatal: it will populate the same kernel cache we are about to poll.
+		log.Printf("[RealNetwork] ScanWifi: %s scan trigger returned EBUSY (scan already in progress), polling existing cache", name)
+	case errors.Is(scanErr, syscall.ENETDOWN):
+		return nil, fmt.Errorf("interface %s is down; bring it up before scanning", name)
+	case errors.Is(scanErr, syscall.ERFKILL), strings.Contains(strings.ToLower(scanErr.Error()), "rf-kill"):
+		return nil, fmt.Errorf("radio for %s is blocked by rfkill", name)
+	default:
+		// Unknown error: best-effort, keep polling the cache in case a concurrent scan still
+		// fills it. Only surfaced if polling ultimately ends up empty.
+		log.Printf("[RealNetwork] ScanWifi: %s scan trigger failed, will keep polling cache: %v", name, scanErr)
+		pendingErr = scanErr
 	}
 
-	// Fetch scanned Basic Service Sets (BSS) list
-	bssList, err := c.AccessPoints(ifi)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve bss list: %w", err)
-	}
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 
+	for {
+		if bssList, err := c.AccessPoints(ifi); err == nil {
+			if results := mapWifiScanResults(bssList); len(results) > 0 {
+				return results, nil
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			log.Printf("[RealNetwork] ScanWifi: %s scan timed out with no networks found", name)
+			if pendingErr != nil {
+				return nil, fmt.Errorf("wifi scan on %s failed: %w", name, pendingErr)
+			}
+			return []model.WifiScanResult{}, nil
+		case <-ticker.C:
+			// poll again
+		}
+	}
+}
+
+// mapWifiScanResults converts a raw BSS dump from the kernel into the API-facing
+// model.WifiScanResult shape, sorted by signal strength descending. Hidden (empty-SSID)
+// BSS entries are skipped.
+func mapWifiScanResults(bssList []*wifi.BSS) []model.WifiScanResult {
 	var results []model.WifiScanResult
 	for _, b := range bssList {
 		if b.SSID == "" {
@@ -491,7 +542,7 @@ func (r *RealNetwork) ScanWifi(name string) ([]model.WifiScanResult, error) {
 		return results[i].Signal > results[j].Signal
 	})
 
-	return results, nil
+	return results
 }
 
 func frequencyToChannel(freq int) int {

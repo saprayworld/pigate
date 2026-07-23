@@ -896,6 +896,11 @@ func (s *Server) HandleScanWifi(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if iface.Status != "up" {
+		s.writeError(w, http.StatusConflict, "Interface must be brought up before scanning for Wi-Fi networks.")
+		return
+	}
+
 	results, err := s.network.ScanWifi(iface.Name)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
