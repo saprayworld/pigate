@@ -63,6 +63,18 @@ func (r *RealNetwork) ToggleInterface(name string, up bool) error {
 		if isWireless {
 			serviceName := fmt.Sprintf("wpa_supplicant@%s.service", name)
 			log.Printf("[RealNetwork] Interface is wireless. Verifying service state: %s", serviceName)
+
+			// Issue #88: on-board brcmfmac only returns scan results once
+			// wpa_supplicant is attached to the interface, which never happens
+			// on an interface that has never had a network saved (no config
+			// file for wpa_supplicant@<name> to start with). Ensure a config
+			// file exists — a real saved config is left untouched — before
+			// attempting to start the service below. Best-effort: log-only,
+			// same as the D-Bus start/stop errors below, so a failure here
+			// does not regress interface-up behavior that worked before.
+			if ensureErr := EnsureWpaConfig(name); ensureErr != nil {
+				log.Printf("[RealNetwork] failed to ensure wpa_supplicant config exists for %s: %v", name, ensureErr)
+			}
 			// if execCommand("sudo", "systemctl", "is-active", "--quiet", serviceName).Run() != nil {
 			// 	// Clean up stale socket file before starting the service
 			// 	socketPath := filepath.Join(wpaSocketDir, name)
@@ -83,7 +95,9 @@ func (r *RealNetwork) ToggleInterface(name string, up bool) error {
 
 				log.Printf("[RealNetwork] Service %s is not active, starting it via D-Bus...", serviceName)
 				// 🛠️ เปลี่ยนมาใช้ D-Bus Start
-				_ = StartServiceViaDBus(serviceName)
+				if startErr := StartServiceViaDBus(serviceName); startErr != nil {
+					log.Printf("[RealNetwork] failed to start %s via D-Bus: %v", serviceName, startErr)
+				}
 			} else {
 				log.Printf("[RealNetwork] Service %s is already active", serviceName)
 			}
@@ -96,7 +110,9 @@ func (r *RealNetwork) ToggleInterface(name string, up bool) error {
 		serviceName := fmt.Sprintf("wpa_supplicant@%s.service", name)
 		log.Printf("[RealNetwork] Interface %s is wireless. Stopping wpa_supplicant service: %s", name, serviceName)
 		// _ = execCommand("sudo", "systemctl", "stop", serviceName).Run()
-		_ = StopServiceViaDBus(serviceName)
+		if stopErr := StopServiceViaDBus(serviceName); stopErr != nil {
+			log.Printf("[RealNetwork] failed to stop %s via D-Bus: %v", serviceName, stopErr)
+		}
 	}
 
 	log.Printf("[RealNetwork] Bringing interface %s DOWN via netlink link...", name)
@@ -200,6 +216,66 @@ func (r *RealNetwork) ConfigureWifi(name string, ssid string, password string, s
 		log.Printf("[RealNetwork] Service %s started successfully", serviceName)
 	}
 
+	return nil
+}
+
+// EnsureWpaConfig guarantees that /etc/wpa_supplicant/wpa_supplicant-<name>.conf
+// exists, writing a minimal placeholder config (GenerateMinimalWpaConfig) if
+// and only if no config file exists yet for the interface. This closes the
+// lifecycle gap behind issue #88: previously a wpa_supplicant config file was
+// only ever written by ConfigureWifi (i.e. once the user explicitly saved a
+// Wi-Fi network), so a wireless interface that was toggled up without ever
+// having a saved network had no config for wpa_supplicant@<name> to start
+// with, never attached to the interface, and the on-board brcmfmac chip never
+// returned any scan results.
+//
+// If a config file already exists — including a real user config previously
+// written by ConfigureWifi — it is left completely untouched: this function
+// never reads it, never overwrites it, and never deletes it.
+func EnsureWpaConfig(name string) error {
+	// Validate interface name to prevent path traversal, matching the same
+	// rule ConfigureWifi already applies.
+	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "..") {
+		return fmt.Errorf("invalid interface name: %q", name)
+	}
+	for _, char := range name {
+		if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' || char == '_') {
+			return fmt.Errorf("interface name %q contains disallowed characters", name)
+		}
+	}
+
+	configPath := filepath.Join(wpaConfigDir, fmt.Sprintf("wpa_supplicant-%s.conf", name))
+
+	if _, statErr := os.Stat(configPath); statErr == nil {
+		// A config already exists — never touch it, whether it is a real
+		// user config or a placeholder a previous call already installed.
+		log.Printf("[RealNetwork] EnsureWpaConfig: config already exists for %s, leaving untouched", name)
+		return nil
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("failed to stat wpa_supplicant config for %q: %w", name, statErr)
+	}
+
+	configContent, err := GenerateMinimalWpaConfig()
+	if err != nil {
+		return fmt.Errorf("failed to generate placeholder wpa_supplicant config for %q: %w", name, err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return fmt.Errorf("failed to create wpa_supplicant config directory: %w", err)
+	}
+
+	// Write atomically: temp file with 0600 permissions, then rename into
+	// place — same convention ConfigureWifi already follows.
+	tmpPath := configPath + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(configContent), 0600); err != nil {
+		return fmt.Errorf("failed to write temporary placeholder wpa_supplicant config for %q: %w", name, err)
+	}
+	if err := os.Rename(tmpPath, configPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to install placeholder wpa_supplicant config for %q: %w", name, err)
+	}
+
+	log.Printf("[RealNetwork] EnsureWpaConfig: no config existed for %s; wrote placeholder config to unlock scanning", name)
 	return nil
 }
 
@@ -464,12 +540,28 @@ func (r *RealNetwork) scanWifiOnce(name string) ([]model.WifiScanResult, error) 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// Diagnostic only (T-07): log the system-wide regulatory domain in effect at scan
+	// time, once per call, before triggering the scan. Read-only (GET_REG) and must not
+	// affect the scan itself; errors are logged and otherwise ignored.
+	// Note: RegulatoryDomain in mdlayher/wifi v0.8.0 only exposes Region (alpha2 code) —
+	// there is no self-managed-reg or DFS-region field in this library version, so that
+	// part of H-D cannot be determined from this API and is intentionally not logged.
+	if regdomain, regErr := c.GetRegulatoryDomain(); regErr != nil {
+		log.Printf("[RealNetwork] ScanWifi: failed to read regdomain at scan time for %s: %v", name, regErr)
+	} else {
+		log.Printf("[RealNetwork] ScanWifi: regdomain at scan time: %s", regdomain.Region)
+	}
+
 	// Trigger a scan in the kernel. This must happen at most once per call: the poll loop
 	// below only issues read-only GET_SCAN dumps so we never fight wpa_supplicant's own
 	// scans while it is trying to associate.
 	scanStart := time.Now()
 	log.Printf("[RealNetwork] ScanWifi: triggering scan on %s", name)
 	scanErr := c.Scan(ctx, ifi)
+	// Diagnostic only (T-07): the nil (success) branch of the switch below is otherwise
+	// silent, making it impossible to distinguish "scan triggered fine" from "we never got
+	// here" in the journal. Log the raw result unconditionally (nil prints as "<nil>").
+	log.Printf("[RealNetwork] ScanWifi: scan trigger on %s returned: %v", name, scanErr)
 	var pendingErr error
 	switch {
 	case scanErr == nil:
@@ -495,7 +587,13 @@ func (r *RealNetwork) scanWifiOnce(name string) ([]model.WifiScanResult, error) 
 	pollStart := time.Now()
 	for attempt := 0; ; attempt++ {
 		if bssList, err := c.AccessPoints(ifi); err == nil {
-			if results := mapWifiScanResults(bssList); len(results) > 0 {
+			results := mapWifiScanResults(bssList)
+			// Diagnostic only (T-07): distinguish "cache genuinely empty" (raw BSS count
+			// 0) from "cache has BSS entries but all got filtered as hidden/unparsed"
+			// (raw > 0, usable 0) — H-A vs H-B. Quantities only, never SSID/BSSID.
+			log.Printf("[RealNetwork] ScanWifi: poll %d: AccessPoints returned %d BSS, %d usable (non-hidden)",
+				attempt, len(bssList), len(results))
+			if len(results) > 0 {
 				log.Printf("[RealNetwork] ScanWifi: %s found %d network(s) after %d poll(s), %s polling (%s total since trigger)",
 					name, len(results), attempt, time.Since(pollStart).Round(time.Millisecond), time.Since(scanStart).Round(time.Millisecond))
 				return results, nil
