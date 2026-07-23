@@ -21,6 +21,7 @@ import (
 
 	"github.com/mdlayher/wifi"
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sync/singleflight"
 )
 
 // RealNetwork implements NetworkManager using netlink for direct kernel interaction.
@@ -30,7 +31,12 @@ import (
 //	sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
 var execCommand = exec.Command
 
-type RealNetwork struct{}
+type RealNetwork struct {
+	// scanGroup dedups concurrent ScanWifi calls per interface name so that
+	// spamming the scan HTTP endpoint cannot fire overlapping TRIGGER_SCAN
+	// requests on the same interface. Zero value is ready to use.
+	scanGroup singleflight.Group
+}
 
 func NewRealNetwork() *RealNetwork {
 	return &RealNetwork{}
@@ -408,6 +414,24 @@ func (r *RealNetwork) DeleteAddress(name string, cidr string) error {
 // EBUSY from a concurrent scan (most commonly wpa_supplicant associating on the same
 // interface) instead of failing immediately.
 func (r *RealNetwork) ScanWifi(name string) ([]model.WifiScanResult, error) {
+	// Dedup concurrent scans per interface: if a scan for this interface is
+	// already in flight, join it instead of firing another TRIGGER_SCAN.
+	// Keyed by interface name (not a constant) so unrelated interfaces
+	// (e.g. wlan0 vs. a USB dongle) can still scan concurrently.
+	v, err, _ := r.scanGroup.Do(name, func() (interface{}, error) {
+		return r.scanWifiOnce(name)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]model.WifiScanResult), nil
+}
+
+// scanWifiOnce performs a single trigger-then-poll Wi-Fi scan for the given
+// interface. It is only ever invoked once per in-flight singleflight call
+// for that interface name; concurrent callers join the same call via
+// RealNetwork.scanGroup instead of re-entering here.
+func (r *RealNetwork) scanWifiOnce(name string) ([]model.WifiScanResult, error) {
 	c, err := wifi.New()
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize wifi client: %w", err)
