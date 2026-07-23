@@ -284,12 +284,17 @@ func (s *BackupService) Import(raw []byte, opts model.ImportOptions) (*model.Imp
 // resolveInterfaces matches each backup interface to a live device interface by
 // name, merging the backup's config fields onto the device row while keeping the
 // device's hardware/runtime identity (id, name, type, mac addresses, status,
-// speed). Interfaces in the backup that don't exist on this device are skipped
-// with a warning (§3.5). Returns the merged rows to restore, warnings, and
-// whether any interface config changed (used to warn the admin about possible
-// disconnection).
+// speed). "Existing" here is the merged data-layer view (live kernel links plus
+// DB rows, including DB-only "offline" rows) rather than the raw DB table, so a
+// physically-present interface whose DB row was deleted (e.g. wlan0 still
+// running via wpa_supplicant after its config row was removed — "unmanaged"
+// state, issue #89) is still recognised as present on this device and gets its
+// DB row recreated from the backup, instead of being skipped. Interfaces in the
+// backup that don't exist on this device are skipped with a warning (§3.5).
+// Returns the merged rows to restore, warnings, and whether any interface config
+// changed (used to warn the admin about possible disconnection).
 func (s *BackupService) resolveInterfaces(backup []model.NetworkInterface) ([]model.NetworkInterface, []string, bool, error) {
-	existing, err := s.repo.GetInterfaces()
+	existing, err := s.interfaceService.GetDataLayerInterfaceIncludingOffline()
 	if err != nil {
 		return nil, nil, false, err
 	}

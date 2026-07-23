@@ -355,9 +355,18 @@ func restorePolicyRelations(tx *sql.Tx, p model.PolicyRule) error {
 
 // restoreInterface updates the config fields of an existing interface row,
 // matched by id. Hardware/runtime identity columns (name, type, mac_address,
-// real_mac_address, status, speed) are intentionally not written — the caller
+// status, speed) are intentionally not written by the UPDATE — the caller
 // (BackupService.Import) has already merged the backup's config fields onto the
 // live device row, so those columns already hold the device's own values.
+//
+// If the UPDATE matches no row, the interface's DB row is missing entirely —
+// either because it's a VLAN sub-interface that hasn't been re-created on the
+// target board yet (issue #20), or because a physical interface's row was
+// deleted while the device itself still exists ("unmanaged" state, issue #89).
+// In both cases we INSERT the full row (identity fields included) so the
+// interface is recreated rather than silently left absent. VLAN-only columns
+// (vlan_parent, vlan_id) are only populated when the interface is actually a
+// VLAN, to avoid stamping bogus VLAN linkage onto a physical interface.
 func restoreInterface(tx *sql.Tx, iface model.NetworkInterface) error {
 	adminAccess := strings.Join(iface.AdminAccess, ",")
 	recon := 0
@@ -386,12 +395,18 @@ func restoreInterface(tx *sql.Tx, iface model.NetworkInterface) error {
 		return fmt.Errorf("restore interface %q: %w", iface.Name, err)
 	}
 
-	// Physical interfaces are always update-in-place (they exist as device rows).
-	// VLAN sub-interfaces, however, may not exist on the target board yet — the
-	// backup carries them so they can be re-created on boot (issue #20). When the
-	// UPDATE matched no row and this is a VLAN, INSERT the full row (identity fields
-	// included) so the VLAN survives a restore onto a fresh device.
-	if n, _ := res.RowsAffected(); n == 0 && iface.Subtype == "vlan" {
+	// When the UPDATE matched no row, the interface's DB row is missing
+	// entirely (VLAN not yet re-created on this board, or a physical
+	// interface's row was deleted while the device still exists — see
+	// issue #89). INSERT the full row, including identity fields, regardless
+	// of subtype so the interface is recreated on restore.
+	if n, _ := res.RowsAffected(); n == 0 {
+		var vlanParent *string
+		var vlanID *int
+		if iface.Subtype == "vlan" {
+			vlanParent = iface.VlanParent
+			vlanID = iface.VlanID
+		}
 		if _, err := tx.Exec(`INSERT INTO network_interfaces (
 			id, name, alias, role, type, subtype, addressing_mode, ip, netmask, gateway, metric, mac_address, admin_access, status, speed,
 			mac_mode, randomized_mac, laa_mac_address, randomize_on_reconnect,
@@ -401,8 +416,8 @@ func restoreInterface(tx *sql.Tx, iface model.NetworkInterface) error {
 			iface.ID, iface.Name, iface.Alias, iface.Role, iface.Type, iface.Subtype, iface.AddressingMode, iface.IP, iface.Netmask, iface.Gateway, iface.Metric, iface.MacAddress, adminAccess, iface.Status, iface.Speed,
 			iface.MacMode, iface.RandomizedMac, iface.LaaMacAddress, recon,
 			iface.WifiSSID, iface.WifiPassword, iface.WifiSecurity, fo, iface.BackupSSID, iface.BackupWifiPassword, iface.BackupWifiSecurity,
-			iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown, iface.VlanParent, iface.VlanID, prefer5GHz); err != nil {
-			return fmt.Errorf("restore vlan interface %q: %w", iface.Name, err)
+			iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown, vlanParent, vlanID, prefer5GHz); err != nil {
+			return fmt.Errorf("restore interface %q: %w", iface.Name, err)
 		}
 	}
 	return nil

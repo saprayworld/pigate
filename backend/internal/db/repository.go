@@ -1937,8 +1937,9 @@ func (r *Repository) UpdateInterface(iface model.NetworkInterface) error {
 		return err
 	}
 
-	rows, err := res.RowsAffected()
-	if err == nil && rows == 0 {
+	rows, rowsErr := res.RowsAffected()
+	switch decideUpsertAction(rows, rowsErr) {
+	case upsertActionInsert:
 		// Insert since it does not exist in the database.
 		// vlan_parent/vlan_id are set only on this INSERT path (VLAN creation); the
 		// UPDATE branch above intentionally omits them because they are immutable
@@ -1953,10 +1954,52 @@ func (r *Repository) UpdateInterface(iface model.NetworkInterface) error {
 			iface.MacMode, iface.RealMacAddress, iface.RandomizedMac, iface.LaaMacAddress, reconInt,
 			iface.WifiSSID, iface.WifiPassword, iface.WifiSecurity, foInt, iface.BackupSSID, iface.BackupWifiPassword, iface.BackupWifiSecurity, iface.IPCheckTimeout, iface.PrimaryMaxRetries, iface.FailoverCooldown,
 			iface.VlanParent, iface.VlanID, prefer5GHzInt)
-		return err
+		if err != nil {
+			return err
+		}
+		log.Printf("[DB] Interface row created (was missing)")
+		return nil
+	case upsertActionUpdateOK:
+		log.Printf("[DB] Interface updated successfully")
+		return nil
+	default:
+		// Defensive: UPDATE reported success with a row count that is neither 0
+		// (handled above via INSERT) nor 1 (e.g. >1, which should be impossible
+		// given id is the primary key). Never silently report success here.
+		return fmt.Errorf("UpdateInterface: unexpected RowsAffected=%d for interface id=%s", rows, iface.ID)
 	}
-	log.Printf("[DB] Interface updated successfully")
-	return nil
+}
+
+// upsertAction is the decision made after an UPDATE attempt in UpdateInterface:
+// insert a new row, treat the update as successful, or report an unexpected
+// row count. Extracted as a pure function of (rows, rowsErr) so the
+// RowsAffected()-error branch can be unit-tested directly, without needing to
+// force the real sqlite driver into an error state.
+type upsertAction int
+
+const (
+	upsertActionInsert upsertAction = iota
+	upsertActionUpdateOK
+	upsertActionUnexpected
+)
+
+// decideUpsertAction decides what UpdateInterface should do after an UPDATE,
+// given the (rows, err) pair returned by sql.Result.RowsAffected().
+//
+// Falls back to INSERT whenever the UPDATE did not confirm exactly one row
+// was affected - this covers both the "no existing row" case (rows == 0) and
+// the case where the driver failed to report RowsAffected() at all (rowsErr
+// != nil). Previously the INSERT fallback only triggered on the former, so a
+// RowsAffected() error silently fell through to "success" while persisting
+// nothing (the "unmanaged interface" bug).
+func decideUpsertAction(rows int64, rowsErr error) upsertAction {
+	if rowsErr != nil || rows == 0 {
+		return upsertActionInsert
+	}
+	if rows == 1 {
+		return upsertActionUpdateOK
+	}
+	return upsertActionUnexpected
 }
 
 func (r *Repository) ToggleInterfaceStatus(id string, status string) error {

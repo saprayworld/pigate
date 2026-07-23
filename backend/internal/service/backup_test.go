@@ -7,14 +7,18 @@ import (
 	"testing"
 
 	"pigate/internal/db"
+	"pigate/internal/kernel"
 	"pigate/internal/model"
 )
 
 // newBackupTestEnv spins up a temp-file, mock-seeded DB and a BackupService with
-// no downstream services (re-apply becomes a no-op, monitor is nil), which is all
-// the export/import DB logic needs. A real file (not ":memory:") is used so
-// pooled connections share one database and the pre-import snapshot path is
-// exercised for real.
+// no downstream services except interfaceService (re-apply for everything else
+// becomes a no-op, monitor is nil), which is all the export/import DB logic
+// needs. interfaceService must be real (backed by the mock kernel) because
+// resolveInterfaces uses it to resolve which backup interfaces are present on
+// this device (issue #89). A real file (not ":memory:") is used so pooled
+// connections share one database and the pre-import snapshot path is exercised
+// for real.
 func newBackupTestEnv(t *testing.T) (*BackupService, *db.Repository) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "pigate-test.db")
@@ -25,8 +29,9 @@ func newBackupTestEnv(t *testing.T) (*BackupService, *db.Repository) {
 	t.Cleanup(func() { sqlDB.Close() })
 	repo := db.NewRepository(sqlDB)
 	repo.SetMockMode(true, false)
+	interfaceService := NewInterfaceService(repo, kernel.NewMockNetwork())
 	bs := NewBackupService(repo, dbPath, "test",
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		interfaceService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	return bs, repo
 }
 
@@ -673,6 +678,64 @@ func TestImportKeepsVlanRow(t *testing.T) {
 	}
 	if !warned {
 		t.Errorf("expected a skip warning for orphan VLAN ethX.200, got: %v", res.Warnings)
+	}
+}
+
+// TestRestoreConfigRecreatesDeletedInterfaceRow covers issue #89: eth1 is
+// hardcoded as physically present in the mock kernel (see GetKernelInterfaces)
+// but, unlike eth0/wlan0, has no seeded DB row — exactly the "unmanaged
+// interface" shape the bug report described. This seeds a DB row for it with
+// a distinct config, backs it up, deletes the row to simulate the
+// unmanaged/DB-lost state, then restores from that same backup and asserts
+// the row is recreated with the backup's values on the very first import
+// (T-02/T-03), not skipped as "not present on this device".
+func TestRestoreConfigRecreatesDeletedInterfaceRow(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+
+	const ifaceID = "iface-eth1"
+	if err := repo.CreateInterfaceForTest(model.NetworkInterface{
+		ID: ifaceID, Name: "eth1", Alias: "eth1_custom", Role: "LAN",
+		Type: "ethernet", Subtype: "device", AddressingMode: "static",
+		IP: "10.9.9.9", Netmask: "24", Gateway: "10.9.9.1",
+		MacAddress: "DC:A6:32:AA:BB:C3", AdminAccess: []string{"PING"},
+		Status: "up", Speed: "100 Mbps",
+	}); err != nil {
+		t.Fatalf("seed eth1: %v", err)
+	}
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	raw, _ := json.Marshal(file)
+
+	// Simulate the "unmanaged" state: DB row gone, device still present
+	// (the mock kernel's eth1 entry is hardcoded, independent of the DB).
+	if err := repo.DeleteInterface(ifaceID); err != nil {
+		t.Fatalf("delete eth1 row: %v", err)
+	}
+
+	res, err := bs.Import(raw, model.ImportOptions{})
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	restored, err := repo.GetInterfaceByID(ifaceID)
+	if err != nil {
+		t.Fatalf("get interface by id: %v", err)
+	}
+	if restored == nil {
+		t.Fatalf("eth1 row was not recreated on restore")
+	}
+	if restored.Alias != "eth1_custom" || restored.AddressingMode != "static" || restored.IP != "10.9.9.9" {
+		t.Errorf("restored eth1 does not match backup values: %+v", restored)
+	}
+
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "eth1") {
+			t.Errorf("eth1 unexpectedly reported in warnings: %q", w)
+		}
 	}
 }
 

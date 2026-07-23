@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"runtime"
 	"strings"
 	"testing"
@@ -777,6 +778,123 @@ func TestInterfaceMetricColumn(t *testing.T) {
 	}
 	if !found {
 		t.Error("Did not find created interface in GetInterfacesFromDB list")
+	}
+}
+
+// TestUpdateInterfaceUpsertsMissingRow is an integration-style test against
+// the real sqlite driver: it verifies that calling UpdateInterface on an id
+// with NO existing row inserts the row (not silently no-op / report success
+// while persisting nothing), and that a second call on the now-existing row
+// updates in place rather than inserting a duplicate. Note: with
+// modernc.org/sqlite, RowsAffected() on a 0-row UPDATE returns (0, nil) - no
+// error - so this test alone exercises only the `rows == 0` branch of the
+// upsert decision, not the `rowsErr != nil` branch (the actual T-01 defect).
+// See TestDecideUpsertAction below for a focused regression test of that
+// branch.
+func TestUpdateInterfaceUpsertsMissingRow(t *testing.T) {
+	sqliteDB, err := InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer sqliteDB.Close()
+	repo := NewRepository(sqliteDB)
+
+	iface := model.NetworkInterface{
+		ID:             "iface-upsert-missing",
+		Name:           "eth-upsert",
+		Alias:          "WAN_Upsert",
+		Role:           "WAN",
+		Type:           "ethernet",
+		AddressingMode: "dhcp",
+		IP:             "10.0.1.2",
+		Netmask:        "24",
+		Gateway:        "10.0.1.1",
+		MacAddress:     "00:11:22:33:44:77",
+		AdminAccess:    []string{"PING"},
+		Status:         "up",
+		Speed:          "1000 Mbps",
+	}
+
+	// No CreateInterfaceForTest call — the row does not exist yet. Calling
+	// UpdateInterface directly on it must upsert (INSERT fallback), not error.
+	if err := repo.UpdateInterface(iface); err != nil {
+		t.Fatalf("UpdateInterface on missing row failed: %v", err)
+	}
+
+	fetched, err := repo.GetInterfaceByID(iface.ID)
+	if err != nil {
+		t.Fatalf("GetInterfaceByID failed: %v", err)
+	}
+	if fetched == nil {
+		t.Fatalf("expected row to be created by UpdateInterface, got nil")
+	}
+	if fetched.Alias != "WAN_Upsert" || fetched.IP != "10.0.1.2" || fetched.Gateway != "10.0.1.1" {
+		t.Fatalf("created row fields mismatch: got alias=%q ip=%q gateway=%q", fetched.Alias, fetched.IP, fetched.Gateway)
+	}
+
+	// Second call on the same id, with a field changed, must update the
+	// existing row in place rather than inserting a duplicate.
+	fetched.Alias = "WAN_Upsert_Updated"
+	fetched.IP = "10.0.1.3"
+	if err := repo.UpdateInterface(*fetched); err != nil {
+		t.Fatalf("UpdateInterface on existing row failed: %v", err)
+	}
+
+	updated, err := repo.GetInterfaceByID(iface.ID)
+	if err != nil {
+		t.Fatalf("GetInterfaceByID failed: %v", err)
+	}
+	if updated == nil {
+		t.Fatalf("expected row to still exist after second UpdateInterface call, got nil")
+	}
+	if updated.Alias != "WAN_Upsert_Updated" || updated.IP != "10.0.1.3" {
+		t.Fatalf("updated row fields mismatch: got alias=%q ip=%q", updated.Alias, updated.IP)
+	}
+
+	// Confirm there is still exactly one row for this id (no duplicate insert).
+	list, err := repo.GetInterfaces()
+	if err != nil {
+		t.Fatalf("GetInterfaces failed: %v", err)
+	}
+	count := 0
+	for _, item := range list {
+		if item.ID == iface.ID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 row for id %q, found %d", iface.ID, count)
+	}
+}
+
+// TestDecideUpsertAction is a focused regression test for the T-01 defect:
+// UpdateInterface must fall back to INSERT not only when RowsAffected()
+// reports 0 rows with no error, but also when RowsAffected() itself returns
+// an error (some drivers cannot report affected rows). This is tested
+// directly against the pure decideUpsertAction helper with a synthetic
+// error, since the real modernc.org/sqlite driver cannot practically be
+// forced into a RowsAffected() error.
+func TestDecideUpsertAction(t *testing.T) {
+	cases := []struct {
+		name     string
+		rows     int64
+		rowsErr  error
+		expected upsertAction
+	}{
+		{"no existing row, no error", 0, nil, upsertActionInsert},
+		{"RowsAffected error must still fall back to INSERT", 0, errors.New("driver does not support RowsAffected"), upsertActionInsert},
+		{"RowsAffected error with a nonzero (bogus) row count must still fall back to INSERT", 3, errors.New("driver does not support RowsAffected"), upsertActionInsert},
+		{"exactly one row updated, no error", 1, nil, upsertActionUpdateOK},
+		{"unexpected row count, no error", 2, nil, upsertActionUnexpected},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := decideUpsertAction(tc.rows, tc.rowsErr)
+			if got != tc.expected {
+				t.Fatalf("decideUpsertAction(%d, %v) = %v, want %v", tc.rows, tc.rowsErr, got, tc.expected)
+			}
+		})
 	}
 }
 
