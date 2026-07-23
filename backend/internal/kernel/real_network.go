@@ -418,9 +418,16 @@ func (r *RealNetwork) ScanWifi(name string) ([]model.WifiScanResult, error) {
 	// already in flight, join it instead of firing another TRIGGER_SCAN.
 	// Keyed by interface name (not a constant) so unrelated interfaces
 	// (e.g. wlan0 vs. a USB dongle) can still scan concurrently.
-	v, err, _ := r.scanGroup.Do(name, func() (interface{}, error) {
+	v, err, shared := r.scanGroup.Do(name, func() (interface{}, error) {
 		return r.scanWifiOnce(name)
 	})
+	if shared {
+		// shared is true for every caller (the one that actually triggered the
+		// scan included) whenever at least one other concurrent request joined
+		// it instead of firing its own TRIGGER_SCAN — see the "triggering scan"
+		// log for which goroutine was the one that actually did the work.
+		log.Printf("[RealNetwork] ScanWifi: %s result was shared across concurrent callers (dedup by singleflight)", name)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -484,9 +491,12 @@ func (r *RealNetwork) scanWifiOnce(name string) ([]model.WifiScanResult, error) 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	for {
+	pollStart := time.Now()
+	for attempt := 0; ; attempt++ {
 		if bssList, err := c.AccessPoints(ifi); err == nil {
 			if results := mapWifiScanResults(bssList); len(results) > 0 {
+				log.Printf("[RealNetwork] ScanWifi: %s found %d network(s) after %d poll(s) (%s)",
+					name, len(results), attempt, time.Since(pollStart).Round(time.Millisecond))
 				return results, nil
 			}
 		}
