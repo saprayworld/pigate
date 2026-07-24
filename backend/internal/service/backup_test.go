@@ -62,6 +62,7 @@ func seedCustomConfig(t *testing.T, repo *db.Repository) {
 	if err := repo.CreateDHCPConfig(model.DhcpConfig{
 		Interface: "wlan0", Enabled: true, StartIP: "192.168.5.100", EndIP: "192.168.5.200",
 		Gateway: "192.168.5.1", Netmask: "255.255.255.0", DNS1: "8.8.8.8", DNS2: "1.1.1.1", LeaseTime: 3600,
+		Domain: "lab.local",
 	}); err != nil {
 		t.Fatalf("create dhcp config: %v", err)
 	}
