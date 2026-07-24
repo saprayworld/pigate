@@ -68,7 +68,7 @@
 
 ### 2.2 หลีกเลี่ยงการ Hardcode สีหลัก (Avoiding Hardcoded Colors)
 * **ข้อกำหนด:** ห้ามเขียน Class สีเขียวของ Tailwind ตรงๆ ลงในโค้ด (เช่น `text-emerald-500`, `bg-emerald-500`, `border-emerald-500/20`) เพื่อให้สามารถควบคุมสไตล์สีหลักได้จากศูนย์กลาง
-* **แนวทางปฏิบัติ:** ให้เรียกใช้ผ่านตัวแปรสีหลักของระบบตามที่ประกาศไว้ใน [`src/index.css`](file:///home/sapray/Dev/pigate/frontend/src/index.css) เสมอ เช่น:
+* **แนวทางปฏิบัติ:** ให้เรียกใช้ผ่านตัวแปรสีหลักของระบบตามที่ประกาศไว้ใน [`src/index.css`](file:///home/sapray/dev/pigate/frontend/src/index.css) เสมอ เช่น:
   * ใช้ `text-primary` แทน `text-emerald-500` หรือ `dark:text-emerald-400`
   * ใช้ `bg-primary/10` หรือ `border-primary/20` แทน `bg-emerald-500/10` หรือ `border-emerald-500/20`
   * ใช้ `bg-primary` และ `text-primary-foreground` สำหรับปุ่มกดหลัก (Primary Button)
@@ -107,5 +107,5 @@
 * **แนวทางปฏิบัติ**:
   * โค้ดหลังบ้านที่แก้ไขการตั้งค่า Wi-Fi จะต้องเขียนบันทึกไฟล์คอนฟิกรายพอร์ต เช่น `/etc/wpa_supplicant/wpa_supplicant-wlan0.conf` จากนั้นส่งคำสั่ง `RECONFIGURE` ผ่าน UNIX Domain Socket (`unixgram`) ของ `wpa_supplicant` แทนการเรียกคำสั่งภายนอกผ่าน subprocesses
   * การบันทึกไฟล์คอนฟิก Wi-Fi ต้องทำแบบอะตอมมิก (Atomic write) เสมอเพื่อความมั่นคงปลอดภัย
-  * ศึกษารายละเอียดแนวทางการเขียนโค้ดและข้อควรระวังความปลอดภัยในการพัฒนา Wi-Fi Client เพิ่มเติมที่คู่มือ [wifi_wpa_working_instruction.md](file:///home/sapray/Sapray/gemini/rpi5-firewall-frontend/docs/wifi_wpa_working_instruction.md)
+  * ศึกษารายละเอียดแนวทางการเขียนโค้ดและข้อควรระวังความปลอดภัยในการพัฒนา Wi-Fi Client เพิ่มเติมที่คู่มือ [wifi_wpa_working_instruction.md](file:///home/sapray/dev/pigate/docs/wifi_wpa_working_instruction.md)
 

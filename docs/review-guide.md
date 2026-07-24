@@ -61,7 +61,7 @@ go install github.com/securego/gosec/v2/cmd/gosec@latest
 2. **ผู้ใช้ role `admin_readonly` ที่พยายามยกระดับสิทธิ์** — ต้องพิสูจน์ว่า middleware ปิดทุกทางที่เขียนข้อมูลได้
 3. **ผู้ดูแลที่ล็อกอินแล้วแต่ป้อนข้อมูลอันตราย (โดยตั้งใจหรือถูกหลอก)** — ค่า SSID/hostname/zone name ที่มีอักขระพิเศษ ต้องไม่กลายเป็นการ inject config หรือคำสั่ง
 4. **ไฟล์ backup ที่หลุด** — มีรหัสผ่าน Wi-Fi และ hash ของบัญชี
-5. **XSS ใน frontend** — token อยู่ใน `localStorage` ถ้ามี XSS จะขโมย session ได้ทันที
+5. **XSS ใน frontend** — session token ปัจจุบันอยู่ใน `HttpOnly` cookie เท่านั้น (ไม่มีใน `localStorage` แล้ว — ดูหมวด C) ดังนั้น XSS ทั่วไปขโมย token ตรงๆ ไม่ได้ แต่ยังต้องเฝ้าไม่ให้มีจุดใหม่เขียน token ลง `localStorage`/DOM ที่ script อ่านได้
 
 สิ่งที่ *ไม่อยู่* ในขอบเขต: ผู้โจมตีที่มี root บนตัว Pi อยู่แล้ว, การโจมตีทางกายภาพ, WAN-side attack (สมมติว่า nftables ปิด input จาก WAN ตามดีไซน์)
 
@@ -78,7 +78,7 @@ go install github.com/securego/gosec/v2/cmd/gosec@latest
 **ดูอย่างไร:**
 - ตรวจว่า token สร้างจาก `crypto/rand` เท่านั้น (ห้าม `math/rand`) และยาว ≥ 16 bytes — ดู `generateRandomToken()` ใน `handlers.go`
 - ตรวจว่า error จาก `rand.Read` **ไม่ถูกเพิกเฉย** (ปัจจุบันบรรทัด `_, _ = rand.Read(b)` เพิกเฉยอยู่ — ถ้า entropy ล้มเหลวจะได้ token เป็นศูนย์ล้วน)
-- ตรวจอายุ session: ฝั่ง server (`activeSessions` map) มีการหมดอายุหรือไม่ ปัจจุบัน **ไม่มี TTL** — token ใช้ได้จนกว่า process จะ restart แม้ cookie ฝั่ง browser หมดอายุใน 24 ชม.
+- ตรวจอายุ session: ฝั่ง server (`activeSessions` map ใน `api/session.go`) มี sliding idle TTL (15 นาที) + absolute cap (7 วัน) + cap ต่อผู้ใช้ (5 session, evict ตัวเก่าสุด) + sweeper กวาดทิ้งเป็นระยะแล้ว — ยืนยันทุกรอบว่าค่าคงที่เหล่านี้ (`sessionTTL`, `sessionAbsoluteMax`, `maxSessionsPerUser`) ไม่ถูกลดเกรดหรือถอดออก
 - ตรวจ password hashing: ต้องเป็น bcrypt (cost ≥ 10) — ดู `service/user.go` และ `HandleLogin`
 - ตรวจ flow บังคับเปลี่ยนรหัสครั้งแรก (`is_initial`) ว่า bypass ได้เฉพาะ 3 endpoint ที่จำเป็น (`/api/system/password`, `/api/auth/logout`, `/api/auth/session`)
 - ตรวจรหัสผ่านเริ่มต้น: `connection.go` ต้อง generate จาก `crypto/rand` (มี `generateRandomPassword` แล้ว) และมีค่าตายตัว `pigate` เฉพาะเมื่อ DSN คือ `:memory:` (โหมดทดสอบ) เท่านั้น
@@ -87,9 +87,8 @@ go install github.com/securego/gosec/v2/cmd/gosec@latest
 **ความเสี่ยง:** session ไม่หมดอายุ = token ที่หลุด (ผ่าน XSS/log/network sniff) ใช้ได้ตลอดไป; token อ่อนแอ = ปลอม session เข้ายึด gateway ได้
 
 **แนวทางแก้:**
-- เพิ่ม TTL ให้ session ฝั่ง server (เก็บ `expiresAt` ใน map แล้วเช็คใน `IsSessionValid` + goroutine กวาดทิ้ง) และต่ออายุแบบ sliding เมื่อมี activity
-- เปลี่ยน `_, _ = rand.Read(b)` ให้ panic หรือคืน error
-- พิจารณาจำกัดจำนวน session ต่อผู้ใช้
+- (เสร็จแล้ว) TTL ฝั่ง server, sliding renewal, และ cap ต่อผู้ใช้ — คงพฤติกรรมนี้ไว้ อย่าถอยหลัง
+- (เสร็จแล้ว) error จาก `rand.Read` ไม่ถูกเพิกเฉยอีกต่อไป (fail-closed ด้วย 500) — ยืนยันซ้ำทุกรอบว่าไม่มีจุดใหม่ที่กลับไปเพิกเฉย error
 
 ### B. Authorization / RBAC
 
@@ -106,20 +105,19 @@ go install github.com/securego/gosec/v2/cmd/gosec@latest
 
 **แนวทางแก้:** ทุกครั้งที่เพิ่ม route ใหม่ ให้ใช้ helper `authRoute`/`superAdminRoute` เท่านั้น ห้าม `mux.Handle` ตรงๆ (ยกเว้น login/logout) และเพิ่ม test ใน `handlers_test.go` ที่ยิงทุก route โดยไม่มี token แล้ว expect 401
 
-### C. Transport Security (จุดอ่อนเชิงโครงสร้างที่ใหญ่ที่สุดตอนนี้)
+### C. Transport Security
 
-**ดูที่ไหน:** `cmd/pigate/main.go` (บรรทัด `http.ListenAndServe`), `handlers.go` (`http.SetCookie`), `frontend/src/services/authService.ts`
+**ดูที่ไหน:** `cmd/pigate/main.go` (การเลือก HTTPS/HTTP และ `setupTLS`), `service/tls_cert.go`, `api/session.go` (`setSessionCookie`), `frontend/src/services/authService.ts`
 
 **ดูอย่างไร:**
-- ปัจจุบันเสิร์ฟ **HTTP เปล่าทุก interface** (`":"+port`) และ cookie ตั้ง `Secure: false`
+- (แก้แล้ว — https-server-foundation) ปัจจุบันเสิร์ฟ **HTTPS เป็นหลักที่ :443** ด้วย self-signed ECDSA P-256 cert ที่ generate ตอน startup (TLS 1.2+, server timeouts), HTTP :80/:2479 ตอบกลับ 308 redirect ไป HTTPS, และคง **plain-HTTP fallback** ไว้เป็นทางสำรองสุดท้ายเมื่อ cert ใช้งานไม่ได้/bind :443 ไม่ได้ (กันแอดมินเข้าไม่ได้) — cookie `Secure` ตั้งราย request จาก `r.TLS` จึงเป็นจริงภายใต้ HTTPS โดยอัตโนมัติ ทุกรอบรีวิวต้องยืนยันว่า fallback path ยังไม่ถูกถอดออกโดยไม่ตั้งใจ และ event log แจ้งเตือนเมื่อ fallback ทำงานจริง
 - ~~token ถูกส่งซ้ำสองทาง: HttpOnly cookie **และ** JSON body ที่ frontend เก็บลง `localStorage`~~ → **แก้แล้ว (cookie-only-session-auth-plan)**: token มากับ `Set-Cookie` (HttpOnly) ทางเดียว; frontend ไม่เก็บ token ใน `localStorage` อีก
 
-**ความเสี่ยง:** ใครก็ตามใน LAN ที่ sniff ได้ (ARP spoof, rogue AP) เห็นรหัสผ่านและ token เป็น plaintext (แก้ด้วย TLS — ดูข้อ 1). ส่วนช่องทาง "XSS ขโมย token จาก `localStorage`" ปิดไปแล้วเพราะ token อยู่ใน HttpOnly cookie เท่านั้น
+**ความเสี่ยง:** หาก fallback ไป plain-HTTP ทำงานโดยไม่มีใครสังเกต (cert ล้มเหลวเงียบๆ) ใครก็ตามใน LAN ที่ sniff ได้ (ARP spoof, rogue AP) จะเห็นรหัสผ่านและ token เป็น plaintext อีกครั้ง — ต้องเฝ้า event log ของหัวข้อนี้ทุกรอบ ส่วนช่องทาง "XSS ขโมย token จาก `localStorage`" ปิดไปแล้วเพราะ token อยู่ใน HttpOnly cookie เท่านั้น
 
-**แนวทางแก้ (เรียงตามความคุ้ม):**
-1. รองรับ TLS: self-signed cert ที่ generate ตอน install + flag `-tls-cert`/`-tls-key` แล้วตั้ง `Secure: true`
-2. เลิกส่ง token ใน response body — ใช้ HttpOnly cookie ทางเดียว (frontend เลิกอ่าน `data.token` และเลิกเก็บ `localStorage`; ใช้ `credentials: "include"` ใน fetch) — จะตัด vector "XSS ขโมย token" ทิ้งทั้งก้อน
-3. อย่างน้อยที่สุด: bind เฉพาะ IP ของ LAN management interface แทน `0.0.0.0`
+**แนวทางแก้ (ที่ยังเหลือ):**
+1. พิจารณา public-CA/ACME หรือ upload certificate ผ่าน UI แทน self-signed ล้วน (ยังไม่ทำ — ดู scorecard หัวข้อ TLS/HTTPS)
+2. อย่างน้อยที่สุด: พิจารณา bind เฉพาะ IP ของ LAN management interface แทน `0.0.0.0` (ยังไม่ทำ)
 
 **C.1 CSRF (ตรวจคู่กับ cookie เสมอ)**
 - หลังทำ cookie-only auth แล้ว auth มาทาง cookie **ทางเดียว** (ตัด `Authorization: Bearer` ทิ้ง) ดังนั้น CSRF ป้องกันด้วยกลไกเดียวคือ cookie เป็น `SameSite=Strict` (เบราว์เซอร์บล็อค cross-site request ทั้งหมด)
@@ -200,7 +198,7 @@ go install github.com/securego/gosec/v2/cmd/gosec@latest
 
 **ดูอย่างไร:**
 - XSS sinks: `grep -rn "dangerouslySetInnerHTML" frontend/src` — ปัจจุบันมีจุดเดียวคือ `components/ui/chart.tsx` (โค้ด shadcn มาตรฐาน ฉีดเฉพาะ CSS ที่สร้างจาก config ภายใน ไม่ใช่ user input) — ตรวจซ้ำทุกรอบว่าไม่มีจุดใหม่ และไม่มีการใช้ `eval`/`new Function`
-- Token storage: ดูหมวด C — เป้าหมายระยะยาวคือเลิกใช้ `localStorage`
+- Token storage: ดูหมวด C — token อยู่ใน HttpOnly cookie เท่านั้นแล้ว (เลิกใช้ `localStorage` สำเร็จ); ตรวจซ้ำทุกรอบว่าไม่มี service ใหม่ที่กลับไปเก็บ token ใน `localStorage`/`sessionStorage`
 - Role ที่เก็บฝั่ง client (`pigate_role`) เป็นแค่ UI hint — ยืนยันว่า **การบังคับสิทธิ์จริงอยู่ที่ backend เท่านั้น** (อยู่แล้ว) ห้ามให้ frontend เป็นด่านเดียว
 - Mock mode: `IS_MOCK_MODE` ต้อง resolve เป็น false ใน production build — ตรวจ `services/config.ts` ว่าเงื่อนไขผูกกับ build env ไม่ใช่ runtime toggle ที่ผู้ใช้เปิดได้
 
