@@ -560,9 +560,12 @@ func appendOfflineRows(dataLayer []model.NetworkInterface, dbIfaces []model.Netw
 }
 
 // GetDataLayerInterfaceIncludingOffline returns the normal data layer plus DB-configured
-// interfaces that have no live kernel link (see appendOfflineRows). This is used ONLY by
-// the interfaces API surface — other consumers (firewall sync, dhcpcd, hostname, dashboard)
-// must keep using GetDataLayerInterface so they never act on a phantom interface.
+// interfaces that have no live kernel link (see appendOfflineRows). This has two
+// deliberately-reviewed callers: the interfaces API surface, and
+// BackupService.resolveInterfaces (read-only identity/existence matching during backup
+// restore — it never mutates kernel state off of a phantom interface). Any other consumer
+// (firewall sync, dhcpcd, hostname, dashboard) must keep using GetDataLayerInterface so it
+// never acts on/mutates a phantom interface at the kernel level.
 func (s *InterfaceService) GetDataLayerInterfaceIncludingOffline() ([]model.NetworkInterface, error) {
 	list, err := s.GetDataLayerInterface()
 	if err != nil {
