@@ -227,7 +227,9 @@ export const interfaceService = {
       const errBody = await response.json().catch(() => ({}));
       throw new Error(errBody.message || response.statusText || "Failed to scan Wi-Fi");
     }
-    return response.json();
+    // Defense-in-depth: a scan that finds nothing should serialize to `[]`,
+    // but guard against `null` here too so callers can always safely `.map()`.
+    return (await response.json()) ?? [];
   },
 
   // Reset interface configuration to default values
