@@ -196,8 +196,8 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 			id = fmt.Sprintf("dhcp-cfg-%s", d.Interface)
 		}
 		if _, err := tx.Exec(
-			"INSERT INTO dhcp_configs (id, interface, enabled, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			id, d.Interface, boolToInt(d.Enabled), d.StartIP, d.EndIP, d.Gateway, d.Netmask, d.DNS1, d.DNS2, d.LeaseTime,
+			"INSERT INTO dhcp_configs (id, interface, enabled, start_ip, end_ip, gateway, netmask, dns1, dns2, lease_time, domain) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			id, d.Interface, boolToInt(d.Enabled), d.StartIP, d.EndIP, d.Gateway, d.Netmask, d.DNS1, d.DNS2, d.LeaseTime, d.Domain,
 		); err != nil {
 			return fmt.Errorf("restore dhcp config for %q: %w", d.Interface, err)
 		}
