@@ -65,7 +65,9 @@ Attackers to consider, in order of likelihood:
 3. **A logged-in admin submitting dangerous input (malicious or tricked)** — SSIDs, hostnames,
    zone names containing special characters must never become config or command injection.
 4. **A leaked backup file** — contains Wi-Fi passwords and account hashes.
-5. **XSS in the frontend** — the token lives in `localStorage`; any XSS steals the session instantly.
+5. **XSS in the frontend** — the session token now lives only in an `HttpOnly` cookie (no longer in
+   `localStorage` — see area C), so ordinary XSS cannot read it directly; still watch for any new
+   code path that writes the token to `localStorage`/somewhere script-readable.
 
 *Out of scope:* an attacker who already has root on the Pi, physical attacks, WAN-side attacks
 (the nftables design drops WAN input by default).
@@ -86,9 +88,10 @@ section), `internal/service/user.go`, `internal/db/connection.go` (`seed` functi
   `generateRandomToken()` in `handlers.go`.
 - Verify the `rand.Read` error is **not ignored** (currently `_, _ = rand.Read(b)` ignores it — an
   entropy failure would yield an all-zero token).
-- Check session lifetime: does the server-side `activeSessions` map expire entries? Currently
-  **no TTL** — a token stays valid until process restart, even though the browser cookie expires
-  after 24 h.
+- Check session lifetime: the server-side `activeSessions` map (`api/session.go`) already has a
+  sliding idle TTL (15 min) + absolute cap (7 d) + per-user cap (5 sessions, evict-oldest) + a
+  periodic sweeper. Re-confirm every round that these constants (`sessionTTL`,
+  `sessionAbsoluteMax`, `maxSessionsPerUser`) are never downgraded or removed.
 - Check password hashing: must be bcrypt (cost ≥ 10) — see `service/user.go` and `HandleLogin`.
 - Check the forced first-password-change flow (`is_initial`): the bypass list must be exactly the
   three necessary endpoints (`/api/system/password`, `/api/auth/logout`, `/api/auth/session`).
@@ -103,10 +106,9 @@ section), `internal/service/user.go`, `internal/db/connection.go` (`seed` functi
 weak tokens allow session forgery and gateway takeover.
 
 **Remediation:**
-- Add server-side session TTL (store `expiresAt` in the map, check it in `IsSessionValid`, sweep
-  with a goroutine), with sliding renewal on activity.
-- Make `rand.Read` failures fatal instead of ignored.
-- Consider capping sessions per user.
+- (Done) Server-side TTL, sliding renewal, and a per-user cap — preserve this, don't regress.
+- (Done) `rand.Read` errors are no longer ignored (fail closed with 500) — re-confirm every round
+  that no new call site reintroduces an ignored error.
 
 ### B. Authorization / RBAC
 
@@ -134,29 +136,33 @@ the firewall.
 `mux.Handle` (except login/logout). Add a test in `handlers_test.go` that hits every route without
 a token and expects 401.
 
-### C. Transport Security (the biggest structural weakness today)
+### C. Transport Security
 
-**Where:** `cmd/pigate/main.go` (the `http.ListenAndServe` line), `handlers.go`
-(`http.SetCookie`), `frontend/src/services/authService.ts`
+**Where:** `cmd/pigate/main.go` (HTTPS/HTTP selection and `setupTLS`), `service/tls_cert.go`,
+`api/session.go` (`setSessionCookie`), `frontend/src/services/authService.ts`
 
 **How:**
-- The server currently serves **plain HTTP on all interfaces** (`":"+port`) and the cookie sets
-  `Secure: false`.
+- (Fixed — https-server-foundation) The server now serves **HTTPS as primary on :443** using a
+  self-signed ECDSA P-256 cert generated at startup (TLS 1.2+, server timeouts); plain HTTP on
+  :80/:2479 issues a 308 redirect to HTTPS; a **plain-HTTP fallback** remains as a last resort when
+  the cert can't be generated/`:443` can't bind, so the admin is never locked out — the cookie's
+  `Secure` flag is set per-request from `r.TLS`, so it's true automatically under HTTPS. Every
+  review round: confirm the fallback path hasn't been accidentally removed, and that it logs a loud
+  warning + event-log entry when it actually triggers.
 - ~~The token is delivered twice: as an HttpOnly cookie **and** in the JSON body, which the frontend
   stores in `localStorage`.~~ → **Fixed (cookie-only-session-auth-plan)**: the token is delivered
   only via `Set-Cookie` (HttpOnly); the frontend no longer stores it in `localStorage`.
 
-**Risk:** anyone on the LAN who can sniff (ARP spoofing, rogue AP) sees passwords in plaintext (fix
-with TLS — see finding 1). The "XSS steals the token from `localStorage`" vector is now closed —
-the token lives only in the HttpOnly cookie.
+**Risk:** if the plain-HTTP fallback ever triggers unnoticed (e.g. a silent cert failure), anyone on
+the LAN who can sniff (ARP spoofing, rogue AP) would see passwords in plaintext again — watch the
+event log for this every round. The "XSS steals the token from `localStorage`" vector is now closed
+— the token lives only in the HttpOnly cookie.
 
-**Remediation (by value):**
-1. Add TLS: generate a self-signed cert at install time, add `-tls-cert`/`-tls-key` flags, set
-   `Secure: true`.
-2. Stop returning the token in the response body — use the HttpOnly cookie exclusively (frontend
-   stops reading `data.token` and stops using `localStorage`; use `credentials: "include"` on
-   fetches). This removes the "XSS steals the token" vector entirely.
-3. At minimum: bind to the LAN management interface's IP instead of `0.0.0.0`.
+**Remediation (remaining items):**
+1. Consider a public-CA/ACME path or in-UI certificate upload instead of self-signed only (not yet
+   done — see the TLS/HTTPS scorecard entry).
+2. At minimum: consider binding to the LAN management interface's IP instead of `0.0.0.0` (not yet
+   done).
 
 **C.1 CSRF (always review together with cookies)**
 - After the cookie-only auth change, auth arrives via the cookie **only** (the `Authorization:
@@ -281,7 +287,9 @@ password; add redaction in `SendWpaCommand` before logging.
 - XSS sinks: `grep -rn "dangerouslySetInnerHTML" frontend/src` — currently a single hit in
   `components/ui/chart.tsx` (stock shadcn code injecting only CSS built from internal config, not
   user input) — re-check every round that no new sinks or `eval`/`new Function` appear.
-- Token storage: see area C — the long-term goal is dropping `localStorage`.
+- Token storage: see area C — the token now lives only in the HttpOnly cookie (`localStorage` was
+  successfully dropped); re-check every round that no new service reintroduces `localStorage`/
+  `sessionStorage` token storage.
 - Client-side role (`pigate_role`) is only a UI hint — confirm **enforcement lives exclusively in
   the backend** (it does); the frontend must never be the only gate.
 - Mock mode: `IS_MOCK_MODE` must resolve to false in production builds — check

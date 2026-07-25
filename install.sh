@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # PiGate Installation Script
-# Based on: docs/setup_guide.md
+# See README.md "Installation" for what this script does
 # =============================================================================
 
 set -euo pipefail

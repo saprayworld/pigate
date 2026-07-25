@@ -81,7 +81,7 @@ Startup sequence in `cmd/pigate/main.go` matters: DB init → kernel manager sel
 - `ref/` — per-subsystem design docs (`dhcp-service-design.md`, `dnsmasq-design.md`, `dns-system-design.md`, `qos-system-design.md`, `hostname-setting-design.md`).
 - `openapi.yaml` — API contract, also served at `frontend/public/openapi.yaml` / rendered via the ApiDocs page (swagger-ui-react).
 - `wifi_wpa_working_instruction.md` — required reading before touching Wi-Fi/wpa_supplicant code.
-- `firewall_default_rule.md`, `project_status.md`, `backend_development_report.md`, `frontend_design_review.md`, `frontend_data_testing_guide.md` — supplementary status/design notes.
+- `review-guide.md` / `review-guide-eng.md` — repeatable security-review methodology (Thai/English pair), with a per-topic scorecard and findings log; read before doing a security review.
 
 ## Project conventions
 - Do not create git commits unless the user explicitly asks.

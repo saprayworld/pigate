@@ -78,7 +78,7 @@ pigate/
 ├── build.sh                         # Compilation script to bundle Frontend and Backend into a Single Binary
 ├── install.sh                       # Installation script for automated Linux host deployment
 ├── note.md                          # Installation, build notes, and test commands
-├── readme-ref.md                    # Reference template for README.md
+├── docs/ref/readme-ref.md           # Reference template for README.md
 └── LICENSE                          # Software license agreement
 ```
 
