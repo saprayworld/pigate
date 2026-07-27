@@ -641,7 +641,7 @@ export default function Dashboard() {
   // inside a single TabsContent — so it is visible regardless of which of
   // the 3 tabs (overview/compact/detailed) the user has open.
   const { capabilities } = useCapabilities()
-  const unavailableCapabilities = capabilities.filter((c) => !c.available)
+  const unavailableCapabilities = capabilities.filter((c) => !c.available || c.degraded)
 
   return (
     <div className="space-y-4">

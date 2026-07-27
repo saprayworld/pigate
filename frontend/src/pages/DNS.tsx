@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { CapabilityBanner } from "@/components/CapabilityBanner";
 import { RefreshCw, AlertCircle, Check, Info, Server, Network } from "lucide-react";
 
 // Helper to validate IPv4 address format (0-255 octets)
@@ -123,7 +124,10 @@ export default function DNS() {
   }
 
   return (
-    <div className="grid gap-4 md:grid-cols-3">
+    <div className="space-y-4">
+      <CapabilityBanner id="resolved" />
+
+      <div className="grid gap-4 md:grid-cols-3">
       {/* DNS Settings Configuration Form */}
       <Card className="md:col-span-2">
         <CardHeader className="space-y-0">
@@ -301,6 +305,7 @@ export default function DNS() {
           </div>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }
