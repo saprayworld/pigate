@@ -25,6 +25,15 @@ function saveLocalPolicies(policies: PolicyRule[]) {
   localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(policies));
 }
 
+// Reads the backend's real failure reason from the response body ({"message": ...},
+// see api/handlers.go's writeError) instead of throwing a generic
+// response.statusText (which just says "Internal Server Error" and hides e.g.
+// the real nftables error) — mirrors userService.ts's parseError.
+async function parseError(response: Response, fallback: string): Promise<never> {
+  const errBody = await response.json().catch(() => ({}));
+  throw new Error(errBody.message || fallback);
+}
+
 export const policyService = {
   // Fetch all firewall rules
   getAll: async (): Promise<PolicyRule[]> => {
@@ -36,7 +45,7 @@ export const policyService = {
 
     const response = await fetch(`${API_BASE_URL}/policies`);
     if (!response.ok) {
-      throw new Error(`Failed to fetch policies: ${response.statusText}`);
+      await parseError(response, `Failed to fetch policies: ${response.statusText}`);
     }
     return response.json();
   },
@@ -58,7 +67,7 @@ export const policyService = {
       body: JSON.stringify({ policies }),
     });
     if (!response.ok) {
-      throw new Error(`Failed to reorder policies: ${response.statusText}`);
+      await parseError(response, `Failed to reorder policies: ${response.statusText}`);
     }
     return response.json();
   },
@@ -87,7 +96,7 @@ export const policyService = {
       body: JSON.stringify(rule),
     });
     if (!response.ok) {
-      throw new Error(`Failed to create policy: ${response.statusText}`);
+      await parseError(response, `Failed to create policy: ${response.statusText}`);
     }
     return response.json();
   },
@@ -122,7 +131,7 @@ export const policyService = {
       body: JSON.stringify(rule),
     });
     if (!response.ok) {
-      throw new Error(`Failed to update policy: ${response.statusText}`);
+      await parseError(response, `Failed to update policy: ${response.statusText}`);
     }
     return response.json();
   },
@@ -142,7 +151,7 @@ export const policyService = {
       method: "DELETE",
     });
     if (!response.ok) {
-      throw new Error(`Failed to delete policy: ${response.statusText}`);
+      await parseError(response, `Failed to delete policy: ${response.statusText}`);
     }
     return true;
   },
@@ -164,7 +173,7 @@ export const policyService = {
       method: "POST",
     });
     if (!response.ok) {
-      throw new Error(`Failed to toggle log: ${response.statusText}`);
+      await parseError(response, `Failed to toggle log: ${response.statusText}`);
     }
     return response.json();
   },
@@ -186,7 +195,7 @@ export const policyService = {
       method: "POST",
     });
     if (!response.ok) {
-      throw new Error(`Failed to toggle status: ${response.statusText}`);
+      await parseError(response, `Failed to toggle status: ${response.statusText}`);
     }
     return response.json();
   },
@@ -204,7 +213,7 @@ export const policyService = {
       method: "POST",
     });
     if (!response.ok) {
-      throw new Error(`Failed to apply policy to kernel: ${response.statusText}`);
+      await parseError(response, `Failed to apply policy to kernel: ${response.statusText}`);
     }
     return true;
   },

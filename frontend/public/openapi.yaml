@@ -2257,6 +2257,38 @@ paths:
               schema:
                 $ref: '#/components/schemas/SystemInfo'
 
+  /system/capabilities:
+    get:
+      tags:
+        - System & Maintenance
+      summary: Get kernel capability detection status
+      description: >
+        Read-only probe of whether the kernel subsystems PiGate depends on
+        (nftables via Netlink, D-Bus/systemd units for dnsmasq and
+        systemd-resolved) are actually usable in this environment — e.g. real
+        mode on WSL reports nftables unavailable instead of silently failing
+        (issue #94). Results are cached for ~30s server-side; pass
+        `?force=1` to bypass the cache and probe again immediately. In mock
+        mode (`-mock=true` or `-mock-from-real=true`), every capability is
+        always reported available with reason `mock`.
+      parameters:
+        - name: force
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ['1']
+          description: Pass `force=1` to bypass the server-side cache and probe again.
+      responses:
+        '200':
+          description: Capability status of every probed subsystem
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemCapabilities'
+        '503':
+          description: Capability service not available on this server instance
+
   /system/time:
     get:
       tags:
@@ -3204,6 +3236,74 @@ components:
         timezone:
           type: string
           example: Asia/Bangkok
+
+    CapabilityStatus:
+      type: object
+      required:
+        - id
+        - name
+        - available
+        - degraded
+        - reason
+        - detail
+        - checkedAt
+      properties:
+        id:
+          type: string
+          description: Stable subsystem id (registry key), e.g. `firewall`, `dbus`, `dnsmasq`, `resolved`.
+          example: firewall
+        name:
+          type: string
+          description: Human-readable display name.
+          example: Firewall (nftables)
+        available:
+          type: boolean
+          description: Whether the subsystem is usable at all.
+        degraded:
+          type: boolean
+          description: >
+            True when the subsystem is available but not fully healthy (e.g.
+            the probe passed but the last real apply attempt failed).
+        reason:
+          type: string
+          description: Machine-readable reason code.
+          enum:
+            - ok
+            - mock
+            - not_supported
+            - permission_denied
+            - no_dbus
+            - service_missing
+            - service_inactive
+            - apply_failed
+            - probe_failed
+          example: not_supported
+        detail:
+          type: string
+          description: Human-readable (Thai) explanation for the UI banner.
+          example: เคอร์เนลของเครื่องนี้ไม่รองรับ nf_tables (พบบ่อยบน WSL/คอนเทนเนอร์)
+        checkedAt:
+          type: string
+          format: date-time
+          description: When this status was last (re)computed.
+
+    SystemCapabilities:
+      type: object
+      required:
+        - mock
+        - checkedAt
+        - capabilities
+      properties:
+        mock:
+          type: boolean
+          description: True when the server is running in mock mode (-mock or -mock-from-real).
+        checkedAt:
+          type: string
+          format: date-time
+        capabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/CapabilityStatus'
 
     TrafficBucket:
       type: object

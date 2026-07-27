@@ -49,6 +49,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertTitle, AlertDescription, AlertAction } from "@/components/ui/alert"
+import { CapabilityBanner } from "@/components/CapabilityBanner"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Combobox,
@@ -605,6 +606,8 @@ export default function FirewallPolicy() {
 
   return (
     <div className="space-y-4">
+      <CapabilityBanner id="firewall" />
+
       {/* 1. Stats overview */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard icon={ListChecks} title="Total Policies" value={stats.total} />
