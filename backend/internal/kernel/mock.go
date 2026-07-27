@@ -465,6 +465,31 @@ func (m *MockSystemServiceManager) Restart(unit string) error {
 	return nil
 }
 
+// MockCapabilityProber implements CapabilityProber for local/dev testing. It
+// has no side effects and always reports every subsystem as available with
+// reason "mock", so dev machines running -mock=true never see a capability
+// warning banner (docs/ref/todo/kernel-capability-detection-plan.md §0).
+// Its id set MUST stay in sync with RealCapabilityProber's registry
+// (firewall, dbus, dnsmasq, resolved).
+type MockCapabilityProber struct{}
+
+func NewMockCapabilityProber() *MockCapabilityProber {
+	return &MockCapabilityProber{}
+}
+
+func (m *MockCapabilityProber) ProbeAll() []model.CapabilityProbeResult {
+	ids := []string{"firewall", "dbus", "dnsmasq", "resolved"}
+	out := make([]model.CapabilityProbeResult, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, model.CapabilityProbeResult{
+			ID:        id,
+			Available: true,
+			Reason:    model.CapabilityReasonMock,
+		})
+	}
+	return out
+}
+
 // MockTimeManager implements TimeManager in-memory for local testing. It keeps
 // the last-applied timezone/NTP/server values and simulates a synced clock.
 type MockTimeManager struct {
