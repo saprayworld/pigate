@@ -40,6 +40,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { CapabilityBanner } from "@/components/CapabilityBanner"
+import { useCapability } from "@/hooks/useCapabilities"
 import {
   type DhcpConfig,
   type DhcpReservation,
@@ -57,11 +58,13 @@ function StatCard({
   title,
   value,
   valueClassName = "",
+  tooltip,
 }: {
   icon: typeof Server
   title: string
   value: string | number
   valueClassName?: string
+  tooltip?: string
 }) {
   return (
     <Card size="sm" className="gap-0">
@@ -74,7 +77,7 @@ function StatCard({
       <CardContent className="pt-3">
         <p
           className={`truncate text-2xl font-bold tracking-tight text-foreground ${valueClassName}`}
-          title={typeof value === "string" ? value : undefined}
+          title={tooltip ?? (typeof value === "string" ? value : undefined)}
         >
           {value}
         </p>
@@ -85,6 +88,7 @@ function StatCard({
 
 export default function DhcpServer() {
   const { alert, confirm } = useAlert()
+  const dnsmasqCap = useCapability("dnsmasq")
 
   // --- State ---
   const [configs, setConfigs] = useState<DhcpConfig[]>([])
@@ -168,12 +172,33 @@ export default function DhcpServer() {
     const activeConfigs = configs.filter(c => c.enabled)
     const interfacesStr = activeConfigs.map(c => c.interface).join(", ")
     return {
-      status: activeConfigs.length > 0 ? "Active" : "Inactive",
       activeInterfaces: interfacesStr || "—",
       reservationsCount: reservations.length,
       activeLeasesCount: activeLeases.length
     }
   }, [configs, reservations, activeLeases])
+
+  // --- Real dnsmasq service status (blends DB config with kernel capability check) ---
+  const serviceStatus = useMemo(() => {
+    const hasEnabledConfig = configs.some(c => c.enabled)
+    if (!hasEnabledConfig) {
+      return { label: "Not Config", className: "text-muted-foreground" }
+    }
+    if (!dnsmasqCap) {
+      // Loading/unknown — never treat as down, fall back to DB-derived "Active".
+      return { label: "Active", className: "text-primary" }
+    }
+    if (dnsmasqCap.available && !dnsmasqCap.degraded) {
+      return { label: "Active", className: "text-primary" }
+    }
+    if (dnsmasqCap.available && dnsmasqCap.degraded) {
+      return { label: "Not Running", className: "text-warning" }
+    }
+    if (!dnsmasqCap.available && dnsmasqCap.reason === "service_missing") {
+      return { label: "Not Installed", className: "text-destructive" }
+    }
+    return { label: "Unknown", className: "text-muted-foreground" }
+  }, [configs, dnsmasqCap])
 
   // --- Filtered lists ---
   const filteredReservations = useMemo(() => {
@@ -503,8 +528,9 @@ export default function DhcpServer() {
         <StatCard
           icon={Activity}
           title="สถานะบริการ"
-          value={stats.status}
-          valueClassName={configs.some(c => c.enabled) ? "text-primary" : "text-muted-foreground"}
+          value={serviceStatus.label}
+          valueClassName={serviceStatus.className}
+          tooltip={dnsmasqCap?.detail}
         />
         <StatCard icon={Radio} title="อินเตอร์เฟสหลัก" value={stats.activeInterfaces} valueClassName="font-mono text-lg leading-8" />
         <StatCard icon={Network} title="การจองไอพีคงที่ (Static)" value={stats.reservationsCount} />
@@ -545,10 +571,26 @@ export default function DhcpServer() {
               </Button>
             )}
             {isApplied && (
-              <div className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/10 px-3 text-xs font-medium text-primary">
-                <CheckCircle2 className="h-4 w-4" />
-                DHCP Service Active
-              </div>
+              dnsmasqCap &&
+              (serviceStatus.label === "Not Running" ||
+                serviceStatus.label === "Not Installed" ||
+                serviceStatus.label === "Unknown") ? (
+                <div
+                  className={`flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium ${
+                    serviceStatus.label === "Not Installed"
+                      ? "border-destructive/30 bg-destructive/10 text-destructive"
+                      : "border-warning/30 bg-warning/10 text-warning"
+                  }`}
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  DHCP Service Not Running
+                </div>
+              ) : (
+                <div className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/10 px-3 text-xs font-medium text-primary">
+                  <CheckCircle2 className="h-4 w-4" />
+                  DHCP Service Active
+                </div>
+              )
             )}
             {availableInterfaces.length > 0 && (
               <Button
