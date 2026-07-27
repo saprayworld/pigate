@@ -122,6 +122,7 @@ func main() {
 	var powerMgr kernel.PowerManager
 	var trafficLog kernel.TrafficLogManager
 	var systemServiceMgr kernel.SystemServiceManager
+	var capProber kernel.CapabilityProber
 	dns := kernel.NewDNSManager(cfg.Mock)
 
 	if cfg.Mock || cfg.MockFromReal {
@@ -140,6 +141,7 @@ func main() {
 		powerMgr = kernel.NewMockPowerManager()
 		trafficLog = kernel.NewMockTrafficLog()
 		systemServiceMgr = kernel.NewMockSystemServiceManager()
+		capProber = kernel.NewMockCapabilityProber()
 	} else {
 		// Real kernel integrations via netlink — used on Raspberry Pi 5 production.
 		// Requires: sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
@@ -156,6 +158,7 @@ func main() {
 		powerMgr = kernel.NewRealPowerManager()
 		trafficLog = kernel.NewRealTrafficLog()
 		systemServiceMgr = kernel.NewRealSystemServiceManager()
+		capProber = kernel.NewRealCapabilityProber()
 	}
 
 	// 5. Instantiate Server & Router
@@ -184,6 +187,16 @@ func main() {
 	// service (RAM queue + async batch writer to SQLite; see event_log.go).
 	eventLogService := service.NewEventLogService(repo)
 	dhcpServerService.SetEventLog(eventLogService)
+
+	// Kernel capability detection (issue #94): probes whether the kernel
+	// subsystems PiGate depends on (nftables, D-Bus/systemd units) are
+	// actually usable in this environment, so the UI can warn instead of
+	// silently failing (e.g. real mode on WSL). -mock-from-real must count as
+	// mock here too, same as the kernel-manager selection above — it does not
+	// write to the kernel either (docs/ref/todo/kernel-capability-detection-plan.md
+	// §5 Caution 11).
+	capabilityService := service.NewSystemCapabilityService(capProber, cfg.Mock || cfg.MockFromReal, eventLogService)
+	capabilityService.RegisterApplyHealth("firewall", firewallService)
 
 	// Self-healing internal event bus: NetlinkMonitor translates raw kernel events
 	// into semantic NetEvents (InterfaceAdded/Removed, LinkChanged, AddrRouteChanged)
@@ -296,7 +309,7 @@ func main() {
 		netlinkMonitor,
 	)
 
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker, wifiPresetService, systemServiceService)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker, wifiPresetService, systemServiceService, capabilityService)
 
 	// Apply config form database to kernel
 
@@ -307,18 +320,24 @@ func main() {
 	log.Printf("[Main] Applying database-configured time/NTP settings to kernel at startup...")
 	if err := timeService.InitApplyConfig(); err != nil {
 		log.Printf("[Main] Warning: Failed to apply time/NTP settings at startup: %v", err)
+		eventLogService.Log(model.EventCategorySystem, "system.startup_apply_failed",
+			model.EventSeverityWarning, "", "time", err.Error())
 	}
 
 	// 6.1 Apply Network Interfaces configuration at startup
 	log.Printf("[Main] Applying database-configured network interfaces to kernel at startup...")
 	if err := ifaceService.InitApplyConfigurationAtStartup(); err != nil {
 		log.Printf("[Main] Warning: Failed to apply network interfaces to kernel at startup: %v", err)
+		eventLogService.Log(model.EventCategorySystem, "system.startup_apply_failed",
+			model.EventSeverityWarning, "", "interfaces", err.Error())
 	}
 
 	// 6.2 Apply Static Routes configuration at startup
 	log.Printf("[Main] Applying database-configured static routes to kernel at startup...")
 	if err := routingService.InitApplyConfig(); err != nil {
 		log.Printf("[Main] Warning: Failed to apply static routes to kernel at startup: %v", err)
+		eventLogService.Log(model.EventCategorySystem, "system.startup_apply_failed",
+			model.EventSeverityWarning, "", "routes", err.Error())
 	}
 
 	// The netlink monitor is started later (after every subsystem's startup apply has
@@ -365,6 +384,8 @@ func main() {
 	log.Printf("[Main] Applying database-configured hostname settings to kernel at startup...")
 	if err := hostnameService.InitApplyConfig(); err != nil {
 		log.Printf("[Main] Warning: Failed to apply hostname settings at startup: %v", err)
+		eventLogService.Log(model.EventCategorySystem, "system.startup_apply_failed",
+			model.EventSeverityWarning, "", "hostname", err.Error())
 	}
 
 	log.Printf("[Main] Synchronizing active DHCP interfaces status...")
@@ -373,6 +394,8 @@ func main() {
 	log.Printf("[Main] Applying database-configured DHCP settings to kernel at startup...")
 	if err := dhcpServerService.InitApplyConfig(); err != nil {
 		log.Printf("[Main] Warning: Failed to apply DHCP configurations at startup: %v", err)
+		eventLogService.Log(model.EventCategorySystem, "system.startup_apply_failed",
+			model.EventSeverityWarning, "", "dhcp_server", err.Error())
 	}
 
 	// Start D-Bus lease watcher in production mode (non-mock)
@@ -387,23 +410,38 @@ func main() {
 	log.Printf("[Main] Applying database-configured DNS local zones to kernel at startup...")
 	if err := dnsServerService.InitApplyConfig(); err != nil {
 		log.Printf("[Main] Warning: Failed to apply DNS local zones at startup: %v", err)
+		eventLogService.Log(model.EventCategorySystem, "system.startup_apply_failed",
+			model.EventSeverityWarning, "", "dns_server", err.Error())
 	}
 
 	log.Printf("[Main] Applying database-configured DNS settings to kernel at startup...")
 	if err := dnsService.ApplyDNSConfig(); err != nil {
 		log.Printf("[Main] Warning: Failed to apply DNS configurations to kernel at startup: %v", err)
+		eventLogService.Log(model.EventCategorySystem, "system.startup_apply_failed",
+			model.EventSeverityWarning, "", "dns", err.Error())
 	}
 
 	// 6.3 Apply Firewall Rules at startup
 	log.Printf("[Main] Applying database-configured firewall rules to kernel at startup...")
 	if err := firewallService.InitApplyConfig(); err != nil {
 		log.Printf("[Main] Warning: Failed to apply firewall rules to kernel at startup: %v", err)
+		eventLogService.Log(model.EventCategorySystem, "system.startup_apply_failed",
+			model.EventSeverityWarning, "", "firewall", err.Error())
 	}
+
+	// Probe kernel capabilities right after the firewall's own startup apply,
+	// so the last-apply outcome above is already reflected by the time this
+	// runs (docs/ref/todo/kernel-capability-detection-plan.md T-07). Logs an
+	// event for every capability found unavailable.
+	log.Printf("[Main] Probing kernel capabilities...")
+	capabilityService.Refresh()
 
 	// 6.4 Apply QoS Rules at startup
 	log.Printf("[Main] Applying database-configured QoS rules to kernel at startup...")
 	if err := qosService.InitApplyConfig(); err != nil {
 		log.Printf("[Main] Warning: Failed to apply QoS rules to kernel at startup: %v", err)
+		eventLogService.Log(model.EventCategorySystem, "system.startup_apply_failed",
+			model.EventSeverityWarning, "", "qos", err.Error())
 	}
 
 	// 6.5 Start the Netlink event monitor LAST, once every subsystem's startup apply

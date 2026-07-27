@@ -37,6 +37,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { CapabilityBanner } from "@/components/CapabilityBanner"
 import { type DNSZone, type DNSRecord, type NetworkInterface } from "@/data-mockup/mockData"
 import { dnsServerService } from "@/services/dnsServerService"
 import { interfaceService } from "@/services/interfaceService"
@@ -412,6 +413,8 @@ export default function DnsServer() {
 
   return (
     <div className="space-y-4">
+      <CapabilityBanner id="dnsmasq" />
+
       {/* 1. Listen Interfaces — real interfaces from Interface Service, independent of DHCP Server */}
       <Card>
         <CardHeader className="flex flex-col gap-3 space-y-0 sm:flex-row sm:items-center sm:justify-between">

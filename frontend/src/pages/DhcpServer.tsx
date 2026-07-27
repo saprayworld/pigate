@@ -39,6 +39,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { CapabilityBanner } from "@/components/CapabilityBanner"
 import {
   type DhcpConfig,
   type DhcpReservation,
@@ -495,6 +496,8 @@ export default function DhcpServer() {
 
   return (
     <div className="space-y-4">
+      <CapabilityBanner id="dnsmasq" />
+
       {/* 1. Stats overview */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard

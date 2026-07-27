@@ -3,6 +3,8 @@ package service
 import (
 	"fmt"
 	"log"
+	"sync"
+	"time"
 
 	"pigate/internal/db"
 	"pigate/internal/kernel"
@@ -15,7 +17,20 @@ type FirewallService struct {
 	repo         *db.Repository
 	firewall     kernel.FirewallManager
 	ifaceService *InterfaceService
+
+	// mu guards lastApplyErr/lastApplyAt, which record the outcome of the
+	// most recent SyncFirewallRules call so SystemCapabilityService can
+	// distinguish "nftables not usable at all" (a probe failure) from
+	// "nftables is usable but our last rule set failed to apply" (see
+	// ApplyHealth / docs/ref/todo/kernel-capability-detection-plan.md §2.2).
+	mu           sync.RWMutex
+	lastApplyErr error
+	lastApplyAt  time.Time
 }
+
+// var _ compiles away to nothing at runtime; it just proves FirewallService
+// satisfies ApplyHealthReporter (T-06 acceptance).
+var _ ApplyHealthReporter = (*FirewallService)(nil)
 
 // NewFirewallService creates a new FirewallService instance.
 func NewFirewallService(repo *db.Repository, firewall kernel.FirewallManager, ifaceService *InterfaceService) *FirewallService {
@@ -116,8 +131,11 @@ func (s *FirewallService) DeletePortForward(id string) error {
 }
 
 // SyncFirewallRules pulls all policies, interfaces, address objects, and service objects
-// from the database and applies them to the kernel via the FirewallManager.
-func (s *FirewallService) SyncFirewallRules() error {
+// from the database and applies them to the kernel via the FirewallManager. Its outcome
+// (error or nil) is always recorded via recordApply — see ApplyHealth.
+func (s *FirewallService) SyncFirewallRules() (err error) {
+	defer func() { s.recordApply(err) }()
+
 	rules, err := s.repo.GetPolicies()
 	if err != nil {
 		return fmt.Errorf("failed to load policies: %w", err)
@@ -163,6 +181,32 @@ func (s *FirewallService) SyncFirewallRules() error {
 		return fmt.Errorf("failed to apply firewall rules: %w", err)
 	}
 	return nil
+}
+
+// recordApply stores the outcome of the SyncFirewallRules call that just
+// finished (err may be nil), under mu, for ApplyHealth to read.
+func (s *FirewallService) recordApply(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastApplyErr = err
+	s.lastApplyAt = time.Now()
+}
+
+// ApplyHealth implements service.ApplyHealthReporter: it reports whether the
+// most recent SyncFirewallRules call succeeded. Before the first ever apply
+// (lastApplyAt is zero), it reports ok=true with a zero time so
+// SystemCapabilityService does not mistake "never applied yet" for a real
+// failure (see docs/ref/todo/kernel-capability-detection-plan.md T-06).
+func (s *FirewallService) ApplyHealth() (bool, string, time.Time) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.lastApplyAt.IsZero() {
+		return true, "", time.Time{}
+	}
+	if s.lastApplyErr != nil {
+		return false, s.lastApplyErr.Error(), s.lastApplyAt
+	}
+	return true, "", s.lastApplyAt
 }
 
 // InitApplyConfig executes firewall sync at startup.

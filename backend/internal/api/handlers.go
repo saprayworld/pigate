@@ -49,6 +49,7 @@ type Server struct {
 	dhcpHealthChecker *service.DhcpHealthChecker
 	wifiPresetService *service.WifiPresetService
 	systemServiceSvc  *service.SystemServiceService
+	capabilityService *service.SystemCapabilityService
 }
 
 func NewServer(
@@ -78,6 +79,7 @@ func NewServer(
 	dhcpHealthChecker *service.DhcpHealthChecker,
 	wifiPresetService *service.WifiPresetService,
 	systemServiceSvc *service.SystemServiceService,
+	capabilityService *service.SystemCapabilityService,
 ) *Server {
 	return &Server{
 		repo:              repo,
@@ -106,6 +108,7 @@ func NewServer(
 		dhcpHealthChecker: dhcpHealthChecker,
 		wifiPresetService: wifiPresetService,
 		systemServiceSvc:  systemServiceSvc,
+		capabilityService: capabilityService,
 	}
 }
 
@@ -362,6 +365,21 @@ func (s *Server) HandleGetPerformanceMetrics(w http.ResponseWriter, r *http.Requ
 // the Dashboard's System Information card.
 func (s *Server) HandleGetSystemInfo(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, s.systemStatus.GetSystemInfo())
+}
+
+// HandleGetSystemCapabilities returns whether the kernel subsystems PiGate
+// depends on (nftables, D-Bus/systemd units) are actually usable in this
+// environment (issue #94) — e.g. real mode on WSL reports nftables
+// unavailable instead of silently failing. Pass ?force=1 to bypass the
+// service's internal cache and probe again immediately (the "ตรวจสอบใหม่"
+// button). Read-only; safe for every logged-in role.
+func (s *Server) HandleGetSystemCapabilities(w http.ResponseWriter, r *http.Request) {
+	if s.capabilityService == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Capability service not available")
+		return
+	}
+	force := r.URL.Query().Get("force") == "1"
+	s.writeJSON(w, http.StatusOK, s.capabilityService.Get(force))
 }
 
 // HandleGetTrafficHistory returns the RAM-buffered rx/tx history for the

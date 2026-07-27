@@ -28,10 +28,12 @@ import {
   Tooltip,
   CartesianGrid,
 } from "recharts"
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { useCapabilities } from "@/hooks/useCapabilities"
 import { useTheme } from "@/hooks/useTheme"
 import { cn } from "@/lib/utils"
 import { ifaceLabel } from "@/lib/ifaceLabel"
@@ -635,8 +637,25 @@ export default function Dashboard() {
   const alerts = useMemo(() => logsToAlerts(logs), [logs])
   const ifaces = interfaces ?? []
 
+  // Capability summary (issue #94): surfaced once above the tabs — not
+  // inside a single TabsContent — so it is visible regardless of which of
+  // the 3 tabs (overview/compact/detailed) the user has open.
+  const { capabilities } = useCapabilities()
+  const unavailableCapabilities = capabilities.filter((c) => !c.available || c.degraded)
+
   return (
-    <Tabs defaultValue="overview" className="space-y-6">
+    <div className="space-y-4">
+      {unavailableCapabilities.length > 0 && (
+        <Alert variant="destructive">
+          <TriangleAlert className="h-4 w-4" />
+          <AlertTitle>มีฟีเจอร์ที่ใช้งานไม่ได้บนเครื่องนี้</AlertTitle>
+          <AlertDescription>
+            ฟีเจอร์ต่อไปนี้ใช้งานไม่ได้บนเครื่องนี้: {unavailableCapabilities.map((c) => c.name).join(", ")}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <Tabs defaultValue="overview" className="space-y-6">
       {/* Header: view switcher + refresh */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <TabsList>
@@ -693,6 +712,7 @@ export default function Dashboard() {
           </div>
         </div>
       </TabsContent>
-    </Tabs>
+      </Tabs>
+    </div>
   )
 }

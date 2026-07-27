@@ -9,6 +9,7 @@ import {
   Info,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { CapabilityBanner } from "@/components/CapabilityBanner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -144,6 +145,8 @@ export default function ForwardTraffic() {
 
   return (
     <div className="space-y-4">
+      <CapabilityBanner id="firewall" />
+
       {/* Page header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">

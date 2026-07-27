@@ -14,6 +14,7 @@ import {
   Info,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { CapabilityBanner } from "@/components/CapabilityBanner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -287,6 +288,8 @@ export default function PortForwarding() {
 
   return (
     <div className="space-y-4">
+      <CapabilityBanner id="firewall" />
+
       {/* 1. Stats overview */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard icon={ArrowRightLeft} title="Total Rules" value={stats.total} />

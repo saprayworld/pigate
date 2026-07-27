@@ -1,6 +1,7 @@
 import { Outlet } from "react-router-dom"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { CapabilitiesProvider } from "@/components/CapabilitiesProvider"
 import { HostnameProvider } from "@/components/HostnameProvider"
 import { MetricsProvider } from "@/components/MetricsProvider"
 import { SiteHeader } from "@/components/site-header"
@@ -15,21 +16,23 @@ export default function ShellLayout() {
   return (
     <HostnameProvider>
       <MetricsProvider>
-        <SidebarProvider
-          style={
-            {
-              "--sidebar-width": "16rem",
-            } as React.CSSProperties
-          }
-        >
-          <AppSidebar variant="inset" />
-          <SidebarInset>
-            <SiteHeader />
-            <main className="flex-1 overflow-y-auto p-4 md:p-6">
-              <Outlet />
-            </main>
-          </SidebarInset>
-        </SidebarProvider>
+        <CapabilitiesProvider>
+          <SidebarProvider
+            style={
+              {
+                "--sidebar-width": "16rem",
+              } as React.CSSProperties
+            }
+          >
+            <AppSidebar variant="inset" />
+            <SidebarInset>
+              <SiteHeader />
+              <main className="flex-1 overflow-y-auto p-4 md:p-6">
+                <Outlet />
+              </main>
+            </SidebarInset>
+          </SidebarProvider>
+        </CapabilitiesProvider>
       </MetricsProvider>
     </HostnameProvider>
   )

@@ -208,3 +208,17 @@ type SystemServiceManager interface {
 	// client-supplied string straight through (unit-name injection).
 	Restart(unit string) error
 }
+
+// CapabilityProber abstracts read-only detection of whether the kernel
+// subsystems PiGate depends on (nftables, D-Bus/systemd units, ...) are
+// actually usable in the current environment (e.g. WSL lacks nf_tables and/or
+// systemd entirely). Implementations MUST be:
+//   - read-only: never create/delete/modify any table, chain, qdisc, or bind
+//     an NFLOG group — this is a detection probe, not a mutation;
+//   - bounded: ProbeAll must return within a fixed internal timeout rather
+//     than blocking a request handler indefinitely if a socket never answers.
+type CapabilityProber interface {
+	// ProbeAll probes every registered subsystem and returns one result per
+	// id, regardless of whether individual probes succeeded or failed.
+	ProbeAll() []model.CapabilityProbeResult
+}
