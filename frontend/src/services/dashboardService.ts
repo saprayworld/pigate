@@ -22,6 +22,10 @@ export interface TrafficData {
 export interface SSELogEntry extends FirewallLog {
   inIface?: string;
   outIface?: string;
+  // Which nftables chain produced this entry ("forward" | "input" | "output").
+  // Optional so a Dashboard consumer that predates this field stays
+  // type-compatible; treat a missing value as "unknown".
+  chain?: string;
 }
 
 export interface CpuDetail {
@@ -236,14 +240,16 @@ export const dashboardService = {
     return response.json();
   },
 
-  // Get firewall logs
-  getRecentLogs: async (): Promise<FirewallLog[]> => {
+  // Get firewall logs. limit defaults to 100 (backend caps at 500) — always
+  // pass a limit rather than relying on the server default, since the
+  // underlying ring buffer can hold up to 10,000 entries.
+  getRecentLogs: async (limit = 100): Promise<FirewallLog[]> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 200));
-      return getLocalLogs();
+      return getLocalLogs().slice(0, limit);
     }
 
-    const response = await fetch(`${API_BASE_URL}/dashboard/logs`);
+    const response = await fetch(`${API_BASE_URL}/dashboard/logs?limit=${limit}`);
     if (!response.ok) {
       throw new Error(`Failed to fetch recent logs: ${response.statusText}`);
     }

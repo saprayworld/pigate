@@ -15,6 +15,7 @@ import {
   Users,
   ScrollText,
   ArrowRightLeft,
+  ShieldAlert,
   Waypoints,
   LogIn,
   LogOut,
@@ -75,6 +76,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       title: "Log & Report",
       items: [
         { path: "/logs/traffic", label: "Forward Traffic", icon: ArrowRightLeft },
+        { path: "/logs/local", label: "Local Traffic", icon: ShieldAlert },
         { path: "/logs/events", label: "System Events", icon: ScrollText },
       ],
     },

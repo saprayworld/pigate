@@ -60,6 +60,15 @@ func (r *RingBuffer) GetAll() []model.FirewallLog {
 	return copyLogs
 }
 
+// Capacity returns the buffer's fixed maximum size, so callers (e.g. the API
+// layer capping a query's limit param) don't need to hardcode the number
+// configured in main.go.
+func (r *RingBuffer) Capacity() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.capacity
+}
+
 // Clear flushes the circular buffer and tells every subscriber to reset.
 func (r *RingBuffer) Clear() {
 	r.mu.Lock()

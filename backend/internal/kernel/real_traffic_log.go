@@ -23,8 +23,18 @@ const (
 	// ForwardNflogGroup is the netlink log group id shared with real_firewall.go
 	// (equivalent to nft `log ... group 100`).
 	ForwardNflogGroup uint16 = 100
+	// LocalNflogGroup is the netlink log group used for input/output chain
+	// packet logs (equivalent to nft `log ... group 101`). Deliberately a
+	// separate group from ForwardNflogGroup rather than reusing group 100:
+	// each group gets its own netlink socket, read loop and bounded channel
+	// (trafficLogChanSize below), so a burst of high-volume forward traffic
+	// can never starve/drop the lower-volume but diagnostically valuable
+	// input/output events (who is hitting the box itself). See
+	// docs/ref/todo/traffic-log-pagination-and-local-traffic-plan.md §2.3.
+	LocalNflogGroup uint16 = 101
 	// ForwardNflogSnaplen is the number of packet bytes the kernel copies per
 	// event — enough for the IPv4/IPv6 header + TCP/UDP ports, not the payload.
+	// Shared by both NFLOG groups above.
 	ForwardNflogSnaplen uint32 = 64
 	// trafficLogChanSize bounds the in-process handoff buffer. On a traffic
 	// burst, events beyond this are dropped (counted) rather than blocking the
@@ -82,18 +92,37 @@ func (r *ifaceNameResolver) name(index *uint32) string {
 	return iface.Name
 }
 
-// WatchForwardTraffic opens the NFLOG socket, then decouples the netlink read
-// loop from the (potentially slow) consumer via a buffered channel drained by a
-// separate goroutine. It blocks until ctx is cancelled.
+// WatchForwardTraffic opens the forward-chain NFLOG socket and streams
+// events tagged with chain "forward". It blocks until ctx is cancelled.
 func (r *RealTrafficLog) WatchForwardTraffic(ctx context.Context, cb func(model.FirewallLog)) error {
+	return r.watchGroup(ctx, ForwardNflogGroup, model.PolicyChainForward, cb)
+}
+
+// WatchLocalTraffic opens the input/output-chain NFLOG socket (a separate
+// group and socket from WatchForwardTraffic — see LocalNflogGroup's doc
+// comment) and streams events tagged with chain "input" or "output"
+// (determined per-event by parseNflogAttr from the log prefix; defaultChain
+// here is only the fallback for an event with no/unrecognized prefix). It
+// blocks until ctx is cancelled.
+func (r *RealTrafficLog) WatchLocalTraffic(ctx context.Context, cb func(model.FirewallLog)) error {
+	return r.watchGroup(ctx, LocalNflogGroup, model.PolicyChainInput, cb)
+}
+
+// watchGroup opens an NFLOG socket for the given group, then decouples the
+// netlink read loop from the (potentially slow) consumer via a buffered
+// channel drained by a separate goroutine. It blocks until ctx is cancelled.
+// defaultChain is used by parseNflogAttr when an event's log prefix is
+// missing/unrecognized (see its doc comment). Shared by WatchForwardTraffic
+// and WatchLocalTraffic so the netlink plumbing is written exactly once.
+func (r *RealTrafficLog) watchGroup(ctx context.Context, group uint16, defaultChain string, cb func(model.FirewallLog)) error {
 	cfg := &nflog.Config{
-		Group:    ForwardNflogGroup,
+		Group:    group,
 		Copymode: nflog.CopyPacket,
 		Bufsize:  ForwardNflogSnaplen,
 	}
 	nf, err := nflog.Open(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to open NFLOG group %d: %w (requires CAP_NET_ADMIN)", ForwardNflogGroup, err)
+		return fmt.Errorf("failed to open NFLOG group %d: %w (requires CAP_NET_ADMIN)", group, err)
 	}
 	defer nf.Close()
 
@@ -113,14 +142,14 @@ func (r *RealTrafficLog) WatchForwardTraffic(ctx context.Context, cb func(model.
 				cb(entry)
 			case <-ticker.C:
 				if n := dropped.Swap(0); n > 0 {
-					log.Printf("[RealTrafficLog] Dropped %d forward-traffic log events in the last 30s (burst overflow)", n)
+					log.Printf("[RealTrafficLog] Dropped %d log events for NFLOG group %d (chain %s) in the last 30s (burst overflow)", n, group, defaultChain)
 				}
 			}
 		}
 	}()
 
 	hook := func(attr nflog.Attribute) int {
-		entry, ok := parseNflogAttr(attr, r.ifaces.name)
+		entry, ok := parseNflogAttr(attr, r.ifaces.name, defaultChain)
 		if !ok {
 			return 0
 		}
@@ -134,24 +163,50 @@ func (r *RealTrafficLog) WatchForwardTraffic(ctx context.Context, cb func(model.
 	}
 
 	errFunc := func(e error) int {
-		log.Printf("[RealTrafficLog] NFLOG read error: %v", e)
+		log.Printf("[RealTrafficLog] NFLOG group %d read error: %v", group, e)
 		return 0
 	}
 
 	if err := nf.RegisterWithErrorFunc(ctx, hook, errFunc); err != nil {
-		return fmt.Errorf("failed to register NFLOG hook: %w", err)
+		return fmt.Errorf("failed to register NFLOG hook (group %d): %w", group, err)
 	}
 
-	log.Printf("[RealTrafficLog] Listening for forward-chain packet logs on NFLOG group %d", ForwardNflogGroup)
+	log.Printf("[RealTrafficLog] Listening for chain=%s packet logs on NFLOG group %d", defaultChain, group)
 	<-ctx.Done()
 	return nil
+}
+
+// nflogPrefixInfo maps a normalized (whitespace-collapsed) log prefix token
+// sequence to the chain/action/reason it represents, per
+// docs/ref/todo/traffic-log-pagination-and-local-traffic-plan.md §2.4. Prefix
+// text in real_firewall.go is not always consistently spaced (one rule emits
+// "[PiGate]  INP DROP  : " with two spaces after "[PiGate]"), so parseNflogAttr
+// normalizes with strings.Fields before matching here — never compare the raw
+// prefix string.
+type nflogPrefixInfo struct {
+	chain  string
+	action string
+	reason string
+}
+
+var nflogPrefixTable = map[string]nflogPrefixInfo{
+	"FWD:ACCEPT": {model.PolicyChainForward, "PASS", "Allowed (forward)"},
+	"FWD:DROP":   {model.PolicyChainForward, "DROP", "Blocked (forward)"},
+	"INP:ACCEPT": {model.PolicyChainInput, "PASS", "Allowed (local-in)"},
+	"INP:DROP":   {model.PolicyChainInput, "DROP", "Blocked (local-in)"},
+	"OUT:ACCEPT": {model.PolicyChainOutput, "PASS", "Allowed (local-out)"},
+	"OUT:DROP":   {model.PolicyChainOutput, "DROP", "Blocked (local-out)"},
 }
 
 // parseNflogAttr turns one NFLOG event into a FirewallLog. Time and ID are left
 // blank — main.go stamps the timestamp when it pushes into the ring buffer.
 // resolveIface maps NFLOG indev/outdev indices to interface names (see
-// ifaceNameResolver). Returns ok=false when there is no packet payload to parse.
-func parseNflogAttr(attr nflog.Attribute, resolveIface func(*uint32) string) (model.FirewallLog, bool) {
+// ifaceNameResolver). defaultChain is used when the log prefix is absent or
+// not recognized (e.g. a future rule forgets to set one) — the event is still
+// surfaced (as a PASS/"Logged" entry) rather than silently dropped, tagged
+// with whichever chain the NFLOG group it arrived on defaults to. Returns
+// ok=false only when there is no packet payload to parse.
+func parseNflogAttr(attr nflog.Attribute, resolveIface func(*uint32) string, defaultChain string) (model.FirewallLog, bool) {
 	if attr.Payload == nil {
 		return model.FirewallLog{}, false
 	}
@@ -159,15 +214,23 @@ func parseNflogAttr(attr nflog.Attribute, resolveIface func(*uint32) string) (mo
 	entry.InIface = resolveIface(attr.InDev)
 	entry.OutIface = resolveIface(attr.OutDev)
 
-	action, reason := "PASS", "Forwarded"
+	chain, action, reason := defaultChain, "PASS", "Logged"
 	if attr.Prefix != nil {
-		prefix := strings.TrimSpace(*attr.Prefix)
-		if strings.Contains(prefix, "DROP") {
-			action, reason = "DROP", "Blocked (forward)"
-		} else {
-			action, reason = "PASS", "Allowed (forward)"
+		fields := strings.Fields(*attr.Prefix)
+		var token, verb string
+		for _, f := range fields {
+			switch strings.TrimSuffix(f, ":") {
+			case "FWD", "INP", "OUT":
+				token = strings.TrimSuffix(f, ":")
+			case "ACCEPT", "DROP", "AUDIT":
+				verb = strings.TrimSuffix(f, ":")
+			}
+		}
+		if info, ok := nflogPrefixTable[token+":"+verb]; ok {
+			chain, action, reason = info.chain, info.action, info.reason
 		}
 	}
+	entry.Chain = chain
 	entry.Action = action
 	entry.Reason = reason
 	return entry, true

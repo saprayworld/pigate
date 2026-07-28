@@ -20,15 +20,22 @@ type FirewallManager interface {
 	) error
 }
 
-// TrafficLogManager streams forward-chain PASS/DROP packet events into the app.
-// The real implementation subscribes to an NFLOG netlink group (the forward-chain
-// log statements are configured to log to a group instead of printk); the mock
-// implementation synthesizes events so dev/mock mode has a live log feed.
-// WatchForwardTraffic blocks until ctx is cancelled, invoking cb once per event.
-// cb must return promptly — implementations must not let a slow consumer stall
-// the netlink read loop (see real_traffic_log.go).
+// TrafficLogManager streams packet PASS/DROP events for all three firewall
+// chains (forward, input, output) into the app. The real implementation
+// subscribes to two NFLOG netlink groups — ForwardNflogGroup for the forward
+// chain and LocalNflogGroup for input/output (the chains' log statements are
+// configured to log to a group instead of printk); the mock implementation
+// synthesizes events for all three chains so dev/mock mode has a live log
+// feed. Both Watch* methods block until ctx is cancelled, invoking cb once
+// per event. cb must return promptly — implementations must not let a slow
+// consumer stall the netlink read loop (see real_traffic_log.go).
 type TrafficLogManager interface {
 	WatchForwardTraffic(ctx context.Context, cb func(model.FirewallLog)) error
+	// WatchLocalTraffic streams input+output chain events (NFLOG group
+	// LocalNflogGroup). Entries carry model.FirewallLog.Chain set to
+	// "input" or "output" per the log prefix (see real_traffic_log.go
+	// parseNflogAttr).
+	WatchLocalTraffic(ctx context.Context, cb func(model.FirewallLog)) error
 }
 
 // NetworkManager abstracts Wi-Fi scanning and interface control

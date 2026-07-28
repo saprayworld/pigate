@@ -388,6 +388,10 @@ type FirewallLog struct {
 	InIface  string `json:"inIface"`  // ingress interface name (NFLOG indev), "-" if unknown
 	OutIface string `json:"outIface"` // egress interface name (NFLOG outdev), "-" if unknown
 	Reason   string `json:"reason"`
+	// Chain identifies which nftables chain produced this entry: one of
+	// PolicyChainForward/PolicyChainInput/PolicyChainOutput (see constants
+	// above). Empty string means "unknown" and the UI must tolerate that.
+	Chain string `json:"chain"`
 }
 
 // SystemEvent is a single audit/event log entry, persisted to SQLite via the

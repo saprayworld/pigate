@@ -102,16 +102,15 @@ func (rf *RealFirewall) ApplyRules(
 		},
 	})
 
-	// Rule 3.4: limit rate 3/minute burst 10 packets log prefix "[PiGate]  INP DROP  : "
+	// Rule 3.4: limit rate 3/minute burst 10 packets, log prefix "[PiGate]  INP DROP  : "
+	// to NFLOG group LocalNflogGroup (Local Traffic page) instead of printk —
+	// log-only rule (no verdict), so keeping the rate limit here is safe.
 	conn.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: notLocalChain,
 		Exprs: []expr.Any{
 			&expr.Limit{Type: expr.LimitTypePkts, Rate: 3, Unit: expr.LimitTimeMinute, Burst: 10, Over: false},
-			&expr.Log{
-				Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
-				Data: []byte("[PiGate]  INP DROP  : "),
-			},
+			localLogExpr("[PiGate]  INP DROP  : "),
 		},
 	})
 
@@ -200,10 +199,7 @@ func (rf *RealFirewall) ApplyRules(
 				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{17}}, // UDP
 				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
 				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{byte(67 >> 8), byte(67 & 0xFF)}},
-				&expr.Log{
-					Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
-					Data: []byte("[PiGate] INP ACCEPT: "),
-				},
+				localLogExpr("[PiGate] INP ACCEPT: "),
 				&expr.Verdict{Kind: expr.VerdictAccept},
 			},
 		})
@@ -228,10 +224,7 @@ func (rf *RealFirewall) ApplyRules(
 				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{17}}, // UDP
 				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
 				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{byte(68 >> 8), byte(68 & 0xFF)}},
-				&expr.Log{
-					Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
-					Data: []byte("[PiGate] INP ACCEPT: "),
-				},
+				localLogExpr("[PiGate] INP ACCEPT: "),
 				&expr.Verdict{Kind: expr.VerdictAccept},
 			},
 		})
@@ -322,10 +315,19 @@ func (rf *RealFirewall) ApplyRules(
 	})
 
 	// --- Section 2: Audit Point ---
+	// This is the one log statement in input that deliberately stays on
+	// printk/journald rather than moving to NFLOG: it fires for EVERY packet
+	// reaching section 2 with no verdict, so sending it to the ring buffer
+	// would duplicate every entry (once here, once at the real ACCEPT/DROP)
+	// and flood the Local Traffic page with undecided packets — it's a
+	// kernel-level debug tap, not a user-facing event (see plan §2.5). It was
+	// previously unrated (the single biggest SD-card write source in this
+	// file); add the same rate limit used elsewhere for log-only rules.
 	conn.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: inputChain,
 		Exprs: []expr.Any{
+			&expr.Limit{Type: expr.LimitTypePkts, Rate: 3, Unit: expr.LimitTimeMinute, Burst: 10, Over: false},
 			&expr.Log{
 				Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
 				Data: []byte("[PiGate] INP AUDIT : "),
@@ -342,10 +344,7 @@ func (rf *RealFirewall) ApplyRules(
 			Exprs: []expr.Any{
 				&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
 				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName("docker0")},
-				&expr.Log{
-					Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
-					Data: []byte("[PiGate] INP ACCEPT: "),
-				},
+				localLogExpr("[PiGate] INP ACCEPT: "),
 				&expr.Verdict{Kind: expr.VerdictAccept},
 			},
 		})
@@ -363,10 +362,7 @@ func (rf *RealFirewall) ApplyRules(
 					Xor:            make([]byte, 16),
 				},
 				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: append([]byte("br-"), make([]byte, 13)...)},
-				&expr.Log{
-					Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
-					Data: []byte("[PiGate] INP ACCEPT: "),
-				},
+				localLogExpr("[PiGate] INP ACCEPT: "),
 				&expr.Verdict{Kind: expr.VerdictAccept},
 			},
 		})
@@ -391,14 +387,17 @@ func (rf *RealFirewall) ApplyRules(
 		"[PiGate] INP ACCEPT: ", "[PiGate] INP DROP  : ")
 
 	// --- Section 4: Final Drop Log ---
+	// Highest-volume log point in the whole file (catches every unsolicited
+	// WAN packet/port-scan noise the earlier sections didn't accept), so it
+	// gets the highest rate limit of the three log-only rules. No verdict
+	// here — the drop itself comes from the chain's policy drop — so adding
+	// a limit is safe (see buildRuleExpressions comment / Caution 2).
 	conn.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: inputChain,
 		Exprs: []expr.Any{
-			&expr.Log{
-				Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
-				Data: []byte("[PiGate] INP DROP  : "),
-			},
+			&expr.Limit{Type: expr.LimitTypePkts, Rate: 10, Unit: expr.LimitTimeSecond, Burst: 20, Over: false},
+			localLogExpr("[PiGate] INP DROP  : "),
 		},
 	})
 
@@ -654,6 +653,21 @@ func forwardLogExpr(logPrefix string) *expr.Log {
 	return &expr.Log{
 		Key:     (1 << unix.NFTA_LOG_GROUP) | (1 << unix.NFTA_LOG_PREFIX) | (1 << unix.NFTA_LOG_SNAPLEN),
 		Group:   ForwardNflogGroup,
+		Snaplen: ForwardNflogSnaplen,
+		Data:    []byte(logPrefix),
+	}
+}
+
+// localLogExpr is forwardLogExpr's twin for the input/output chains: it
+// directs their ACCEPT/DROP packet logs to LocalNflogGroup (Local Traffic
+// page) instead of printk/journald (SD card write), so no rate limiting is
+// required here — unlike printk, NFLOG overflow is dropped at the socket/
+// channel level in real_traffic_log.go without touching disk. See plan
+// docs/ref/todo/traffic-log-pagination-and-local-traffic-plan.md §2.5.
+func localLogExpr(logPrefix string) *expr.Log {
+	return &expr.Log{
+		Key:     (1 << unix.NFTA_LOG_GROUP) | (1 << unix.NFTA_LOG_PREFIX) | (1 << unix.NFTA_LOG_SNAPLEN),
+		Group:   LocalNflogGroup,
 		Snaplen: ForwardNflogSnaplen,
 		Data:    []byte(logPrefix),
 	}
@@ -1000,17 +1014,19 @@ func buildIPMatchExpressions(name string, addrsMap map[string]model.AddressObjec
 //  2. Only the forward chain ever sets the fwmark 0x1 used for policy-based
 //     source NAT (Caution: "ห้ามใส่ fwmark/NAT ในขา input/output" — NAT only
 //     makes sense for traffic actually being routed through the box).
-//  3. Logging differs by chain: forward-chain logs go to NFLOG (ring buffer
-//     in RAM, see forwardLogExpr) and can safely share one rule with the
-//     counter+verdict. input/output logs go to printk/journald (SD card) and
-//     MUST be rate-limited — and critically, a rate-limited `limit ... log
-//     ... <verdict>` rule only applies its verdict to packets that pass the
-//     limiter, silently letting the rest fall through to the next rule
-//     (Caution 5, security leak). So for input/output, a log-enabled rule is
-//     split into two nftables rules: a limited log-only rule (no verdict),
-//     followed by a separate counter+verdict rule with identical match
-//     conditions. The forward chain keeps returning exactly one rule, same
-//     as before this chain parameter was introduced.
+//  3. Logging: forward-chain logs go to NFLOG group ForwardNflogGroup
+//     (forwardLogExpr) and input/output-chain logs go to NFLOG group
+//     LocalNflogGroup (localLogExpr) — both write to an in-RAM ring buffer,
+//     not journald/SD card, so neither needs rate limiting and both can
+//     safely share one rule with the counter+verdict. Caution 5/Caution 2
+//     (docs/ref/todo/input-output-chain-firewall-plan.md,
+//     traffic-log-pagination-and-local-traffic-plan.md §2.6) still applies
+//     as a general rule going forward: a rate-limited `limit ... <verdict>`
+//     rule only applies its verdict to packets that pass the limiter,
+//     silently letting the rest fall through to the next rule — so a
+//     log-only rule that DOES carry an expr.Limit (e.g. the three
+//     structural log points in real_firewall.go: notLocal 3.4, AUDIT, input
+//     final drop) must never also carry an expr.Verdict.
 //
 // Returns one []expr.Any per nftables rule to add, in order.
 // outputIPv6DropExprs returns the fixed rule expressions for "meta nfproto
@@ -1263,11 +1279,10 @@ func buildRuleExpressions(
 	}
 
 	if chain == model.PolicyChainForward {
-		// Forward chain keeps its original single-rule shape: counter, then
-		// (if enabled) an NFLOG log expr — NFLOG writes to an in-RAM ring
-		// buffer, not journald/SD card, so no rate limiting is required and
-		// combining log+verdict in one rule is safe here (unlike printk
-		// below). Then the fwmark for policy-based source NAT, then verdict.
+		// Forward chain: counter, then (if enabled) an NFLOG log expr — NFLOG
+		// writes to an in-RAM ring buffer, not journald/SD card, so no rate
+		// limiting is required and combining log+verdict in one rule is
+		// safe. Then the fwmark for policy-based source NAT, then verdict.
 		fwdExprs := append([]expr.Any{}, exprs...)
 		fwdExprs = append(fwdExprs, &expr.Counter{})
 		if logEnabled {
@@ -1288,23 +1303,19 @@ func buildRuleExpressions(
 		return [][]expr.Any{fwdExprs}, nil
 	}
 
-	// input/output chain: printk log (journald/SD card) must be rate-limited,
-	// and a rate-limited rule cannot also carry the verdict (Caution 5) — so
-	// split into a log-only rule and a separate counter+verdict rule that
-	// share the same match conditions.
-	var rules [][]expr.Any
+	// input/output chain: now that the log goes to NFLOG group
+	// LocalNflogGroup (in-RAM, no SD card write) instead of printk, there is
+	// no need to rate-limit it, so it can share a single rule with the
+	// counter+verdict exactly like the forward branch above (plan §2.6). No
+	// fwmark/NAT here (input/output are never subject to policy-based
+	// source NAT — Caution: "ห้ามใส่ fwmark/NAT ในขา input/output").
+	localExprs := append([]expr.Any{}, exprs...)
+	localExprs = append(localExprs, &expr.Counter{})
 	if logEnabled {
-		logExprs := append([]expr.Any{}, exprs...)
-		logExprs = append(logExprs,
-			&expr.Limit{Type: expr.LimitTypePkts, Rate: 3, Unit: expr.LimitTimeMinute, Burst: 10, Over: false},
-			&expr.Log{Key: uint32(1 << unix.NFTA_LOG_PREFIX), Data: []byte(logPrefix)},
-		)
-		rules = append(rules, logExprs)
+		localExprs = append(localExprs, localLogExpr(logPrefix))
 	}
-	verdictExprs := append([]expr.Any{}, exprs...)
-	verdictExprs = append(verdictExprs, &expr.Counter{}, verdictExpr())
-	rules = append(rules, verdictExprs)
-	return rules, nil
+	localExprs = append(localExprs, verdictExpr())
+	return [][]expr.Any{localExprs}, nil
 }
 
 func addAdminAccessRules(
@@ -1332,10 +1343,7 @@ func addAdminAccessRules(
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{1}}, // ICMP
 					&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1},
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{8}}, // Echo request
-					&expr.Log{
-						Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
-						Data: []byte("[PiGate] INP ACCEPT: "),
-					},
+					localLogExpr("[PiGate] INP ACCEPT: "),
 					&expr.Verdict{Kind: expr.VerdictAccept},
 				},
 			})
@@ -1354,10 +1362,7 @@ func addAdminAccessRules(
 						&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{6}}, // TCP
 						&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
 						&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: portBytes},
-						&expr.Log{
-							Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
-							Data: []byte("[PiGate] INP ACCEPT: "),
-						},
+						localLogExpr("[PiGate] INP ACCEPT: "),
 						&expr.Verdict{Kind: expr.VerdictAccept},
 					},
 				})
@@ -1375,10 +1380,7 @@ func addAdminAccessRules(
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{6}}, // TCP
 					&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: portBytes},
-					&expr.Log{
-						Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
-						Data: []byte("[PiGate] INP ACCEPT: "),
-					},
+					localLogExpr("[PiGate] INP ACCEPT: "),
 					&expr.Verdict{Kind: expr.VerdictAccept},
 				},
 			})
@@ -1395,10 +1397,7 @@ func addAdminAccessRules(
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{6}}, // TCP
 					&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: portBytes},
-					&expr.Log{
-						Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
-						Data: []byte("[PiGate] INP ACCEPT: "),
-					},
+					localLogExpr("[PiGate] INP ACCEPT: "),
 					&expr.Verdict{Kind: expr.VerdictAccept},
 				},
 			})
@@ -1427,10 +1426,7 @@ func addDNSServerAccessRules(
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{protoVal}},
 					&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: portBytes},
-					&expr.Log{
-						Key:  uint32(1 << unix.NFTA_LOG_PREFIX),
-						Data: []byte("[PiGate] INP ACCEPT: "),
-					},
+					localLogExpr("[PiGate] INP ACCEPT: "),
 					&expr.Verdict{Kind: expr.VerdictAccept},
 				},
 			})
