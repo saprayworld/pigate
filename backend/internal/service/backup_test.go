@@ -281,6 +281,96 @@ func TestImportLegacyBackupWithoutPresets(t *testing.T) {
 	}
 }
 
+// TestImportRoundTripPreservesChain verifies chain survives an export/import
+// cycle for all three chains, and that reordering after import stays scoped
+// per chain (docs/ref/todo/input-output-chain-firewall-plan.md T-15).
+func TestImportRoundTripPreservesChain(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo) // seeds one forward-chain policy "pol-1"
+
+	if err := repo.CreatePolicy(model.PolicyRule{
+		ID: "pol-in", Name: "AllowSSH", Chain: model.PolicyChainInput,
+		Source: []string{"LabNet"}, Destination: []string{"ALL"}, Service: []string{"Custom8080"},
+		Action: "ACCEPT", Status: true,
+	}); err != nil {
+		t.Fatalf("create input policy: %v", err)
+	}
+	if err := repo.CreatePolicy(model.PolicyRule{
+		ID: "pol-out", Name: "BlockOut", Chain: model.PolicyChainOutput,
+		Source: []string{"LabNet"}, Destination: []string{"ALL"}, Service: []string{"Custom8080"},
+		Action: "DROP", Status: true,
+	}); err != nil {
+		t.Fatalf("create output policy: %v", err)
+	}
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	raw, _ := json.Marshal(file)
+
+	if _, err := bs.Import(raw, model.ImportOptions{}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	chainByID := map[string]string{}
+	all, err := repo.GetPolicies()
+	if err != nil {
+		t.Fatalf("get policies after import: %v", err)
+	}
+	for _, p := range all {
+		chainByID[p.ID] = p.Chain
+	}
+	want := map[string]string{
+		"pol-1":   model.PolicyChainForward,
+		"pol-in":  model.PolicyChainInput,
+		"pol-out": model.PolicyChainOutput,
+	}
+	for id, exp := range want {
+		if chainByID[id] != exp {
+			t.Errorf("policy %s: chain = %q after import, want %q", id, chainByID[id], exp)
+		}
+	}
+}
+
+// TestImportLegacyBackupWithoutChainNormalizesToForward simulates restoring a
+// backup file exported before the input/output chain feature existed (no
+// `chain` value on any policy). It must import successfully as "forward" for
+// every policy, not fail the whole restore on the chain CHECK constraint
+// (Caution 12).
+func TestImportLegacyBackupWithoutChainNormalizesToForward(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo) // seeds policy "pol-1"
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if len(file.Config.Policies) != 1 {
+		t.Fatalf("expected 1 seeded policy, got %d", len(file.Config.Policies))
+	}
+	// Simulate a pre-feature exporter: clear chain as if the field never
+	// existed on this policy.
+	for i := range file.Config.Policies {
+		file.Config.Policies[i].Chain = ""
+	}
+	sum, _ := configChecksum(*file.Config)
+	file.Meta.Checksum = sum
+	raw, _ := json.Marshal(file)
+
+	if _, err := bs.Import(raw, model.ImportOptions{}); err != nil {
+		t.Fatalf("import of legacy backup without chain must succeed, got: %v", err)
+	}
+
+	restored, err := repo.GetPolicyByID("pol-1")
+	if err != nil || restored == nil {
+		t.Fatalf("get restored policy: %v", err)
+	}
+	if restored.Chain != model.PolicyChainForward {
+		t.Errorf("restored policy chain = %q, want %q (Caution 12 normalization)", restored.Chain, model.PolicyChainForward)
+	}
+}
+
 func TestImportChecksumMismatchRejected(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo)

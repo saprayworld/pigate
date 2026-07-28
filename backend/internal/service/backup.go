@@ -664,6 +664,13 @@ func validateConfig(cfg model.BackupConfig) error {
 		if len(p.Source) == 0 || len(p.Destination) == 0 || len(p.Service) == 0 {
 			return fmt.Errorf("policy %q must reference at least one source, destination, and service", p.Name)
 		}
+		// Old backups predate the `chain` field (Caution 12) — normalize the
+		// local copy before validating so those files still import cleanly as
+		// "forward", matching what backup_repo.go actually writes to the DB.
+		p.Chain = model.NormalizePolicyChain(p.Chain)
+		if err := model.ValidatePolicyRule(p); err != nil {
+			return fmt.Errorf("policy %q: %w", p.Name, err)
+		}
 		for _, n := range append(append([]string{}, p.Source...), p.Destination...) {
 			if !addrNames[n] {
 				return fmt.Errorf("policy %q references unknown address object %q", p.Name, n)

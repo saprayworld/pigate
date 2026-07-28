@@ -17,6 +17,8 @@ const TITLES: Record<string, string> = {
   "/network/dhcp": "DHCP Server",
   "/network/qos": "QoS Bandwidth Limiting",
   "/policy/firewall": "Firewall Policy",
+  "/policy/local-in": "Local-In Policy",
+  "/policy/local-out": "Local-Out Policy",
   "/policy/addresses": "Addresses (Objects)",
   "/policy/services": "Services (Objects)",
   "/system/settings": "Settings & Maintenance",

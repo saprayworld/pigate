@@ -133,12 +133,20 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 
 	// --- 4. Firewall policies + junction relations -----------------------
 	// Preserve the backup's ordering as priority (GetPolicies exported them
-	// ordered by priority ASC).
-	for i, p := range cfg.Policies {
+	// ordered by chain ASC, priority ASC). Priority is scoped per chain
+	// (Caution 3), so each chain gets its own 1..N sequence rather than one
+	// running counter across all three chains. Old backups that predate the
+	// `chain` field have an empty Chain here — normalize to "forward" so the
+	// CHECK constraint on the column does not fail the whole restore
+	// (Caution 12/9).
+	chainPriority := map[string]int{}
+	for _, p := range cfg.Policies {
+		chain := model.NormalizePolicyChain(p.Chain)
+		chainPriority[chain]++
 		logVal, natVal, statVal := boolToInt(p.Log), boolToInt(p.Nat), boolToInt(p.Status)
 		if _, err := tx.Exec(
-			"INSERT INTO firewall_policies (id, name, in_interface, out_interface, action, log, nat, status, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			p.ID, p.Name, p.InInterface, p.OutInterface, p.Action, logVal, natVal, statVal, i+1,
+			"INSERT INTO firewall_policies (id, name, chain, in_interface, out_interface, action, log, nat, status, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			p.ID, p.Name, chain, p.InInterface, p.OutInterface, p.Action, logVal, natVal, statVal, chainPriority[chain],
 		); err != nil {
 			return fmt.Errorf("restore policy %q: %w", p.Name, err)
 		}

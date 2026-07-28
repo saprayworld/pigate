@@ -97,10 +97,31 @@ type ServiceObjectInput struct {
 	Comment  string `json:"comment,omitempty"`
 }
 
+// Policy chain identifiers — which nftables base chain a PolicyRule targets.
+// See docs/ref/todo/input-output-chain-firewall-plan.md for the full design.
+const (
+	PolicyChainForward = "forward"
+	PolicyChainInput   = "input"
+	PolicyChainOutput  = "output"
+)
+
+// NormalizePolicyChain returns c unchanged if it is a known chain, otherwise
+// falls back to "forward" for backward compatibility with rows/clients that
+// predate the chain field (empty string, old DB rows, old API clients).
+func NormalizePolicyChain(c string) string {
+	switch c {
+	case PolicyChainForward, PolicyChainInput, PolicyChainOutput:
+		return c
+	default:
+		return PolicyChainForward
+	}
+}
+
 // PolicyRule represents a single nftables rule definition
 type PolicyRule struct {
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
+	Chain        string   `json:"chain"` // "forward" (default), "input", "output"
 	InInterface  string   `json:"inInterface"`
 	OutInterface string   `json:"outInterface"`
 	Source       []string `json:"source"`
@@ -116,6 +137,7 @@ type PolicyRule struct {
 // PolicyRuleInput represents input parameters to create or edit a rule
 type PolicyRuleInput struct {
 	Name         string   `json:"name"`
+	Chain        string   `json:"chain"` // "forward" (default), "input", "output"
 	InInterface  string   `json:"inInterface"`
 	OutInterface string   `json:"outInterface"`
 	Source       []string `json:"source"`

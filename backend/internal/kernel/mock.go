@@ -47,13 +47,28 @@ func (m *MockFirewall) ApplyRules(
 	if len(dnsServerIfaces) > 0 {
 		log.Printf("  [DNS Server] Opening tcp+udp/53 on interfaces: %v", dnsServerIfaces)
 	}
+
+	// Log rule counts grouped by chain (T-08) so mock-mode dev runs can see
+	// at a glance whether Local-In/Local-Out policies made it into the batch,
+	// same as the real kernel now applies input/output/forward separately.
+	byChain := map[string]int{
+		model.PolicyChainForward: 0,
+		model.PolicyChainInput:   0,
+		model.PolicyChainOutput:  0,
+	}
+	for _, r := range rules {
+		byChain[model.NormalizePolicyChain(r.Chain)]++
+	}
+	log.Printf("  [MockFirewall] forward: %d rule(s), input: %d rule(s), output: %d rule(s)",
+		byChain[model.PolicyChainForward], byChain[model.PolicyChainInput], byChain[model.PolicyChainOutput])
+
 	for _, r := range rules {
 		statusStr := "DISABLED"
 		if r.Status {
 			statusStr = "ENABLED"
 		}
-		log.Printf("  [%s] Name: %s, In: %s, Out: %s, Src: %v, Dest: %v, Svc: %v, Action: %s, Log: %t",
-			statusStr, r.Name, r.InInterface, r.OutInterface, r.Source, r.Destination, r.Service, r.Action, r.Log)
+		log.Printf("  [%s][%s] Name: %s, In: %s, Out: %s, Src: %v, Dest: %v, Svc: %v, Action: %s, Log: %t",
+			statusStr, model.NormalizePolicyChain(r.Chain), r.Name, r.InInterface, r.OutInterface, r.Source, r.Destination, r.Service, r.Action, r.Log)
 	}
 	for _, pf := range portForwards {
 		statusStr := "DISABLED"

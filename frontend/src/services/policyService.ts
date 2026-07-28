@@ -1,8 +1,16 @@
-import { type PolicyRule, initialPolicyRules } from "@/data-mockup/mockData"
+import { type PolicyChain, type PolicyRule, initialPolicyRules } from "@/data-mockup/mockData"
 import { IS_MOCK_MODE, API_BASE_URL } from "./config"
 import { syncReferences } from "./mockSync"
 
 const LOCAL_STORAGE_KEY = "pigate_firewall_policies";
+
+// Rows saved before the input/output chain feature shipped have no `chain`
+// field at all — normalize to "forward" so every consumer of getLocalPolicies
+// can rely on chain always being set (mirrors the backend's
+// model.NormalizePolicyChain / migration DEFAULT 'forward').
+function normalizeChain(rules: PolicyRule[]): PolicyRule[] {
+  return rules.map((r) => (r.chain ? r : { ...r, chain: "forward" as PolicyChain }));
+}
 
 // Helper to get data from LocalStorage (initializes with initialPolicyRules if empty)
 function getLocalPolicies(): PolicyRule[] {
@@ -12,7 +20,7 @@ function getLocalPolicies(): PolicyRule[] {
     return initialPolicyRules;
   }
   try {
-    return JSON.parse(stored);
+    return normalizeChain(JSON.parse(stored));
   } catch (e) {
     console.error("Failed to parse local policies, resetting to mock data:", e);
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(initialPolicyRules));
@@ -35,26 +43,33 @@ async function parseError(response: Response, fallback: string): Promise<never> 
 }
 
 export const policyService = {
-  // Fetch all firewall rules
-  getAll: async (): Promise<PolicyRule[]> => {
+  // Fetch firewall rules. chain filters to one chain (forward/input/output);
+  // omitted returns every chain (used e.g. by mock sync).
+  getAll: async (chain?: PolicyChain): Promise<PolicyRule[]> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 300));
       syncReferences();
-      return getLocalPolicies();
+      const all = getLocalPolicies();
+      return chain ? all.filter((r) => r.chain === chain) : all;
     }
 
-    const response = await fetch(`${API_BASE_URL}/policies`);
+    const qs = chain ? `?chain=${encodeURIComponent(chain)}` : "";
+    const response = await fetch(`${API_BASE_URL}/policies${qs}`);
     if (!response.ok) {
       await parseError(response, `Failed to fetch policies: ${response.statusText}`);
     }
     return response.json();
   },
 
-  // Save the entire rules list (used after reordering/drag-and-drop)
-  saveAll: async (policies: PolicyRule[]): Promise<PolicyRule[]> => {
+  // Save one chain's rules list in the new order (used after reordering/drag-and-drop).
+  // Only policies belonging to `chain` are touched — other chains' rules and
+  // ordering are left untouched (backend rejects an id that doesn't belong to
+  // `chain`, see docs/ref/todo/input-output-chain-firewall-plan.md Caution 3).
+  saveAll: async (chain: PolicyChain, policies: PolicyRule[]): Promise<PolicyRule[]> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 200));
-      saveLocalPolicies(policies);
+      const others = getLocalPolicies().filter((r) => r.chain !== chain);
+      saveLocalPolicies([...others, ...policies]);
       syncReferences();
       return policies;
     }
@@ -64,7 +79,7 @@ export const policyService = {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ policies }),
+      body: JSON.stringify({ chain, policies }),
     });
     if (!response.ok) {
       await parseError(response, `Failed to reorder policies: ${response.statusText}`);

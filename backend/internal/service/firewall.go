@@ -45,9 +45,24 @@ func NewFirewallService(repo *db.Repository, firewall kernel.FirewallManager, if
 // Firewall Policies Methods
 // =========================================================================
 
-// GetPolicies retrieves all firewall policies from the database.
-func (s *FirewallService) GetPolicies() ([]model.PolicyRule, error) {
-	return s.repo.GetPolicies()
+// GetPolicies retrieves firewall policies from the database. An empty chain
+// returns every chain (used by the kernel sync); a non-empty chain filters to
+// just that chain (used by the per-chain frontend pages).
+func (s *FirewallService) GetPolicies(chain string) ([]model.PolicyRule, error) {
+	all, err := s.repo.GetPolicies()
+	if err != nil {
+		return nil, err
+	}
+	if chain == "" {
+		return all, nil
+	}
+	filtered := []model.PolicyRule{}
+	for _, p := range all {
+		if p.Chain == chain {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered, nil
 }
 
 // GetPolicyByID retrieves a specific firewall policy by its ID.
@@ -57,11 +72,19 @@ func (s *FirewallService) GetPolicyByID(id string) (*model.PolicyRule, error) {
 
 // CreatePolicy inserts a new firewall policy rule into the database.
 func (s *FirewallService) CreatePolicy(rule model.PolicyRule) error {
+	rule.Chain = model.NormalizePolicyChain(rule.Chain)
+	if err := model.ValidatePolicyRule(rule); err != nil {
+		return err
+	}
 	return s.repo.CreatePolicy(rule)
 }
 
 // UpdatePolicy updates an existing firewall policy rule in the database.
 func (s *FirewallService) UpdatePolicy(rule model.PolicyRule) error {
+	rule.Chain = model.NormalizePolicyChain(rule.Chain)
+	if err := model.ValidatePolicyRule(rule); err != nil {
+		return err
+	}
 	return s.repo.UpdatePolicy(rule)
 }
 
@@ -70,9 +93,10 @@ func (s *FirewallService) DeletePolicy(id string) error {
 	return s.repo.DeletePolicy(id)
 }
 
-// ReorderPolicies saves all policies in their new order.
-func (s *FirewallService) ReorderPolicies(policies []model.PolicyRule) error {
-	return s.repo.SaveAllPolicies(policies)
+// ReorderPolicies saves the new priority order (1..N) for every policy id in
+// ids, scoped to chain. See db.Repository.SaveChainOrder.
+func (s *FirewallService) ReorderPolicies(chain string, ids []string) error {
+	return s.repo.SaveChainOrder(model.NormalizePolicyChain(chain), ids)
 }
 
 // TogglePolicyLog toggles the logging flag on a policy.
