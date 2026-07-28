@@ -380,6 +380,16 @@ func (rf *RealFirewall) ApplyRules(
 	// DNS Server (dnsmasq) access rules per interface in input
 	addDNSServerAccessRules(conn, table, inputChain, dnsServerIfaces)
 
+	// --- Section 3b: User input rules from the DB (Local-In Policy page) ---
+	// MUST stay after Admin Access + DNS server accept above (section 3a) and
+	// before the final drop log below — nftables is first-match, so a user
+	// DROP rule can never precede (and therefore can never shadow) the
+	// interface's own Admin Access accept, which is the structural guarantee
+	// that a bad rule here cannot lock the operator out of the web UI/SSH
+	// (plan section 2.2, Caution 8).
+	addUserChainRules(conn, table, inputChain, model.PolicyChainInput, rules, addrsMap, svcsMap,
+		"[PiGate] INP ACCEPT: ", "[PiGate] INP DROP  : ")
+
 	// --- Section 4: Final Drop Log ---
 	conn.AddRule(&nftables.Rule{
 		Table: table,
@@ -483,65 +493,8 @@ func (rf *RealFirewall) ApplyRules(
 	}
 
 	// User rules in forward
-	for _, r := range rules {
-		if !r.Status {
-			continue
-		}
-
-		sources := r.Source
-		if len(sources) == 0 {
-			sources = []string{"ALL"}
-		}
-		destinations := r.Destination
-		if len(destinations) == 0 {
-			destinations = []string{"ALL"}
-		}
-		services := r.Service
-		if len(services) == 0 {
-			services = []string{"ALL"}
-		}
-
-		for _, src := range sources {
-			for _, dest := range destinations {
-				for _, svc := range services {
-					var protocols []string
-					if svc == "ALL" {
-						protocols = []string{"ALL"}
-					} else if s, ok := resolveService(svc, svcsMap); ok {
-						if strings.ToUpper(s.Protocol) == "TCP/UDP" {
-							protocols = []string{"TCP", "UDP"}
-						} else {
-							protocols = []string{strings.ToUpper(s.Protocol)}
-						}
-					} else {
-						protocols = []string{"ALL"}
-					}
-
-					for _, proto := range protocols {
-						logPrefix := "[PiGate] FWD ACCEPT: "
-						if r.Action == "DROP" {
-							logPrefix = "[PiGate] FWD DROP  : "
-						}
-						exprs, err := buildRuleExpressions(
-							r.InInterface, r.OutInterface,
-							src, dest, svc, proto,
-							r.Action, r.Log, r.Nat, logPrefix,
-							addrsMap, svcsMap,
-						)
-						if err != nil {
-							log.Printf("[RealFirewall] Skip forward rule %q combination (%s,%s,%s): %v", r.Name, src, dest, svc, err)
-							continue
-						}
-						conn.AddRule(&nftables.Rule{
-							Table: table,
-							Chain: forwardChain,
-							Exprs: exprs,
-						})
-					}
-				}
-			}
-		}
-	}
+	addUserChainRules(conn, table, forwardChain, model.PolicyChainForward, rules, addrsMap, svcsMap,
+		"[PiGate] FWD ACCEPT: ", "[PiGate] FWD DROP  : ")
 
 	// Final Drop Log in forward — also to the NFLOG group (see forwardLogExpr).
 	conn.AddRule(&nftables.Rule{
@@ -551,6 +504,69 @@ func (rf *RealFirewall) ApplyRules(
 			forwardLogExpr("[PiGate] FWD DROP  : "),
 		},
 	})
+
+	// 5.5. Setup base "output" chain (new — Local-Out Policy page).
+	// Unlike input/forward, output uses policy accept (default-allow): this is
+	// a deliberate scope decision (plan section 0 "นอกขอบเขต") — strict egress
+	// filtering (policy drop) needs allow-rules for DNS/NTP/DHCP client/apt/
+	// dnsmasq upstream first, or the box cuts its own network access. Uses a
+	// dedicated policyAccept var, NOT the policyDrop used by input/forward
+	// above — accidentally reusing policyDrop here would drop 100% of the
+	// box's own outgoing traffic the instant this is applied (Caution 8).
+	policyAccept := nftables.ChainPolicyAccept
+	outputChain := conn.AddChain(&nftables.Chain{
+		Name:     "output",
+		Table:    table,
+		Type:     nftables.ChainTypeFilter,
+		Hooknum:  nftables.ChainHookOutput,
+		Priority: nftables.ChainPriorityFilter,
+		Policy:   &policyAccept,
+	})
+
+	// ct state established,related accept — protects replies of sessions the
+	// box itself opened (e.g. an admin's open web UI/SSH session) from being
+	// cut by a DROP rule the user adds later (plan section 2.3).
+	conn.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: outputChain,
+		Exprs: []expr.Any{
+			&expr.Ct{Key: expr.CtKeySTATE, Register: 1},
+			&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: uint32ToBytes(6), Xor: uint32ToBytes(0)},
+			&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: uint32ToBytes(0)},
+			&expr.Verdict{Kind: expr.VerdictAccept},
+		},
+	})
+
+	// oifname "lo" accept
+	conn.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: outputChain,
+		Exprs: []expr.Any{
+			&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName("lo")},
+			&expr.Verdict{Kind: expr.VerdictAccept},
+		},
+	})
+
+	// meta nfproto ipv6 counter drop — see plan section 2.3.1 / Caution 13:
+	// input/forward already fail-closed for IPv6 by accident (a protocol
+	// offset bug that only matches the IPv4 header shape), but output is a
+	// brand-new policy-accept chain with no such accident protecting it, and
+	// user address objects can't express an IPv6 DROP rule to close the gap
+	// themselves. Must come before any user output rule below so it can never
+	// be shadowed by one. Factored into outputIPv6DropExprs so
+	// policy_chain_test.go can assert this exact rule exists (Caution 13).
+	conn.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: outputChain,
+		Exprs: outputIPv6DropExprs(),
+	})
+
+	// User rules in output (Local-Out Policy page). No final drop log —
+	// chain policy is accept, so anything not matched by a user DROP rule
+	// above simply falls through to the implicit accept.
+	addUserChainRules(conn, table, outputChain, model.PolicyChainOutput, rules, addrsMap, svcsMap,
+		"[PiGate] OUT ACCEPT: ", "[PiGate] OUT DROP  : ")
 
 	// 6. Setup NAT table and chain for policy-based source NAT.
 	// Source NAT is now driven per firewall policy (the policy's "NAT" toggle),
@@ -973,7 +989,124 @@ func buildIPMatchExpressions(name string, addrsMap map[string]model.AddressObjec
 	return exprs, nil
 }
 
+// buildRuleExpressions builds the nftables rule(s) for one (interface,
+// address, service, protocol) combination of a user PolicyRule, for any of
+// the three chains (docs/ref/todo/input-output-chain-firewall-plan.md
+// section 2.4). chain controls three things:
+//  1. iifname/oifname are only meaningful for their respective direction —
+//     outInterface is ignored on the input chain, inInterface is ignored on
+//     the output chain (defense in depth; model.ValidatePolicyRule already
+//     forces the unused field to "" / "ALL" before a rule reaches here).
+//  2. Only the forward chain ever sets the fwmark 0x1 used for policy-based
+//     source NAT (Caution: "ห้ามใส่ fwmark/NAT ในขา input/output" — NAT only
+//     makes sense for traffic actually being routed through the box).
+//  3. Logging differs by chain: forward-chain logs go to NFLOG (ring buffer
+//     in RAM, see forwardLogExpr) and can safely share one rule with the
+//     counter+verdict. input/output logs go to printk/journald (SD card) and
+//     MUST be rate-limited — and critically, a rate-limited `limit ... log
+//     ... <verdict>` rule only applies its verdict to packets that pass the
+//     limiter, silently letting the rest fall through to the next rule
+//     (Caution 5, security leak). So for input/output, a log-enabled rule is
+//     split into two nftables rules: a limited log-only rule (no verdict),
+//     followed by a separate counter+verdict rule with identical match
+//     conditions. The forward chain keeps returning exactly one rule, same
+//     as before this chain parameter was introduced.
+//
+// Returns one []expr.Any per nftables rule to add, in order.
+// outputIPv6DropExprs returns the fixed rule expressions for "meta nfproto
+// ipv6 counter drop", the safety line added to the output chain right after
+// the two keep-alive rules and before any user output rule (plan section
+// 2.3.1, Caution 13). Factored out so it can be asserted directly in
+// policy_chain_test.go without needing a real nftables/netlink connection.
+func outputIPv6DropExprs() []expr.Any {
+	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.NFPROTO_IPV6}},
+		&expr.Counter{},
+		&expr.Verdict{Kind: expr.VerdictDrop},
+	}
+}
+
+// addUserChainRules expands every enabled PolicyRule in rules that targets
+// chainName into one or more nftables rules appended to nfChain, via
+// buildRuleExpressions. Used for all three chains (forward/input/output) —
+// see docs/ref/todo/input-output-chain-firewall-plan.md section 2.4.
+func addUserChainRules(
+	conn *nftables.Conn,
+	table *nftables.Table,
+	nfChain *nftables.Chain,
+	chainName string,
+	rules []model.PolicyRule,
+	addrsMap map[string]model.AddressObject,
+	svcsMap map[string]model.ServiceObject,
+	acceptLogPrefix, dropLogPrefix string,
+) {
+	for _, r := range rules {
+		if !r.Status || r.Chain != chainName {
+			continue
+		}
+
+		sources := r.Source
+		if len(sources) == 0 {
+			sources = []string{"ALL"}
+		}
+		destinations := r.Destination
+		if len(destinations) == 0 {
+			destinations = []string{"ALL"}
+		}
+		services := r.Service
+		if len(services) == 0 {
+			services = []string{"ALL"}
+		}
+
+		for _, src := range sources {
+			for _, dest := range destinations {
+				for _, svc := range services {
+					var protocols []string
+					if svc == "ALL" {
+						protocols = []string{"ALL"}
+					} else if s, ok := resolveService(svc, svcsMap); ok {
+						if strings.ToUpper(s.Protocol) == "TCP/UDP" {
+							protocols = []string{"TCP", "UDP"}
+						} else {
+							protocols = []string{strings.ToUpper(s.Protocol)}
+						}
+					} else {
+						protocols = []string{"ALL"}
+					}
+
+					for _, proto := range protocols {
+						logPrefix := acceptLogPrefix
+						if r.Action == "DROP" {
+							logPrefix = dropLogPrefix
+						}
+						ruleSets, err := buildRuleExpressions(
+							chainName,
+							r.InInterface, r.OutInterface,
+							src, dest, svc, proto,
+							r.Action, r.Log, r.Nat, logPrefix,
+							addrsMap, svcsMap,
+						)
+						if err != nil {
+							log.Printf("[RealFirewall] Skip %s rule %q combination (%s,%s,%s): %v", chainName, r.Name, src, dest, svc, err)
+							continue
+						}
+						for _, exprs := range ruleSets {
+							conn.AddRule(&nftables.Rule{
+								Table: table,
+								Chain: nfChain,
+								Exprs: exprs,
+							})
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 func buildRuleExpressions(
+	chain string,
 	inInterface, outInterface string,
 	srcName, destName string,
 	svcName, proto string,
@@ -983,19 +1116,29 @@ func buildRuleExpressions(
 	logPrefix string,
 	addrsMap map[string]model.AddressObject,
 	svcsMap map[string]model.ServiceObject,
-) ([]expr.Any, error) {
+) ([][]expr.Any, error) {
+	// Chain-scoped interface fields: input has no meaningful egress
+	// interface, output has no meaningful ingress interface.
+	effInInterface, effOutInterface := inInterface, outInterface
+	if chain == model.PolicyChainInput {
+		effOutInterface = ""
+	}
+	if chain == model.PolicyChainOutput {
+		effInInterface = ""
+	}
+
 	var exprs []expr.Any
 
 	// 1. Input Interface
-	if inInterface != "" && inInterface != "ALL" {
+	if effInInterface != "" && effInInterface != "ALL" {
 		exprs = append(exprs, &expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1})
-		exprs = append(exprs, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName(inInterface)})
+		exprs = append(exprs, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName(effInInterface)})
 	}
 
 	// 2. Output Interface
-	if outInterface != "" && outInterface != "ALL" {
+	if effOutInterface != "" && effOutInterface != "ALL" {
 		exprs = append(exprs, &expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1})
-		exprs = append(exprs, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName(outInterface)})
+		exprs = append(exprs, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName(effOutInterface)})
 	}
 
 	// 3. Source IP
@@ -1112,38 +1255,56 @@ func buildRuleExpressions(
 		}
 	}
 
-	// 6. Add Counter
-	exprs = append(exprs, &expr.Counter{})
+	verdictExpr := func() expr.Any {
+		if action == "ACCEPT" {
+			return &expr.Verdict{Kind: expr.VerdictAccept}
+		}
+		return &expr.Verdict{Kind: expr.VerdictDrop}
+	}
 
-	// 7. Add Log (if enabled)
-	// Forward-chain logs go to NFLOG group ForwardNflogGroup (not printk) so the
-	// in-app NFLOG listener (real_traffic_log.go) can read them into the ring
-	// buffer for the Forward Traffic page. Snaplen keeps only the headers we parse.
+	if chain == model.PolicyChainForward {
+		// Forward chain keeps its original single-rule shape: counter, then
+		// (if enabled) an NFLOG log expr — NFLOG writes to an in-RAM ring
+		// buffer, not journald/SD card, so no rate limiting is required and
+		// combining log+verdict in one rule is safe here (unlike printk
+		// below). Then the fwmark for policy-based source NAT, then verdict.
+		fwdExprs := append([]expr.Any{}, exprs...)
+		fwdExprs = append(fwdExprs, &expr.Counter{})
+		if logEnabled {
+			fwdExprs = append(fwdExprs, forwardLogExpr(logPrefix))
+		}
+		// Source NAT mark (policy-based NAT, forward chain only — Caution:
+		// "ห้ามใส่ fwmark/NAT ในขา input/output"). When the policy has NAT
+		// enabled and accepts the traffic, tag the packet with fwmark 0x1;
+		// the pigate_nat postrouting chain masquerades every packet carrying
+		// this mark to the outgoing interface address ("Use Outgoing
+		// Interface Address"). Only meaningful on ACCEPT — a DROPped packet
+		// never reaches postrouting, so we skip the mark for anything else.
+		if nat && action == "ACCEPT" {
+			fwdExprs = append(fwdExprs, &expr.Immediate{Register: 1, Data: []byte{0x01, 0x00, 0x00, 0x00}})
+			fwdExprs = append(fwdExprs, &expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 1})
+		}
+		fwdExprs = append(fwdExprs, verdictExpr())
+		return [][]expr.Any{fwdExprs}, nil
+	}
+
+	// input/output chain: printk log (journald/SD card) must be rate-limited,
+	// and a rate-limited rule cannot also carry the verdict (Caution 5) — so
+	// split into a log-only rule and a separate counter+verdict rule that
+	// share the same match conditions.
+	var rules [][]expr.Any
 	if logEnabled {
-		exprs = append(exprs, forwardLogExpr(logPrefix))
+		logExprs := append([]expr.Any{}, exprs...)
+		logExprs = append(logExprs,
+			&expr.Limit{Type: expr.LimitTypePkts, Rate: 3, Unit: expr.LimitTimeMinute, Burst: 10, Over: false},
+			&expr.Log{Key: uint32(1 << unix.NFTA_LOG_PREFIX), Data: []byte(logPrefix)},
+		)
+		rules = append(rules, logExprs)
 	}
-
-	// 7.5. Source NAT mark (policy-based NAT).
-	// When the policy has NAT enabled and accepts the traffic, tag the packet
-	// with fwmark 0x1 in the forward chain. The pigate_nat postrouting chain
-	// masquerades every packet carrying this mark to the outgoing interface
-	// address ("Use Outgoing Interface Address"). Netfilter evaluates
-	// forward(filter) before postrouting(nat), so the mark is always visible in
-	// time. Only meaningful on ACCEPT — a DROPped packet never reaches
-	// postrouting, so we skip the mark for anything else.
-	if nat && action == "ACCEPT" {
-		exprs = append(exprs, &expr.Immediate{Register: 1, Data: []byte{0x01, 0x00, 0x00, 0x00}})
-		exprs = append(exprs, &expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 1})
-	}
-
-	// 8. Add Verdict
-	if action == "ACCEPT" {
-		exprs = append(exprs, &expr.Verdict{Kind: expr.VerdictAccept})
-	} else {
-		exprs = append(exprs, &expr.Verdict{Kind: expr.VerdictDrop})
-	}
-
-	return exprs, nil
+	verdictExprs := append([]expr.Any{}, exprs...)
+	verdictExprs = append(verdictExprs, &expr.Counter{}, verdictExpr())
+	rules = append(rules, verdictExprs)
+	return rules, nil
 }
 
 func addAdminAccessRules(

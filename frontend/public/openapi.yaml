@@ -1100,7 +1100,19 @@ paths:
     get:
       tags:
         - Firewall Policies
-      summary: Retrieve all firewall policy rules ordered by precedence
+      summary: Retrieve firewall policy rules ordered by chain, then precedence
+      parameters:
+        - name: chain
+          in: query
+          required: false
+          description: >-
+            Filter to one chain (forward/input/output). Omitted or empty
+            returns every chain (backward compatible with clients that
+            predate this parameter, used internally when applying rules to
+            the kernel).
+          schema:
+            type: string
+            enum: [forward, input, output]
       responses:
         '200':
           description: List of policy rules
@@ -1175,7 +1187,7 @@ paths:
     put:
       tags:
         - Firewall Policies
-      summary: Save the full rules list in the new order (Drag and Drop sequence)
+      summary: Save one chain's rules list in the new order (Drag and Drop sequence)
       requestBody:
         required: true
         content:
@@ -1183,8 +1195,17 @@ paths:
             schema:
               type: object
               required:
+                - chain
                 - policies
               properties:
+                chain:
+                  type: string
+                  enum: [forward, input, output]
+                  description: >-
+                    The chain being reordered. Every id in policies must
+                    already belong to this chain, or the request is rejected
+                    with 400 (an id from another chain would otherwise steal
+                    that chain's priority sequence).
                 policies:
                   type: array
                   items:
@@ -3665,6 +3686,16 @@ components:
         name:
           type: string
           example: Block_Malicious
+        chain:
+          type: string
+          enum: [forward, input, output]
+          default: forward
+          description: >-
+            Which nftables base chain this rule targets. "input" (Local-In
+            Policy) ignores outInterface/nat; "output" (Local-Out Policy)
+            ignores inInterface/nat. Empty/omitted normalizes to "forward"
+            for backward compatibility with clients that predate this field.
+          example: forward
         inInterface:
           type: string
           example: eth0
@@ -3695,7 +3726,7 @@ components:
           example: true
         nat:
           type: boolean
-          description: Source NAT (masquerade to outgoing interface address)
+          description: Source NAT (masquerade to outgoing interface address). Must be false for chain input/output.
           example: false
         status:
           type: boolean
@@ -3717,6 +3748,16 @@ components:
         name:
           type: string
           example: Block_Malicious
+        chain:
+          type: string
+          enum: [forward, input, output]
+          default: forward
+          description: >-
+            Which nftables base chain this rule targets. On PUT, an
+            empty/omitted value keeps the existing rule's chain unchanged
+            (it never resets to "forward"). On POST, empty/omitted
+            normalizes to "forward".
+          example: forward
         inInterface:
           type: string
           example: eth0
@@ -3747,7 +3788,7 @@ components:
           example: true
         nat:
           type: boolean
-          description: Source NAT (masquerade to outgoing interface address)
+          description: Source NAT (masquerade to outgoing interface address). Must be false for chain input/output.
           example: false
         status:
           type: boolean

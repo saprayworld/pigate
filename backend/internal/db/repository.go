@@ -604,7 +604,7 @@ func (r *Repository) ServiceNameExists(name string) (bool, error) {
 // =========================================================================
 
 func (r *Repository) GetPolicies() ([]model.PolicyRule, error) {
-	rows, err := r.db.Query("SELECT id, name, in_interface, out_interface, action, log, nat, status FROM firewall_policies ORDER BY priority ASC")
+	rows, err := r.db.Query("SELECT id, name, chain, in_interface, out_interface, action, log, nat, status FROM firewall_policies ORDER BY chain ASC, priority ASC")
 	if err != nil {
 		return nil, err
 	}
@@ -614,7 +614,7 @@ func (r *Repository) GetPolicies() ([]model.PolicyRule, error) {
 	for rows.Next() {
 		var p model.PolicyRule
 		var logInt, natInt, statInt int
-		if err := rows.Scan(&p.ID, &p.Name, &p.InInterface, &p.OutInterface, &p.Action, &logInt, &natInt, &statInt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Chain, &p.InInterface, &p.OutInterface, &p.Action, &logInt, &natInt, &statInt); err != nil {
 			return nil, err
 		}
 		p.Log = logInt == 1
@@ -666,10 +666,10 @@ func (r *Repository) GetPolicies() ([]model.PolicyRule, error) {
 }
 
 func (r *Repository) GetPolicyByID(id string) (*model.PolicyRule, error) {
-	row := r.db.QueryRow("SELECT id, name, in_interface, out_interface, action, log, nat, status FROM firewall_policies WHERE id = ?", id)
+	row := r.db.QueryRow("SELECT id, name, chain, in_interface, out_interface, action, log, nat, status FROM firewall_policies WHERE id = ?", id)
 	var p model.PolicyRule
 	var logInt, natInt, statInt int
-	err := row.Scan(&p.ID, &p.Name, &p.InInterface, &p.OutInterface, &p.Action, &logInt, &natInt, &statInt)
+	err := row.Scan(&p.ID, &p.Name, &p.Chain, &p.InInterface, &p.OutInterface, &p.Action, &logInt, &natInt, &statInt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -739,15 +739,22 @@ func (r *Repository) CreatePolicy(p model.PolicyRule) error {
 		return errors.New("policy must have at least one service object")
 	}
 
+	p.Chain = model.NormalizePolicyChain(p.Chain)
+	if err := model.ValidatePolicyRule(p); err != nil {
+		return err
+	}
+
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	// Get next priority value
+	// Get next priority value, scoped to this chain (Caution 3: priority is
+	// per-chain, not global — reorder within one chain must not disturb the
+	// others).
 	var maxPriority int
-	err = tx.QueryRow("SELECT COALESCE(MAX(priority), 0) FROM firewall_policies").Scan(&maxPriority)
+	err = tx.QueryRow("SELECT COALESCE(MAX(priority), 0) FROM firewall_policies WHERE chain = ?", p.Chain).Scan(&maxPriority)
 	if err != nil {
 		return err
 	}
@@ -765,8 +772,8 @@ func (r *Repository) CreatePolicy(p model.PolicyRule) error {
 		statVal = 1
 	}
 
-	_, err = tx.Exec("INSERT INTO firewall_policies (id, name, in_interface, out_interface, action, log, nat, status, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		p.ID, p.Name, p.InInterface, p.OutInterface, p.Action, logVal, natVal, statVal, maxPriority+1)
+	_, err = tx.Exec("INSERT INTO firewall_policies (id, name, chain, in_interface, out_interface, action, log, nat, status, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		p.ID, p.Name, p.Chain, p.InInterface, p.OutInterface, p.Action, logVal, natVal, statVal, maxPriority+1)
 	if err != nil {
 		return err
 	}
@@ -796,6 +803,11 @@ func (r *Repository) UpdatePolicy(p model.PolicyRule) error {
 		return errors.New("policy must have at least one service object")
 	}
 
+	p.Chain = model.NormalizePolicyChain(p.Chain)
+	if err := model.ValidatePolicyRule(p); err != nil {
+		return err
+	}
+
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
@@ -815,8 +827,8 @@ func (r *Repository) UpdatePolicy(p model.PolicyRule) error {
 		statVal = 1
 	}
 
-	_, err = tx.Exec("UPDATE firewall_policies SET name = ?, in_interface = ?, out_interface = ?, action = ?, log = ?, nat = ?, status = ? WHERE id = ?",
-		p.Name, p.InInterface, p.OutInterface, p.Action, logVal, natVal, statVal, p.ID)
+	_, err = tx.Exec("UPDATE firewall_policies SET name = ?, chain = ?, in_interface = ?, out_interface = ?, action = ?, log = ?, nat = ?, status = ? WHERE id = ?",
+		p.Name, p.Chain, p.InInterface, p.OutInterface, p.Action, logVal, natVal, statVal, p.ID)
 	if err != nil {
 		return err
 	}
@@ -1039,15 +1051,33 @@ func (r *Repository) ReplaceAllPortForwards(pfs []model.PortForward) error {
 	return tx.Commit()
 }
 
-func (r *Repository) SaveAllPolicies(policies []model.PolicyRule) error {
+// SaveChainOrder rewrites the priority of every policy in ids (1..N, in the
+// given order) for one chain only. It rejects the whole batch if any id does
+// not belong to chain — an id from another chain would otherwise silently
+// steal that chain's priority sequence (Caution 3: priority is per-chain).
+func (r *Repository) SaveChainOrder(chain string, ids []string) error {
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	for idx, p := range policies {
-		_, err := tx.Exec("UPDATE firewall_policies SET priority = ? WHERE id = ?", idx+1, p.ID)
+	for _, id := range ids {
+		var gotChain string
+		err := tx.QueryRow("SELECT chain FROM firewall_policies WHERE id = ?", id).Scan(&gotChain)
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("policy %q does not exist", id)
+		}
+		if err != nil {
+			return err
+		}
+		if gotChain != chain {
+			return fmt.Errorf("policy %q belongs to chain %q, not %q", id, gotChain, chain)
+		}
+	}
+
+	for idx, id := range ids {
+		_, err := tx.Exec("UPDATE firewall_policies SET priority = ? WHERE id = ? AND chain = ?", idx+1, id, chain)
 		if err != nil {
 			return err
 		}
@@ -2505,7 +2535,7 @@ func (r *Repository) GetDNSZones() ([]model.DNSZone, error) {
 		}
 		z.IsAuthoritative = isAuth == 1
 		z.Enabled = enabled == 1
-		
+
 		// Load records for each zone
 		records, err := r.GetDNSRecordsByZone(z.ID)
 		if err == nil && records != nil {

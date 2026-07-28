@@ -92,12 +92,13 @@ sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
 * *ข้อดี*: หากแอปพลิเคชันหน้าเว็บมีช่องโหว่ RCE แฮกเกอร์ก็จะไม่สามารถเข้ามาเขียนทับไฟล์ระบบ หรือลบไฟล์ส่วนอื่นๆ ใน OS ได้เนื่องจากรันภายใต้สิทธิ์ผู้ใช้จำกัดทั่วไป งานที่ยังต้องอาศัยสิทธิ์เพิ่ม (เช่น สั่ง `dhcpcd@<iface>`/`wpa_supplicant`/`systemd-resolved` ผ่าน D-Bus) ถูกจำกัดขอบเขตเพิ่มอีกชั้นด้วย Polkit rule และ sudoers entry แบบเจาะจงรายคำสั่ง+อาร์กิวเมนต์ที่ `install.sh` ติดตั้งให้
 
 ### 4.3 Default Firewall Rules & Auditing Architecture (การตั้งค่ากฎไฟร์วอลล์หลักและการตรวจสอบบัญชี)
-ระบบ PiGate ได้กำหนดโครงสร้างของกฎไฟร์วอลล์พื้นฐาน (Default rules) สำหรับปกป้องอินเทอร์เฟซขาเข้า (INPUT Chain) โดยจัดวางแบบ **Declarative nftables format** และจัดลำดับการคัดกรองร่วมกับระบบ Auditing และ Docker Compatibility ดังต่อไปนี้:
+ระบบ PiGate ได้กำหนดโครงสร้างของกฎไฟร์วอลล์พื้นฐาน (Default rules) สำหรับปกป้องอินเทอร์เฟซขาเข้า (INPUT Chain) และควบคุมทราฟฟิกขาออกจากตัวบอร์ดเอง (OUTPUT Chain) โดยจัดวางแบบ **Declarative nftables format** และจัดลำดับการคัดกรองร่วมกับระบบ Auditing และ Docker Compatibility ดังต่อไปนี้ — ผู้ใช้กำหนดกฎเองได้ทั้งสามหน้า **Firewall Policy** (`forward`, ทราฟฟิกที่วิ่งผ่านบอร์ด), **Local-In Policy** (`input`, ทราฟฟิกเข้าตัวบอร์ด) และ **Local-Out Policy** (`output`, ทราฟฟิกออกจากตัวบอร์ด) ผ่านฟิลด์ `PolicyRule.Chain` ตัวเดียวกัน:
 
 1. **โครงสร้างการประมวลผล (Processing Sequence)**:
    * **ส่วนที่ 1: กฎความปลอดภัยเบื้องต้น (Drop & Sanity Checks)**: บล็อกแพ็กเก็ตชำรุด (INVALID), Loopback whitelist, ICMP diagnostics, บล็อกพอร์ต Samba/SMB, บล็อก rogue DHCP, บล็อก Broadcast, คัดกรอง IP Spoofing ผ่าน custom chain `pigate-not-local` และยอมรับ mDNS/SSDP
    * **ส่วนที่ 2: จุดเริ่มต้นการตรวจสอบสิทธิ์ (Audit Log)**: พ่นข้อมูลแพ็กเก็ตที่ผ่านการกรองเบื้องต้นลง syslog ด้วย Prefix `[PiGate] INP AUDIT : ` เพื่อเป็นหลักฐานว่ามีข้อมูลผ่านเข้ามาสู่ชั้นตัดสินสิทธิ์
-   * **ส่วนที่ 3: กฎไดนามิกและการอนุญาต (Dynamic Accept Rules)**: ยอมรับและสตรีมล็อก (`[PiGate] INP ACCEPT: `) สำหรับพอร์ตบริการ/IP ที่ผ่านเงื่อนไขจาก Database (เช่น HTTP, HTTPS, SSH, PING) และเชื่อมโยงกับการตั้งค่า Docker Compatibility (เช่น การยอมรับ `docker0` และ `br-*` อัตโนมัติเมื่อเปิดแฟล็ก)
+   * **ส่วนที่ 3a: กฎไดนามิกและการอนุญาต (Dynamic Accept Rules)**: ยอมรับและสตรีมล็อก (`[PiGate] INP ACCEPT: `) สำหรับพอร์ตบริการ/IP ที่ผ่านเงื่อนไขจาก Database (เช่น HTTP, HTTPS, SSH, PING) และเชื่อมโยงกับการตั้งค่า Docker Compatibility (เช่น การยอมรับ `docker0` และ `br-*` อัตโนมัติเมื่อเปิดแฟล็ก) — ส่วนนี้อยู่**ก่อน**กฎของผู้ใช้เสมอ (ดูส่วนที่ 3b) เพื่อรับประกันเชิงโครงสร้างว่ากฎที่ผู้ใช้เขียนผิดจะปิดทางเข้าหน้าเว็บ/SSH ของตัวเองไม่ได้
+   * **ส่วนที่ 3b: กฎ Local-In Policy จากผู้ใช้ (Input Chain — User Rules)**: กฎ ACCEPT/DROP ที่ผู้ใช้สร้างจากหน้า **Local-In Policy** (`PolicyRule.Chain = "input"`) ต่อจากส่วนที่ 3a เสมอ — ใช้ generator เดียวกับ `forward`/`output` (`buildRuleExpressions`) แต่ log ไปที่ printk/journald (ไม่ใช่ NFLOG แบบ `forward`) จึงต้องใส่ `limit` และแยกกฎ log ออกจากกฎ verdict เป็นสองกฎเสมอ ไม่งั้น `limit ... log ... <verdict>` จะ drop เฉพาะแพ็กเก็ตที่ผ่านตัวจำกัดอัตรา ที่เหลือหลุดไปกฎถัดไป (ดู `docs/ref/todo/input-output-chain-firewall-plan.md` §5 ข้อ 5)
    * **ส่วนที่ 4: แพ็กเก็ตที่เหลือทั้งหมด (Drop Log)**: พ่นล็อกลง syslog ด้วย Prefix `[PiGate] INP DROP  : ` เพื่อความสะดวกในการติดตามเหตุการณ์ว่าแพ็กเก็ตชิ้นใดถูกบล็อกโดย Default Policy (`DROP`)
 
 2. **โครงสร้างโมเดล nftables ตัวอย่าง**:
@@ -131,7 +132,7 @@ table inet pigate {
         # --- Section 2: Audit Point ---
         log prefix "[PiGate] INP AUDIT : "
 
-        # --- Section 3: Dynamic Accepts (From DB / Docker Compat) ---
+        # --- Section 3a: Dynamic Accepts (From DB / Docker Compat) ---
         # [Docker Compat]
         # iifname "docker0" log prefix "[PiGate] INP ACCEPT: " accept
         # iifname "br-*" log prefix "[PiGate] INP ACCEPT: " accept
@@ -139,8 +140,33 @@ table inet pigate {
         # [Dynamic from DB AdminAccess config]
         # iifname "eth0" tcp dport { 22, 2479 } log prefix "[PiGate] INP ACCEPT: " accept
 
+        # --- Section 3b: Local-In Policy (User rules, chain="input") ---
+        # Always AFTER section 3a — a user DROP rule here can never shadow the
+        # interface's own Admin Access accept above. Log-enabled rules are two
+        # nftables rules, not one (limit+log, then a separate counter+verdict):
+        # tcp dport 8443 limit rate 3/minute burst 10 packets log prefix "[PiGate] INP DROP  : "
+        # tcp dport 8443 counter drop
+
         # --- Section 4: Final Drop Log ---
         log prefix "[PiGate] INP DROP  : "
+    }
+
+    # New chain (input/output firewall plan). Policy ACCEPT by design — strict
+    # egress filtering (policy drop) is out of scope until DNS/NTP/DHCP
+    # client/apt/dnsmasq-upstream allow-rules exist (see the plan §0).
+    chain output {
+        type filter hook output priority filter; policy accept;
+
+        ct state established,related accept
+        oifname "lo" accept
+        # Fail-closed for IPv6 like input/forward (offset-based protocol match
+        # only understands the IPv4 header shape — see the plan §2.3.1):
+        meta nfproto ipv6 counter drop
+
+        # --- Local-Out Policy (User rules, chain="output") ---
+        # Same two-rule split for log-enabled rules as section 3b above.
+        # No final drop log — policy accept means anything unmatched falls
+        # through to the implicit accept.
     }
 }
 ```

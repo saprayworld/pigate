@@ -94,10 +94,18 @@ export const mockLogServices = [
   { port: "3389", proto: "TCP", reason: "RDP connection attempt", action: "DROP" }
 ]
 
+// Which nftables base chain a PolicyRule targets. "forward" (default) is the
+// traffic passing through the box (Firewall Policy page); "input" is traffic
+// destined to the box itself (Local-In Policy); "output" is traffic
+// originating from the box itself (Local-Out Policy). See
+// docs/ref/todo/input-output-chain-firewall-plan.md.
+export type PolicyChain = "forward" | "input" | "output"
+
 // Types for Firewall Policy
 export interface PolicyRule {
   id: string
   name: string
+  chain: PolicyChain
   inInterface: string // e.g. "ALL", "eth0", "wlan0"
   outInterface: string // e.g. "ALL", "eth0", "wlan0"
   source: string[]

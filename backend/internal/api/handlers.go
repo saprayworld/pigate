@@ -1037,7 +1037,15 @@ func (s *Server) HandleResetInterface(w http.ResponseWriter, r *http.Request) {
 // =========================================================================
 
 func (s *Server) HandleGetPolicies(w http.ResponseWriter, r *http.Request) {
-	list, err := s.firewallService.GetPolicies()
+	chain := r.URL.Query().Get("chain")
+	switch chain {
+	case "", model.PolicyChainForward, model.PolicyChainInput, model.PolicyChainOutput:
+	default:
+		s.writeError(w, http.StatusBadRequest, "Invalid chain query parameter")
+		return
+	}
+
+	list, err := s.firewallService.GetPolicies(chain)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1060,6 +1068,7 @@ func (s *Server) HandleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	rule := model.PolicyRule{
 		ID:           id,
 		Name:         input.Name,
+		Chain:        input.Chain,
 		InInterface:  input.InInterface,
 		OutInterface: input.OutInterface,
 		Source:       input.Source,
@@ -1095,9 +1104,19 @@ func (s *Server) HandleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Caution 2: an empty/omitted chain in the request body must keep the
+	// rule's existing chain, never silently fall back to "forward" — a client
+	// (or an old client that predates this field) that PUTs a rule without
+	// `chain` must not move an input/output rule into forward.
+	chain := input.Chain
+	if chain == "" {
+		chain = existing.Chain
+	}
+
 	rule := model.PolicyRule{
 		ID:           id,
 		Name:         input.Name,
+		Chain:        chain,
 		InInterface:  input.InInterface,
 		OutInterface: input.OutInterface,
 		Source:       input.Source,
@@ -1136,6 +1155,7 @@ func (s *Server) HandleDeletePolicy(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleReorderPolicies(w http.ResponseWriter, r *http.Request) {
 	var body struct {
+		Chain    string             `json:"chain"`
 		Policies []model.PolicyRule `json:"policies"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -1143,8 +1163,14 @@ func (s *Server) HandleReorderPolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.firewallService.ReorderPolicies(body.Policies); err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+	chain := model.NormalizePolicyChain(body.Chain)
+	ids := make([]string, 0, len(body.Policies))
+	for _, p := range body.Policies {
+		ids = append(ids, p.ID)
+	}
+
+	if err := s.firewallService.ReorderPolicies(chain, ids); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 

@@ -51,7 +51,7 @@ func TestFirewallService_Policies(t *testing.T) {
 	svc := NewFirewallService(repo, tracker, ifaceSvc)
 
 	// Test GetPolicies
-	_, err = svc.GetPolicies()
+	_, err = svc.GetPolicies("")
 	if err != nil {
 		t.Fatalf("GetPolicies failed: %v", err)
 	}
@@ -147,6 +147,136 @@ func TestFirewallService_Policies(t *testing.T) {
 	deleted, err := svc.GetPolicyByID("rule-test-1")
 	if err == nil && deleted != nil {
 		t.Errorf("Expected policy to be deleted, but still found it")
+	}
+}
+
+// TestFirewallService_PolicyChain covers the input/output chain plan
+// (docs/ref/todo/input-output-chain-firewall-plan.md): empty chain normalizes
+// to "forward", GetPolicies(chain) filters correctly, and reorder is scoped
+// per chain (an id from another chain is rejected rather than silently
+// stealing that chain's priority sequence — Caution 3).
+func TestFirewallService_PolicyChain(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	tracker := &trackingFirewallManager{}
+	mockNet := kernel.NewMockNetwork()
+	ifaceSvc := NewInterfaceService(repo, mockNet)
+	svc := NewFirewallService(repo, tracker, ifaceSvc)
+
+	addrSrc := model.AddressObject{ID: "addr-src-chain", Name: "SRC_CHAIN", Type: "subnet", Value: "10.1.0.0/24"}
+	addrDst := model.AddressObject{ID: "addr-dst-chain", Name: "DST_CHAIN", Type: "subnet", Value: "10.2.0.0/24"}
+	svcObj := model.ServiceObject{ID: "svc-chain", Name: "SVC_CHAIN", Protocol: "TCP", Port: "22", Type: "custom"}
+	if err := svc.CreateAddress(addrSrc); err != nil {
+		t.Fatalf("CreateAddress (src) failed: %v", err)
+	}
+	if err := svc.CreateAddress(addrDst); err != nil {
+		t.Fatalf("CreateAddress (dst) failed: %v", err)
+	}
+	if err := svc.CreateService(svcObj); err != nil {
+		t.Fatalf("CreateService failed: %v", err)
+	}
+
+	base := model.PolicyRule{
+		Source:      []string{"SRC_CHAIN"},
+		Destination: []string{"DST_CHAIN"},
+		Service:     []string{"SVC_CHAIN"},
+		Action:      "ACCEPT",
+		Status:      true,
+	}
+
+	// No chain set at all -> must normalize to forward, not error.
+	forwardImplicit := base
+	forwardImplicit.ID = "rule-chain-implicit-forward"
+	forwardImplicit.Name = "Implicit Forward"
+	if err := svc.CreatePolicy(forwardImplicit); err != nil {
+		t.Fatalf("CreatePolicy (implicit forward) failed: %v", err)
+	}
+	got, err := svc.GetPolicyByID("rule-chain-implicit-forward")
+	if err != nil || got == nil {
+		t.Fatalf("GetPolicyByID (implicit forward) failed: %v", err)
+	}
+	if got.Chain != model.PolicyChainForward {
+		t.Errorf("expected chain to normalize to %q, got %q", model.PolicyChainForward, got.Chain)
+	}
+
+	in1 := base
+	in1.ID = "rule-chain-in-1"
+	in1.Name = "Local-In 1"
+	in1.Chain = model.PolicyChainInput
+	in2 := base
+	in2.ID = "rule-chain-in-2"
+	in2.Name = "Local-In 2"
+	in2.Chain = model.PolicyChainInput
+	out1 := base
+	out1.ID = "rule-chain-out-1"
+	out1.Name = "Local-Out 1"
+	out1.Chain = model.PolicyChainOutput
+
+	for _, r := range []model.PolicyRule{in1, in2, out1} {
+		if err := svc.CreatePolicy(r); err != nil {
+			t.Fatalf("CreatePolicy (%s) failed: %v", r.Name, err)
+		}
+	}
+
+	inputPolicies, err := svc.GetPolicies(model.PolicyChainInput)
+	if err != nil {
+		t.Fatalf("GetPolicies(input) failed: %v", err)
+	}
+	if len(inputPolicies) != 2 {
+		t.Fatalf("expected 2 input policies, got %d", len(inputPolicies))
+	}
+	for _, p := range inputPolicies {
+		if p.Chain != model.PolicyChainInput {
+			t.Errorf("GetPolicies(input) returned a %q-chain rule: %+v", p.Chain, p)
+		}
+	}
+
+	outputPolicies, err := svc.GetPolicies(model.PolicyChainOutput)
+	if err != nil {
+		t.Fatalf("GetPolicies(output) failed: %v", err)
+	}
+	if len(outputPolicies) != 1 {
+		t.Fatalf("expected 1 output policy, got %d", len(outputPolicies))
+	}
+
+	// Reorder input chain: valid — both ids belong to "input".
+	if err := svc.ReorderPolicies(model.PolicyChainInput, []string{"rule-chain-in-2", "rule-chain-in-1"}); err != nil {
+		t.Fatalf("ReorderPolicies(input) failed: %v", err)
+	}
+	reordered, err := svc.GetPolicies(model.PolicyChainInput)
+	if err != nil {
+		t.Fatalf("GetPolicies(input) after reorder failed: %v", err)
+	}
+	if len(reordered) != 2 || reordered[0].ID != "rule-chain-in-2" {
+		t.Fatalf("expected rule-chain-in-2 first after reorder, got %+v", reordered)
+	}
+
+	// Reorder input chain with an id that actually belongs to output — must
+	// be rejected (Caution 3), not silently accepted.
+	if err := svc.ReorderPolicies(model.PolicyChainInput, []string{"rule-chain-out-1", "rule-chain-in-1"}); err == nil {
+		t.Fatalf("expected ReorderPolicies(input) to reject an id from chain output, got nil error")
+	}
+
+	// Update: an empty chain in the input struct must NOT move a rule to
+	// forward — service.UpdatePolicy normalizes empty to forward internally,
+	// but callers of the service (the API handler) are responsible for
+	// resolving "" to the existing chain before calling UpdatePolicy
+	// (Caution 2) — the handler-level test lives in api/handlers_test.go.
+	in1.Name = "Local-In 1 Renamed"
+	if err := svc.UpdatePolicy(in1); err != nil {
+		t.Fatalf("UpdatePolicy (input) failed: %v", err)
+	}
+	updated, err := svc.GetPolicyByID("rule-chain-in-1")
+	if err != nil || updated == nil {
+		t.Fatalf("GetPolicyByID (rule-chain-in-1) failed: %v", err)
+	}
+	if updated.Chain != model.PolicyChainInput {
+		t.Errorf("expected chain to stay %q, got %q", model.PolicyChainInput, updated.Chain)
 	}
 }
 

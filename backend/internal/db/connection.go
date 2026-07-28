@@ -258,6 +258,7 @@ func migrate(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS firewall_policies (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
+			chain TEXT NOT NULL DEFAULT 'forward' CHECK(chain IN ('forward', 'input', 'output')),
 			in_interface TEXT NOT NULL,
 			out_interface TEXT NOT NULL,
 			action TEXT NOT NULL CHECK(action IN ('ACCEPT', 'DROP')),
@@ -593,6 +594,22 @@ func migrate(db *sql.DB) error {
 			}
 			if n, _ := res.RowsAffected(); n > 0 {
 				log.Printf("[Migration] Policy-based source NAT: enabled nat on %d existing ACCEPT policy(ies) egressing WAN/ALL to preserve behaviour. Review your firewall policies — policies with out_interface 'ALL' now masquerade LAN-bound traffic too.", n)
+			}
+		}
+	}
+
+	// Input/Output chain firewall policies (docs/ref/todo/input-output-chain-firewall-plan.md).
+	// Add a `chain` column so a PolicyRule can target the input/output nftables
+	// base chains in addition to forward. Detect via the CHECK constraint token
+	// "'output'" rather than the word "chain" (which could appear elsewhere in
+	// the CREATE statement in the future) — existing rows get 'forward' via the
+	// column DEFAULT, preserving current behaviour exactly.
+	var sqlCreatePoliciesChain string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='firewall_policies'").Scan(&sqlCreatePoliciesChain)
+	if err == nil {
+		if !strings.Contains(sqlCreatePoliciesChain, "'output'") {
+			if _, err = db.Exec("ALTER TABLE firewall_policies ADD COLUMN chain TEXT NOT NULL DEFAULT 'forward' CHECK(chain IN ('forward', 'input', 'output'))"); err != nil {
+				return fmt.Errorf("failed to add chain column to firewall_policies table: %w", err)
 			}
 		}
 	}
