@@ -859,18 +859,6 @@ export default function Dashboard() {
       {/* Detailed — everything stacked with full context */}
       <TabsContent value="detailed" className="space-y-6">
         <StatGrid metrics={metrics} />
-        <BandwidthCard data={chartData} />
-        <div className="grid gap-4 lg:grid-cols-3">
-          <div className="lg:col-span-1">
-            <SystemInfoCard info={info} fetchedAt={infoFetchedAt} now={now} />
-          </div>
-          <div className="lg:col-span-1">
-            <InterfacesCard interfaces={ifaces} />
-          </div>
-          <div className="lg:col-span-1">
-            <AlertsCard alerts={alerts} />
-          </div>
-        </div>
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="lg:col-span-1">
             <ProtocolBreakdownCard detail={trafficDetail} />
