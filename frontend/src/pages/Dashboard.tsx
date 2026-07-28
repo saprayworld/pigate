@@ -734,7 +734,9 @@ function TopRulesCard({ detail }: { detail: TrafficDetail | null }) {
                     {r.chain}/{r.action}
                   </Badge>
                 </span>
-                <span className="shrink-0 font-mono text-xs text-muted-foreground">{fmtBytes(r.bytes)}</span>
+                <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                  {r.packets.toLocaleString()} · {fmtBytes(r.bytes)}
+                </span>
               </div>
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
                 <div
