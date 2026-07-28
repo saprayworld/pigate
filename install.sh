@@ -467,6 +467,13 @@ else
     log_info "ไม่ใช่ interactive — ใช้ rp_filter=2 (loose) ซึ่งเหมาะกับ router"
 fi
 
+# --- โหลด nf_conntrack ล่วงหน้า ก่อนเขียน/apply sysctl ---
+# net.netfilter.nf_conntrack_acct เป็นคีย์ที่มีอยู่ก็ต่อเมื่อโมดูล nf_conntrack
+# ถูกโหลดแล้วเท่านั้น — ถ้า apply sysctl ก่อนโมดูลโหลด คีย์นี้จะ apply ไม่ผ่าน
+# (แม้ระบบส่วนใหญ่จะ auto-load เมื่อ nftables สร้างกฎ ct state ก็ตาม แต่ตอน
+# ติดตั้งอาจยังไม่มีกฎใดสร้างเลย จึง modprobe เองล่วงหน้าให้ชัดเจน)
+modprobe nf_conntrack >/dev/null 2>&1 || true
+
 # --- เขียนไฟล์ sysctl (persist ข้าม reboot; apply ทันทีด้านล่าง) ---
 SYSCTL_FILE="/etc/sysctl.d/99-pigate.conf"
 cat > "${SYSCTL_FILE}" << EOF
@@ -486,8 +493,12 @@ net.ipv4.ip_forward = 1
 # policy routing ควรใช้ loose ไม่งั้น forwarded packet อาจโดน drop เงียบ ๆ
 net.ipv4.conf.all.rp_filter = ${RP_FILTER}
 net.ipv4.conf.default.rp_filter = ${RP_FILTER}
+
+# Conntrack byte/packet accounting — ต้องเปิดเพื่อให้ Dashboard นับ traffic
+# ต่อ host/protocol ได้ (ค่า default ของ kernel = 0 ทำให้ byte counter เป็น 0 ทั้งหมด)
+net.netfilter.nf_conntrack_acct = 1
 EOF
-log_ok "เขียน ${SYSCTL_FILE} (ip_forward=1, rp_filter=${RP_FILTER})"
+log_ok "เขียน ${SYSCTL_FILE} (ip_forward=1, rp_filter=${RP_FILTER}, nf_conntrack_acct=1)"
 
 # apply ทันทีโดยไม่ต้อง reboot
 if sysctl --system >/dev/null 2>&1; then
@@ -497,21 +508,25 @@ else
 fi
 
 # --- preload kernel modules ที่ pigate ต้องใช้แต่ modprobe เองไม่ได้ ---
-# 8021q: VLAN sub-interface (pigate สร้างผ่าน netlink; ปกติ kernel auto-load แต่
-#        preload กันเคส blacklist/ไม่ auto-load)
-# ifb:   QoS ingress shaping (real_qos.go ต้องใช้ แต่ modprobe runtime ล้มเพราะ
-#        ไม่มี CAP_SYS_MODULE)
+# 8021q:      VLAN sub-interface (pigate สร้างผ่าน netlink; ปกติ kernel auto-load
+#             แต่ preload กันเคส blacklist/ไม่ auto-load)
+# ifb:        QoS ingress shaping (real_qos.go ต้องใช้ แต่ modprobe runtime ล้มเพราะ
+#             ไม่มี CAP_SYS_MODULE)
+# nf_conntrack: ต้องโหลดก่อน systemd-sysctl ถึงจะ apply
+#             net.netfilter.nf_conntrack_acct ได้ (ดูด้านบน) และ Dashboard
+#             traffic-detail collector (conntrack polling) ต้องการโมดูลนี้
 MODULES_FILE="/etc/modules-load.d/pigate.conf"
 cat > "${MODULES_FILE}" << 'EOF'
 # Managed by PiGate installer. Do not edit manually.
 # โมดูลที่ pigate ต้องใช้แต่ modprobe เองไม่ได้ (ไม่มี CAP_SYS_MODULE)
 8021q
 ifb
+nf_conntrack
 EOF
-log_ok "เขียน ${MODULES_FILE} (8021q, ifb)"
+log_ok "เขียน ${MODULES_FILE} (8021q, ifb, nf_conntrack)"
 
 # โหลดทันที (install รันเป็น root จึง modprobe ได้) — ไม่ fail ถ้า compiled-in
-for mod in 8021q ifb; do
+for mod in 8021q ifb nf_conntrack; do
     if modprobe "${mod}" 2>/dev/null; then
         log_ok "โหลดโมดูล ${mod} สำเร็จ"
     else
@@ -610,8 +625,8 @@ echo -e "  Binary:   ${BLUE}/usr/local/bin/pigate${NC}"
 echo -e "  Database: ${BLUE}/var/lib/pigate/pigate.db${NC}"
 echo -e "  Service:  ${BLUE}/etc/systemd/system/pigate.service${NC}"
 echo -e "  dhcpcd:   ${BLUE}/etc/systemd/system/dhcpcd@.service${NC} (per-interface, ควบคุมผ่าน polkit)"
-echo -e "  Gateway:  ${BLUE}/etc/sysctl.d/99-pigate.conf${NC} (ip_forward=1, rp_filter=${RP_FILTER})"
-echo -e "  Modules:  ${BLUE}/etc/modules-load.d/pigate.conf${NC} (8021q, ifb)"
+echo -e "  Gateway:  ${BLUE}/etc/sysctl.d/99-pigate.conf${NC} (ip_forward=1, rp_filter=${RP_FILTER}, nf_conntrack_acct=1)"
+echo -e "  Modules:  ${BLUE}/etc/modules-load.d/pigate.conf${NC} (8021q, ifb, nf_conntrack)"
 echo ""
 echo -e "${YELLOW}คำสั่งถัดไป:${NC}"
 if [[ "${IS_UPDATE}" == true ]] && [[ "${SERVICE_WAS_RUNNING}" == true ]]; then

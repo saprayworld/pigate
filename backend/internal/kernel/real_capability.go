@@ -29,10 +29,10 @@ func NewRealCapabilityProber() *RealCapabilityProber {
 }
 
 // ProbeAll runs every registered probe and always returns exactly one result
-// per registered id (firewall, dbus, dnsmasq, resolved), even when a probe
+// per registered id (firewall, dbus, dnsmasq, resolved, conntrack), even when a probe
 // fails or times out. The whole batch is bounded by capabilityProbeTimeout.
 func (p *RealCapabilityProber) ProbeAll() []model.CapabilityProbeResult {
-	ids := []string{"firewall", "dbus", "dnsmasq", "resolved"}
+	ids := []string{"firewall", "dbus", "dnsmasq", "resolved", "conntrack"}
 
 	type resultsMsg struct {
 		results []model.CapabilityProbeResult
@@ -46,6 +46,7 @@ func (p *RealCapabilityProber) ProbeAll() []model.CapabilityProbeResult {
 			dbusResult,
 			probeSystemdUnit("dnsmasq", "dnsmasq.service", dbusOK),
 			probeSystemdUnit("resolved", "systemd-resolved.service", dbusOK),
+			probeConntrack(),
 		}
 		done <- resultsMsg{results: results}
 	}()
@@ -140,6 +141,47 @@ func probeSystemdUnit(id, unitName string, dbusOK bool) model.CapabilityProbeRes
 		}
 	}
 	return model.CapabilityProbeResult{ID: id, Available: true, Reason: model.CapabilityReasonOK}
+}
+
+// probeConntrack detects whether conntrack-based traffic accounting
+// (docs/ref/todo/dashboard-traffic-detail-plan.md) is usable: it must be able
+// to dump the IPv4 conntrack table at all (permission/support), AND —
+// separately — the kernel must actually be counting bytes per flow, which
+// requires the operator-set sysctl `net.netfilter.nf_conntrack_acct=1`
+// (install.sh sets this, but an upgraded-in-place host may predate that). An
+// empty table (nothing connected right now) is inconclusive, not evidence of
+// either state, so it is reported as ok rather than degraded — only "every
+// visible flow has Bytes==0" is treated as the sysctl being off.
+func probeConntrack() model.CapabilityProbeResult {
+	flows, err := safeConntrackList(unix.AF_INET)
+	if err != nil {
+		return model.CapabilityProbeResult{
+			ID:     "conntrack",
+			Reason: classifyNetlinkErr(err),
+			Err:    err.Error(),
+		}
+	}
+	if len(flows) > 0 {
+		allZero := true
+		for _, f := range flows {
+			if f == nil {
+				continue
+			}
+			if f.Forward.Bytes > 0 || f.Reverse.Bytes > 0 {
+				allZero = false
+				break
+			}
+		}
+		if allZero {
+			return model.CapabilityProbeResult{
+				ID:        "conntrack",
+				Available: true,
+				Degraded:  true,
+				Reason:    model.CapabilityReasonAcctDisabled,
+			}
+		}
+	}
+	return model.CapabilityProbeResult{ID: "conntrack", Available: true, Reason: model.CapabilityReasonOK}
 }
 
 // classifyNetlinkErr maps a netlink/nftables error's underlying errno to one

@@ -50,6 +50,7 @@ type Server struct {
 	wifiPresetService *service.WifiPresetService
 	systemServiceSvc  *service.SystemServiceService
 	capabilityService *service.SystemCapabilityService
+	trafficStats      *service.TrafficStatsService
 }
 
 func NewServer(
@@ -80,6 +81,7 @@ func NewServer(
 	wifiPresetService *service.WifiPresetService,
 	systemServiceSvc *service.SystemServiceService,
 	capabilityService *service.SystemCapabilityService,
+	trafficStats *service.TrafficStatsService,
 ) *Server {
 	return &Server{
 		repo:              repo,
@@ -109,6 +111,7 @@ func NewServer(
 		wifiPresetService: wifiPresetService,
 		systemServiceSvc:  systemServiceSvc,
 		capabilityService: capabilityService,
+		trafficStats:      trafficStats,
 	}
 }
 
@@ -387,6 +390,20 @@ func (s *Server) HandleGetSystemCapabilities(w http.ResponseWriter, r *http.Requ
 // reboot is expected; the frontend copes).
 func (s *Server) HandleGetTrafficHistory(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, s.systemStatus.GetTrafficHistory())
+}
+
+// HandleGetTrafficDetail backs the Dashboard "Detailed" tab's Protocol
+// Breakdown / Top Talkers / Top Rules by Traffic cards
+// (docs/ref/todo/dashboard-traffic-detail-plan.md). window is whitelisted to
+// {"1h","24h"} — any other value (including empty) silently falls back to
+// "1h" rather than passing a client-supplied raw string into the service
+// (plan T-09: "ห้ามส่งค่าดิบจาก client ต่อเข้า service").
+func (s *Server) HandleGetTrafficDetail(w http.ResponseWriter, r *http.Request) {
+	window := r.URL.Query().Get("window")
+	if window != "24h" {
+		window = "1h"
+	}
+	s.writeJSON(w, http.StatusOK, s.trafficStats.GetTrafficDetail(window))
 }
 
 // HandleGetRecentLogs backs the Dashboard "Recent Logs" widget. It reads the

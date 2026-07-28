@@ -38,6 +38,7 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("GET /api/dashboard/performance", s.HandleGetPerformanceMetrics)
 	authRoute("GET /api/dashboard/performance/stream", s.HandleMetricsStream)
 	authRoute("GET /api/dashboard/traffic", s.HandleGetTrafficHistory)
+	authRoute("GET /api/dashboard/traffic-detail", s.HandleGetTrafficDetail)
 	authRoute("GET /api/dashboard/logs", s.HandleGetRecentLogs)
 	authRoute("POST /api/dashboard/logs/clear", s.HandleClearLogs)
 	authRoute("GET /api/dashboard/logs/stream", s.HandleLogStream)

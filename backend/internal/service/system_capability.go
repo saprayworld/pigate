@@ -26,6 +26,7 @@ var capabilityCatalog = []capabilityCatalogEntry{
 	{ID: "dbus", Name: "D-Bus System Bus"},
 	{ID: "dnsmasq", Name: "DHCP/DNS Forwarder (dnsmasq)"},
 	{ID: "resolved", Name: "DNS Resolver (systemd-resolved)"},
+	{ID: "conntrack", Name: "Traffic Accounting (conntrack)"},
 }
 
 // ApplyHealthReporter lets any subsystem service (FirewallService today;
@@ -238,6 +239,11 @@ func detailFor(reason, errText string) string {
 			msg += ": " + errText
 		}
 		return msg
+	case model.CapabilityReasonAcctDisabled:
+		return "ตรวจสอบ conntrack ได้ แต่ยังไม่ได้เปิดการนับ byte ต่อ flow — กรุณาตั้งค่า " +
+			"`net.netfilter.nf_conntrack_acct=1` (รัน install.sh ใหม่ หรือ `sudo sysctl " +
+			"net.netfilter.nf_conntrack_acct=1` ด้วยตัวเอง) การ์ดวิเคราะห์ traffic บน Dashboard " +
+			"จะแสดงค่า 0 ไปเรื่อย ๆ จนกว่าจะเปิดค่านี้"
 	default:
 		msg := "สถานะไม่ทราบแน่ชัด"
 		if errText != "" {

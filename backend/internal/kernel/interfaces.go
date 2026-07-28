@@ -38,6 +38,31 @@ type TrafficLogManager interface {
 	WatchLocalTraffic(ctx context.Context, cb func(model.FirewallLog)) error
 }
 
+// TrafficAccountingManager abstracts read-only traffic accounting used by the
+// Dashboard "Detailed" tab's Protocol Breakdown / Top Talkers / Top Rules
+// cards (docs/ref/todo/dashboard-traffic-detail-plan.md). Both methods are
+// strictly read-only (a dump/list, never a mutation) and MUST degrade
+// gracefully rather than fail the whole request: a real implementation
+// requires `net.netfilter.nf_conntrack_acct=1` to be set on the host for
+// DumpFlows to return non-zero byte counts (see the "conntrack" capability
+// probe) — an unset sysctl is not itself an error, it just yields
+// FlowSample.Bytes==0 for every flow. Callers (service.TrafficStatsService)
+// are responsible for polling on a background goroutine and caching the
+// result; neither method may be called directly from an HTTP request handler
+// (plan Caution 6).
+type TrafficAccountingManager interface {
+	// DumpFlows returns a snapshot of the conntrack table (IPv4 + IPv6) at the
+	// moment of the call. A family that errors (e.g. IPv6 disabled) is logged
+	// and skipped rather than failing the whole dump; only when every family
+	// fails does DumpFlows return an error.
+	DumpFlows() ([]model.FlowSample, error)
+	// DumpRuleCounters returns the current bytes/packets nftables has counted
+	// for each DB policy-rule id (decoded from the rule's UserData comment —
+	// see real_firewall.go applyUserRules). Rules with no UserData (the fixed
+	// structural rules: ct-state checks, final drop-log, etc.) are omitted.
+	DumpRuleCounters() (map[string]model.RuleCounter, error)
+}
+
 // NetworkManager abstracts Wi-Fi scanning and interface control
 type NetworkManager interface {
 	ToggleInterface(name string, up bool) error
