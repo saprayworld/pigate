@@ -345,6 +345,22 @@ paths:
       tags:
         - Dashboard
       summary: Get recent firewall filter packet logs (nftables block logs)
+      description: |
+        Backs the Dashboard "Recent Logs" widget. Reads the same shared RAM
+        ring buffer as `/logs/traffic` — entries from all three chains
+        (forward/input/output) appear here, unfiltered by chain.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 500
+          description: |
+            Max rows to return (default 100, capped at 500). Always pass this —
+            the ring buffer can hold up to 10,000 entries and an unbounded
+            request would download several MB of JSON on every page load/SSE
+            reconnect.
       responses:
         '200':
           description: List of firewall logs
@@ -497,16 +513,34 @@ paths:
     get:
       tags:
         - Event Log
-      summary: Get live forward-chain packet logs (PASS/DROP, newest first)
+      summary: Get live packet logs for forward/input/output chains (PASS/DROP, cursor-paginated, newest first)
       description: |
-        Real-time PASS/DROP events for packets forwarded through the firewall
-        (LAN↔WAN forward chain), captured from the kernel via NFLOG into a
-        fixed-size RAM ring buffer. Deliberately NOT persisted to SQLite (packet
-        rate + SD-card wear), so it is a recent-sample view, not a complete
-        record. Shares the buffer with `/dashboard/logs`; clear it via
-        `/dashboard/logs/clear`. Established connections are accepted without a
-        log (ct state), so mostly connection-opening and dropped packets appear.
-        Available to any authenticated role.
+        Real-time PASS/DROP events for packets on any of the three firewall
+        chains — forward (LAN↔WAN traffic routed through the box, the
+        "Forward Traffic" page), input (traffic destined to the box itself)
+        and output (traffic the box itself originates) — the latter two
+        together power the "Local Traffic" page. All three are captured from
+        the kernel via NFLOG (two netlink groups: one for forward, one shared
+        by input/output) into a single fixed-size RAM ring buffer (10,000
+        entries). Deliberately NOT persisted to SQLite (packet rate + SD-card
+        wear), so it is a recent-sample view, not a complete record. Shares
+        the buffer with `/dashboard/logs`; clear it via `/dashboard/logs/clear`.
+        Established connections are accepted without a log (ct state), so
+        mostly connection-opening and dropped packets appear. Available to
+        any authenticated role.
+
+        **Cursor pagination**: the server filters the entire buffer by
+        action/q/chain FIRST, then locates `beforeId` in the filtered result,
+        then returns up to `limit` rows after it (never the other way
+        around — a match deeper in the buffer than the first page must still
+        be found). `beforeId`/`beforeTime` together form the cursor: pass the
+        `id`/`time` of the last row you already have. If `beforeId` is no
+        longer present in the buffer (evicted by newer entries), the server
+        falls back to cutting by `time < beforeTime` instead. Getting back
+        fewer than `limit` rows means there is nothing older left — no
+        separate "hasMore" field is added, to keep the response format
+        (a plain array, `[]` when empty — never `null`) unchanged for
+        clients that don't send a cursor at all.
       parameters:
         - name: action
           in: query
@@ -518,22 +552,53 @@ paths:
           in: query
           schema:
             type: string
-          description: Case-insensitive text search across src, dest, port, proto, and reason
+          description: Case-insensitive text search across src, dest, port, proto, chain, and reason
+        - name: chain
+          in: query
+          schema:
+            type: string
+            enum: [forward, input, output, local]
+          description: |
+            Filter by chain. "local" means input+output combined (used by the
+            Local Traffic page). Omit for all chains (used by legacy clients
+            and the Dashboard). An unrecognized value is rejected with 400
+            rather than silently returning all chains.
         - name: limit
           in: query
           schema:
             type: integer
             default: 100
-          description: Max rows to return (capped at the buffer capacity)
+            maximum: 1000
+          description: Max rows to return (default 100, capped at min(1000, buffer capacity))
+        - name: beforeId
+          in: query
+          schema:
+            type: string
+          description: |
+            Cursor: the `id` of the last row already fetched under the
+            current filter. Rows strictly after this one (within the
+            filtered result) are returned. Omit to fetch the first page.
+        - name: beforeTime
+          in: query
+          schema:
+            type: string
+            example: "2026-07-28T14:31:02.123456789Z"
+          description: |
+            Cursor fallback (RFC3339Nano; plain RFC3339 also accepted): used
+            only when `beforeId` can no longer be found (evicted from the
+            ring buffer). If neither resolves, the response is an empty array
+            rather than restarting from the first page.
       responses:
         '200':
-          description: Matching forward-traffic logs (newest first)
+          description: Matching packet logs (newest first); fewer than `limit` rows means no older data remains
           content:
             application/json:
               schema:
                 type: array
                 items:
                   $ref: '#/components/schemas/FirewallLog'
+        '400':
+          description: Invalid `chain` value
         '401':
           $ref: '#/components/responses/Unauthorized'
 
@@ -3376,13 +3441,14 @@ components:
         - inIface
         - outIface
         - reason
+        - chain
       properties:
         id:
           type: string
           example: log-1
         time:
           type: string
-          example: "14:31:02"
+          example: "2026-07-28T14:31:02.123456789Z"
         action:
           type: string
           enum: [PASS, DROP]
@@ -3410,6 +3476,17 @@ components:
         reason:
           type: string
           example: Blocked Port (SMB)
+        chain:
+          type: string
+          enum: [forward, input, output]
+          description: |
+            Which nftables chain produced this entry. "forward" is LAN↔WAN
+            traffic routed through the box; "input" is traffic destined to
+            the box itself (e.g. admin reaching the web UI/SSH, or an
+            unsolicited WAN scan); "output" is traffic the box itself
+            originates (e.g. its own DNS/NTP lookups). Empty string means
+            unknown (defensive default; should not normally occur).
+          example: forward
 
     # --- Network Interface Schemas ---
     NetworkInterface:

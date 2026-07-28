@@ -99,12 +99,13 @@ func TestBuildRuleExpressions_NoFwmarkOnInputOutput(t *testing.T) {
 	}
 }
 
-// TestBuildRuleExpressions_LogSplitOnInputOutput asserts Caution 5: a
-// log-enabled input/output rule must be split into a rate-limited log-only
-// rule and a separate counter+verdict rule — never a single rule combining
-// `limit ... log ... <verdict>`, which would only apply the verdict to
-// packets that pass the rate limiter and let the rest fall through.
-func TestBuildRuleExpressions_LogSplitOnInputOutput(t *testing.T) {
+// TestBuildRuleExpressions_InputOutputSingleRuleWithNflog asserts the
+// traffic-log-pagination plan's §2.6 change: now that input/output logs go
+// to NFLOG group LocalNflogGroup (RAM) instead of printk/journald, a
+// log-enabled input/output rule is a SINGLE nftables rule carrying match +
+// Counter + Log(group=LocalNflogGroup) + Verdict, with no expr.Limit —
+// mirroring the forward chain's shape, not the old two-rule split.
+func TestBuildRuleExpressions_InputOutputSingleRuleWithNflog(t *testing.T) {
 	addrs, svcs := chainTestMaps()
 
 	for _, chain := range []string{model.PolicyChainInput, model.PolicyChainOutput} {
@@ -118,31 +119,96 @@ func TestBuildRuleExpressions_LogSplitOnInputOutput(t *testing.T) {
 		if err != nil {
 			t.Fatalf("chain=%s: unexpected error: %v", chain, err)
 		}
-		if len(ruleSets) != 2 {
-			t.Fatalf("chain=%s: expected 2 rules when log is enabled, got %d: %+v", chain, len(ruleSets), ruleSets)
+		if len(ruleSets) != 1 {
+			t.Fatalf("chain=%s: expected exactly 1 rule when log is enabled, got %d: %+v", chain, len(ruleSets), ruleSets)
 		}
 
-		logRule := ruleSets[0]
-		if !hasLimit(logRule) {
-			t.Errorf("chain=%s: log-only rule must carry a rate Limit, got %+v", chain, logRule)
+		rule := ruleSets[0]
+		if hasLimit(rule) {
+			t.Errorf("chain=%s: rule must NOT carry a rate Limit now that log goes to NFLOG, got %+v", chain, rule)
 		}
-		logExpr, ok := hasLog(logRule)
+		if !hasCounter(rule) {
+			t.Errorf("chain=%s: rule must carry a Counter, got %+v", chain, rule)
+		}
+		logExpr, ok := hasLog(rule)
 		if !ok {
-			t.Fatalf("chain=%s: log-only rule missing Log expr, got %+v", chain, logRule)
+			t.Fatalf("chain=%s: rule missing Log expr, got %+v", chain, rule)
+		}
+		if logExpr.Group != LocalNflogGroup {
+			t.Errorf("chain=%s: expected Log.Group == LocalNflogGroup (%d), got %d", chain, LocalNflogGroup, logExpr.Group)
 		}
 		if string(logExpr.Data) != "[PiGate] TEST DROP  : " {
 			t.Errorf("chain=%s: unexpected log prefix %q", chain, logExpr.Data)
 		}
-		if hasVerdict(logRule, expr.VerdictDrop) || hasVerdict(logRule, expr.VerdictAccept) {
-			t.Errorf("chain=%s: log-only rule must NOT carry a verdict (Caution 5 leak), got %+v", chain, logRule)
+		if !hasVerdict(rule, expr.VerdictDrop) {
+			t.Errorf("chain=%s: rule must carry the DROP verdict, got %+v", chain, rule)
 		}
+	}
+}
 
-		verdictRule := ruleSets[1]
-		if !hasVerdict(verdictRule, expr.VerdictDrop) {
-			t.Errorf("chain=%s: second rule must carry the DROP verdict, got %+v", chain, verdictRule)
+// TestBuildRuleExpressions_LimitNeverWithVerdict is the general safety-net
+// test called out in the plan's Caution 2 / §2.6: for every combination of
+// chain/action/log/nat this project currently generates rules for, any
+// nftables rule that carries an expr.Limit must NEVER also carry an
+// expr.Verdict in the same rule (a rate-limited verdict rule silently lets
+// packets that exceed the limit fall through to the next rule — a security
+// leak, not just a style issue). This subsumes the old
+// TestBuildRuleExpressions_LogSplitOnInputOutput check with a rule that must
+// keep holding regardless of how buildRuleExpressions is refactored later.
+func TestBuildRuleExpressions_LimitNeverWithVerdict(t *testing.T) {
+	addrs, svcs := chainTestMaps()
+
+	chains := []string{model.PolicyChainForward, model.PolicyChainInput, model.PolicyChainOutput}
+	actions := []string{"ACCEPT", "DROP"}
+	logOptions := []bool{true, false}
+	natOptions := []bool{true, false}
+
+	for _, chain := range chains {
+		for _, action := range actions {
+			for _, logEnabled := range logOptions {
+				for _, nat := range natOptions {
+					ruleSets, err := buildRuleExpressions(
+						chain,
+						"eth0", "eth0",
+						"LAN", "LAN", "SSH", "TCP",
+						action, logEnabled, nat,
+						"[PiGate] TEST : ",
+						addrs, svcs,
+					)
+					if err != nil {
+						t.Fatalf("chain=%s action=%s log=%v nat=%v: unexpected error: %v", chain, action, logEnabled, nat, err)
+					}
+					for _, rule := range ruleSets {
+						if hasLimit(rule) && (hasVerdict(rule, expr.VerdictAccept) || hasVerdict(rule, expr.VerdictDrop)) {
+							t.Errorf("chain=%s action=%s log=%v nat=%v: rule has BOTH Limit and Verdict (security leak), got %+v",
+								chain, action, logEnabled, nat, rule)
+						}
+					}
+				}
+			}
 		}
-		if _, ok := hasLog(verdictRule); ok {
-			t.Errorf("chain=%s: verdict rule must not duplicate the Log expr, got %+v", chain, verdictRule)
+	}
+
+	// Also assert it against the three fixed structural log rules elsewhere
+	// in real_firewall.go that legitimately DO carry a Limit (notLocal 3.4,
+	// AUDIT, input final drop) — none of them may carry a Verdict either.
+	fixedLimitLogRules := [][]expr.Any{
+		{
+			&expr.Limit{Type: expr.LimitTypePkts, Rate: 3, Unit: expr.LimitTimeMinute, Burst: 10, Over: false},
+			localLogExpr("[PiGate]  INP DROP  : "),
+		},
+		{
+			&expr.Limit{Type: expr.LimitTypePkts, Rate: 3, Unit: expr.LimitTimeMinute, Burst: 10, Over: false},
+			&expr.Log{Key: uint32(1 << unix.NFTA_LOG_PREFIX), Data: []byte("[PiGate] INP AUDIT : ")},
+		},
+		{
+			&expr.Limit{Type: expr.LimitTypePkts, Rate: 10, Unit: expr.LimitTimeSecond, Burst: 20, Over: false},
+			localLogExpr("[PiGate] INP DROP  : "),
+		},
+	}
+	for _, rule := range fixedLimitLogRules {
+		if hasVerdict(rule, expr.VerdictAccept) || hasVerdict(rule, expr.VerdictDrop) {
+			t.Errorf("fixed log-only rule must not carry a Verdict, got %+v", rule)
 		}
 	}
 }

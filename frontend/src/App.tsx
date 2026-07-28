@@ -26,6 +26,7 @@ import ForceChangePassword from "@/pages/ForceChangePassword"
 import QoS from "@/pages/QoS"
 import EventLogs from "@/pages/EventLogs"
 import ForwardTraffic from "@/pages/ForwardTraffic"
+import LocalTraffic from "@/pages/LocalTraffic"
 import { SizeIndicator, TailwindIndicator } from "./components/tailwindIndicator"
 
 // A simple authentication route guard
@@ -167,6 +168,7 @@ export default function App() {
                   {/* Log & Report Routes */}
                   <Route path="logs">
                     <Route path="traffic" element={<ForwardTraffic />} />
+                    <Route path="local" element={<LocalTraffic />} />
                     <Route path="events" element={<EventLogs />} />
                   </Route>
 

@@ -21,6 +21,9 @@ const TITLES: Record<string, string> = {
   "/policy/local-out": "Local-Out Policy",
   "/policy/addresses": "Addresses (Objects)",
   "/policy/services": "Services (Objects)",
+  "/logs/traffic": "Forward Traffic",
+  "/logs/local": "Local Traffic",
+  "/logs/events": "System Events",
   "/system/settings": "Settings & Maintenance",
   "/system/users": "User Management",
 }

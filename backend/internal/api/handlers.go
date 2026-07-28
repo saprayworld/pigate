@@ -389,8 +389,26 @@ func (s *Server) HandleGetTrafficHistory(w http.ResponseWriter, r *http.Request)
 	s.writeJSON(w, http.StatusOK, s.systemStatus.GetTrafficHistory())
 }
 
+// HandleGetRecentLogs backs the Dashboard "Recent Logs" widget. It reads the
+// same shared ring buffer as HandleGetTrafficLogs (so entries from all three
+// chains appear here — deliberate, see plan §6 Caution 7) but MUST cap how
+// much it returns: at trafficLogBufferCapacity (10,000) entries, an unbounded
+// GetAll() here would ship ~2.5 MB of JSON on every page load/SSE reconnect
+// (plan §6 Caution 5), which this small, frequently-hit widget never needs.
 func (s *Server) HandleGetRecentLogs(w http.ResponseWriter, r *http.Request) {
-	s.writeJSON(w, http.StatusOK, s.logs.GetAll())
+	limit := 100
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 {
+		limit = v
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	all := s.logs.GetAll() // newest-first
+	if limit > len(all) {
+		limit = len(all)
+	}
+	s.writeJSON(w, http.StatusOK, all[:limit])
 }
 
 func (s *Server) HandleClearLogs(w http.ResponseWriter, r *http.Request) {
@@ -402,44 +420,150 @@ func (s *Server) HandleClearLogs(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// HandleGetTrafficLogs returns forward-chain packet logs (newest first) from the
-// RAM ring buffer, filtered in memory by the query params below. It reads the
-// same buffer as the Dashboard Recent Logs widget; it never touches SQLite.
+// trafficLogChainMatches reports whether entry belongs to the requested
+// chain filter. chainParam is already validated by the caller to be one of
+// "", "forward", "input", "output", "local" ("local" = input+output).
+func trafficLogChainMatches(entry model.FirewallLog, chainParam string) bool {
+	switch chainParam {
+	case "":
+		return true
+	case "local":
+		return entry.Chain == model.PolicyChainInput || entry.Chain == model.PolicyChainOutput
+	default:
+		return entry.Chain == chainParam
+	}
+}
+
+// HandleGetTrafficLogs returns packet logs (forward/input/output, newest
+// first) from the shared RAM ring buffer, filtered in memory by the query
+// params below. It reads the same buffer as the Dashboard Recent Logs
+// widget; it never touches SQLite.
 //
-//	action  PASS | DROP        (case-insensitive; empty = all)
-//	q       substring matched against src/dest/port/proto/interface/reason (case-insensitive)
-//	limit   max rows to return (default 100, capped at the buffer capacity)
+//	action     PASS | DROP                         (case-insensitive; empty = all)
+//	q          substring matched against src/dest/port/proto/interface/reason (case-insensitive)
+//	chain      forward | input | output | local (=input+output) | "" (=all); unknown value -> 400
+//	limit      max rows to return (default 100, capped at min(1000, buffer capacity))
+//	beforeId   cursor: id of the last row the client already has under the current filter
+//	beforeTime cursor fallback (RFC3339Nano, RFC3339 also accepted): used only when beforeId
+//	           is no longer present in the buffer (evicted) — see plan §2.7/§6 Caution 4
+//
+// Cursor pagination contract (docs/ref/todo/traffic-log-pagination-and-local-traffic-plan.md
+// §2.7): filter the WHOLE buffer first (action/q/chain), THEN locate the
+// cursor within the filtered result, THEN cut `limit` rows — never cut by
+// limit before filtering, or entries deeper in the buffer that match the
+// filter would be silently skipped. The cursor is the (id, time) of the last
+// row the client already rendered, not a numeric offset, because the ring
+// buffer is prepended to continuously by the NFLOG watchers — a numeric
+// offset would drift under the client's feet. Returning fewer than `limit`
+// rows is the client's signal that there is nothing older left; this handler
+// always returns `[]`, never `null`, so the frontend's array methods never
+// see a nil.
 func (s *Server) HandleGetTrafficLogs(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	action := strings.ToUpper(strings.TrimSpace(query.Get("action")))
 	needle := strings.ToLower(strings.TrimSpace(query.Get("q")))
+	chainParam := strings.ToLower(strings.TrimSpace(query.Get("chain")))
+	beforeID := strings.TrimSpace(query.Get("beforeId"))
+	beforeTimeRaw := strings.TrimSpace(query.Get("beforeTime"))
 
-	all := s.logs.GetAll() // already newest-first
+	switch chainParam {
+	case "", model.PolicyChainForward, model.PolicyChainInput, model.PolicyChainOutput, "local":
+		// ok
+	default:
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid chain %q: must be one of forward, input, output, local", chainParam))
+		return
+	}
+
 	limit := 100
 	if v, err := strconv.Atoi(query.Get("limit")); err == nil && v > 0 {
 		limit = v
 	}
-	if limit > len(all) {
-		limit = len(all)
+	if maxLimit := s.logs.Capacity(); limit > maxLimit {
+		limit = maxLimit
+	}
+	if limit > 1000 {
+		limit = 1000
 	}
 
-	filtered := make([]model.FirewallLog, 0, limit)
+	// Filter the entire buffer first (see doc comment above) — do not break
+	// out of this loop at `limit`.
+	all := s.logs.GetAll() // newest-first
+	matched := make([]model.FirewallLog, 0, len(all))
 	for _, entry := range all {
-		if len(filtered) >= limit {
-			break
-		}
 		if action != "" && strings.ToUpper(entry.Action) != action {
 			continue
 		}
+		if !trafficLogChainMatches(entry, chainParam) {
+			continue
+		}
 		if needle != "" {
-			hay := strings.ToLower(entry.Src + " " + entry.Dest + " " + entry.Port + " " + entry.Proto + " " + entry.InIface + " " + entry.OutIface + " " + entry.Reason)
+			hay := strings.ToLower(entry.Src + " " + entry.Dest + " " + entry.Port + " " + entry.Proto + " " + entry.InIface + " " + entry.OutIface + " " + entry.Reason + " " + entry.Chain)
 			if !strings.Contains(hay, needle) {
 				continue
 			}
 		}
-		filtered = append(filtered, entry)
+		matched = append(matched, entry)
 	}
-	s.writeJSON(w, http.StatusOK, filtered)
+
+	// Locate the cursor within the filtered result, then take rows after it.
+	start := 0
+	if beforeID != "" {
+		idx := -1
+		for i, entry := range matched {
+			if entry.ID == beforeID {
+				idx = i
+				break
+			}
+		}
+		if idx >= 0 {
+			start = idx + 1
+		} else {
+			// beforeId no longer present (evicted) — fall back to time-based cut.
+			beforeTime, ok := parseTrafficLogCursorTime(beforeTimeRaw)
+			if !ok {
+				// No usable fallback: nothing more to return, not "start over".
+				s.writeJSON(w, http.StatusOK, []model.FirewallLog{})
+				return
+			}
+			filteredByTime := matched[:0:0]
+			for _, entry := range matched {
+				entryTime, err := time.Parse(time.RFC3339Nano, entry.Time)
+				if err != nil {
+					continue
+				}
+				if entryTime.Before(beforeTime) {
+					filteredByTime = append(filteredByTime, entry)
+				}
+			}
+			matched = filteredByTime
+			start = 0
+		}
+	}
+
+	page := matched[start:]
+	if len(page) > limit {
+		page = page[:limit]
+	}
+	result := make([]model.FirewallLog, len(page))
+	copy(result, page)
+	s.writeJSON(w, http.StatusOK, result)
+}
+
+// parseTrafficLogCursorTime parses the beforeTime cursor fallback param,
+// accepting RFC3339Nano (the format entries are actually stamped with, see
+// main.go) and plain RFC3339 for leniency. ok=false for an empty/unparseable
+// value, which the caller treats as "no more data" rather than "start over".
+func parseTrafficLogCursorTime(raw string) (time.Time, bool) {
+	if raw == "" {
+		return time.Time{}, false
+	}
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
 }
 
 // HandleGetSystemEvents returns central event log entries (newest first) with

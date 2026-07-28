@@ -703,6 +703,61 @@ func (m *MockTrafficLog) WatchForwardTraffic(ctx context.Context, cb func(model.
 				InIface:  s.in,
 				OutIface: s.out,
 				Reason:   s.reason,
+				Chain:    model.PolicyChainForward,
+			})
+		}
+	}
+}
+
+// WatchLocalTraffic synthesizes input+output chain events (admin/self
+// traffic hitting or leaving the board itself) on a timer, alternating
+// between "input" (e.g. admin reaching the web UI, ping, an unsolicited scan
+// from the WAN) and "output" (e.g. the board's own DNS/NTP lookups) samples,
+// using the same reason text as the real parser (§2.4 of the plan).
+func (m *MockTrafficLog) WatchLocalTraffic(ctx context.Context, cb func(model.FirewallLog)) error {
+	rng := rand.New(rand.NewSource(time.Now().UnixNano() + 1))
+	ticker := time.NewTicker(4 * time.Second)
+	defer ticker.Stop()
+
+	type sample struct {
+		chain  string
+		action string
+		src    string
+		dest   string
+		port   string
+		proto  string
+		in     string
+		out    string
+		reason string
+	}
+	samples := []sample{
+		// input: traffic destined to the board itself.
+		{model.PolicyChainInput, "PASS", "192.168.1.10", "192.168.1.1", "443", "TCP", "eth1", "-", "Allowed (local-in)"},
+		{model.PolicyChainInput, "PASS", "192.168.1.20", "192.168.1.1", "22", "TCP", "eth1", "-", "Allowed (local-in)"},
+		{model.PolicyChainInput, "PASS", "192.168.1.15", "192.168.1.1", "-", "ICMP", "eth1", "-", "Allowed (local-in)"},
+		{model.PolicyChainInput, "DROP", "203.0.113.77", "203.0.113.1", "23", "TCP", "eth0", "-", "Blocked (local-in)"},
+		{model.PolicyChainInput, "DROP", "198.51.100.5", "203.0.113.1", "3389", "TCP", "eth0", "-", "Blocked (local-in)"},
+		// output: traffic the board itself originates.
+		{model.PolicyChainOutput, "PASS", "203.0.113.1", "8.8.8.8", "53", "UDP", "-", "eth0", "Allowed (local-out)"},
+		{model.PolicyChainOutput, "PASS", "203.0.113.1", "129.6.15.28", "123", "UDP", "-", "eth0", "Allowed (local-out)"},
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			s := samples[rng.Intn(len(samples))]
+			cb(model.FirewallLog{
+				Chain:    s.chain,
+				Action:   s.action,
+				Src:      s.src,
+				Dest:     s.dest,
+				Port:     s.port,
+				Proto:    s.proto,
+				InIface:  s.in,
+				OutIface: s.out,
+				Reason:   s.reason,
 			})
 		}
 	}

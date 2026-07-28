@@ -3,6 +3,8 @@ package kernel
 import (
 	"testing"
 
+	"pigate/internal/model"
+
 	nflog "github.com/florianl/go-nflog/v2"
 )
 
@@ -159,29 +161,35 @@ func TestParseNflogAttr(t *testing.T) {
 
 	t.Run("DROP prefix", func(t *testing.T) {
 		prefix := "[PiGate] FWD DROP  : "
-		entry, ok := parseNflogAttr(nflogAttrFixture(&payload, &prefix), stubResolveIface)
+		entry, ok := parseNflogAttr(nflogAttrFixture(&payload, &prefix), stubResolveIface, model.PolicyChainForward)
 		if !ok {
 			t.Fatal("expected ok=true")
 		}
 		if entry.Action != "DROP" {
 			t.Errorf("Action = %q, want DROP", entry.Action)
 		}
+		if entry.Chain != model.PolicyChainForward {
+			t.Errorf("Chain = %q, want forward", entry.Chain)
+		}
 	})
 
 	t.Run("ACCEPT prefix", func(t *testing.T) {
 		prefix := "[PiGate] FWD ACCEPT: "
-		entry, ok := parseNflogAttr(nflogAttrFixture(&payload, &prefix), stubResolveIface)
+		entry, ok := parseNflogAttr(nflogAttrFixture(&payload, &prefix), stubResolveIface, model.PolicyChainForward)
 		if !ok {
 			t.Fatal("expected ok=true")
 		}
 		if entry.Action != "PASS" {
 			t.Errorf("Action = %q, want PASS", entry.Action)
 		}
+		if entry.Chain != model.PolicyChainForward {
+			t.Errorf("Chain = %q, want forward", entry.Chain)
+		}
 	})
 
 	t.Run("nil payload", func(t *testing.T) {
 		prefix := "[PiGate] FWD DROP  : "
-		if _, ok := parseNflogAttr(nflogAttrFixture(nil, &prefix), stubResolveIface); ok {
+		if _, ok := parseNflogAttr(nflogAttrFixture(nil, &prefix), stubResolveIface, model.PolicyChainForward); ok {
 			t.Error("expected ok=false for nil payload")
 		}
 	})
@@ -192,7 +200,7 @@ func TestParseNflogAttr(t *testing.T) {
 		attr := nflogAttrFixture(&payload, &prefix)
 		attr.InDev = &in
 		attr.OutDev = &out
-		entry, ok := parseNflogAttr(attr, stubResolveIface)
+		entry, ok := parseNflogAttr(attr, stubResolveIface, model.PolicyChainForward)
 		if !ok {
 			t.Fatal("expected ok=true")
 		}
@@ -206,12 +214,64 @@ func TestParseNflogAttr(t *testing.T) {
 
 	t.Run("absent indev/outdev yields dash", func(t *testing.T) {
 		prefix := "[PiGate] FWD DROP  : "
-		entry, ok := parseNflogAttr(nflogAttrFixture(&payload, &prefix), stubResolveIface)
+		entry, ok := parseNflogAttr(nflogAttrFixture(&payload, &prefix), stubResolveIface, model.PolicyChainForward)
 		if !ok {
 			t.Fatal("expected ok=true")
 		}
 		if entry.InIface != "-" || entry.OutIface != "-" {
 			t.Errorf("InIface/OutIface = %q/%q, want -/-", entry.InIface, entry.OutIface)
+		}
+	})
+
+	// New cases per docs/ref/todo/traffic-log-pagination-and-local-traffic-plan.md
+	// §2.4: input/output prefixes, including the inconsistent double-space
+	// "[PiGate]  INP DROP  : " variant (Caution 3), and an unrecognized/absent
+	// prefix falling back to defaultChain.
+	prefixCases := []struct {
+		name         string
+		prefix       string
+		defaultChain string
+		wantChain    string
+		wantAction   string
+		wantReason   string
+	}{
+		{"INP ACCEPT", "[PiGate] INP ACCEPT: ", model.PolicyChainInput, model.PolicyChainInput, "PASS", "Allowed (local-in)"},
+		{"INP DROP single space", "[PiGate] INP DROP  : ", model.PolicyChainInput, model.PolicyChainInput, "DROP", "Blocked (local-in)"},
+		{"INP DROP double space", "[PiGate]  INP DROP  : ", model.PolicyChainInput, model.PolicyChainInput, "DROP", "Blocked (local-in)"},
+		{"OUT ACCEPT", "[PiGate] OUT ACCEPT: ", model.PolicyChainOutput, model.PolicyChainOutput, "PASS", "Allowed (local-out)"},
+		{"OUT DROP", "[PiGate] OUT DROP  : ", model.PolicyChainOutput, model.PolicyChainOutput, "DROP", "Blocked (local-out)"},
+		{"FWD ACCEPT", "[PiGate] FWD ACCEPT: ", model.PolicyChainForward, model.PolicyChainForward, "PASS", "Allowed (forward)"},
+		{"FWD DROP", "[PiGate] FWD DROP  : ", model.PolicyChainForward, model.PolicyChainForward, "DROP", "Blocked (forward)"},
+	}
+	for _, tc := range prefixCases {
+		t.Run(tc.name, func(t *testing.T) {
+			prefix := tc.prefix
+			entry, ok := parseNflogAttr(nflogAttrFixture(&payload, &prefix), stubResolveIface, tc.defaultChain)
+			if !ok {
+				t.Fatal("expected ok=true")
+			}
+			if entry.Chain != tc.wantChain {
+				t.Errorf("Chain = %q, want %q", entry.Chain, tc.wantChain)
+			}
+			if entry.Action != tc.wantAction {
+				t.Errorf("Action = %q, want %q", entry.Action, tc.wantAction)
+			}
+			if entry.Reason != tc.wantReason {
+				t.Errorf("Reason = %q, want %q", entry.Reason, tc.wantReason)
+			}
+		})
+	}
+
+	t.Run("missing prefix falls back to defaultChain", func(t *testing.T) {
+		entry, ok := parseNflogAttr(nflogAttrFixture(&payload, nil), stubResolveIface, model.PolicyChainInput)
+		if !ok {
+			t.Fatal("expected ok=true")
+		}
+		if entry.Chain != model.PolicyChainInput {
+			t.Errorf("Chain = %q, want input (defaultChain fallback)", entry.Chain)
+		}
+		if entry.Action != "PASS" {
+			t.Errorf("Action = %q, want PASS (unrecognized -> logged, not dropped)", entry.Action)
 		}
 	})
 }

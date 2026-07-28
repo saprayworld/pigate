@@ -234,9 +234,10 @@ table ip pigate_nat {
 บอร์ด Raspberry Pi มักใช้ MicroSD Card ในการเก็บระบบปฏิบัติการ ซึ่งมีจำนวนรอบการเขียน (Write Cycles) ที่จำกัด การบันทึกล็อกปริมาณมากอาจทำให้การ์ดชำรุดเสียหายเร็วขึ้น:
 * **Log Storage**: หลีกเลี่ยงการเขียนสถิติล็อกของ Firewall (nftables Block Logs) และ session ลงในฐานข้อมูล SQLite บนดิสก์อย่างต่อเนื่อง
 * **Solution**:
-  * บันทึกข้อมูลประวัติ Log ล่าสุดไว้ใน **In-Memory Circular Buffer (Ring Buffer)** บนแรมของ Go API (`backend/internal/logs/ringbuffer.go`) — ขนาดคงที่ ไม่ persist ลงดิสก์
+  * บันทึกข้อมูลประวัติ Log ล่าสุดไว้ใน **In-Memory Circular Buffer (Ring Buffer)** บนแรมของ Go API (`backend/internal/logs/ringbuffer.go`) — ขนาดคงที่ 10,000 รายการ (รวมทั้ง 3 chain: forward/input/output), ไม่ persist ลงดิสก์
   * ใช้การอ่าน/ดึงข้อมูลสตรีมโดยตรงจาก **Systemd Journald** หรือเก็บไฟล์ล็อกไว้ใน `/run/` หรือ `/tmp/` (ซึ่งเป็น `tmpfs` หรือแรมเสมือนใน Linux) เพื่อลดภาระการเขียนข้อมูลลงหน่วยความจำถาวร
   * SQLite (`db/`) เก็บเฉพาะ**การตั้งค่า** (source of truth ของ config) ส่วนสถานะที่เปลี่ยนบ่อย (firewall hit counter, DHCP lease สด) จะอ่านสดจาก kernel ทุกครั้งแทนการ cache ลงดิสก์
+  * **log ของ input/output chain** (Local Traffic page) ย้ายจาก printk/journald มาเข้า **NFLOG group 101** (RAM ring buffer ด้านบน) เช่นเดียวกับ forward chain (group 100) แล้ว — ลดการเขียน SD card ลงอีกขั้น มีข้อยกเว้นจุดเดียวคือกฎ AUDIT ของ input (ดักทุกแพ็กเก็ตก่อนมีคำตัดสิน ใช้เพื่อ debug ระดับ kernel ไม่ใช่ event ที่ผู้ใช้ต้องเห็น) ที่ยังคงเป็น printk แต่เพิ่ม rate limit (3/นาที) เข้าไปแล้ว (ดู `docs/ref/todo/traffic-log-pagination-and-local-traffic-plan.md`)
 
 ---
 
@@ -252,7 +253,7 @@ table ip pigate_nat {
 * **Hostname (`internal/kernel/real_hostname.go`)**: อ่าน/ตั้งชื่อโฮสต์ผ่าน D-Bus ของ `systemd-hostnamed` (`org.freedesktop.hostname1`) ซึ่งจัดการเขียน `/etc/hostname` ให้เองแบบ atomic
 * **เวลาระบบ / NTP (`internal/kernel/real_timedate.go`)**: อ่าน/ตั้งเขตเวลา, เปิด-ปิด NTP sync ผ่าน D-Bus ของ `systemd-timedated` (`org.freedesktop.timedate1`)
 * **QoS (`internal/kernel/real_qos.go`)**: จำกัดแบนด์วิดท์ด้วย Linux Traffic Control ผ่าน `vishvananda/netlink` โดยตรง — สร้าง HTB (Hierarchical Token Bucket) qdisc/class สำหรับ egress และใช้ IFB (Intermediate Functional Block) redirect เพื่อจำกัด ingress
-* **Forward Traffic Log (`internal/kernel/real_traffic_log.go`)**: subscribe NFLOG multicast group ที่ nftables ส่ง log ของ `forward` chain มาให้ ผ่านไลบรารี `florianl/go-nflog` (Netlink ล้วน ไม่ tail syslog)
+* **Traffic Log — forward + local (`internal/kernel/real_traffic_log.go`)**: subscribe NFLOG multicast group ที่ nftables ส่ง log มาให้ ผ่านไลบรารี `florianl/go-nflog` (Netlink ล้วน ไม่ tail syslog) ครอบคลุมทั้ง 3 chain ผ่าน**สอง netlink group แยกกัน**: group **100** สำหรับ `forward` chain (หน้า Forward Traffic) และ group **101** สำหรับ `input`/`output` chain รวมกัน (หน้า Local Traffic) — แยก group โดยเจตนาเพื่อไม่ให้ทราฟฟิก forward ปริมาณสูงเบียดคิว/แย่ง channel กับ event ของ input/output ที่มีค่าเชิง diagnostic (เช่น มีใครยิงเข้าตัวบอร์ด) parser (`parseNflogAttr`) แยก chain/action/reason จาก log prefix (`FWD`/`INP`/`OUT`) แล้วเก็บลง ring buffer เดียวกันพร้อมฟิลด์ `Chain`
 
 *เหตุผลรวม*: ได้ผลลัพธ์การทำงานที่แม่นยำกว่าการจับข้อความจาก stdout ของคอมมานด์ไลน์ ปลอดภัยจากการโจมตี command injection โดยดีไซน์ และทำงานได้เร็วกว่า
 

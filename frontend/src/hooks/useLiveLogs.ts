@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react"
 
 import { dashboardService, type SSELogEntry } from "@/services/dashboardService"
 
-// Cap the in-memory list at the backend ring-buffer capacity (main.go:74) so a
-// long-lived stream can't grow the array without bound.
-const MAX_LOGS = 500
+// Default cap on the in-memory list — matches the Dashboard Recent Logs
+// widget's page size. Callers that need a bigger ceiling (e.g. the
+// cursor-paginated Forward/Local Traffic pages) pass `maxRows` instead of
+// relying on this default (see usePaginatedLiveLogs.ts).
+const DEFAULT_MAX_LOGS = 500
 
 interface UseLiveLogsOptions<T> {
   /** Fetches the authoritative newest-first snapshot (server-filtered). Called
@@ -19,6 +21,9 @@ interface UseLiveLogsOptions<T> {
    *  ForwardTraffic applies its client-side filter so filtered rows never leak
    *  in via the live stream. Defaults to an identity cast (Dashboard). */
   transform?: (raw: SSELogEntry) => T | null
+  /** Max rows kept in memory (default 500, matching the historical Dashboard
+   *  behavior — do not change the default, only pass an override). */
+  maxRows?: number
 }
 
 /**
@@ -44,6 +49,7 @@ export function useLiveLogs<T extends { id: string }>({
   refreshKey = 0,
   paused = false,
   transform,
+  maxRows = DEFAULT_MAX_LOGS,
 }: UseLiveLogsOptions<T>): { logs: T[]; isLoading: boolean } {
   const [logs, setLogs] = useState<T[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -65,13 +71,13 @@ export function useLiveLogs<T extends { id: string }>({
   const loadSnapshot = useCallback(async () => {
     try {
       const data = await fetchRef.current()
-      setLogs(data.slice(0, MAX_LOGS))
+      setLogs(data.slice(0, maxRows))
     } catch {
       /* keep last known rows — a transient failure shouldn't blank the view */
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [maxRows])
 
   // Snapshot on mount and whenever refreshKey changes. Independent of the SSE
   // connection so a filter/refresh never tears the stream down.
@@ -93,7 +99,7 @@ export function useLiveLogs<T extends { id: string }>({
         if (!entry) return
         setLogs((prev) => {
           if (prev.some((l) => l.id === entry.id)) return prev
-          return [entry, ...prev].slice(0, MAX_LOGS)
+          return [entry, ...prev].slice(0, maxRows)
         })
       },
       onClear: () => setLogs([]),
@@ -105,7 +111,7 @@ export function useLiveLogs<T extends { id: string }>({
       },
     })
     return stop
-  }, [paused, loadSnapshot])
+  }, [paused, loadSnapshot, maxRows])
 
   return { logs, isLoading }
 }

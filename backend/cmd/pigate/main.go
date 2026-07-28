@@ -36,6 +36,15 @@ import (
 // -config path, which must already exist.
 const defaultConfigPath = "/var/lib/pigate/pigate.conf"
 
+// trafficLogBufferCapacity is the max number of entries the shared traffic
+// log ring buffer holds (forward + input + output chains combined). At ~300-
+// 550 bytes/entry in practice (see
+// docs/ref/todo/traffic-log-pagination-and-local-traffic-plan.md §2.2 for the
+// full calculation) this is ~3-5.5 MB worst-case RAM on the Pi — a small,
+// fixed cost that lets the Forward Traffic / Local Traffic pages page back
+// ~20 screens (500 rows/page) of recent history via cursor pagination.
+const trafficLogBufferCapacity = 10000
+
 // version is the PiGate build version. It is overridable at build time via
 // -ldflags "-X main.version=<tag>" (see build.sh); the default applies to plain
 // `go build` / `go run` during development.
@@ -94,7 +103,7 @@ func main() {
 	// Logs widget. RAM-only — never persisted (SD card wear, tech_stack_design.md
 	// §8). Capacity 500: a FirewallLog is a handful of short strings, so this is
 	// only a few hundred KB while giving the log view a useful window.
-	ringBuffer := logs.NewRingBuffer(500)
+	ringBuffer := logs.NewRingBuffer(trafficLogBufferCapacity)
 
 	// 3. Initialize SQLite DB & run migrations
 	sqliteDB, err := db.InitDB(cfg.DBPath, cfg.Mock)
@@ -346,21 +355,42 @@ func main() {
 	monitorCtx, cancelMonitor := context.WithCancel(context.Background())
 	defer cancelMonitor()
 
+	// stampAndPush is the shared callback for both traffic-log watchers below:
+	// it stamps a unique id + timestamp then pushes into the one shared ring
+	// buffer (see docs/ref/todo/traffic-log-pagination-and-local-traffic-plan.md
+	// §2.1 for why one buffer covers all three chains). Timestamp uses
+	// RFC3339Nano (not plain RFC3339) — the API's cursor pagination falls back
+	// to comparing this timestamp when a beforeId has been evicted from the
+	// buffer, and second-level RFC3339 precision would make many entries
+	// arriving within the same second indistinguishable, silently dropping
+	// siblings out of that fallback (plan §6 Caution 4).
+	stampAndPush := func(entry model.FirewallLog) {
+		entry.Time = time.Now().UTC().Format(time.RFC3339Nano)
+		entry.ID = uuid.NewString()
+		ringBuffer.Add(entry)
+	}
+
 	// Start the forward-traffic log watcher. It feeds the shared ring buffer that
-	// backs the Forward Traffic page and Dashboard Recent Logs. Each event is
-	// stamped with an RFC3339 UTC timestamp (the frontend formats it for display)
-	// and a unique id. Real mode reads NFLOG group 100; mock mode synthesizes
-	// events. If the watcher errors (e.g. NFLOG unavailable), the buffer simply
-	// stays empty — packets are unaffected.
-	log.Printf("[Main] Starting forward-traffic log watcher...")
+	// backs the Forward Traffic page and Dashboard Recent Logs. Real mode reads
+	// NFLOG group 100; mock mode synthesizes events. If the watcher errors (e.g.
+	// NFLOG unavailable), the buffer simply stays empty — packets are unaffected.
+	log.Printf("[Main] Starting forward-traffic log watcher (NFLOG group %d)...", kernel.ForwardNflogGroup)
 	go func() {
-		err := trafficLog.WatchForwardTraffic(monitorCtx, func(entry model.FirewallLog) {
-			entry.Time = time.Now().UTC().Format(time.RFC3339)
-			entry.ID = uuid.NewString()
-			ringBuffer.Add(entry)
-		})
+		err := trafficLog.WatchForwardTraffic(monitorCtx, stampAndPush)
 		if err != nil && monitorCtx.Err() == nil {
-			log.Printf("[Main] Warning: forward-traffic log watcher stopped: %v", err)
+			log.Printf("[Main] Warning: forward-traffic log watcher (NFLOG group %d) stopped: %v", kernel.ForwardNflogGroup, err)
+		}
+	}()
+
+	// Start the local-traffic (input+output chain) log watcher — a second,
+	// independent NFLOG socket/goroutine (LocalNflogGroup) feeding the SAME
+	// ring buffer, distinguished by entry.Chain. Kept as a separate warning
+	// message so an operator can tell which NFLOG group failed to bind.
+	log.Printf("[Main] Starting local-traffic log watcher (NFLOG group %d)...", kernel.LocalNflogGroup)
+	go func() {
+		err := trafficLog.WatchLocalTraffic(monitorCtx, stampAndPush)
+		if err != nil && monitorCtx.Err() == nil {
+			log.Printf("[Main] Warning: local-traffic log watcher (NFLOG group %d) stopped: %v", kernel.LocalNflogGroup, err)
 		}
 	}()
 
