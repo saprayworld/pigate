@@ -132,6 +132,7 @@ func main() {
 	var trafficLog kernel.TrafficLogManager
 	var systemServiceMgr kernel.SystemServiceManager
 	var capProber kernel.CapabilityProber
+	var trafficAcct kernel.TrafficAccountingManager
 	dns := kernel.NewDNSManager(cfg.Mock)
 
 	if cfg.Mock || cfg.MockFromReal {
@@ -151,6 +152,20 @@ func main() {
 		trafficLog = kernel.NewMockTrafficLog()
 		systemServiceMgr = kernel.NewMockSystemServiceManager()
 		capProber = kernel.NewMockCapabilityProber()
+		// ruleIDs supplies live DB policy-rule ids so MockTrafficAccounting's
+		// synthetic Top Rules entries actually match something in the DB
+		// (docs/ref/todo/dashboard-traffic-detail-plan.md T-05).
+		trafficAcct = kernel.NewMockTrafficAccounting(func() []string {
+			rules, err := repo.GetPolicies()
+			if err != nil {
+				return nil
+			}
+			ids := make([]string, 0, len(rules))
+			for _, r := range rules {
+				ids = append(ids, r.ID)
+			}
+			return ids
+		})
 	} else {
 		// Real kernel integrations via netlink — used on Raspberry Pi 5 production.
 		// Requires: sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
@@ -168,6 +183,7 @@ func main() {
 		trafficLog = kernel.NewRealTrafficLog()
 		systemServiceMgr = kernel.NewRealSystemServiceManager()
 		capProber = kernel.NewRealCapabilityProber()
+		trafficAcct = kernel.NewRealTrafficAccounting()
 	}
 
 	// 5. Instantiate Server & Router
@@ -191,6 +207,9 @@ func main() {
 	powerService := service.NewPowerService(powerMgr)
 	systemServiceService := service.NewSystemServiceService(systemServiceMgr, repo)
 	systemStatusService := service.NewSystemStatusService(sysStats, repo, hostnameService, timeService, version)
+	// Dashboard "Detailed" tab traffic-analytics pipeline (Protocol Breakdown /
+	// Top Talkers / Top Rules by Traffic — docs/ref/todo/dashboard-traffic-detail-plan.md).
+	trafficStatsService := service.NewTrafficStatsService(trafficAcct, repo, dhcp)
 
 	// Central event log: every subsystem funnels audit events through this one
 	// service (RAM queue + async batch writer to SQLite; see event_log.go).
@@ -318,7 +337,7 @@ func main() {
 		netlinkMonitor,
 	)
 
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker, wifiPresetService, systemServiceService, capabilityService)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker, wifiPresetService, systemServiceService, capabilityService, trafficStatsService)
 
 	// Apply config form database to kernel
 
@@ -410,6 +429,12 @@ func main() {
 	// Shares the monitor context so it stops on shutdown.
 	log.Printf("[Main] Starting system status telemetry sampler...")
 	systemStatusService.Start(monitorCtx)
+
+	// Dashboard traffic-detail collector (conntrack + nftables rule counters
+	// poller) — shares the monitor context so it stops on shutdown, same as
+	// systemStatusService above.
+	log.Printf("[Main] Starting dashboard traffic-detail collector...")
+	trafficStatsService.Start(monitorCtx)
 
 	log.Printf("[Main] Applying database-configured hostname settings to kernel at startup...")
 	if err := hostnameService.InitApplyConfig(); err != nil {

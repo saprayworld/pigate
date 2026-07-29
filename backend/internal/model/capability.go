@@ -38,6 +38,14 @@ const (
 	// CapabilityReasonProbeFailed is the catch-all for any other/unclassified
 	// probe error (including a probe that timed out).
 	CapabilityReasonProbeFailed = "probe_failed"
+	// CapabilityReasonAcctDisabled means the conntrack table itself is
+	// reachable (dump succeeded), but every visible flow reports zero bytes —
+	// the telltale sign that `net.netfilter.nf_conntrack_acct` is not set to
+	// 1, so the kernel isn't counting per-flow bytes at all (see
+	// docs/ref/todo/dashboard-traffic-detail-plan.md §5 Caution 1). Reported
+	// as Degraded rather than Available=false since the subsystem otherwise
+	// works — only the byte counters are silently zero.
+	CapabilityReasonAcctDisabled = "acct_disabled"
 )
 
 // CapabilityProbeResult is the raw result of probing one subsystem from the

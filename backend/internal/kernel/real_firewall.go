@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
+	"github.com/google/nftables/userdata"
 	"golang.org/x/sys/unix"
 )
 
@@ -706,27 +707,11 @@ func protoNumber(proto string) (byte, error) {
 }
 
 // parsePortSpec parses a "8080" or "8000-8010" spec into an inclusive range.
-// single ports return start==end.
+// single ports return start==end. Delegates to model.ParsePortSpec, the one
+// canonical implementation shared with the dashboard traffic-detail
+// categorizer (plan Caution 13) — do not reimplement this logic here.
 func parsePortSpec(spec string) (start, end int, err error) {
-	spec = strings.TrimSpace(spec)
-	parts := strings.Split(spec, "-")
-	switch len(parts) {
-	case 1:
-		p, err := strconv.Atoi(strings.TrimSpace(parts[0]))
-		if err != nil || p < 1 || p > 65535 {
-			return 0, 0, fmt.Errorf("invalid port %q", spec)
-		}
-		return p, p, nil
-	case 2:
-		s, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
-		e, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
-		if err1 != nil || err2 != nil || s < 1 || e > 65535 || s >= e {
-			return 0, 0, fmt.Errorf("invalid port range %q", spec)
-		}
-		return s, e, nil
-	default:
-		return 0, 0, fmt.Errorf("invalid port spec %q", spec)
-	}
+	return model.ParsePortSpec(spec)
 }
 
 // dportMatchExprs builds the transport-header destination-port match for a
@@ -1062,6 +1047,14 @@ func addUserChainRules(
 			continue
 		}
 
+		// Tag every nft rule this DB rule expands into with its DB id, so the
+		// traffic-detail collector can sum nftables' own per-rule counter back
+		// to the DB rule it belongs to (docs/ref/todo/dashboard-traffic-detail-plan.md
+		// §2.3). Purely additive: UserData is a separate rule attribute, not
+		// part of Exprs, so it cannot change match/verdict behavior or rule
+		// count/order.
+		ruleUserData := userdata.AppendString(nil, userdata.TypeComment, r.ID)
+
 		sources := r.Source
 		if len(sources) == 0 {
 			sources = []string{"ALL"}
@@ -1109,9 +1102,10 @@ func addUserChainRules(
 						}
 						for _, exprs := range ruleSets {
 							conn.AddRule(&nftables.Rule{
-								Table: table,
-								Chain: nfChain,
-								Exprs: exprs,
+								Table:    table,
+								Chain:    nfChain,
+								Exprs:    exprs,
+								UserData: ruleUserData,
 							})
 						}
 					}

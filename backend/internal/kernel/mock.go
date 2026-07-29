@@ -485,7 +485,7 @@ func (m *MockSystemServiceManager) Restart(unit string) error {
 // reason "mock", so dev machines running -mock=true never see a capability
 // warning banner (docs/ref/todo/kernel-capability-detection-plan.md §0).
 // Its id set MUST stay in sync with RealCapabilityProber's registry
-// (firewall, dbus, dnsmasq, resolved).
+// (firewall, dbus, dnsmasq, resolved, conntrack).
 type MockCapabilityProber struct{}
 
 func NewMockCapabilityProber() *MockCapabilityProber {
@@ -493,7 +493,7 @@ func NewMockCapabilityProber() *MockCapabilityProber {
 }
 
 func (m *MockCapabilityProber) ProbeAll() []model.CapabilityProbeResult {
-	ids := []string{"firewall", "dbus", "dnsmasq", "resolved"}
+	ids := []string{"firewall", "dbus", "dnsmasq", "resolved", "conntrack"}
 	out := make([]model.CapabilityProbeResult, 0, len(ids))
 	for _, id := range ids {
 		out = append(out, model.CapabilityProbeResult{
@@ -761,4 +761,111 @@ func (m *MockTrafficLog) WatchLocalTraffic(ctx context.Context, cb func(model.Fi
 			})
 		}
 	}
+}
+
+// mockFlowTemplate is one synthetic conntrack flow (or a small group of
+// near-identical flows) used to seed MockTrafficAccounting.DumpFlows.
+// ratePerSec is the combined bytes/sec across all `instances` of this
+// template; elapsed real time since MockTrafficAccounting was constructed is
+// what drives monotonic byte growth (see DumpFlows).
+type mockFlowTemplate struct {
+	srcIP      string
+	dstIP      string
+	proto      uint8
+	dstPort    uint16
+	ratePerSec float64
+	instances  int
+}
+
+// mockFlowTemplates deliberately reuses the same LAN IPs as MockDhcp's
+// hardcoded lease list (192.168.1.101/102/105 — iPhone-13/Android-SmartTV/
+// iPad-Pro) so Top Talkers shows real hostnames in -mock=true dev mode, per
+// docs/ref/todo/dashboard-traffic-detail-plan.md T-05. Ports span common
+// Service Object categories (443 HTTPS, 53 DNS, 5060 VoIP/SIP, 80 HTTP) plus
+// a couple of unmatched ports (51820, 6881, 22-ish) that deliberately fall
+// into the "Other" category, so both matched and unmatched Protocol
+// Breakdown segments are exercised in dev.
+var mockFlowTemplates = []mockFlowTemplate{
+	{"192.168.1.101", "142.250.80.46", 6, 443, 9000, 3},    // iPhone-13: HTTPS video/streaming
+	{"192.168.1.101", "1.1.1.1", 17, 53, 40, 2},            // iPhone-13: DNS
+	{"192.168.1.102", "173.194.76.94", 6, 443, 26000, 3},   // Android-SmartTV: HTTPS video (dominant talker)
+	{"192.168.1.102", "64.233.166.127", 17, 5060, 1200, 2}, // Android-SmartTV: VoIP/SIP
+	{"192.168.1.102", "8.8.8.8", 17, 53, 35, 2},            // Android-SmartTV: DNS
+	{"192.168.1.105", "151.101.1.69", 6, 80, 3000, 3},      // iPad-Pro: HTTP browsing
+	{"192.168.1.105", "151.101.1.69", 6, 443, 4500, 3},     // iPad-Pro: HTTPS browsing
+	{"192.168.1.105", "203.0.113.55", 6, 51820, 800, 2},    // iPad-Pro: unmatched port -> "Other"
+	{"192.168.1.101", "45.33.32.156", 17, 6881, 500, 2},    // iPhone-13: unmatched port -> "Other"
+	{"192.168.1.102", "198.51.100.9", 6, 22, 150, 2},       // Android-SmartTV: unmatched port -> "Other"
+}
+
+// MockTrafficAccounting implements TrafficAccountingManager for local/mock
+// testing. It synthesizes ~20-40 flows across mockFlowTemplates rather than
+// opening any real netlink socket, and per-flow byte counts grow
+// monotonically with wall-clock time since construction — exactly like a
+// real conntrack entry's cumulative Bytes field — so the Dashboard traffic
+// cards visibly move during -mock=true development. ruleIDs (optional)
+// supplies live DB policy-rule ids so DumpRuleCounters can synthesize
+// realistic Top Rules entries the service layer can actually match against
+// the DB instead of ids nothing will ever match; when nil, DumpRuleCounters
+// returns an empty map.
+type MockTrafficAccounting struct {
+	start   time.Time
+	ruleIDs func() []string
+}
+
+// NewMockTrafficAccounting constructs the mock. ruleIDs may be nil (Top
+// Rules will simply stay empty in that case).
+func NewMockTrafficAccounting(ruleIDs func() []string) *MockTrafficAccounting {
+	return &MockTrafficAccounting{start: time.Now(), ruleIDs: ruleIDs}
+}
+
+func (m *MockTrafficAccounting) DumpFlows() ([]model.FlowSample, error) {
+	elapsed := time.Since(m.start).Seconds()
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	out := make([]model.FlowSample, 0, 32)
+	for ti, t := range mockFlowTemplates {
+		if t.instances <= 0 {
+			continue
+		}
+		perInstance := t.ratePerSec / float64(t.instances)
+		for i := 0; i < t.instances; i++ {
+			// Small per-instance jitter (deterministic, not time-based) so
+			// instances of the same template aren't perfectly identical.
+			jitter := 0.85 + 0.3*float64(i)/float64(t.instances)
+			bytes := uint64(perInstance * elapsed * jitter)
+			out = append(out, model.FlowSample{
+				Key:     fmt.Sprintf("mock-flow-%d-%d", ti, i),
+				SrcIP:   t.srcIP,
+				DstIP:   t.dstIP,
+				Proto:   t.proto,
+				DstPort: t.dstPort,
+				Bytes:   bytes,
+			})
+		}
+	}
+	return out, nil
+}
+
+func (m *MockTrafficAccounting) DumpRuleCounters() (map[string]model.RuleCounter, error) {
+	out := make(map[string]model.RuleCounter)
+	if m.ruleIDs == nil {
+		return out, nil
+	}
+	elapsed := time.Since(m.start).Seconds()
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	for i, id := range m.ruleIDs() {
+		if id == "" {
+			continue
+		}
+		// Vary the synthetic rate per rule so the Top Rules ranking isn't a
+		// flat tie in dev mode.
+		ratePerSec := 300.0 + float64(i%5)*450.0
+		bytes := uint64(ratePerSec * elapsed)
+		out[id] = model.RuleCounter{Bytes: bytes, Packets: bytes / 512}
+	}
+	return out, nil
 }

@@ -98,6 +98,40 @@ export interface TrafficHistory {
   buckets: TrafficBucket[];
 }
 
+export interface TrafficCategorySlice {
+  name: string;
+  bytes: number;
+  percent: number;
+}
+
+export interface TopTalker {
+  ip: string;
+  hostname: string;
+  mac: string;
+  bytes: number;
+  percent: number;
+}
+
+export interface TopRule {
+  ruleId: string;
+  name: string;
+  chain: string;
+  action: string;
+  bytes: number;
+  packets: number;
+  percent: number;
+}
+
+export interface TrafficDetail {
+  window: "1h" | "24h";
+  observedBytes: number;
+  estimated: boolean;
+  categories: TrafficCategorySlice[];
+  topTalkers: TopTalker[];
+  topRules: TopRule[];
+  generatedAt: string;
+}
+
 const LOGS_STORAGE_KEY = "pigate_dashboard_logs";
 
 function getLocalLogs(): FirewallLog[] {
@@ -236,6 +270,70 @@ export const dashboardService = {
     const response = await fetch(`${API_BASE_URL}/dashboard/traffic`);
     if (!response.ok) {
       throw new Error(`Failed to fetch traffic history: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  // Get the Dashboard "Detailed" tab traffic-analytics cards (Protocol
+  // Breakdown / Top Talkers / Top Rules by Traffic). window defaults to "1h".
+  // Categories/TopTalkers are estimates (conntrack-derived, see `estimated`);
+  // TopRules is exact (nftables' own per-rule counter).
+  getTrafficDetail: async (window: "1h" | "24h" = "1h"): Promise<TrafficDetail> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      // Deterministic-ish mock numbers scaled by window so the two ranges
+      // visibly differ, matching the shape of the real 5-minute-bucket data.
+      const scale = window === "24h" ? 22 : 1;
+      const categoriesRaw = [
+        { name: "HTTPS", bytes: 5_120_000_000 * scale },
+        { name: "DNS", bytes: 640_000_000 * scale },
+        { name: "VoIP", bytes: 410_000_000 * scale },
+        { name: "Other", bytes: 2_050_000_000 * scale },
+      ];
+      const observedBytes = categoriesRaw.reduce((sum, c) => sum + c.bytes, 0);
+      const categories: TrafficCategorySlice[] = categoriesRaw.map((c) => ({
+        ...c,
+        percent: Math.round((c.bytes / observedBytes) * 1000) / 10,
+      }));
+
+      const talkersRaw = [
+        { ip: "192.168.1.50", hostname: "NAS-Server", mac: "AA:11:22:33:44:01", bytes: 4_800_000_000 * scale },
+        { ip: "192.168.1.101", hostname: "iPhone-13", mac: "99:88:77:66:55:44", bytes: 2_100_000_000 * scale },
+        { ip: "192.168.1.60", hostname: "MacBook-Pro", mac: "AA:11:22:33:44:02", bytes: 1_650_000_000 * scale },
+        { ip: "192.168.1.102", hostname: "Android-SmartTV", mac: "AA:BB:CC:DD:EE:FF", bytes: 890_000_000 * scale },
+        { ip: "192.168.1.105", hostname: "iPad-Pro", mac: "B4:F1:DA:C8:E2:10", bytes: 320_000_000 * scale },
+      ];
+      const talkersTotal = talkersRaw.reduce((sum, t) => sum + t.bytes, 0);
+      const topTalkers: TopTalker[] = talkersRaw.map((t) => ({
+        ...t,
+        percent: Math.round((t.bytes / talkersTotal) * 1000) / 10,
+      }));
+
+      const rulesRaw = [
+        { ruleId: "mock-rule-1", name: "Allow LAN to WAN", chain: "forward", action: "ACCEPT", bytes: 6_400_000_000 * scale, packets: 5_200_000 * scale },
+        { ruleId: "mock-rule-2", name: "Allow DNS", chain: "forward", action: "ACCEPT", bytes: 640_000_000 * scale, packets: 900_000 * scale },
+        { ruleId: "mock-rule-3", name: "Block Ads Domains", chain: "forward", action: "DROP", bytes: 45_000_000 * scale, packets: 120_000 * scale },
+      ];
+      const rulesTotal = rulesRaw.reduce((sum, r) => sum + r.bytes, 0);
+      const topRules: TopRule[] = rulesRaw.map((r) => ({
+        ...r,
+        percent: Math.round((r.bytes / rulesTotal) * 1000) / 10,
+      }));
+
+      return {
+        window,
+        observedBytes,
+        estimated: true,
+        categories,
+        topTalkers,
+        topRules,
+        generatedAt: new Date().toISOString(),
+      };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/dashboard/traffic-detail?window=${window}`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch traffic detail: ${response.statusText}`);
     }
     return response.json();
   },

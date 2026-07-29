@@ -340,6 +340,43 @@ paths:
               schema:
                 $ref: '#/components/schemas/TrafficHistory'
 
+  /dashboard/traffic-detail:
+    get:
+      tags:
+        - Dashboard
+      summary: >-
+        Get the Detailed-tab traffic-analytics cards (Protocol Breakdown, Top
+        Talkers, Top Rules by Traffic)
+      description: >
+        Backs three Dashboard "Detailed" tab cards. Categories and topTalkers
+        are derived from a background conntrack-polling collector and are
+        **estimates** (see `estimated`) — accurate to roughly 95-99% of actual
+        bytes in typical home/office conditions, degrading under heavy
+        port-scan/P2P conditions; their percentages are computed against
+        `observedBytes` (the total the collector itself saw), NOT against the
+        WAN total from `/dashboard/traffic` — the two must never be conflated.
+        topRules is derived from nftables' own exact per-rule packet/byte
+        counter and is not an estimate. All three lists live only in a RAM
+        ring buffer (5-minute buckets, up to 24h) and reset on reboot — never
+        persisted to SQLite.
+      parameters:
+        - name: window
+          in: query
+          schema:
+            type: string
+            enum: [1h, 24h]
+            default: 1h
+          description: >
+            Aggregation window. Any value outside {1h, 24h} (including
+            omitted) silently falls back to 1h rather than erroring.
+      responses:
+        '200':
+          description: Traffic detail retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrafficDetail'
+
   /dashboard/logs:
     get:
       tags:
@@ -3336,7 +3373,9 @@ components:
       properties:
         id:
           type: string
-          description: Stable subsystem id (registry key), e.g. `firewall`, `dbus`, `dnsmasq`, `resolved`.
+          description: >-
+            Stable subsystem id (registry key), e.g. `firewall`, `dbus`,
+            `dnsmasq`, `resolved`, `conntrack`.
           example: firewall
         name:
           type: string
@@ -3363,6 +3402,7 @@ components:
             - service_inactive
             - apply_failed
             - probe_failed
+            - acct_disabled
           example: not_supported
         detail:
           type: string
@@ -3427,6 +3467,115 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TrafficBucket'
+
+    TrafficCategorySlice:
+      type: object
+      required: [name, bytes, percent]
+      properties:
+        name:
+          type: string
+          description: >-
+            A Service Object name the flow's (protocol, destination port)
+            matched (narrowest matching port range wins), or "Other" when
+            nothing matches.
+          example: HTTPS
+        bytes:
+          type: integer
+          format: int64
+          example: 5120000000
+        percent:
+          type: number
+          format: float
+          description: Share of observedBytes (not of the WAN total).
+          example: 62.1
+
+    TopTalker:
+      type: object
+      required: [ip, hostname, mac, bytes, percent]
+      properties:
+        ip:
+          type: string
+          description: Pre-NAT LAN-side source IP (conntrack original tuple).
+          example: 192.168.1.50
+        hostname:
+          type: string
+          description: DHCP lease/reservation hostname; falls back to the IP itself.
+          example: NAS-Server
+        mac:
+          type: string
+          example: 'AA:11:22:33:44:01'
+        bytes:
+          type: integer
+          format: int64
+          example: 4800000000
+        percent:
+          type: number
+          format: float
+          description: Share of observedBytes (not of the WAN total).
+          example: 39.5
+
+    TopRule:
+      type: object
+      required: [ruleId, name, chain, action, bytes, packets, percent]
+      properties:
+        ruleId:
+          type: string
+        name:
+          type: string
+        chain:
+          type: string
+          enum: [input, forward, output]
+        action:
+          type: string
+          enum: [ACCEPT, DROP]
+        bytes:
+          type: integer
+          format: int64
+        packets:
+          type: integer
+          format: int64
+        percent:
+          type: number
+          format: float
+          description: >-
+            Share of total traffic across all returned rule deltas — NOT
+            observedBytes (different accounting source: nftables' own exact
+            counter vs. conntrack-derived estimate).
+
+    TrafficDetail:
+      type: object
+      required: [window, observedBytes, estimated, categories, topTalkers, topRules, generatedAt]
+      properties:
+        window:
+          type: string
+          enum: [1h, 24h]
+        observedBytes:
+          type: integer
+          format: int64
+          description: >-
+            Total bytes the conntrack-based collector actually observed in
+            this window — the denominator for categories/topTalkers percent,
+            NOT the WAN total from /dashboard/traffic.
+        estimated:
+          type: boolean
+          description: >-
+            Always true — categories/topTalkers are conntrack-poll estimates
+            (~95-99% typical accuracy). topRules is exact regardless.
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/TrafficCategorySlice'
+        topTalkers:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopTalker'
+        topRules:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopRule'
+        generatedAt:
+          type: string
+          format: date-time
 
     FirewallLog:
       type: object

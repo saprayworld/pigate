@@ -42,6 +42,7 @@ import {
   type PerformanceMetrics,
   type SystemInfo,
   type TrafficHistory,
+  type TrafficDetail,
 } from "@/services/dashboardService"
 import { interfaceService } from "@/services/interfaceService"
 import { useLiveLogs } from "@/hooks/useLiveLogs"
@@ -55,6 +56,7 @@ import type { NetworkInterface, FirewallLog } from "@/data-mockup/mockData"
 const INFO_INTERVAL = 30_000
 const TRAFFIC_INTERVAL = 60_000
 const INTERFACES_INTERVAL = 30_000
+const TRAFFIC_DETAIL_INTERVAL = 60_000
 // Recent Logs no longer polls — it rides the live SSE stream via useLiveLogs.
 // Performance metrics no longer poll either — they ride the shared SSE metrics
 // stream via useMetrics() (MetricsProvider at the layout level).
@@ -599,6 +601,158 @@ function AlertsCard({ alerts }: { alerts: AlertItem[] }) {
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Traffic-detail cards (Protocol Breakdown / Top Talkers / Top Rules)       */
+/*  docs/ref/todo/dashboard-traffic-detail-plan.md                           */
+/* -------------------------------------------------------------------------- */
+
+// Segment/legend colors cycle through the theme's chart palette (src/index.css
+// --chart-1..5) — never a hardcoded Tailwind color class.
+const CHART_BG_CLASSES = ["bg-chart-1", "bg-chart-2", "bg-chart-3", "bg-chart-4", "bg-chart-5"]
+
+function EstimatedBadge() {
+  return (
+    <Badge variant="outline" className="border-muted-foreground/30 text-muted-foreground font-normal">
+      ประมาณการ
+    </Badge>
+  )
+}
+
+function EmptyTrafficDetailState({ label }: { label: string }) {
+  return <p className="py-6 text-center text-sm text-muted-foreground">{label}</p>
+}
+
+function ProtocolBreakdownCard({ detail }: { detail: TrafficDetail | null }) {
+  const categories = detail?.categories ?? []
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+        <CardTitle className="text-base font-semibold">Protocol Breakdown</CardTitle>
+        <EstimatedBadge />
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {categories.length === 0 ? (
+          <EmptyTrafficDetailState label="ยังไม่มีข้อมูล traffic ในช่วงเวลานี้" />
+        ) : (
+          <>
+            <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-muted">
+              {categories.map((c, i) => (
+                <div
+                  key={c.name}
+                  className={cn("h-full", CHART_BG_CLASSES[i % CHART_BG_CLASSES.length])}
+                  style={{ width: `${Math.max(c.percent, 1)}%` }}
+                  title={`${c.name}: ${c.percent}%`}
+                />
+              ))}
+            </div>
+            <ul className="space-y-2">
+              {categories.map((c, i) => (
+                <li key={c.name} className="flex items-center justify-between gap-3 text-sm">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span
+                      className={cn(
+                        "h-2.5 w-2.5 shrink-0 rounded-full",
+                        CHART_BG_CLASSES[i % CHART_BG_CLASSES.length]
+                      )}
+                    />
+                    <span className="truncate text-foreground/90">{c.name}</span>
+                  </span>
+                  <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                    {fmtBytes(c.bytes)} · {c.percent}%
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function TopTalkersCard({ detail }: { detail: TrafficDetail | null }) {
+  const talkers = detail?.topTalkers ?? []
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+        <CardTitle className="text-base font-semibold">Top Talkers</CardTitle>
+        <EstimatedBadge />
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {talkers.length === 0 ? (
+          <EmptyTrafficDetailState label="ยังไม่มีข้อมูล host ในช่วงเวลานี้" />
+        ) : (
+          talkers.map((t) => (
+            <div key={t.ip} className="space-y-1">
+              <div className="flex items-center justify-between gap-3 text-sm">
+                <span className="min-w-0 truncate text-foreground/90">
+                  {t.hostname}
+                  {t.hostname !== t.ip && (
+                    <span className="ml-1.5 font-mono text-xs text-muted-foreground">{t.ip}</span>
+                  )}
+                </span>
+                <span className="shrink-0 font-mono text-xs text-muted-foreground">{fmtBytes(t.bytes)}</span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-500"
+                  style={{ width: `${Math.min(100, t.percent)}%` }}
+                />
+              </div>
+            </div>
+          ))
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+const ruleActionBadge: Record<string, string> = {
+  ACCEPT: "bg-primary/10 text-primary border-primary/20",
+  DROP: "bg-destructive/10 text-destructive border-destructive/20",
+}
+
+function TopRulesCard({ detail }: { detail: TrafficDetail | null }) {
+  const rules = detail?.topRules ?? []
+  return (
+    <Card>
+      <CardHeader className="space-y-0">
+        <CardTitle className="text-base font-semibold">Top Rules by Traffic</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {rules.length === 0 ? (
+          <EmptyTrafficDetailState label="ยังไม่มีข้อมูล rule ในช่วงเวลานี้" />
+        ) : (
+          rules.map((r) => (
+            <div key={r.ruleId} className="space-y-1">
+              <div className="flex items-center justify-between gap-3 text-sm">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="truncate text-foreground/90">{r.name}</span>
+                  <Badge
+                    variant="outline"
+                    className={cn("shrink-0 border text-[10px]", ruleActionBadge[r.action] ?? "")}
+                  >
+                    {r.chain}/{r.action}
+                  </Badge>
+                </span>
+                <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                  {r.packets.toLocaleString()} PKG · {fmtBytes(r.bytes)}
+                </span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-500"
+                  style={{ width: `${Math.min(100, r.percent)}%` }}
+                />
+              </div>
+            </div>
+          ))
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Page                                                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -616,6 +770,14 @@ export default function Dashboard() {
   const { metrics: perf } = useMetrics()
   const traffic = usePoll(dashboardService.getTrafficHistory, TRAFFIC_INTERVAL, refreshKey)
   const interfaces = usePoll(interfaceService.getAll, INTERFACES_INTERVAL, refreshKey)
+  // Detailed-tab traffic-analytics cards (Protocol Breakdown / Top Talkers /
+  // Top Rules) — window fixed at "1h" for now; the API/service already
+  // support "24h" for a future window switcher.
+  const trafficDetail = usePoll(
+    () => dashboardService.getTrafficDetail("1h"),
+    TRAFFIC_DETAIL_INTERVAL,
+    refreshKey
+  )
   // Recent Logs stream live over SSE; the Refresh button still reseeds via refreshKey.
   const { logs } = useLiveLogs<FirewallLog>({
     fetchSnapshot: dashboardService.getRecentLogs,
@@ -699,16 +861,15 @@ export default function Dashboard() {
       {/* Detailed — everything stacked with full context */}
       <TabsContent value="detailed" className="space-y-6">
         <StatGrid metrics={metrics} />
-        <BandwidthCard data={chartData} />
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="lg:col-span-1">
-            <SystemInfoCard info={info} fetchedAt={infoFetchedAt} now={now} />
+            <ProtocolBreakdownCard detail={trafficDetail} />
           </div>
           <div className="lg:col-span-1">
-            <InterfacesCard interfaces={ifaces} />
+            <TopTalkersCard detail={trafficDetail} />
           </div>
           <div className="lg:col-span-1">
-            <AlertsCard alerts={alerts} />
+            <TopRulesCard detail={trafficDetail} />
           </div>
         </div>
       </TabsContent>

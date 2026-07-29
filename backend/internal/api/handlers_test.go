@@ -64,7 +64,8 @@ func buildTestServer(t *testing.T, allowDevCORS bool) (*Server, *db.Repository) 
 
 	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
 	systemServiceSvc := service.NewSystemServiceService(kernel.NewMockSystemServiceManager(), repo)
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, allowDevCORS, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, wifiPresetService, systemServiceSvc, nil)
+	trafficStatsService := service.NewTrafficStatsService(kernel.NewMockTrafficAccounting(nil), repo, dhcp)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, allowDevCORS, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, wifiPresetService, systemServiceSvc, nil, trafficStatsService)
 
 	return server, repo
 }
@@ -365,7 +366,7 @@ func TestDisableEditMode(t *testing.T) {
 
 	// Server initialized with disableEdit = true
 	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, true, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, nil, nil, nil)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, true, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, nil, nil, nil, nil)
 	handler := RegisterRoutes(server)
 
 	// Add test session token to activeSessions since IsSessionValid no longer allows mock_session_id_* bypass
@@ -553,7 +554,7 @@ func TestForcePasswordChangeFlow(t *testing.T) {
 	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
 
 	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, nil, nil, nil)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, nil, nil, nil, nil)
 	handler := RegisterRoutes(server)
 
 	// 1. Login with correct password
@@ -666,7 +667,7 @@ func TestCheckSessionAPI(t *testing.T) {
 	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
 
 	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, nil, nil, nil)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, nil, nil, nil, nil)
 	handler := RegisterRoutes(server)
 
 	// 1. Check session without token (should fail with 401)
@@ -786,6 +787,51 @@ func TestDashboardSystemStatusAPIs(t *testing.T) {
 	}
 }
 
+// TestHandleGetTrafficDetail_WindowWhitelist asserts the ?window query param
+// is whitelisted to {"1h","24h"} rather than passed raw into the service
+// (docs/ref/todo/dashboard-traffic-detail-plan.md T-09) — any other value,
+// including an empty/missing one, must silently fall back to "1h".
+func TestHandleGetTrafficDetail_WindowWhitelist(t *testing.T) {
+	handler, _ := setupTestServer(t)
+	authToken := "mock_session_id_test_token"
+
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		addSessionCookie(req, authToken)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	cases := []struct {
+		query        string
+		expectWindow string
+	}{
+		{"", "1h"},
+		{"?window=1h", "1h"},
+		{"?window=24h", "24h"},
+		{"?window=evil", "1h"},
+		{"?window=99h", "1h"},
+	}
+	for _, c := range cases {
+		rec := get("/api/dashboard/traffic-detail" + c.query)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("query=%q: expected 200, got %d. Body: %s", c.query, rec.Code, rec.Body.String())
+		}
+		var detail model.TrafficDetail
+		if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+			t.Fatalf("query=%q: decode failed: %v", c.query, err)
+		}
+		if detail.Window != c.expectWindow {
+			t.Errorf("query=%q: expected window=%q, got %q", c.query, c.expectWindow, detail.Window)
+		}
+		if detail.Categories == nil || detail.TopTalkers == nil || detail.TopRules == nil {
+			t.Errorf("query=%q: expected non-nil (possibly empty) slices, got categories=%v topTalkers=%v topRules=%v",
+				c.query, detail.Categories, detail.TopTalkers, detail.TopRules)
+		}
+	}
+}
+
 func setupTestServerWithFirewall(t *testing.T) (http.Handler, *db.Repository, *kernel.MockFirewall) {
 	sqliteDB, err := db.InitDB(":memory:")
 	if err != nil {
@@ -814,7 +860,7 @@ func setupTestServerWithFirewall(t *testing.T) (http.Handler, *db.Repository, *k
 	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
 
 	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, nil, nil, nil)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, nil, nil, nil, nil)
 	handler := RegisterRoutes(server)
 
 	AddSession("mock_session_id_test_token", "pigate")

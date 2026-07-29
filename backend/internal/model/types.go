@@ -1,6 +1,11 @@
 package model
 
-import "time"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
 
 // User roles. super_admin can do everything (including managing other users);
 // admin_readonly can view every page but cannot perform any mutation.
@@ -561,6 +566,104 @@ type TrafficBucket struct {
 type TrafficHistory struct {
 	Interfaces []string        `json:"interfaces"`
 	Buckets    []TrafficBucket `json:"buckets"`
+}
+
+// FlowSample is one conntrack flow observed by kernel.TrafficAccountingManager.
+// DumpFlows (docs/ref/todo/dashboard-traffic-detail-plan.md §2.1). SrcIP is the
+// pre-NAT LAN-side source (Forward tuple), so it can be used directly as the
+// Top Talkers key. Key includes the flow's start time so a 5-tuple reused by a
+// brand-new flow is never mistaken for the flow that just died (Caution 3).
+type FlowSample struct {
+	Key     string // hash of (family, proto, srcIP, srcPort, dstIP, dstPort, TimeStart)
+	SrcIP   string
+	DstIP   string
+	Proto   uint8
+	DstPort uint16
+	Bytes   uint64
+}
+
+// RuleCounter is the bytes/packets nftables has counted for one DB policy
+// rule id, summed across every nft rule expansion that carries that id in its
+// UserData comment (see real_firewall.go applyUserRules / plan §2.3).
+type RuleCounter struct {
+	Bytes   uint64
+	Packets uint64
+}
+
+// TrafficCategorySlice is one Protocol Breakdown segment — a Service-Object-
+// defined category (or "Other") with its share of ObservedBytes.
+type TrafficCategorySlice struct {
+	Name    string  `json:"name"`
+	Bytes   uint64  `json:"bytes"`
+	Percent float64 `json:"percent"`
+}
+
+// TopTalker is one row of the Top Talkers card: a LAN host ranked by observed
+// bytes in the requested window. Hostname/MAC are enriched from DHCP leases/
+// reservations; IP alone is used as the fallback display name.
+type TopTalker struct {
+	IP       string  `json:"ip"`
+	Hostname string  `json:"hostname"`
+	MAC      string  `json:"mac"`
+	Bytes    uint64  `json:"bytes"`
+	Percent  float64 `json:"percent"`
+}
+
+// TopRule is one row of the Top Rules by Traffic card, sourced from the exact
+// nftables rule counter (not an estimate, unlike TrafficCategorySlice/TopTalker).
+type TopRule struct {
+	RuleID  string  `json:"ruleId"`
+	Name    string  `json:"name"`
+	Chain   string  `json:"chain"`
+	Action  string  `json:"action"`
+	Bytes   uint64  `json:"bytes"`
+	Packets uint64  `json:"packets"`
+	Percent float64 `json:"percent"`
+}
+
+// TrafficDetail is the /api/dashboard/traffic-detail response backing the
+// Dashboard "Detailed" tab's Protocol Breakdown / Top Talkers / Top Rules
+// cards. ObservedBytes is the total the conntrack-based collector actually
+// saw in the window — Categories/TopTalkers percentages are computed against
+// this figure, NOT against the WAN total from /dashboard/traffic (Caution 8);
+// Estimated is always true for the conntrack-derived figures (§2.4 accuracy
+// estimate), independent of TopRules which is exact (kernel-counted).
+type TrafficDetail struct {
+	Window        string                 `json:"window"` // "1h" or "24h"
+	ObservedBytes uint64                 `json:"observedBytes"`
+	Estimated     bool                   `json:"estimated"`
+	Categories    []TrafficCategorySlice `json:"categories"`
+	TopTalkers    []TopTalker            `json:"topTalkers"`
+	TopRules      []TopRule              `json:"topRules"`
+	GeneratedAt   string                 `json:"generatedAt"`
+}
+
+// ParsePortSpec parses a "8080" or "8000-8010" port spec into an inclusive
+// range (single ports return start==end). This is the single canonical port-
+// spec parser shared by the firewall rule builder (kernel/real_firewall.go)
+// and the dashboard traffic-detail categorizer (service/traffic_stats.go) —
+// do not write a second implementation; the two must never drift (plan
+// Caution 13).
+func ParsePortSpec(spec string) (start, end int, err error) {
+	spec = strings.TrimSpace(spec)
+	parts := strings.Split(spec, "-")
+	switch len(parts) {
+	case 1:
+		p, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil || p < 1 || p > 65535 {
+			return 0, 0, fmt.Errorf("invalid port %q", spec)
+		}
+		return p, p, nil
+	case 2:
+		s, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+		e, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err1 != nil || err2 != nil || s < 1 || e > 65535 || s >= e {
+			return 0, 0, fmt.Errorf("invalid port range %q", spec)
+		}
+		return s, e, nil
+	default:
+		return 0, 0, fmt.Errorf("invalid port spec %q", spec)
+	}
 }
 
 // DNSConfig represents system-wide DNS settings

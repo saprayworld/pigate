@@ -167,7 +167,7 @@ func TestSystemCapability_ApplyHealthNeverAppliedIsIgnored(t *testing.T) {
 }
 
 func TestSystemCapability_MockModeAllAvailable(t *testing.T) {
-	ids := []string{"firewall", "dbus", "dnsmasq", "resolved"}
+	ids := []string{"firewall", "dbus", "dnsmasq", "resolved", "conntrack"}
 	results := make([]model.CapabilityProbeResult, 0, len(ids))
 	for _, id := range ids {
 		results = append(results, model.CapabilityProbeResult{ID: id, Available: true, Reason: model.CapabilityReasonMock})
