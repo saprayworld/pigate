@@ -485,7 +485,7 @@ func (m *MockSystemServiceManager) Restart(unit string) error {
 // reason "mock", so dev machines running -mock=true never see a capability
 // warning banner (docs/ref/todo/kernel-capability-detection-plan.md §0).
 // Its id set MUST stay in sync with RealCapabilityProber's registry
-// (firewall, dbus, dnsmasq, resolved, conntrack).
+// (firewall, dbus, dnsmasq, resolved, conntrack, conntrack-events).
 type MockCapabilityProber struct{}
 
 func NewMockCapabilityProber() *MockCapabilityProber {
@@ -493,7 +493,7 @@ func NewMockCapabilityProber() *MockCapabilityProber {
 }
 
 func (m *MockCapabilityProber) ProbeAll() []model.CapabilityProbeResult {
-	ids := []string{"firewall", "dbus", "dnsmasq", "resolved", "conntrack"}
+	ids := []string{"firewall", "dbus", "dnsmasq", "resolved", "conntrack", "conntrack-events"}
 	out := make([]model.CapabilityProbeResult, 0, len(ids))
 	for _, id := range ids {
 		out = append(out, model.CapabilityProbeResult{
@@ -868,4 +868,49 @@ func (m *MockTrafficAccounting) DumpRuleCounters() (map[string]model.RuleCounter
 		out[id] = model.RuleCounter{Bytes: bytes, Packets: bytes / 512}
 	}
 	return out, nil
+}
+
+// mockFlowEndInterval is how often WatchFlowEnd synthesizes a "flow death"
+// event in mock/dev mode — arbitrary, just fast enough that the Top Talkers
+// card visibly reacts to events (not only the poll) during -mock=true
+// development (plan T-05).
+const mockFlowEndInterval = 7 * time.Second
+
+// WatchFlowEnd synthesizes a periodic flow-end event from mockFlowTemplates,
+// reusing the same synthetic IPs as DumpFlows above so Top Talkers keeps
+// moving in dev mode even when the flow-end event path is exercised in
+// isolation from the poll path. It deliberately opens no socket and reads no
+// /proc file — dev machines running -mock=true (frequently WSL, with no real
+// conntrack) must never touch the host (plan Caution 9). Returns nil when ctx
+// is cancelled, mirroring the real implementation's contract.
+func (m *MockTrafficAccounting) WatchFlowEnd(ctx context.Context, cb func(model.FlowSample)) error {
+	ticker := time.NewTicker(mockFlowEndInterval)
+	defer ticker.Stop()
+	tick := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if len(mockFlowTemplates) == 0 {
+				continue
+			}
+			ti := tick % len(mockFlowTemplates)
+			tick++
+			t := mockFlowTemplates[ti]
+			elapsed := time.Since(m.start).Seconds()
+			if elapsed < 0 {
+				elapsed = 0
+			}
+			bytes := uint64((t.ratePerSec / float64(max(t.instances, 1))) * elapsed)
+			cb(model.FlowSample{
+				Key:     fmt.Sprintf("mock-flow-%d-0", ti),
+				SrcIP:   t.srcIP,
+				DstIP:   t.dstIP,
+				Proto:   t.proto,
+				DstPort: t.dstPort,
+				Bytes:   bytes,
+			})
+		}
+	}
 }

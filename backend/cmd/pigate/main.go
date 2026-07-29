@@ -436,6 +436,16 @@ func main() {
 	log.Printf("[Main] Starting dashboard traffic-detail collector...")
 	trafficStatsService.Start(monitorCtx)
 
+	// Conntrack DESTROY event watcher — augments the poller above with
+	// per-flow byte counts at teardown, closing the gap for flows that start
+	// and die entirely between two polls (docs/ref/todo/
+	// traffic-accounting-accuracy-phase2-plan.md T-06/T-08). Shares
+	// monitorCtx so its netlink socket is closed on shutdown; no
+	// InitApplyConfig() needed — there is no kernel state to apply and no
+	// boot-ordering dependency (poll-only degrade is safe at any time).
+	log.Printf("[Main] Starting conntrack flow-end event watcher...")
+	trafficStatsService.StartFlowEndWatcher(monitorCtx)
+
 	log.Printf("[Main] Applying database-configured hostname settings to kernel at startup...")
 	if err := hostnameService.InitApplyConfig(); err != nil {
 		log.Printf("[Main] Warning: Failed to apply hostname settings at startup: %v", err)

@@ -27,6 +27,7 @@ var capabilityCatalog = []capabilityCatalogEntry{
 	{ID: "dnsmasq", Name: "DHCP/DNS Forwarder (dnsmasq)"},
 	{ID: "resolved", Name: "DNS Resolver (systemd-resolved)"},
 	{ID: "conntrack", Name: "Traffic Accounting (conntrack)"},
+	{ID: "conntrack-events", Name: "Conntrack Event Stream"},
 }
 
 // ApplyHealthReporter lets any subsystem service (FirewallService today;
@@ -244,6 +245,10 @@ func detailFor(reason, errText string) string {
 			"`net.netfilter.nf_conntrack_acct=1` (รัน install.sh ใหม่ หรือ `sudo sysctl " +
 			"net.netfilter.nf_conntrack_acct=1` ด้วยตัวเอง) การ์ดวิเคราะห์ traffic บน Dashboard " +
 			"จะแสดงค่า 0 ไปเรื่อย ๆ จนกว่าจะเปิดค่านี้"
+	case model.CapabilityReasonEventsUnavailable:
+		return "ไม่สามารถติดตาม conntrack DESTROY event ได้ (ต้องการ `cap_net_admin` และเคอร์เนลที่เปิด " +
+			"`net.netfilter.nf_conntrack_events=1`) — ระบบยัง poll ข้อมูล traffic ได้ตามปกติ " +
+			"เพียงแต่ป้าย \"ความแม่นยำ\" บนการ์ด Dashboard จะค้างที่ \"ประมาณการ\" แทน \"ใกล้เคียงจริง\""
 	default:
 		msg := "สถานะไม่ทราบแน่ชัด"
 		if errText != "" {

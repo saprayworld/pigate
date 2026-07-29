@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"pigate/internal/db"
@@ -111,6 +112,13 @@ type TrafficStatsService struct {
 	svcMu       sync.RWMutex
 	svcCache    []categoryEntry
 	svcCachedAt time.Time
+
+	// eventsActive reports whether the conntrack DESTROY event watcher
+	// (StartFlowEndWatcher) is currently subscribed and running. Read by
+	// GetTrafficDetail to set TrafficDetail.Accuracy ("near-exact" once
+	// events are augmenting the poll, "estimated" while running poll-only —
+	// see docs/ref/todo/traffic-accounting-accuracy-phase2-plan.md T-06).
+	eventsActive atomic.Bool
 }
 
 // NewTrafficStatsService constructs the service. acct/dhcp may be either the
@@ -143,6 +151,79 @@ func (s *TrafficStatsService) run(ctx context.Context) {
 			s.poll()
 		}
 	}
+}
+
+// StartFlowEndWatcher launches the conntrack DESTROY event watcher on its own
+// background goroutine, separate from run()'s poll ticker
+// (docs/ref/todo/traffic-accounting-accuracy-phase2-plan.md T-06/T-08). It is
+// safe to call this even when the underlying kernel.TrafficAccountingManager
+// cannot actually subscribe (e.g. mock, or a real kernel without
+// CONFIG_NF_CONNTRACK_EVENTS / missing cap_net_admin): a failure here only
+// keeps eventsActive false, degrading GetTrafficDetail's Accuracy back to
+// "estimated" — it must never be treated as fatal to the caller (plan
+// Caution 6).
+func (s *TrafficStatsService) StartFlowEndWatcher(ctx context.Context) {
+	go s.runFlowEndWatcher(ctx)
+	log.Printf("[TrafficStats] Starting conntrack flow-end event watcher")
+}
+
+// runFlowEndWatcher calls the blocking kernel.WatchFlowEnd for as long as ctx
+// is alive, flipping eventsActive on/off around the call so
+// GetTrafficDetail's Accuracy label always reflects whether events are
+// actually flowing right now. A non-nil error after ctx is NOT cancelled
+// means the subscription itself failed or dropped (e.g. transient netlink
+// error) — logged once here; the poll loop in run() is entirely unaffected
+// and keeps the Dashboard cards working (poll-only).
+func (s *TrafficStatsService) runFlowEndWatcher(ctx context.Context) {
+	s.eventsActive.Store(true)
+	err := s.acct.WatchFlowEnd(ctx, s.onFlowEnd)
+	s.eventsActive.Store(false)
+	if err != nil && ctx.Err() == nil {
+		log.Printf("[TrafficStats] Flow-end event watcher stopped (degrading to poll-only accounting): %v", err)
+	}
+}
+
+// onFlowEnd is the callback WatchFlowEnd invokes once per conntrack DESTROY
+// event. It credits ONLY the byte delta the poll path has not already
+// counted, under the same flowMu/flowState baseline poll() itself maintains,
+// then deletes the key so a later poll tick can never see it again and
+// double-credit it (plan Caution 1 — the single most important invariant of
+// this whole phase):
+//   - key has a baseline (poll saw this flow at least once): credit
+//     f.Bytes - baseline (clamped to 0 — a flow can only grow, so a negative
+//     result here would mean a key collision or a kernel counter reset, never
+//     a legitimate value) and delete the baseline.
+//   - key has no baseline (the flow was born and died entirely between two
+//     poll ticks — exactly the gap this phase exists to close): credit
+//     f.Bytes in full.
+//
+// The credited delta lands in whichever 5-minute bucket is open *right now*,
+// not the bucket(s) the flow's bytes actually flowed through — a flow that
+// carried data 4 minutes ago but is only torn down (and thus only reported)
+// now will show up in the current bucket instead. The window total (1h/24h)
+// stays correct either way; only the bucket-by-bucket shape shifts slightly.
+// This is expected, not a bug (plan Caution 7) — see also the analogous note
+// in real_conntrack_events.go about ordering.
+func (s *TrafficStatsService) onFlowEnd(f model.FlowSample) {
+	s.flowMu.Lock()
+	var delta uint64
+	if st, ok := s.flowState[f.Key]; ok {
+		if f.Bytes > st.bytes {
+			delta = f.Bytes - st.bytes
+		}
+		delete(s.flowState, f.Key)
+	} else {
+		delta = f.Bytes
+	}
+	s.flowMu.Unlock()
+
+	if delta == 0 {
+		return
+	}
+
+	hostDeltas := map[string]uint64{f.SrcIP: delta}
+	catDeltas := map[string]uint64{s.categorize(f.Proto, f.DstPort): delta}
+	s.addBucket(time.Now(), hostDeltas, catDeltas, nil, delta)
 }
 
 // poll is one collection tick: DumpFlows + DumpRuleCounters must never be
@@ -508,10 +589,16 @@ func (s *TrafficStatsService) GetTrafficDetail(window string) model.TrafficDetai
 
 	leaseByIP, resByIP := s.hostLookup()
 
+	accuracy := "estimated"
+	if s.eventsActive.Load() {
+		accuracy = "near-exact"
+	}
+
 	return model.TrafficDetail{
 		Window:        window,
 		ObservedBytes: observed,
 		Estimated:     true,
+		Accuracy:      accuracy,
 		Categories:    buildCategorySlices(catTotals, observed),
 		TopTalkers:    buildTopTalkers(hostTotals, observed, leaseByIP, resByIP),
 		TopRules:      buildTopRules(ruleTotals, s.policyLookup()),

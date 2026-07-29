@@ -609,10 +609,23 @@ function AlertsCard({ alerts }: { alerts: AlertItem[] }) {
 // --chart-1..5) — never a hardcoded Tailwind color class.
 const CHART_BG_CLASSES = ["bg-chart-1", "bg-chart-2", "bg-chart-3", "bg-chart-4", "bg-chart-5"]
 
-function EstimatedBadge() {
+// AccuracyBadge reflects TrafficDetail.accuracy: "estimated" while only the
+// 10s conntrack poll is feeding this card, "near-exact" once the conntrack
+// DESTROY event listener is also active (docs/ref/todo/
+// traffic-accounting-accuracy-phase2-plan.md). accuracy is optional so a
+// stale mock payload predating this field still renders (falls back to
+// "estimated").
+function AccuracyBadge({ accuracy }: { accuracy?: "estimated" | "near-exact" }) {
+  const isNearExact = accuracy === "near-exact"
   return (
-    <Badge variant="outline" className="border-muted-foreground/30 text-muted-foreground font-normal">
-      ประมาณการ
+    <Badge
+      variant="outline"
+      className={cn(
+        "font-normal",
+        isNearExact ? "border-primary/30 text-primary" : "border-muted-foreground/30 text-muted-foreground"
+      )}
+    >
+      {isNearExact ? "ใกล้เคียงจริง" : "ประมาณการ"}
     </Badge>
   )
 }
@@ -627,7 +640,7 @@ function ProtocolBreakdownCard({ detail }: { detail: TrafficDetail | null }) {
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
         <CardTitle className="text-base font-semibold">Protocol Breakdown</CardTitle>
-        <EstimatedBadge />
+        <AccuracyBadge accuracy={detail?.accuracy} />
       </CardHeader>
       <CardContent className="space-y-4">
         {categories.length === 0 ? (
@@ -675,7 +688,7 @@ function TopTalkersCard({ detail }: { detail: TrafficDetail | null }) {
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
         <CardTitle className="text-base font-semibold">Top Talkers</CardTitle>
-        <EstimatedBadge />
+        <AccuracyBadge accuracy={detail?.accuracy} />
       </CardHeader>
       <CardContent className="space-y-3">
         {talkers.length === 0 ? (

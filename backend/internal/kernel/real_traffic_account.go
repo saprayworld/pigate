@@ -111,19 +111,39 @@ func flowsToSamples(flows []*netlink.ConntrackFlow, limit int) []model.FlowSampl
 	return out
 }
 
-// flowKey hashes (family, proto, srcIP, srcPort, dstIP, dstPort, TimeStart)
-// into a stable string. TimeStart is included so a brand-new flow that
-// happens to reuse a 5-tuple recently vacated by a dead flow (common under
-// NAT port reuse) is never mistaken for the old one — that mistake would
-// otherwise produce a negative/garbage delta in the service-layer aggregator
-// (plan Caution 3).
+// flowKey hashes the poll-side conntrack flow's 5-tuple into the same stable
+// string that real_conntrack_events.go computes for the equivalent DESTROY
+// event, via the shared flowKeyFromParts (see its doc comment for why
+// TimeStart is deliberately NOT part of the key as of Phase 2).
 func flowKey(f *netlink.ConntrackFlow) string {
-	h := sha256.New()
-	fmt.Fprintf(h, "%d|%d|%s|%d|%s|%d|%d",
-		f.FamilyType, f.Forward.Protocol,
+	return flowKeyFromParts(f.FamilyType, f.Forward.Protocol,
 		f.Forward.SrcIP.String(), f.Forward.SrcPort,
-		f.Forward.DstIP.String(), f.Forward.DstPort,
-		f.TimeStart)
+		f.Forward.DstIP.String(), f.Forward.DstPort)
+}
+
+// flowKeyFromParts hashes (family, proto, srcIP, srcPort, dstIP, dstPort)
+// into a stable string shared by both the poll path (flowKey above, via
+// netlink.ConntrackFlow) and the conntrack DESTROY event path
+// (real_conntrack_events.go, via CTA_TUPLE_ORIG attributes). The two callers
+// MUST produce an identical key for the same flow, or the service-layer
+// aggregator (service/traffic_stats.go onFlowEnd) will treat a DESTROY event
+// as a brand-new, never-seen flow and credit its full byte count on top of
+// whatever the poll already counted — a silent double-count (plan Caution 2).
+//
+// Deliberately excludes conntrack's TimeStart (CTA_TIMESTAMP), even though a
+// 5-tuple can in principle be reused by a new flow shortly after the old one
+// died (NAT port reuse). TimeStart is only populated when
+// net.netfilter.nf_conntrack_timestamp=1, and T-01 (verifying that sysctl's
+// default on the target board) was out of scope for this phase — see
+// docs/ref/todo/traffic-accounting-accuracy-phase2-plan.md T-01. Parsing
+// CTA_TIMESTAMP on the event side while the poll side sees a zero/absent
+// TimeStart (or vice versa) would itself break key parity and cause the
+// double-count this function exists to prevent, which is strictly worse than
+// the rare 5-tuple-reuse mis-attribution this omission accepts.
+func flowKeyFromParts(family uint8, proto uint8, srcIP string, srcPort uint16, dstIP string, dstPort uint16) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%d|%d|%s|%d|%s|%d",
+		family, proto, srcIP, srcPort, dstIP, dstPort)
 	return hex.EncodeToString(h.Sum(nil))
 }
 

@@ -46,6 +46,15 @@ const (
 	// as Degraded rather than Available=false since the subsystem otherwise
 	// works — only the byte counters are silently zero.
 	CapabilityReasonAcctDisabled = "acct_disabled"
+	// CapabilityReasonEventsUnavailable means the conntrack DESTROY event
+	// listener (kernel.TrafficAccountingManager.WatchFlowEnd) could not be
+	// subscribed to — e.g. missing CAP_NET_ADMIN or a kernel built without
+	// CONFIG_NF_CONNTRACK_EVENTS/net.netfilter.nf_conntrack_events=0 (see
+	// docs/ref/todo/traffic-accounting-accuracy-phase2-plan.md T-09). Reported
+	// as Degraded rather than Available=false: traffic accounting still works
+	// via the existing conntrack poll, it just falls back to "estimated"
+	// accuracy instead of "near-exact".
+	CapabilityReasonEventsUnavailable = "events_unavailable"
 )
 
 // CapabilityProbeResult is the raw result of probing one subsystem from the
