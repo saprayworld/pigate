@@ -3729,7 +3729,7 @@ components:
 
     TopHost:
       type: object
-      required: [ip, hostname, mac, bytes, percent, private]
+      required: [ip, hostname, mac, bytes, percent, private, domain]
       description: >-
         One ranked row for the Statistics page's Top Source Hosts / Top
         Destinations cards (same shape for both).
@@ -3761,10 +3761,22 @@ components:
             "source" too (conntrack Forward tuple) — false in that case, so
             the UI can visually separate LAN hosts from internet hosts.
           example: true
+        domain:
+          type: string
+          description: >-
+            The domain name dnsmasq most recently answered for ip (empty
+            when unknown, DNS Statistics is disabled, or the mapping
+            expired). This is a value the DNS server ANSWERED, used for
+            DISPLAY ONLY — it can be poisoned by any LAN client asking its
+            own DNS server to answer arbitrary names, so it must never be
+            treated as fact or used for firewall/routing decisions. May be
+            stale (the IP could since be reused for another domain, e.g.
+            CDN/cloud load balancers).
+          example: www.youtube.com
 
     TopConversation:
       type: object
-      required: [srcIp, srcHostname, dstIp, dstHostname, proto, dstPort, bytes, percent]
+      required: [srcIp, srcHostname, dstIp, dstHostname, proto, dstPort, bytes, percent, dstDomain]
       description: >-
         One src -> dst:port flow-tuple row for the Top Conversations card. A
         4-tuple (no source port — model.FlowSample does not carry one; the
@@ -3798,6 +3810,39 @@ components:
           format: float
           description: Share of observedBytes.
           example: 12.4
+        dstDomain:
+          type: string
+          description: >-
+            Same display-only domain enrichment as TopHost.domain, applied to
+            dstIp. srcIp has no equivalent field (always a LAN address in
+            this table).
+          example: www.youtube.com
+
+    TopDomain:
+      type: object
+      required: [domain, queryType, count, percent]
+      description: >-
+        One ranked row for the "Top Queried Domains" card
+        (docs/ref/todo/statistics-dns-top-domain-plan.md). Fed by the DNS
+        query-log watcher; empty/absent entirely when DNS Statistics
+        (dns/settings.queryLogging) is disabled.
+      properties:
+        domain:
+          type: string
+          example: www.youtube.com
+        queryType:
+          type: string
+          description: DNS record type of the most recently seen query for this domain.
+          example: A
+        count:
+          type: integer
+          format: int64
+          example: 128
+        percent:
+          type: number
+          format: float
+          description: Share of TrafficStatistics.dnsQueries (not observedBytes).
+          example: 22.5
 
     TopDeniedSource:
       type: object
@@ -3862,6 +3907,10 @@ components:
         - deniedSampled
         - deniedEvents
         - truncated
+        - topDomains
+        - dnsQueries
+        - dnsLoggingEnabled
+        - dnsTruncated
         - generatedAt
       description: >-
         The /statistics/traffic response backing the Statistics page.
@@ -3917,6 +3966,30 @@ components:
             True when any per-bucket tracking map (hosts/destinations/
             conversations/denied sources/denied ports) hit its cap during
             this window — the ranking may be missing entries.
+        topDomains:
+          type: array
+          description: >-
+            "Top Queried Domains" card rows. Always an empty array (not
+            omitted) when DNS Statistics is disabled — see
+            dnsLoggingEnabled.
+          items:
+            $ref: '#/components/schemas/TopDomain'
+        dnsQueries:
+          type: integer
+          format: int64
+          description: >-
+            Total DNS queries observed in this window — the denominator for
+            topDomains percentages (a different unit than observedBytes).
+        dnsLoggingEnabled:
+          type: boolean
+          description: >-
+            Mirrors DNSServerSettings.queryLogging — lets the UI show an
+            accurate empty-state ("not enabled yet") instead of an empty list.
+        dnsTruncated:
+          type: boolean
+          description: >-
+            True when the domain-query ring hit its per-bucket tracking cap
+            during this window — topDomains may be missing entries.
         generatedAt:
           type: string
           format: date-time
@@ -4755,6 +4828,9 @@ components:
       type: object
       required:
         - interfaces
+        - queryLogging
+        - dnsCacheTtlMinutes
+        - dnsCacheMaxEntries
       properties:
         interfaces:
           type: array
@@ -4762,6 +4838,37 @@ components:
           items:
             type: string
           example: [eth0, wlan0]
+        queryLogging:
+          type: boolean
+          default: false
+          description: >-
+            Enables both the "Top Queried Domains" card and IP->domain
+            enrichment of Top Destinations/Conversations
+            (docs/ref/todo/statistics-dns-top-domain-plan.md). Off by
+            default (privacy). Changing this value RESTARTS dnsmasq
+            (DNS and DHCP briefly interrupted, same process) and, when
+            turned off, immediately deletes the on-disk query log and
+            clears all in-memory DNS statistics.
+        dnsCacheTtlMinutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+          default: 60
+          description: >-
+            How long the IP->domain reverse-cache remembers a mapping since
+            it was last seen. Applies immediately — changing this value does
+            NOT restart dnsmasq or anything else.
+          example: 60
+        dnsCacheMaxEntries:
+          type: integer
+          minimum: 128
+          maximum: 65536
+          default: 4096
+          description: >-
+            Caps the reverse cache's entry count. Applies immediately,
+            including evicting down to the new cap right away when
+            lowered — does NOT restart dnsmasq or anything else.
+          example: 4096
 
     # --- Static Route Schemas ---
     RoutesConfig:

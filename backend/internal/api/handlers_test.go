@@ -488,7 +488,11 @@ func TestDNSServerSettingsGrandfatherValidation(t *testing.T) {
 	}
 
 	put := func(names []string) *httptest.ResponseRecorder {
-		return vlanReq(t, handler, "PUT", "/api/dns/settings", token, model.DNSServerSettings{Interfaces: names})
+		return vlanReq(t, handler, "PUT", "/api/dns/settings", token, model.DNSServerSettings{
+			Interfaces:         names,
+			DNSCacheTTLMinutes: model.DNSCacheTTLDefault,
+			DNSCacheMaxEntries: model.DNSCacheEntriesDefault,
+		})
 	}
 
 	// (a) Keeping the saved dangling name is allowed (grandfathered) -> 200.
@@ -515,6 +519,135 @@ func TestDNSServerSettingsGrandfatherValidation(t *testing.T) {
 	}
 	if got, _ := repo.GetDNSServerInterfaces(); len(got) != 1 || got[0] != "eth0" {
 		t.Fatalf("(d) expected settings [eth0], got %v", got)
+	}
+}
+
+// dnsStatsTestServer is a copy of buildTestServer's wiring, but keeps a
+// handle on the *kernel.MockDNSServerManager (for ApplyCount) so
+// TestDNSServerSettingsUpdate_* below can assert exactly when ApplyZones
+// fires (docs/ref/todo/statistics-dns-top-domain-plan.md T-11 item 7).
+func dnsStatsTestServer(t *testing.T) (http.Handler, *db.Repository, *kernel.MockDNSServerManager) {
+	t.Helper()
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	repo := db.NewRepository(sqliteDB)
+	fw := kernel.NewMockFirewall(true)
+	net := kernel.NewMockNetwork()
+	rt := kernel.NewMockRouting()
+	dhcp := kernel.NewMockDhcp()
+	ringBuffer := logs.NewRingBuffer(50)
+	ifaceService := service.NewInterfaceService(repo, net)
+	routingService := service.NewRoutingService(repo, rt)
+	fwService := service.NewFirewallService(repo, fw, ifaceService)
+	dns := kernel.NewDNSManager(true)
+	dnsService := service.NewDNSService(repo, dns)
+	qos := kernel.NewMockQos()
+	qosService := service.NewQosService(repo, qos)
+	dhcpServerService := service.NewDhcpServerService(repo, dhcp)
+	dnsServer := kernel.NewMockDNSServerManager()
+	dnsServerService := service.NewDNSServerService(repo, dnsServer, dnsService)
+	hostnameMgr := kernel.NewMockHostnameManager()
+	dhcpcdMgr := kernel.NewMockDhcpcdManager()
+	hostnameService := service.NewHostnameService(repo, hostnameMgr, dhcpcdMgr, ifaceService)
+	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
+	wifiPresetService := service.NewWifiPresetService(repo, ifaceService)
+	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
+	systemServiceSvc := service.NewSystemServiceService(kernel.NewMockSystemServiceManager(), repo)
+	trafficStatsService := service.NewTrafficStatsService(kernel.NewMockTrafficAccounting(nil), repo, dhcp, kernel.NewMockSystemStats())
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, wifiPresetService, systemServiceSvc, nil, trafficStatsService, service.NewStatisticsService(trafficStatsService, repo, dhcp))
+	handler := RegisterRoutes(server)
+	AddSession("mock_session_id_test_token", "pigate")
+	return handler, repo, dnsServer
+}
+
+// TestDNSServerSettingsUpdate_TTLCapOnlyDoesNotCallApplyZones is T-11 item 7
+// (🔒, plan §5 item 18): changing only dnsCacheTtlMinutes/dnsCacheMaxEntries
+// must never restart dnsmasq.
+func TestDNSServerSettingsUpdate_TTLCapOnlyDoesNotCallApplyZones(t *testing.T) {
+	handler, repo, dnsServer := dnsStatsTestServer(t)
+	token := "mock_session_id_test_token"
+
+	baseline := dnsServer.ApplyCount
+
+	rec := vlanReq(t, handler, "PUT", "/api/dns/settings", token, model.DNSServerSettings{
+		Interfaces:         []string{},
+		QueryLogging:       false,
+		DNSCacheTTLMinutes: 30,
+		DNSCacheMaxEntries: 8192,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	if dnsServer.ApplyCount != baseline {
+		t.Errorf("ApplyZones called %d time(s) for a TTL/cap-only change, want %d (no restart)", dnsServer.ApplyCount, baseline)
+	}
+
+	settings, err := repo.GetDNSServerSettings()
+	if err != nil {
+		t.Fatalf("GetDNSServerSettings: %v", err)
+	}
+	if settings.DNSCacheTTLMinutes != 30 || settings.DNSCacheMaxEntries != 8192 {
+		t.Errorf("settings not persisted: %+v", settings)
+	}
+}
+
+// TestDNSServerSettingsUpdate_QueryLoggingChangeCallsApplyZonesOnce is T-11
+// item 7: flipping queryLogging must call ApplyZones exactly once.
+func TestDNSServerSettingsUpdate_QueryLoggingChangeCallsApplyZonesOnce(t *testing.T) {
+	handler, _, dnsServer := dnsStatsTestServer(t)
+	token := "mock_session_id_test_token"
+
+	baseline := dnsServer.ApplyCount
+
+	rec := vlanReq(t, handler, "PUT", "/api/dns/settings", token, model.DNSServerSettings{
+		Interfaces:         []string{},
+		QueryLogging:       true,
+		DNSCacheTTLMinutes: model.DNSCacheTTLDefault,
+		DNSCacheMaxEntries: model.DNSCacheEntriesDefault,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	if dnsServer.ApplyCount != baseline+1 {
+		t.Errorf("ApplyZones called %d time(s) after enabling queryLogging, want %d", dnsServer.ApplyCount, baseline+1)
+	}
+}
+
+// TestDNSServerSettingsUpdate_OutOfRangeRejected is T-11 item 7 (🔒, plan §5
+// item 17): out-of-range TTL/cap returns 400 and the DB is left untouched.
+func TestDNSServerSettingsUpdate_OutOfRangeRejected(t *testing.T) {
+	handler, repo, dnsServer := dnsStatsTestServer(t)
+	token := "mock_session_id_test_token"
+
+	before, err := repo.GetDNSServerSettings()
+	if err != nil {
+		t.Fatalf("GetDNSServerSettings: %v", err)
+	}
+	baseline := dnsServer.ApplyCount
+
+	cases := []model.DNSServerSettings{
+		{Interfaces: []string{}, DNSCacheTTLMinutes: 0, DNSCacheMaxEntries: model.DNSCacheEntriesDefault},
+		{Interfaces: []string{}, DNSCacheTTLMinutes: -5, DNSCacheMaxEntries: model.DNSCacheEntriesDefault},
+		{Interfaces: []string{}, DNSCacheTTLMinutes: model.DNSCacheTTLDefault, DNSCacheMaxEntries: 99999},
+	}
+	for _, c := range cases {
+		rec := vlanReq(t, handler, "PUT", "/api/dns/settings", token, c)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("input %+v: expected 400, got %d. Body: %s", c, rec.Code, rec.Body.String())
+		}
+	}
+
+	after, err := repo.GetDNSServerSettings()
+	if err != nil {
+		t.Fatalf("GetDNSServerSettings: %v", err)
+	}
+	if after.QueryLogging != before.QueryLogging || after.DNSCacheTTLMinutes != before.DNSCacheTTLMinutes || after.DNSCacheMaxEntries != before.DNSCacheMaxEntries {
+		t.Errorf("DB changed after rejected requests: before=%+v after=%+v", before, after)
+	}
+	if dnsServer.ApplyCount != baseline {
+		t.Errorf("ApplyZones called after a rejected request: baseline=%d now=%d", baseline, dnsServer.ApplyCount)
 	}
 }
 

@@ -38,7 +38,17 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { CapabilityBanner } from "@/components/CapabilityBanner"
-import { type DNSZone, type DNSRecord, type NetworkInterface } from "@/data-mockup/mockData"
+import {
+  type DNSZone,
+  type DNSRecord,
+  type NetworkInterface,
+  DNS_CACHE_TTL_MIN,
+  DNS_CACHE_TTL_MAX,
+  DNS_CACHE_TTL_DEFAULT,
+  DNS_CACHE_ENTRIES_MIN,
+  DNS_CACHE_ENTRIES_MAX,
+  DNS_CACHE_ENTRIES_DEFAULT,
+} from "@/data-mockup/mockData"
 import { dnsServerService } from "@/services/dnsServerService"
 import { interfaceService } from "@/services/interfaceService"
 import { useAlert } from "@/hooks/useAlert"
@@ -89,6 +99,17 @@ export default function DnsServer() {
   const [selectedInterfaces, setSelectedInterfaces] = useState<string[]>([])
   const [isSavingInterfaces, setIsSavingInterfaces] = useState(false)
 
+  // DNS Statistics state (docs/ref/todo/statistics-dns-top-domain-plan.md T-13):
+  // queryLogging restarts dnsmasq when changed; the TTL/cap inputs are kept as
+  // strings while editing (so an in-progress edit like "" or "14" isn't forced
+  // back to a number every keystroke) and only parsed/validated on save.
+  const [queryLogging, setQueryLogging] = useState(false)
+  const [isSavingQueryLogging, setIsSavingQueryLogging] = useState(false)
+  const [dnsCacheTtlInput, setDnsCacheTtlInput] = useState(String(DNS_CACHE_TTL_DEFAULT))
+  const [dnsCacheMaxInput, setDnsCacheMaxInput] = useState(String(DNS_CACHE_ENTRIES_DEFAULT))
+  const [dnsCacheLimitsError, setDnsCacheLimitsError] = useState("")
+  const [isSavingCacheLimits, setIsSavingCacheLimits] = useState(false)
+
   useEffect(() => {
     // isLoading already starts true; avoid a synchronous setState in the effect body.
     // selectedZoneId is still its initial null value on this first-mount load.
@@ -105,6 +126,9 @@ export default function DnsServer() {
         }
         setAvailableInterfaces((ifaces || []).filter(i => i.role === "LAN"))
         setSelectedInterfaces(settings.interfaces || [])
+        setQueryLogging(settings.queryLogging || false)
+        setDnsCacheTtlInput(String(settings.dnsCacheTtlMinutes || DNS_CACHE_TTL_DEFAULT))
+        setDnsCacheMaxInput(String(settings.dnsCacheMaxEntries || DNS_CACHE_ENTRIES_DEFAULT))
       } catch (err) {
         console.error(err)
         await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูล DNS Server ได้: " + getErrorMessage(err))
@@ -123,13 +147,74 @@ export default function DnsServer() {
 
     setIsSavingInterfaces(true)
     try {
-      await dnsServerService.updateSettings({ interfaces: next })
+      // PUT /api/dns/settings takes the full settings object (not a partial
+      // patch) — always send the current queryLogging/TTL/cap alongside the
+      // changed interfaces so they aren't reset to their zero value.
+      await dnsServerService.updateSettings({
+        interfaces: next,
+        queryLogging,
+        dnsCacheTtlMinutes: Number(dnsCacheTtlInput) || DNS_CACHE_TTL_DEFAULT,
+        dnsCacheMaxEntries: Number(dnsCacheMaxInput) || DNS_CACHE_ENTRIES_DEFAULT,
+      })
       setSelectedInterfaces(next)
       setIsApplied(false)
     } catch (err) {
       await alert("ข้อผิดพลาด", "ไม่สามารถบันทึก Interface ของ DNS Server ได้: " + getErrorMessage(err))
     } finally {
       setIsSavingInterfaces(false)
+    }
+  }
+
+  // --- Handlers: DNS Statistics (docs/ref/todo/statistics-dns-top-domain-plan.md T-13) ---
+  // Toggling queryLogging restarts dnsmasq (backend ApplyAll) — warn in the UI
+  // copy, not here.
+  const handleToggleQueryLogging = async (checked: boolean) => {
+    setIsSavingQueryLogging(true)
+    try {
+      await dnsServerService.updateSettings({
+        interfaces: selectedInterfaces,
+        queryLogging: checked,
+        dnsCacheTtlMinutes: Number(dnsCacheTtlInput) || DNS_CACHE_TTL_DEFAULT,
+        dnsCacheMaxEntries: Number(dnsCacheMaxInput) || DNS_CACHE_ENTRIES_DEFAULT,
+      })
+      setQueryLogging(checked)
+      setIsApplied(false)
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถบันทึกการเปิด/ปิดสถิติ DNS ได้: " + getErrorMessage(err))
+    } finally {
+      setIsSavingQueryLogging(false)
+    }
+  }
+
+  // Saving the TTL/cap never restarts dnsmasq server-side (SetReverseCacheLimits
+  // only, not ApplyAll — see api/handlers.go HandleUpdateDNSServerSettings) so
+  // isApplied/"Apply DNS Zones" banner is intentionally left untouched here.
+  const handleSaveCacheLimits = async () => {
+    const ttl = Number(dnsCacheTtlInput)
+    const max = Number(dnsCacheMaxInput)
+    if (!Number.isFinite(ttl) || ttl < DNS_CACHE_TTL_MIN || ttl > DNS_CACHE_TTL_MAX) {
+      setDnsCacheLimitsError(`อายุของ mapping ต้องอยู่ระหว่าง ${DNS_CACHE_TTL_MIN}-${DNS_CACHE_TTL_MAX} นาที`)
+      return
+    }
+    if (!Number.isFinite(max) || max < DNS_CACHE_ENTRIES_MIN || max > DNS_CACHE_ENTRIES_MAX) {
+      setDnsCacheLimitsError(`จำนวน mapping สูงสุดต้องอยู่ระหว่าง ${DNS_CACHE_ENTRIES_MIN}-${DNS_CACHE_ENTRIES_MAX}`)
+      return
+    }
+    setDnsCacheLimitsError("")
+    setIsSavingCacheLimits(true)
+    try {
+      await dnsServerService.updateSettings({
+        interfaces: selectedInterfaces,
+        queryLogging,
+        dnsCacheTtlMinutes: ttl,
+        dnsCacheMaxEntries: max,
+      })
+    } catch (err) {
+      // The backend re-validates (400 on out-of-range) even though the
+      // client already checked above — surface that error verbatim.
+      setDnsCacheLimitsError(getErrorMessage(err))
+    } finally {
+      setIsSavingCacheLimits(false)
     }
   }
 
@@ -514,6 +599,98 @@ export default function DnsServer() {
               ))}
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* 1.5 DNS Statistics — query logging switch + reverse-cache TTL/cap
+          (docs/ref/todo/statistics-dns-top-domain-plan.md T-13) */}
+      <Card>
+        <CardHeader className="space-y-1">
+          <CardTitle className="flex items-center gap-2 text-base font-semibold">
+            <Info className="h-4 w-4 text-muted-foreground" />
+            DNS Statistics (สถิติ DNS)
+          </CardTitle>
+          <CardDescription className="text-xs">
+            ควบคุมการเก็บสถิติ "Top Queried Domains" และการเติมชื่อโดเมนให้ IP ปลายทางในหน้า Statistics
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/50 p-3">
+            <div className="space-y-0.5">
+              <Label className="text-xs font-semibold text-foreground">
+                เก็บสถิติ DNS query (Top Queried Domains + ชื่อโดเมนของ IP ปลายทาง)
+              </Label>
+              <p className="text-[10px] text-muted-foreground">
+                เมื่อเปิด จะเห็นรายชื่อโดเมนที่เครื่องในบ้านถามได้ในหน้า Statistics — โปรดพิจารณาความเป็นส่วนตัวก่อนเปิด
+                การเปิด/ปิดสวิตช์นี้จะ <span className="font-semibold text-warning">restart dnsmasq</span> (DNS/DHCP สะดุดสั้น ๆ)
+              </p>
+            </div>
+            <Switch
+              checked={queryLogging}
+              onCheckedChange={handleToggleQueryLogging}
+              disabled={isSavingQueryLogging}
+              className="cursor-pointer"
+            />
+          </div>
+
+          <div className="space-y-3 rounded-lg border border-border bg-muted/50 p-3">
+            {dnsCacheLimitsError && (
+              <Alert variant="destructive" className="px-3 py-2.5">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-xs">{dnsCacheLimitsError}</AlertDescription>
+              </Alert>
+            )}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="dns-cache-ttl" className="block text-xs font-medium text-muted-foreground">
+                  อายุของ mapping IP→โดเมน (นาที)
+                </Label>
+                <Input
+                  id="dns-cache-ttl"
+                  type="number"
+                  min={DNS_CACHE_TTL_MIN}
+                  max={DNS_CACHE_TTL_MAX}
+                  value={dnsCacheTtlInput}
+                  onChange={(e) => setDnsCacheTtlInput(e.target.value)}
+                  className="h-9 font-mono text-sm"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  ค่าเริ่มต้น {DNS_CACHE_TTL_DEFAULT} นาที (ช่วง {DNS_CACHE_TTL_MIN}-{DNS_CACHE_TTL_MAX})
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="dns-cache-max" className="block text-xs font-medium text-muted-foreground">
+                  จำนวน mapping สูงสุด
+                </Label>
+                <Input
+                  id="dns-cache-max"
+                  type="number"
+                  min={DNS_CACHE_ENTRIES_MIN}
+                  max={DNS_CACHE_ENTRIES_MAX}
+                  value={dnsCacheMaxInput}
+                  onChange={(e) => setDnsCacheMaxInput(e.target.value)}
+                  className="h-9 font-mono text-sm"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  ค่าเริ่มต้น {DNS_CACHE_ENTRIES_DEFAULT} รายการ (ช่วง {DNS_CACHE_ENTRIES_MIN}-{DNS_CACHE_ENTRIES_MAX})
+                </p>
+              </div>
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              ปรับแล้วมีผลทันที ไม่ต้อง restart บริการใด ๆ — ค่าสูงขึ้น = ชื่อโดเมนครบขึ้นแต่ใช้ RAM มากขึ้น /
+              ค่ายาวขึ้น = เสี่ยงเห็นชื่อเก่าที่ IP ถูกใช้ซ้ำแล้ว
+            </p>
+            <Button
+              onClick={handleSaveCacheLimits}
+              disabled={isSavingCacheLimits}
+              size="sm"
+              variant="outline"
+              className="cursor-pointer gap-1.5"
+            >
+              {isSavingCacheLimits ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              บันทึกค่า Cache
+            </Button>
+          </div>
         </CardContent>
       </Card>
 

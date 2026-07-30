@@ -41,14 +41,17 @@ func (s *DNSServerService) ApplyAll() error {
 		}
 	}
 
-	interfaces, err := s.repo.GetDNSServerInterfaces()
+	settings, err := s.repo.GetDNSServerSettings()
 	if err != nil {
-		return fmt.Errorf("failed to retrieve DNS server interfaces from database: %w", err)
+		return fmt.Errorf("failed to retrieve DNS server settings from database: %w", err)
 	}
 
 	upstreams := s.resolveUpstreams()
 
-	if err := s.manager.ApplyZones(enabledZones, interfaces, upstreams); err != nil {
+	// QueryLogging is the only DNS Statistics field that affects the dnsmasq
+	// config (TTL/cap are pure service-layer parameters — plan T-07: "ไม่ต้อง
+	// ส่ง TTL/cap ไม่เกี่ยวกับ dnsmasq").
+	if err := s.manager.ApplyZones(enabledZones, settings.Interfaces, upstreams, settings.QueryLogging); err != nil {
 		return fmt.Errorf("failed to apply DNS zone configurations: %w", err)
 	}
 

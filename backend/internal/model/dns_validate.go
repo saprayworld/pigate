@@ -223,6 +223,38 @@ func ValidateDhcpConfig(cfg DhcpConfig) error {
 	return nil
 }
 
+// DNS reverse-cache TTL/cap bounds (docs/ref/todo/
+// statistics-dns-top-domain-plan.md §2.1) — declared once here so the
+// backend (handler validation, repo clamp-on-read, service.SetLimits) and
+// tests all reference the same numbers instead of duplicating literals.
+const (
+	DNSCacheTTLDefault = 60
+	DNSCacheTTLMin     = 1
+	DNSCacheTTLMax     = 1440
+
+	DNSCacheEntriesDefault = 4096
+	DNSCacheEntriesMin     = 128
+	DNSCacheEntriesMax     = 65536
+)
+
+// ValidateDNSServerSettings checks the DNS Statistics fields of
+// DNSServerSettings (TTL/cap of the IP->domain reverse cache). Interfaces is
+// validated separately by the handler (grandfathered dangling refs, see
+// HandleUpdateDNSServerSettings) so it is intentionally not checked here.
+// REJECTS out-of-range values with a readable error rather than clamping —
+// the caller (handler) must return 400 so the user knows the value was not
+// accepted (plan §5 item 17: clamping happens elsewhere, defense-in-depth,
+// but the API boundary itself must be explicit).
+func ValidateDNSServerSettings(s DNSServerSettings) error {
+	if s.DNSCacheTTLMinutes < DNSCacheTTLMin || s.DNSCacheTTLMinutes > DNSCacheTTLMax {
+		return fmt.Errorf("dnsCacheTtlMinutes %d is out of range (allowed: %d-%d)", s.DNSCacheTTLMinutes, DNSCacheTTLMin, DNSCacheTTLMax)
+	}
+	if s.DNSCacheMaxEntries < DNSCacheEntriesMin || s.DNSCacheMaxEntries > DNSCacheEntriesMax {
+		return fmt.Errorf("dnsCacheMaxEntries %d is out of range (allowed: %d-%d)", s.DNSCacheMaxEntries, DNSCacheEntriesMin, DNSCacheEntriesMax)
+	}
+	return nil
+}
+
 // ValidateReservation validates every field of a reservation that is written to
 // the dnsmasq config: the MAC address, the reserved IP, and the device name.
 // MAC and IP are validated only when both are set, matching the writer, which

@@ -379,20 +379,114 @@ func (m *MockQos) GetIfaceQosStatus(ifaceName string) (*model.QosIfaceStatus, er
 	}, nil
 }
 
-type MockDNSServerManager struct{}
+// MockDNSServerManager implements DNSServerManager for local testing.
+// ApplyCount lets tests assert exactly how many times ApplyZones (== a
+// dnsmasq config write + restart) fired — e.g. a TTL/cap-only settings
+// change must NOT increment it (docs/ref/todo/
+// statistics-dns-top-domain-plan.md §5 item 18 / T-11 item 7).
+type MockDNSServerManager struct {
+	ApplyCount int
+}
 
 func NewMockDNSServerManager() *MockDNSServerManager {
 	return &MockDNSServerManager{}
 }
 
-func (m *MockDNSServerManager) ApplyZones(zones []model.DNSZone, interfaces []string, upstreamServers []string) error {
-	log.Printf("[MockDNSServer] ApplyZones called with %d zones, interfaces: %v, upstream servers: %v", len(zones), interfaces, upstreamServers)
+func (m *MockDNSServerManager) ApplyZones(zones []model.DNSZone, interfaces []string, upstreamServers []string, queryLog bool) error {
+	m.ApplyCount++
+	log.Printf("[MockDNSServer] ApplyZones called with %d zones, interfaces: %v, upstream servers: %v, queryLog: %t", len(zones), interfaces, upstreamServers, queryLog)
 	return nil
 }
 
 func (m *MockDNSServerManager) ClearCache() error {
 	log.Printf("[MockDNSServer] ClearCache called")
 	return nil
+}
+
+// mockDNSQueryEvents are the synthetic query events WatchDNSLog cycles
+// through in -mock=true dev mode (docs/ref/todo/
+// statistics-dns-top-domain-plan.md T-06) — fixed domains from a few of the
+// same synthetic LAN clients MockDhcp/mockFlowTemplates already use, at
+// different relative frequencies so the "Top Queried Domains" card ranking
+// visibly differs row to row.
+var mockDNSQueryEvents = []struct {
+	domain   string
+	qtype    string
+	clientIP string
+	weight   int // higher = queried more often
+}{
+	{"www.youtube.com", "A", "192.168.1.101", 5},
+	{"googlevideo.com", "A", "192.168.1.101", 4},
+	{"netflix.com", "A", "192.168.1.102", 3},
+	{"line-apps.com", "A", "192.168.1.105", 2},
+	{"cdn.jsdelivr.net", "A", "192.168.1.105", 1},
+}
+
+// mockDNSAnswerEvents map IPs to domains that intentionally mirror
+// mockFlowTemplates' dstIP values (plan T-06), so Top Destinations/
+// Conversations in -mock=true dev mode visibly show resolved domain names.
+// 8.8.8.8 and 203.0.113.55 are deliberately left unmapped so the "IP with no
+// known domain" fallback path is exercised too.
+var mockDNSAnswerEvents = []struct {
+	domain string
+	ip     string
+}{
+	{"www.youtube.com", "142.250.80.46"},
+	{"googlevideo.com", "173.194.76.94"},
+	{"cdn.jsdelivr.net", "151.101.1.69"},
+}
+
+// mockDNSLogInterval mirrors mockFlowEndInterval's dev-visibility rationale —
+// fast enough to see the cards move without spamming.
+const mockDNSLogInterval = 2 * time.Second
+
+// WatchDNSLog synthesizes query and answer events on a ticker. It never
+// touches the filesystem (plan §5 item 14/Caution 9: -mock=true must be
+// 100% safe on a dev workstation).
+func (m *MockDNSServerManager) WatchDNSLog(ctx context.Context, cb func(model.DNSLogEvent)) error {
+	ticker := time.NewTicker(mockDNSLogInterval)
+	defer ticker.Stop()
+	tick := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			// Emit a query, weighted by picking from a flattened list so
+			// higher-weight domains show up more often across ticks.
+			total := 0
+			for _, e := range mockDNSQueryEvents {
+				total += e.weight
+			}
+			if total > 0 {
+				pick := tick % total
+				acc := 0
+				for _, e := range mockDNSQueryEvents {
+					acc += e.weight
+					if pick < acc {
+						cb(model.DNSLogEvent{
+							Kind:      model.DNSLogQuery,
+							Domain:    e.domain,
+							QueryType: e.qtype,
+							ClientIP:  e.clientIP,
+						})
+						break
+					}
+				}
+			}
+			// Emit the matching answer event(s) every other tick so the
+			// reverse cache also gets populated in dev mode.
+			if len(mockDNSAnswerEvents) > 0 && tick%2 == 0 {
+				a := mockDNSAnswerEvents[(tick/2)%len(mockDNSAnswerEvents)]
+				cb(model.DNSLogEvent{
+					Kind:     model.DNSLogAnswer,
+					Domain:   a.domain,
+					AnswerIP: a.ip,
+				})
+			}
+			tick++
+		}
+	}
 }
 
 // MockDhcpcdManager implements DhcpcdManager for local testing

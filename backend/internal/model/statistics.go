@@ -22,6 +22,11 @@ type TopHost struct {
 	// (conntrack Forward tuple, plan Caution 7) — the UI uses this flag to
 	// tell those rows apart from genuine LAN hosts.
 	Private bool `json:"private"`
+	// Domain is the domain name dnsmasq most recently answered for this IP
+	// (docs/ref/todo/statistics-dns-top-domain-plan.md T-01/T-08) — display
+	// only, empty when unknown/expired. NEVER used for firewall rule
+	// generation, policy matching, or routing decisions (plan §5 item 6).
+	Domain string `json:"domain"`
 }
 
 // TopConversation is one src -> dst:port flow-tuple row (4-tuple: src IP,
@@ -38,6 +43,22 @@ type TopConversation struct {
 	DstPort uint16  `json:"dstPort"`
 	Bytes   uint64  `json:"bytes"`
 	Percent float64 `json:"percent"`
+	// DstDomain is the domain name dnsmasq most recently answered for DstIP —
+	// display only, empty when unknown/expired (same source/rules as
+	// TopHost.Domain above). SrcIP has no equivalent field: it is always a LAN
+	// address in this table.
+	DstDomain string `json:"dstDomain"`
+}
+
+// TopDomain is one row of the "Top Queried Domains" card — ranked by query
+// count, fed by the DNS query-log watcher (docs/ref/todo/
+// statistics-dns-top-domain-plan.md T-04/T-07). RAM-only, opt-in (query
+// logging must be enabled from the DNS Server page).
+type TopDomain struct {
+	Domain    string  `json:"domain"`
+	QueryType string  `json:"queryType"`
+	Count     uint64  `json:"count"`
+	Percent   float64 `json:"percent"`
 }
 
 // TopDeniedSource is one row of the Top Denied Sources card — ranked by
@@ -85,6 +106,23 @@ type TrafficStatistics struct {
 	// hit its tracking cap during this window (plan §2 T-02/T-03) — the UI
 	// should show a warning that the ranking may be incomplete.
 	Truncated bool `json:"truncated"`
+
+	// TopDomains, DNSQueries, DNSLoggingEnabled, DNSTruncated are the "Top
+	// Queried Domains" card (docs/ref/todo/statistics-dns-top-domain-plan.md
+	// T-01/T-07). All zero-valued (empty slice / false) when query logging is
+	// disabled — the field always exists so a client doesn't have to special-
+	// case its absence, but is never populated without the opt-in switch.
+	TopDomains []TopDomain `json:"topDomains"`
+	// DNSQueries is the total number of DNS queries observed in this window
+	// (used as the percent denominator for TopDomains — a different unit than
+	// ObservedBytes, mirroring DeniedEvents above).
+	DNSQueries uint64 `json:"dnsQueries"`
+	// DNSLoggingEnabled mirrors DNSServerSettings.QueryLogging — lets the UI
+	// show an accurate empty-state instead of an empty list.
+	DNSLoggingEnabled bool `json:"dnsLoggingEnabled"`
+	// DNSTruncated is true when the domain ring hit its per-bucket tracking
+	// cap during this window (maxTrackedDomains in service/dns_query_stats.go).
+	DNSTruncated bool `json:"dnsTruncated"`
 
 	GeneratedAt string `json:"generatedAt"`
 }

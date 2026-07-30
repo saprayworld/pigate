@@ -495,6 +495,32 @@ func main() {
 			model.EventSeverityWarning, "", "dns_server", err.Error())
 	}
 
+	// DNS Statistics (Top Queried Domains + IP->domain enrichment —
+	// docs/ref/todo/statistics-dns-top-domain-plan.md T-09): load the
+	// opt-in switch + reverse-cache TTL/cap from DB once at boot, then start
+	// the query-log watcher. A read failure falls back to the package
+	// defaults (60min/4096 entries, logging disabled) with a warning rather
+	// than failing startup — this is display-only enrichment, never a boot
+	// dependency.
+	dnsServerSettings, err := repo.GetDNSServerSettings()
+	if err != nil {
+		log.Printf("[Main] Warning: failed to read DNS server settings at startup, using defaults: %v", err)
+		dnsServerSettings = model.DNSServerSettings{
+			QueryLogging:       false,
+			DNSCacheTTLMinutes: model.DNSCacheTTLDefault,
+			DNSCacheMaxEntries: model.DNSCacheEntriesDefault,
+		}
+	}
+	statisticsService.SetDNSLoggingEnabled(dnsServerSettings.QueryLogging)
+	statisticsService.SetReverseCacheLimits(dnsServerSettings.DNSCacheTTLMinutes, dnsServerSettings.DNSCacheMaxEntries)
+
+	log.Printf("[Main] Starting DNS query-log watcher...")
+	go func() {
+		if err := dnsServer.WatchDNSLog(monitorCtx, statisticsService.RecordDNSEvent); err != nil && monitorCtx.Err() == nil {
+			log.Printf("[Main] Warning: DNS query-log watcher stopped: %v", err)
+		}
+	}()
+
 	log.Printf("[Main] Applying database-configured DNS settings to kernel at startup...")
 	if err := dnsService.ApplyDNSConfig(); err != nil {
 		log.Printf("[Main] Warning: Failed to apply DNS configurations to kernel at startup: %v", err)

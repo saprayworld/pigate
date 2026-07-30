@@ -2679,3 +2679,60 @@ func (r *Repository) SetDNSServerInterfaces(interfaces []string) error {
 	_, err := r.db.Exec("UPDATE dns_server_settings SET interfaces = ? WHERE id = 1", strings.Join(interfaces, ","))
 	return err
 }
+
+// GetDNSServerSettings returns the full DNS Server settings row, including the
+// DNS Statistics fields (docs/ref/todo/statistics-dns-top-domain-plan.md T-02).
+// Out-of-range TTL/cap values (e.g. a DB hand-edited or restored from a
+// corrupted backup) are clamped back to the package default with a warning
+// log rather than returned as-is — callers must never see a value that could
+// let the reverse cache grow unbounded (plan §5 item 17).
+func (r *Repository) GetDNSServerSettings() (model.DNSServerSettings, error) {
+	var stored string
+	var queryLogging int
+	var ttl, maxEntries int
+	err := r.db.QueryRow(
+		"SELECT interfaces, query_logging, dns_cache_ttl_minutes, dns_cache_max_entries FROM dns_server_settings WHERE id = 1",
+	).Scan(&stored, &queryLogging, &ttl, &maxEntries)
+	if err != nil {
+		return model.DNSServerSettings{}, err
+	}
+
+	// Non-nil (matches GetDNSServerInterfaces above): an empty JSON array
+	// ("[]") rather than "null" is what lets backup_repo.go's restore path
+	// tell "current-era backup with DNS Server configured to no interfaces"
+	// apart from "legacy backup predating this whole section" (nil).
+	interfaces := []string{}
+	if strings.TrimSpace(stored) != "" {
+		interfaces = strings.Split(stored, ",")
+	}
+
+	if ttl < model.DNSCacheTTLMin || ttl > model.DNSCacheTTLMax {
+		log.Printf("[Repository] dns_cache_ttl_minutes=%d out of range, clamping to default %d", ttl, model.DNSCacheTTLDefault)
+		ttl = model.DNSCacheTTLDefault
+	}
+	if maxEntries < model.DNSCacheEntriesMin || maxEntries > model.DNSCacheEntriesMax {
+		log.Printf("[Repository] dns_cache_max_entries=%d out of range, clamping to default %d", maxEntries, model.DNSCacheEntriesDefault)
+		maxEntries = model.DNSCacheEntriesDefault
+	}
+
+	return model.DNSServerSettings{
+		Interfaces:         interfaces,
+		QueryLogging:       queryLogging != 0,
+		DNSCacheTTLMinutes: ttl,
+		DNSCacheMaxEntries: maxEntries,
+	}, nil
+}
+
+// SetDNSServerSettings persists the DNS Statistics fields (query_logging,
+// dns_cache_ttl_minutes, dns_cache_max_entries) without touching interfaces —
+// callers that also need to change interfaces should call
+// SetDNSServerInterfaces separately (mirrors the existing split so a caller
+// that only wants to flip QueryLogging never has to know the current
+// interface list).
+func (r *Repository) SetDNSServerSettings(queryLogging bool, ttlMinutes int, maxEntries int) error {
+	_, err := r.db.Exec(
+		"UPDATE dns_server_settings SET query_logging = ?, dns_cache_ttl_minutes = ?, dns_cache_max_entries = ? WHERE id = 1",
+		boolToInt(queryLogging), ttlMinutes, maxEntries,
+	)
+	return err
+}

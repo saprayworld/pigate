@@ -184,3 +184,42 @@ func TestValidateDhcpConfig(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateDNSServerSettings covers T-11 item 6 (🔒): out-of-range/0/
+// negative TTL and cap values must error; the documented boundary values
+// (including both ends of the range) must pass.
+func TestValidateDNSServerSettings(t *testing.T) {
+	base := func() DNSServerSettings {
+		return DNSServerSettings{DNSCacheTTLMinutes: DNSCacheTTLDefault, DNSCacheMaxEntries: DNSCacheEntriesDefault}
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*DNSServerSettings)
+		wantErr bool
+	}{
+		{"ttl 0", func(s *DNSServerSettings) { s.DNSCacheTTLMinutes = 0 }, true},
+		{"ttl -1", func(s *DNSServerSettings) { s.DNSCacheTTLMinutes = -1 }, true},
+		{"ttl 1441", func(s *DNSServerSettings) { s.DNSCacheTTLMinutes = 1441 }, true},
+		{"ttl 1 (min boundary)", func(s *DNSServerSettings) { s.DNSCacheTTLMinutes = 1 }, false},
+		{"ttl 60 (default)", func(s *DNSServerSettings) { s.DNSCacheTTLMinutes = 60 }, false},
+		{"ttl 1440 (max boundary)", func(s *DNSServerSettings) { s.DNSCacheTTLMinutes = 1440 }, false},
+		{"max 0", func(s *DNSServerSettings) { s.DNSCacheMaxEntries = 0 }, true},
+		{"max -1", func(s *DNSServerSettings) { s.DNSCacheMaxEntries = -1 }, true},
+		{"max 127", func(s *DNSServerSettings) { s.DNSCacheMaxEntries = 127 }, true},
+		{"max 65537", func(s *DNSServerSettings) { s.DNSCacheMaxEntries = 65537 }, true},
+		{"max 128 (min boundary)", func(s *DNSServerSettings) { s.DNSCacheMaxEntries = 128 }, false},
+		{"max 4096 (default)", func(s *DNSServerSettings) { s.DNSCacheMaxEntries = 4096 }, false},
+		{"max 65536 (max boundary)", func(s *DNSServerSettings) { s.DNSCacheMaxEntries = 65536 }, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := base()
+			tt.mutate(&s)
+			err := ValidateDNSServerSettings(s)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateDNSServerSettings(%+v) err = %v, wantErr %v", s, err, tt.wantErr)
+			}
+		})
+	}
+}

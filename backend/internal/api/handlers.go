@@ -3163,28 +3163,44 @@ func (s *Server) HandleClearDNSCache(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, true)
 }
 
-// HandleGetDNSServerSettings returns the interfaces the DNS Server is currently bound to.
+// HandleGetDNSServerSettings returns the interfaces the DNS Server is currently
+// bound to plus the DNS Statistics fields (queryLogging/dnsCacheTtlMinutes/
+// dnsCacheMaxEntries — docs/ref/todo/statistics-dns-top-domain-plan.md T-10).
 func (s *Server) HandleGetDNSServerSettings(w http.ResponseWriter, r *http.Request) {
-	interfaces, err := s.repo.GetDNSServerInterfaces()
+	settings, err := s.repo.GetDNSServerSettings()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.writeJSON(w, http.StatusOK, model.DNSServerSettings{Interfaces: interfaces})
+	s.writeJSON(w, http.StatusOK, settings)
 }
 
 // HandleUpdateDNSServerSettings saves the set of real interfaces (from Interface Service)
-// the DNS Server should bind to. Kept independent from DHCP Server configuration.
+// the DNS Server should bind to, plus the DNS Statistics fields (query logging switch +
+// reverse-cache TTL/cap). Kept independent from DHCP Server configuration.
 //
 // Validation tolerates dangling refs: interfaces already saved in dns_server_settings
 // are grandfathered through even if they no longer exist in the kernel (e.g. a VLAN
 // whose parent went away), so the user can always keep or remove them via the UI
 // without hitting a 400 deadlock. Only names newly *added* in this request are
 // validated against real interfaces, to keep rejecting typos/garbage from API clients.
+//
+// 🔒 The TTL/cap fields are validated via model.ValidateDNSServerSettings before
+// anything is written — out of range returns 400 and the DB is left untouched (plan
+// §5 item 17). Which side effect fires depends on WHAT changed: interfaces/queryLogging
+// changing triggers dnsServerService.ApplyAll() (writes config + restarts dnsmasq);
+// TTL/cap changing on their own only calls statisticsService.SetReverseCacheLimits —
+// ApplyZones/dnsmasq are never touched for a TTL/cap-only change (plan §5 item 18,
+// T-11 item 7).
 func (s *Server) HandleUpdateDNSServerSettings(w http.ResponseWriter, r *http.Request) {
 	var input model.DNSServerSettings
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	if err := model.ValidateDNSServerSettings(input); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -3198,16 +3214,17 @@ func (s *Server) HandleUpdateDNSServerSettings(w http.ResponseWriter, r *http.Re
 		valid[iface.Name] = true
 	}
 
-	// Load the previously saved set BEFORE writing so we can grandfather it (Caution 2:
-	// must read before SetDNSServerInterfaces, otherwise the grandfather set would be
-	// the new input and validation would pass everything).
-	saved, err := s.repo.GetDNSServerInterfaces()
+	// Load the previously saved settings BEFORE writing so we can (a) grandfather
+	// dangling interface refs (Caution 2: must read before writing, otherwise the
+	// grandfather set would be the new input and validation would pass everything)
+	// and (b) detect exactly what changed, to decide restart vs. no-restart below.
+	saved, err := s.repo.GetDNSServerSettings()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	savedSet := make(map[string]bool)
-	for _, name := range saved {
+	for _, name := range saved.Interfaces {
 		savedSet[name] = true
 	}
 
@@ -3222,9 +3239,51 @@ func (s *Server) HandleUpdateDNSServerSettings(w http.ResponseWriter, r *http.Re
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if err := s.repo.SetDNSServerSettings(input.QueryLogging, input.DNSCacheTTLMinutes, input.DNSCacheMaxEntries); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	interfacesChanged := stringSliceSetChanged(saved.Interfaces, input.Interfaces)
+	queryLoggingChanged := saved.QueryLogging != input.QueryLogging
+
+	if interfacesChanged || queryLoggingChanged {
+		if err := s.dnsServerService.ApplyAll(); err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if queryLoggingChanged {
+			s.statistics.SetDNSLoggingEnabled(input.QueryLogging)
+		}
+	}
+	// TTL/cap take effect immediately regardless of whether ApplyAll ran above —
+	// this call never touches dnsmasq (plan §5 item 18).
+	s.statistics.SetReverseCacheLimits(input.DNSCacheTTLMinutes, input.DNSCacheMaxEntries)
+
 	s.logEvent(r, model.EventCategoryDns, "dns.server_settings_changed", model.EventSeverityInfo,
-		"dns-server", fmt.Sprintf("DNS server bound to %d interface(s)", len(input.Interfaces)))
+		"dns-server", fmt.Sprintf("DNS server bound to %d interface(s), query logging: %t", len(input.Interfaces), input.QueryLogging))
 	s.writeJSON(w, http.StatusOK, input)
+}
+
+// stringSliceSetChanged reports whether a and b differ as sets of strings,
+// ignoring order — used to detect whether the DNS Server "interfaces"
+// selection actually changed (order is not meaningful for this field, so a
+// pure order-sensitive comparison would trigger a spurious dnsmasq restart).
+func stringSliceSetChanged(a, b []string) bool {
+	if len(a) != len(b) {
+		return true
+	}
+	setA := make(map[string]bool, len(a))
+	for _, s := range a {
+		setA[s] = true
+	}
+	for _, s := range b {
+		if !setA[s] {
+			return true
+		}
+		delete(setA, s)
+	}
+	return len(setA) != 0
 }
 
 // =========================================================================
