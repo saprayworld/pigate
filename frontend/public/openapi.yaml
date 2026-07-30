@@ -5084,6 +5084,7 @@ components:
         status:
           type: string
           enum: [running, stopped, failed, unavailable]
+          example: running
         restartAllowed:
           type: boolean
           description: |
@@ -5091,7 +5092,6 @@ components:
             itself) — the UI must not offer a restart action, and the server
             also rejects the restart request with 403 regardless.
           example: true
-          example: running
 
     DNSConfig:
       type: object
