@@ -5,6 +5,7 @@ import (
 	"log"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -46,6 +47,17 @@ const (
 	// topN caps how many rows each of Top Talkers / Top Rules returns.
 	topN = 10
 
+	// maxTrackedDests/maxTrackedConversations bound the Statistics page's
+	// per-bucket destination/conversation maps the same way maxTrackedHosts
+	// bounds hostBytes — a port-scan/P2P burst can't grow either map without
+	// limit (docs/ref/todo/statistics-page-plan.md T-02, plan Caution 5/8).
+	// statsTopN caps how many rows the Statistics page's top-N lists return
+	// (kept distinct from topN, which the Dashboard "Detailed" tab cards use
+	// and must not be touched by this plan).
+	maxTrackedDests         = 300
+	maxTrackedConversations = 200
+	statsTopN               = 10
+
 	trafficWindow1h  = "1h"
 	trafficWindow24h = "24h"
 	// trafficWindow1hBuckets is how many trailing 5-minute buckets make up
@@ -80,6 +92,16 @@ type trafficDetailBucket struct {
 	catBytes  map[string]uint64
 	ruleBytes map[string]model.RuleCounter
 	observed  uint64
+
+	// dstBytes/convBytes back the Statistics page (Top Destinations / Top
+	// Conversations, docs/ref/todo/statistics-page-plan.md T-02) — same
+	// delta source (processFlows/onFlowEnd) and merged via addBucket in the
+	// same call as hostBytes, so they can never drift out of sync with it
+	// (plan Caution 2: never compute a second delta).
+	// dstBytes is keyed by destination IP; convBytes is keyed by
+	// convKey(srcIP, dstIP, proto, dstPort).
+	dstBytes  map[string]uint64
+	convBytes map[string]uint64
 }
 
 // categoryEntry is one Service-Object-derived Protocol Breakdown category
@@ -339,7 +361,9 @@ func (s *TrafficStatsService) onFlowEnd(f model.FlowSample) {
 
 	hostDeltas := map[string]uint64{f.SrcIP: delta}
 	catDeltas := map[string]uint64{s.categorize(f.Proto, f.DstPort): delta}
-	s.addBucket(time.Now(), hostDeltas, catDeltas, nil, delta)
+	dstDeltas := map[string]uint64{f.DstIP: delta}
+	convDeltas := map[string]uint64{convKey(f): delta}
+	s.addBucket(time.Now(), hostDeltas, catDeltas, nil, dstDeltas, convDeltas, delta)
 }
 
 // poll is one collection tick: DumpFlows + DumpRuleCounters must never be
@@ -350,12 +374,14 @@ func (s *TrafficStatsService) poll() {
 	now := time.Now()
 	hostDeltas := make(map[string]uint64)
 	catDeltas := make(map[string]uint64)
+	dstDeltas := make(map[string]uint64)
+	convDeltas := make(map[string]uint64)
 	var observed uint64
 
 	if flows, err := s.acct.DumpFlows(); err != nil {
 		log.Printf("[TrafficStats] DumpFlows failed (traffic cards will show stale/empty data): %v", err)
 	} else {
-		observed = s.processFlows(flows, hostDeltas, catDeltas)
+		observed = s.processFlows(flows, hostDeltas, catDeltas, dstDeltas, convDeltas)
 	}
 
 	ruleDeltas := make(map[string]model.RuleCounter)
@@ -370,7 +396,7 @@ func (s *TrafficStatsService) poll() {
 		// tick — nothing to add to the bucket ring.
 		return
 	}
-	s.addBucket(now, hostDeltas, catDeltas, ruleDeltas, observed)
+	s.addBucket(now, hostDeltas, catDeltas, ruleDeltas, dstDeltas, convDeltas, observed)
 }
 
 // processFlows folds one DumpFlows snapshot into per-host/per-category
@@ -378,7 +404,7 @@ func (s *TrafficStatsService) poll() {
 // Caution 4), clamping negative deltas to 0 (Caution 3), and pruning flow
 // keys absent for flowStaleMisses consecutive polls (Caution 5). Returns the
 // total observed byte delta this poll.
-func (s *TrafficStatsService) processFlows(flows []model.FlowSample, hostDeltas, catDeltas map[string]uint64) uint64 {
+func (s *TrafficStatsService) processFlows(flows []model.FlowSample, hostDeltas, catDeltas, dstDeltas, convDeltas map[string]uint64) uint64 {
 	s.flowMu.Lock()
 	defer s.flowMu.Unlock()
 
@@ -428,6 +454,17 @@ func (s *TrafficStatsService) processFlows(flows []model.FlowSample, hostDeltas,
 			hostDeltas[f.SrcIP] += d
 		}
 		catDeltas[s.categorize(f.Proto, f.DstPort)] += d
+		// Same delta `d` feeds Top Destinations/Top Conversations
+		// (docs/ref/todo/statistics-page-plan.md T-02 step 4, Caution 2) —
+		// never compute a second delta for these, or a stray poll/event race
+		// would silently double-count.
+		if _, exists := dstDeltas[f.DstIP]; exists || len(dstDeltas) < maxTrackedDests {
+			dstDeltas[f.DstIP] += d
+		}
+		ck := convKey(f)
+		if _, exists := convDeltas[ck]; exists || len(convDeltas) < maxTrackedConversations {
+			convDeltas[ck] += d
+		}
 	}
 
 	for k, st := range s.flowState {
@@ -629,7 +666,7 @@ func parseServicePortRange(port string) (start, end int, ok bool) {
 // addBucket merges this poll's deltas into the current (or a freshly rolled)
 // 5-minute bucket, evicting the oldest bucket past trafficDetailBucketMax —
 // mirrors SystemStatusService.addToBucketLocked.
-func (s *TrafficStatsService) addBucket(now time.Time, hostDeltas, catDeltas map[string]uint64, ruleDeltas map[string]model.RuleCounter, observed uint64) {
+func (s *TrafficStatsService) addBucket(now time.Time, hostDeltas, catDeltas map[string]uint64, ruleDeltas map[string]model.RuleCounter, dstDeltas, convDeltas map[string]uint64, observed uint64) {
 	ts := now.Truncate(trafficDetailBucketSpan).Format(time.RFC3339)
 
 	s.mu.Lock()
@@ -640,6 +677,8 @@ func (s *TrafficStatsService) addBucket(now time.Time, hostDeltas, catDeltas map
 		mergeUint64Map(b.hostBytes, hostDeltas, maxTrackedHosts)
 		mergeUint64Map(b.catBytes, catDeltas, 0)
 		mergeRuleMap(b.ruleBytes, ruleDeltas)
+		mergeUint64Map(b.dstBytes, dstDeltas, maxTrackedDests)
+		mergeUint64Map(b.convBytes, convDeltas, maxTrackedConversations)
 		b.observed += observed
 		return
 	}
@@ -649,15 +688,43 @@ func (s *TrafficStatsService) addBucket(now time.Time, hostDeltas, catDeltas map
 		hostBytes: make(map[string]uint64, len(hostDeltas)),
 		catBytes:  make(map[string]uint64, len(catDeltas)),
 		ruleBytes: make(map[string]model.RuleCounter, len(ruleDeltas)),
+		dstBytes:  make(map[string]uint64, len(dstDeltas)),
+		convBytes: make(map[string]uint64, len(convDeltas)),
 		observed:  observed,
 	}
 	mergeUint64Map(b.hostBytes, hostDeltas, maxTrackedHosts)
 	mergeUint64Map(b.catBytes, catDeltas, 0)
 	mergeRuleMap(b.ruleBytes, ruleDeltas)
+	mergeUint64Map(b.dstBytes, dstDeltas, maxTrackedDests)
+	mergeUint64Map(b.convBytes, convDeltas, maxTrackedConversations)
 
 	s.buckets = append(s.buckets, b)
 	if len(s.buckets) > trafficDetailBucketMax {
 		s.buckets = s.buckets[len(s.buckets)-trafficDetailBucketMax:]
+	}
+}
+
+// convKey builds the Statistics page's 4-tuple conversation key (src IP, dst
+// IP, proto, dst port — no src port, plan §0: model.FlowSample has none).
+// Deliberately a plain delimited string (not a hash) so GetTrafficBreakdown
+// can split it back into its parts for display, unlike flowState's keys
+// (plan §1 item 3).
+func convKey(f model.FlowSample) string {
+	return f.SrcIP + "|" + f.DstIP + "|" + protoLabel(f.Proto) + "|" + strconv.FormatUint(uint64(f.DstPort), 10)
+}
+
+// protoLabel renders an IP protocol number the way the Statistics page wants
+// to display it: "TCP"/"UDP"/"ICMP" for the common cases, "IP:<n>" otherwise.
+func protoLabel(proto uint8) string {
+	switch proto {
+	case 6:
+		return "TCP"
+	case 17:
+		return "UDP"
+	case 1, 58:
+		return "ICMP"
+	default:
+		return "IP:" + strconv.Itoa(int(proto))
 	}
 }
 
@@ -758,6 +825,80 @@ func (s *TrafficStatsService) GetTrafficDetail(window string) model.TrafficDetai
 		GeneratedAt:    time.Now().UTC().Format(time.RFC3339),
 		Sessions:       s.SessionCurrent(),
 		SessionHistory: s.SessionHistory(),
+	}
+}
+
+// TrafficBreakdown is the read-only accessor the Statistics page's
+// StatisticsService composes its response from (docs/ref/todo/statistics-page-plan.md
+// T-02 step 6). Hosts/Dests/Convs are raw byte totals for the requested
+// window, keyed the same way the bucket ring stores them (Convs by
+// convKey); StatisticsService is responsible for turning those keys back
+// into display rows (hostname lookup, percent, sorting).
+type TrafficBreakdown struct {
+	Hosts, Dests, Convs map[string]uint64
+	Observed            uint64
+	Truncated           bool
+	Accuracy            string
+}
+
+// GetTrafficBreakdown is GetTrafficDetail's sibling for the Statistics page:
+// same bucket-ring read pattern (whole aggregation under one RLock — see the
+// long comment on GetTrafficDetail above for why), but also returns the raw
+// dst/conv totals GetTrafficDetail's response shape has no room for.
+// Truncated reports whether any bucket in the window hit one of its
+// tracking caps (maxTrackedHosts/maxTrackedDests/maxTrackedConversations) —
+// a signal that the ranking below may be missing entries.
+func (s *TrafficStatsService) GetTrafficBreakdown(window string) TrafficBreakdown {
+	if window != trafficWindow24h {
+		window = trafficWindow1h
+	}
+
+	hostTotals := make(map[string]uint64)
+	dstTotals := make(map[string]uint64)
+	convTotals := make(map[string]uint64)
+	var observed uint64
+	var truncated bool
+
+	s.mu.RLock()
+	var windowBuckets []trafficDetailBucket
+	if window == trafficWindow1h {
+		n := trafficWindow1hBuckets
+		if len(s.buckets) < n {
+			n = len(s.buckets)
+		}
+		windowBuckets = s.buckets[len(s.buckets)-n:]
+	} else {
+		windowBuckets = s.buckets
+	}
+	for _, b := range windowBuckets {
+		for k, v := range b.hostBytes {
+			hostTotals[k] += v
+		}
+		for k, v := range b.dstBytes {
+			dstTotals[k] += v
+		}
+		for k, v := range b.convBytes {
+			convTotals[k] += v
+		}
+		observed += b.observed
+		if len(b.hostBytes) >= maxTrackedHosts || len(b.dstBytes) >= maxTrackedDests || len(b.convBytes) >= maxTrackedConversations {
+			truncated = true
+		}
+	}
+	s.mu.RUnlock()
+
+	accuracy := "estimated"
+	if s.eventsActive.Load() {
+		accuracy = "near-exact"
+	}
+
+	return TrafficBreakdown{
+		Hosts:     hostTotals,
+		Dests:     dstTotals,
+		Convs:     convTotals,
+		Observed:  observed,
+		Truncated: truncated,
+		Accuracy:  accuracy,
 	}
 }
 

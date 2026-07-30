@@ -51,6 +51,7 @@ type Server struct {
 	systemServiceSvc  *service.SystemServiceService
 	capabilityService *service.SystemCapabilityService
 	trafficStats      *service.TrafficStatsService
+	statistics        *service.StatisticsService
 }
 
 func NewServer(
@@ -82,6 +83,7 @@ func NewServer(
 	systemServiceSvc *service.SystemServiceService,
 	capabilityService *service.SystemCapabilityService,
 	trafficStats *service.TrafficStatsService,
+	statistics *service.StatisticsService,
 ) *Server {
 	return &Server{
 		repo:              repo,
@@ -112,6 +114,7 @@ func NewServer(
 		systemServiceSvc:  systemServiceSvc,
 		capabilityService: capabilityService,
 		trafficStats:      trafficStats,
+		statistics:        statistics,
 	}
 }
 
@@ -404,6 +407,21 @@ func (s *Server) HandleGetTrafficDetail(w http.ResponseWriter, r *http.Request) 
 		window = "1h"
 	}
 	s.writeJSON(w, http.StatusOK, s.trafficStats.GetTrafficDetail(window))
+}
+
+// HandleGetStatistics backs the Statistics page (Top Source Hosts / Top
+// Destinations / Top Conversations / Top Denied —
+// docs/ref/todo/statistics-page-plan.md). window is whitelisted to
+// {"1h","24h"} exactly like HandleGetTrafficDetail above — any other value
+// (including empty) silently falls back to "1h" rather than passing a
+// client-supplied raw string into the service (plan §5 Caution 1: the only
+// client input in this whole feature).
+func (s *Server) HandleGetStatistics(w http.ResponseWriter, r *http.Request) {
+	window := r.URL.Query().Get("window")
+	if window != "24h" {
+		window = "1h"
+	}
+	s.writeJSON(w, http.StatusOK, s.statistics.GetStatistics(window))
 }
 
 // HandleGetRecentLogs backs the Dashboard "Recent Logs" widget. It reads the

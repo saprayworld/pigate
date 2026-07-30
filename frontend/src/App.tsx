@@ -27,6 +27,7 @@ import QoS from "@/pages/QoS"
 import EventLogs from "@/pages/EventLogs"
 import ForwardTraffic from "@/pages/ForwardTraffic"
 import LocalTraffic from "@/pages/LocalTraffic"
+import Statistics from "@/pages/Statistics"
 import { SizeIndicator, TailwindIndicator } from "./components/tailwindIndicator"
 
 // A simple authentication route guard
@@ -170,6 +171,7 @@ export default function App() {
                     <Route path="traffic" element={<ForwardTraffic />} />
                     <Route path="local" element={<LocalTraffic />} />
                     <Route path="events" element={<EventLogs />} />
+                    <Route path="statistics" element={<Statistics />} />
                   </Route>
 
                   {/* System Routes */}

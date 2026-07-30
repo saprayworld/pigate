@@ -14,6 +14,7 @@ import {
   Server,
   Users,
   ScrollText,
+  BarChart3,
   ArrowRightLeft,
   ShieldAlert,
   Waypoints,
@@ -78,6 +79,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         { path: "/logs/traffic", label: "Forward Traffic", icon: ArrowRightLeft },
         { path: "/logs/local", label: "Local Traffic", icon: ShieldAlert },
         { path: "/logs/events", label: "System Events", icon: ScrollText },
+        { path: "/logs/statistics", label: "Statistics", icon: BarChart3 },
       ],
     },
     {
