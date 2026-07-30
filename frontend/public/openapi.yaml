@@ -4993,7 +4993,6 @@ components:
             false for read-only catalog entries (currently only pigate.service
             itself) — the UI must not offer a restart action, and the server
             also rejects the restart request with 403 regardless.
-          example: true
           example: running
 
     DNSConfig:
