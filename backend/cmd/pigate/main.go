@@ -209,7 +209,11 @@ func main() {
 	systemStatusService := service.NewSystemStatusService(sysStats, repo, hostnameService, timeService, version)
 	// Dashboard "Detailed" tab traffic-analytics pipeline (Protocol Breakdown /
 	// Top Talkers / Top Rules by Traffic — docs/ref/todo/dashboard-traffic-detail-plan.md).
-	trafficStatsService := service.NewTrafficStatsService(trafficAcct, repo, dhcp)
+	trafficStatsService := service.NewTrafficStatsService(trafficAcct, repo, dhcp, sysStats)
+	// Wire the Active Sessions snapshot into the SSE metrics push after both
+	// services exist above, to avoid a circular dependency between them
+	// (docs/ref/todo/dashboard-active-sessions-graph-plan.md Step 5).
+	systemStatusService.SetSessionCurrentFn(trafficStatsService.SessionCurrent)
 
 	// Central event log: every subsystem funnels audit events through this one
 	// service (RAM queue + async batch writer to SQLite; see event_log.go).

@@ -42,6 +42,9 @@ func (f *fakeStats) GetHostInfo() (*model.HostInfo, error) {
 func (f *fakeStats) GetNetCounters() (map[string]model.NetCounters, error) {
 	return f.counters, nil
 }
+func (f *fakeStats) GetConntrackCount() (count int, max int, available bool) {
+	return 0, 0, false
+}
 
 func newTestService(t *testing.T, stats *fakeStats) *SystemStatusService {
 	t.Helper()

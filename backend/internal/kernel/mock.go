@@ -655,6 +655,18 @@ func (m *MockSystemStats) GetNetCounters() (map[string]model.NetCounters, error)
 	}, nil
 }
 
+// GetConntrackCount returns a synthetic conntrack occupancy that drifts over
+// time (never reads /proc), so the mock Active Sessions chart visibly moves
+// during -mock development.
+func (m *MockSystemStats) GetConntrackCount() (count int, max int, available bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	count = 400 + int(300*m.wave(4))
+	max = 262144
+	available = true
+	return count, max, available
+}
+
 // MockTrafficLog implements TrafficLogManager for local/mock testing. It
 // synthesizes forward-traffic events on a timer (no netlink socket is ever
 // opened — safe to run on a dev workstation) so the Forward Traffic page and

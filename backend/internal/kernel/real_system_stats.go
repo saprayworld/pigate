@@ -218,6 +218,37 @@ func (r *RealSystemStats) GetTemperature() (*model.TemperatureInfo, error) {
 	}, nil
 }
 
+// GetConntrackCount reads the live conntrack table occupancy from
+// /proc/sys/net/netfilter/nf_conntrack_count|max. Absent on WSL / dev boxes
+// where nf_conntrack isn't loaded → available=false, no error, warned at
+// most once (see warnOnceKey) to avoid spamming the log every sample tick.
+func (r *RealSystemStats) GetConntrackCount() (count int, max int, available bool) {
+	countPath := filepath.Join(r.procRoot, "sys/net/netfilter/nf_conntrack_count")
+	raw, err := os.ReadFile(countPath)
+	if err != nil {
+		r.warnOnceKey("conntrack_count", "conntrack count not available (%s); session metrics reported as unavailable", countPath)
+		return 0, 0, false
+	}
+	c, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		r.warnOnceKey("conntrack_count", "conntrack count unparsable (%s): %v; session metrics reported as unavailable", countPath, err)
+		return 0, 0, false
+	}
+
+	maxPath := filepath.Join(r.procRoot, "sys/net/netfilter/nf_conntrack_max")
+	rawMax, err := os.ReadFile(maxPath)
+	if err != nil {
+		r.warnOnceKey("conntrack_max", "conntrack max not available (%s)", maxPath)
+		return c, 0, true
+	}
+	m, err := strconv.Atoi(strings.TrimSpace(string(rawMax)))
+	if err != nil {
+		r.warnOnceKey("conntrack_max", "conntrack max unparsable (%s): %v", maxPath, err)
+		return c, 0, true
+	}
+	return c, m, true
+}
+
 // GetDiskUsage returns usage for the filesystem containing path via statfs.
 func (r *RealSystemStats) GetDiskUsage(path string) (*model.DiskUsage, error) {
 	var st unix.Statfs_t

@@ -43,10 +43,13 @@ import {
   type SystemInfo,
   type TrafficHistory,
   type TrafficDetail,
+  type SessionCounts,
+  type SessionHistoryPoint,
 } from "@/services/dashboardService"
 import { interfaceService } from "@/services/interfaceService"
 import { useLiveLogs } from "@/hooks/useLiveLogs"
 import { useMetrics } from "@/hooks/useMetrics"
+import { CapabilityBanner } from "@/components/CapabilityBanner"
 import type { NetworkInterface, FirewallLog } from "@/data-mockup/mockData"
 
 /* -------------------------------------------------------------------------- */
@@ -430,6 +433,179 @@ function BandwidthCard({ data }: { data: Bucket[] }) {
             </ResponsiveContainer>
           )}
         </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+/**
+ * Active Sessions card (Dashboard "Detailed" tab) — total conntrack session
+ * count as a live line chart, seeded from the traffic-detail poll's RAM ring
+ * (sessionHistory, 30 min) and kept moving between polls by the shared SSE
+ * metrics stream (perf.sessions, ~5s). Deliberately a single "total" line —
+ * TCP/UDP/ICMP/Other are shown as badges only (different freshness/source,
+ * see model.SessionCounts doc comment; stacking them into the same chart
+ * line would misrepresent the figures as summing cleanly, which they don't).
+ */
+function ActiveSessionsCard({
+  detail,
+  sessions,
+  refreshKey,
+}: {
+  detail: TrafficDetail | null
+  sessions?: SessionCounts
+  refreshKey: number
+}) {
+  const { theme } = useTheme()
+  const isDark = theme === "dark"
+  const grid = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"
+  const axis = isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.45)"
+  const lineColor = "var(--primary)"
+
+  const [points, setPoints] = useState<SessionHistoryPoint[]>([])
+  const seededRefreshKey = useRef<number | null>(null)
+
+  // Seed from the traffic-detail poll's history ring — only on first load or
+  // when the user explicitly hits Refresh (refreshKey change), never on every
+  // 60s re-poll, so it doesn't stomp on the live-appended points in between.
+  useEffect(() => {
+    if (!detail?.sessionHistory || detail.sessionHistory.length === 0) return
+    if (points.length === 0 || seededRefreshKey.current !== refreshKey) {
+      setPoints(detail.sessionHistory)
+      seededRefreshKey.current = refreshKey
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail?.sessionHistory, refreshKey])
+
+  // Live append from the shared SSE metrics stream (~5s cadence). Dedupe
+  // lightly: the two tickers (session sampler + metrics broadcaster) don't
+  // align in phase exactly, so a push can occasionally carry the same
+  // snapshot the previous one did.
+  useEffect(() => {
+    if (!sessions || !sessions.available) return
+    // Appending to local chart state from an external push (SSE metrics
+    // stream) is exactly the "subscribe to external system" case the rule
+    // allows — there is no React state this could be derived from instead.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPoints((prev) => {
+      const last = prev[prev.length - 1]
+      if (last) {
+        const lastMs = new Date(last.t).getTime()
+        if (last.total === sessions.total && Date.now() - lastMs < 2500) {
+          return prev
+        }
+      }
+      const next = [
+        ...prev,
+        {
+          t: new Date().toISOString(),
+          total: sessions.total,
+          tcp: sessions.tcp,
+          udp: sessions.udp,
+          icmp: sessions.icmp,
+          other: sessions.other,
+        },
+      ]
+      return next.length > 360 ? next.slice(-360) : next
+    })
+  }, [sessions])
+
+  const percentOfMax =
+    sessions && sessions.max > 0 ? Math.round((sessions.total / sessions.max) * 1000) / 10 : null
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0">
+        <div>
+          <CardTitle className="text-base font-semibold">Active Sessions</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            {sessions?.available ? (
+              <>
+                <span className="font-mono text-foreground">{sessions.total.toLocaleString()}</span>{" "}
+                sessions{percentOfMax !== null ? ` (${percentOfMax}% ของ nf_conntrack_max)` : ""}
+              </>
+            ) : (
+              "รอข้อมูล conntrack…"
+            )}
+          </p>
+        </div>
+        {sessions?.available && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline" className="font-normal text-muted-foreground">
+              TCP {sessions.tcp.toLocaleString()}
+            </Badge>
+            <Badge variant="outline" className="font-normal text-muted-foreground">
+              UDP {sessions.udp.toLocaleString()}
+            </Badge>
+            <Badge variant="outline" className="font-normal text-muted-foreground">
+              ICMP {sessions.icmp.toLocaleString()}
+            </Badge>
+            <Badge variant="outline" className="font-normal text-muted-foreground">
+              Other {sessions.other.toLocaleString()}
+            </Badge>
+            <span className="text-xs text-muted-foreground">อัปเดตทุก ~10s</span>
+          </div>
+        )}
+      </CardHeader>
+      <CardContent>
+        {!sessions || !sessions.available ? (
+          <CapabilityBanner id="conntrack" />
+        ) : (
+          <>
+            <div className="h-56 w-full">
+              {points.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  Collecting session data…
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={points} margin={{ top: 8, right: 8, left: -24, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={grid} />
+                    <XAxis
+                      dataKey="t"
+                      stroke={axis}
+                      fontSize={11}
+                      tickLine={false}
+                      axisLine={false}
+                      minTickGap={40}
+                      tickFormatter={(v) =>
+                        new Date(v).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                      }
+                    />
+                    <YAxis stroke={axis} fontSize={11} tickLine={false} axisLine={false} />
+                    <Tooltip
+                      cursor={{ stroke: isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.12)", strokeWidth: 1 }}
+                      contentStyle={{
+                        backgroundColor: isDark ? "oklch(0.205 0 0)" : "#fff",
+                        border: `1px solid ${grid}`,
+                        borderRadius: "8px",
+                        fontSize: "12px",
+                        color: isDark ? "#fff" : "#111",
+                      }}
+                      labelFormatter={(v) => new Date(v).toLocaleTimeString()}
+                      formatter={(value) => [`${value}`, "Total"]}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="total"
+                      name="Total"
+                      stroke={lineColor}
+                      strokeWidth={2}
+                      dot={false}
+                      activeDot={{ r: 4, strokeWidth: 0 }}
+                      isAnimationActive={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+            {sessions.protoCapped && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                หมายเหตุ: ค่านับ TCP/UDP/ICMP/Other ถูก cap ที่ขีดจำกัดการอ่าน conntrack ต่อรอบ
+              </p>
+            )}
+          </>
+        )}
       </CardContent>
     </Card>
   )
@@ -874,6 +1050,7 @@ export default function Dashboard() {
       {/* Detailed — everything stacked with full context */}
       <TabsContent value="detailed" className="space-y-6">
         <StatGrid metrics={metrics} />
+        <ActiveSessionsCard detail={trafficDetail} sessions={perf?.sessions} refreshKey={refreshKey} />
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="lg:col-span-1">
             <ProtocolBreakdownCard detail={trafficDetail} />

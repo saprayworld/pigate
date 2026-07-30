@@ -51,6 +51,15 @@ const (
 	// trafficWindow1hBuckets is how many trailing 5-minute buckets make up
 	// the "1h" window (12 x 5min = 1h).
 	trafficWindow1hBuckets = 12
+
+	// sessionSampleInterval is the cadence of the Active Sessions sampler
+	// (docs/ref/todo/dashboard-active-sessions-graph-plan.md) — an
+	// independent ticker in run() from flowPollInterval, so total-session
+	// freshness (~5s) is decoupled from the conntrack-dump poll (10s).
+	sessionSampleInterval = 5 * time.Second
+	// sessionRingMax bounds the RAM-only Active Sessions history ring to 30
+	// minutes (5s x 360 points); never persisted to SQLite.
+	sessionRingMax = 360
 )
 
 // flowSampleState is the per-flow-key baseline the poller keeps between
@@ -90,13 +99,35 @@ type categoryEntry struct {
 // them in RAM, and composes the model.TrafficDetail DTO the API serves. All
 // state here is RAM-only (plan Caution 12).
 type TrafficStatsService struct {
-	acct kernel.TrafficAccountingManager
-	repo *db.Repository
-	dhcp kernel.DhcpManager
+	acct  kernel.TrafficAccountingManager
+	repo  *db.Repository
+	dhcp  kernel.DhcpManager
+	stats kernel.SystemStatsManager
 
 	// Bucket ring — the aggregated deltas GetTrafficDetail reads from.
 	mu      sync.RWMutex
 	buckets []trafficDetailBucket
+
+	// protoMu/protoCounts holds the per-protocol session counts observed by
+	// the most recent processFlows() call (10s cadence, same dump the bucket
+	// ring is built from) — separate from the byte-delta state above because
+	// this counts *sessions seen*, not bytes transferred.
+	protoMu     sync.RWMutex
+	protoCounts struct {
+		tcp, udp, icmp, other int
+		capped                bool
+		at                    time.Time
+	}
+
+	// sessMu/sessRing/sessCur back the Active Sessions Dashboard card: sessCur
+	// is the latest snapshot (Total/Max/Available from /proc, TCP/UDP/ICMP/
+	// Other from protoCounts above); sessRing is the RAM-only 30-minute
+	// history sampled every sessionSampleInterval by run()'s independent
+	// ticker (plan Caution 6 — must not be tied to the metrics broadcaster,
+	// which skips ticks when nobody is viewing the dashboard).
+	sessMu   sync.RWMutex
+	sessRing []model.SessionHistoryPoint
+	sessCur  model.SessionCounts
 
 	// Flow-delta baseline (conntrack).
 	flowMu     sync.Mutex
@@ -121,13 +152,16 @@ type TrafficStatsService struct {
 	eventsActive atomic.Bool
 }
 
-// NewTrafficStatsService constructs the service. acct/dhcp may be either the
-// real or mock kernel implementation (main.go selects per -mock).
-func NewTrafficStatsService(acct kernel.TrafficAccountingManager, repo *db.Repository, dhcp kernel.DhcpManager) *TrafficStatsService {
+// NewTrafficStatsService constructs the service. acct/dhcp/stats may be either
+// the real or mock kernel implementation (main.go selects per -mock); stats is
+// nil-safe (sampleSessions no-ops when nil, e.g. in older tests that don't
+// exercise the Active Sessions feature).
+func NewTrafficStatsService(acct kernel.TrafficAccountingManager, repo *db.Repository, dhcp kernel.DhcpManager, stats kernel.SystemStatsManager) *TrafficStatsService {
 	return &TrafficStatsService{
 		acct:         acct,
 		repo:         repo,
 		dhcp:         dhcp,
+		stats:        stats,
 		flowState:    make(map[string]*flowSampleState),
 		ruleBaseline: make(map[string]model.RuleCounter),
 	}
@@ -143,14 +177,96 @@ func (s *TrafficStatsService) Start(ctx context.Context) {
 func (s *TrafficStatsService) run(ctx context.Context) {
 	t := time.NewTicker(flowPollInterval)
 	defer t.Stop()
+	// st is the Active Sessions sampler ticker — deliberately independent of
+	// t above (and of the metrics broadcaster's own ticker in
+	// system_status.go), so history ring samples keep landing every ~5s even
+	// when nobody currently has the dashboard open (plan Caution 6).
+	st := time.NewTicker(sessionSampleInterval)
+	defer st.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 			s.poll()
+		case <-st.C:
+			s.sampleSessions()
 		}
 	}
+}
+
+// sampleSessions is the Active Sessions sampler tick: reads the live
+// conntrack total from kernel.SystemStatsManager plus the latest per-proto
+// snapshot processFlows() already computed, and records both the current
+// snapshot (sessCur) and a new history-ring point (sessRing) — but only when
+// the live read is available, so a host without conntrack gets an empty
+// history (and the frontend's CapabilityBanner empty state) instead of a
+// misleading flat line of zeros.
+func (s *TrafficStatsService) sampleSessions() {
+	if s.stats == nil {
+		return
+	}
+	total, max, available := s.stats.GetConntrackCount()
+	tcp, udp, icmp, other, capped, at := s.protoSnapshot()
+
+	protoSampledAt := ""
+	if !at.IsZero() {
+		protoSampledAt = at.UTC().Format(time.RFC3339)
+	}
+	cur := model.SessionCounts{
+		Total:          total,
+		TCP:            tcp,
+		UDP:            udp,
+		ICMP:           icmp,
+		Other:          other,
+		Max:            max,
+		Available:      available,
+		ProtoSampledAt: protoSampledAt,
+		ProtoCapped:    capped,
+	}
+
+	s.sessMu.Lock()
+	s.sessCur = cur
+	if available {
+		point := model.SessionHistoryPoint{
+			T:     time.Now().UTC().Format(time.RFC3339),
+			Total: total,
+			TCP:   tcp,
+			UDP:   udp,
+			ICMP:  icmp,
+			Other: other,
+		}
+		s.sessRing = append(s.sessRing, point)
+		if len(s.sessRing) > sessionRingMax {
+			s.sessRing = s.sessRing[len(s.sessRing)-sessionRingMax:]
+		}
+	}
+	s.sessMu.Unlock()
+}
+
+// SessionCurrent returns the latest Active Sessions snapshot. Safe to call
+// concurrently — SessionCounts is scalar-only, so returning it by value under
+// RLock is a real copy (no shared references, unlike trafficDetailBucket's
+// maps — see the GetTrafficDetail comment below).
+func (s *TrafficStatsService) SessionCurrent() model.SessionCounts {
+	s.sessMu.RLock()
+	defer s.sessMu.RUnlock()
+	return s.sessCur
+}
+
+// SessionHistory returns a copy of the Active Sessions RAM ring buffer.
+// Deliberately makes a fresh slice and copies into it rather than returning
+// s.sessRing (or a sub-slice of it) directly: sampleSessions appends to
+// s.sessRing from the sampler goroutine on every tick, and a caller holding a
+// slice that aliases that backing array would race with those appends —
+// same class of bug the trafficDetailBucket race note above (:534-551)
+// warns about, just with a slice instead of a map.
+func (s *TrafficStatsService) SessionHistory() []model.SessionHistoryPoint {
+	s.sessMu.RLock()
+	defer s.sessMu.RUnlock()
+	out := make([]model.SessionHistoryPoint, len(s.sessRing))
+	copy(out, s.sessRing)
+	return out
 }
 
 // StartFlowEndWatcher launches the conntrack DESTROY event watcher on its own
@@ -269,9 +385,27 @@ func (s *TrafficStatsService) processFlows(flows []model.FlowSample, hostDeltas,
 	firstPoll := !s.flowSeeded
 	seen := make(map[string]bool, len(flows))
 	var observed uint64
+	var protoTCP, protoUDP, protoICMP, protoOther int
 
 	for _, f := range flows {
 		seen[f.Key] = true
+
+		// Active Sessions per-proto session count (plan §Step 3) — counts
+		// every flow this dump saw, including the seed round and delta==0
+		// flows (this is a session count, not a byte-delta count), and MUST
+		// run before the memory-cap continue below so a capped/dropped flow
+		// still contributes to the proto tally.
+		switch f.Proto {
+		case 6:
+			protoTCP++
+		case 17:
+			protoUDP++
+		case 1, 58:
+			protoICMP++
+		default:
+			protoOther++
+		}
+
 		st, ok := s.flowState[f.Key]
 		if !ok {
 			if len(s.flowState) >= maxTrackedFlows {
@@ -307,7 +441,26 @@ func (s *TrafficStatsService) processFlows(flows []model.FlowSample, hostDeltas,
 	}
 
 	s.flowSeeded = true
+
+	s.protoMu.Lock()
+	s.protoCounts.tcp = protoTCP
+	s.protoCounts.udp = protoUDP
+	s.protoCounts.icmp = protoICMP
+	s.protoCounts.other = protoOther
+	s.protoCounts.capped = len(flows) >= kernel.MaxFlowsPerDump
+	s.protoCounts.at = time.Now()
+	s.protoMu.Unlock()
+
 	return observed
+}
+
+// protoSnapshot returns the most recent per-protocol session counts
+// processFlows() computed, plus whether that dump hit kernel.MaxFlowsPerDump
+// and when it was taken (zero time if processFlows has never run yet).
+func (s *TrafficStatsService) protoSnapshot() (tcp, udp, icmp, other int, capped bool, at time.Time) {
+	s.protoMu.RLock()
+	defer s.protoMu.RUnlock()
+	return s.protoCounts.tcp, s.protoCounts.udp, s.protoCounts.icmp, s.protoCounts.other, s.protoCounts.capped, s.protoCounts.at
 }
 
 // processRuleCounters folds one DumpRuleCounters snapshot into ruleDeltas,
@@ -595,14 +748,16 @@ func (s *TrafficStatsService) GetTrafficDetail(window string) model.TrafficDetai
 	}
 
 	return model.TrafficDetail{
-		Window:        window,
-		ObservedBytes: observed,
-		Estimated:     true,
-		Accuracy:      accuracy,
-		Categories:    buildCategorySlices(catTotals, observed),
-		TopTalkers:    buildTopTalkers(hostTotals, observed, leaseByIP, resByIP),
-		TopRules:      buildTopRules(ruleTotals, s.policyLookup()),
-		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+		Window:         window,
+		ObservedBytes:  observed,
+		Estimated:      true,
+		Accuracy:       accuracy,
+		Categories:     buildCategorySlices(catTotals, observed),
+		TopTalkers:     buildTopTalkers(hostTotals, observed, leaseByIP, resByIP),
+		TopRules:       buildTopRules(ruleTotals, s.policyLookup()),
+		GeneratedAt:    time.Now().UTC().Format(time.RFC3339),
+		Sessions:       s.SessionCurrent(),
+		SessionHistory: s.SessionHistory(),
 	}
 }
 

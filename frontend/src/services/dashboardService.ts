@@ -55,6 +55,35 @@ export interface StorageDetail {
   percent: number;
 }
 
+// SessionCounts is the conntrack session snapshot shared by PerformanceMetrics
+// (SSE push, ~5s) and TrafficDetail (poll, 60s). Total/Max/Available are fresh
+// (~5s); TCP/UDP/ICMP/Other come from the conntrack dump the traffic-detail
+// poller already does every ~10s, so they can lag Total slightly and are
+// capped server-side (protoCapped=true when the dump hit that cap) — do NOT
+// stack the per-proto counts on top of total in the same chart line.
+export interface SessionCounts {
+  total: number;
+  tcp: number;
+  udp: number;
+  icmp: number;
+  other: number;
+  max: number;
+  available: boolean;
+  protoSampledAt: string;
+  protoCapped: boolean;
+}
+
+// SessionHistoryPoint is one sample in the Active Sessions history seeded
+// from TrafficDetail.sessionHistory (RAM-only ring on the backend).
+export interface SessionHistoryPoint {
+  t: string;
+  total: number;
+  tcp: number;
+  udp: number;
+  icmp: number;
+  other: number;
+}
+
 export interface PerformanceMetrics {
   // Flat fields retained for backward-compatibility.
   cpu: number;
@@ -65,6 +94,7 @@ export interface PerformanceMetrics {
   memDetail: MemDetail;
   tempDetail: TempDetail;
   storage: StorageDetail;
+  sessions: SessionCounts;
 }
 
 export interface DashboardStats {
@@ -135,6 +165,53 @@ export interface TrafficDetail {
   topTalkers: TopTalker[];
   topRules: TopRule[];
   generatedAt: string;
+  sessions: SessionCounts;
+  sessionHistory: SessionHistoryPoint[];
+}
+
+// mockSessionCounts derives a SessionCounts snapshot from a given total,
+// splitting it into the usual ~70/25/2/3 TCP/UDP/ICMP/Other proportions used
+// by every mock branch that needs one (getPerformanceMetrics/getTrafficDetail/
+// SSE), so the badges and the chart line stay roughly consistent with total.
+function mockSessionCounts(total: number): SessionCounts {
+  const t = Math.max(0, Math.round(total));
+  const tcp = Math.round(t * 0.7);
+  const udp = Math.round(t * 0.25);
+  const icmp = Math.round(t * 0.02);
+  const other = Math.max(0, t - tcp - udp - icmp);
+  return {
+    total: t,
+    tcp,
+    udp,
+    icmp,
+    other,
+    max: 262144,
+    available: true,
+    protoSampledAt: new Date().toISOString(),
+    protoCapped: false,
+  };
+}
+
+// mockSessionHistory synthesizes 360 points (5s apart, 30 minutes) of a
+// smooth Active Sessions wave, used to seed the mock getTrafficDetail
+// sessionHistory field the same way the real backend's RAM ring buffer would.
+function mockSessionHistory(): SessionHistoryPoint[] {
+  const now = Date.now();
+  const points: SessionHistoryPoint[] = [];
+  for (let i = 359; i >= 0; i--) {
+    const ts = new Date(now - i * 5000);
+    const total = Math.round(420 + 120 * Math.sin(((359 - i) / 360) * Math.PI * 2));
+    const counts = mockSessionCounts(total);
+    points.push({
+      t: ts.toISOString(),
+      total: counts.total,
+      tcp: counts.tcp,
+      udp: counts.udp,
+      icmp: counts.icmp,
+      other: counts.other,
+    });
+  }
+  return points;
 }
 
 const LOGS_STORAGE_KEY = "pigate_dashboard_logs";
@@ -198,6 +275,7 @@ export const dashboardService = {
       const memPct = Math.round((45 + Math.random() * 15) * 10) / 10;
       const temp = Math.round((47.5 + Math.random() * 2) * 10) / 10;
       const totalMem = 8 * 1024 ** 3;
+      const sessTotal = Math.round(420 + 120 * Math.sin(Date.now() / 20000));
       return {
         cpu,
         memory: memPct,
@@ -221,6 +299,7 @@ export const dashboardService = {
           totalBytes: 128 * 1024 ** 3,
           percent: 32,
         },
+        sessions: mockSessionCounts(sessTotal),
       };
     }
 
@@ -338,6 +417,8 @@ export const dashboardService = {
         topTalkers,
         topRules,
         generatedAt: new Date().toISOString(),
+        sessions: mockSessionCounts(420 + 120 * Math.sin(Date.now() / 20000)),
+        sessionHistory: mockSessionHistory(),
       };
     }
 
@@ -468,7 +549,7 @@ export const dashboardService = {
         void dashboardService.getPerformanceMetrics().then(onMetrics);
       };
       emit(); // paint immediately, like the real stream's first snapshot
-      const intervalId = setInterval(emit, 3000);
+      const intervalId = setInterval(emit, 5000);
       return () => {
         clearTimeout(openTimer);
         clearInterval(intervalId);
