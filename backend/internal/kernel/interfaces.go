@@ -61,6 +61,15 @@ type TrafficAccountingManager interface {
 	// see real_firewall.go applyUserRules). Rules with no UserData (the fixed
 	// structural rules: ct-state checks, final drop-log, etc.) are omitted.
 	DumpRuleCounters() (map[string]model.RuleCounter, error)
+	// WatchFlowEnd streams the final byte count of every conntrack flow at
+	// teardown (conntrack DESTROY event), so a flow that starts and dies
+	// entirely between two DumpFlows polls is not lost (docs/ref/todo/
+	// traffic-accounting-accuracy-phase2-plan.md §2.1). Blocking; returns when
+	// ctx is done or the subscription fails — a returned error means the
+	// caller must degrade to poll-only (DumpFlows) rather than fail startup
+	// (plan Caution 6). cb must return promptly, mirroring
+	// TrafficLogManager.WatchForwardTraffic above.
+	WatchFlowEnd(ctx context.Context, cb func(model.FlowSample)) error
 }
 
 // NetworkManager abstracts Wi-Fi scanning and interface control

@@ -497,8 +497,15 @@ net.ipv4.conf.default.rp_filter = ${RP_FILTER}
 # Conntrack byte/packet accounting — ต้องเปิดเพื่อให้ Dashboard นับ traffic
 # ต่อ host/protocol ได้ (ค่า default ของ kernel = 0 ทำให้ byte counter เป็น 0 ทั้งหมด)
 net.netfilter.nf_conntrack_acct = 1
+
+# Conntrack DESTROY event notifications — ทำให้ pigate จับ byte ก้อนสุดท้าย
+# ของ flow ที่อายุสั้นกว่ารอบ poll (10s) ได้ทัน (Dashboard traffic-detail
+# hybrid poll+event, ดู docs/ref/todo/traffic-accounting-accuracy-phase2-plan.md)
+# ถ้าปิดค่านี้ pigate จะ degrade กลับไปใช้ poll อย่างเดียวเงียบ ๆ (ไม่ล้มระบบ)
+# และ System Capabilities panel จะแสดง conntrack-events เป็น degraded
+net.netfilter.nf_conntrack_events = 1
 EOF
-log_ok "เขียน ${SYSCTL_FILE} (ip_forward=1, rp_filter=${RP_FILTER}, nf_conntrack_acct=1)"
+log_ok "เขียน ${SYSCTL_FILE} (ip_forward=1, rp_filter=${RP_FILTER}, nf_conntrack_acct=1, nf_conntrack_events=1)"
 
 # apply ทันทีโดยไม่ต้อง reboot
 if sysctl --system >/dev/null 2>&1; then
@@ -625,7 +632,7 @@ echo -e "  Binary:   ${BLUE}/usr/local/bin/pigate${NC}"
 echo -e "  Database: ${BLUE}/var/lib/pigate/pigate.db${NC}"
 echo -e "  Service:  ${BLUE}/etc/systemd/system/pigate.service${NC}"
 echo -e "  dhcpcd:   ${BLUE}/etc/systemd/system/dhcpcd@.service${NC} (per-interface, ควบคุมผ่าน polkit)"
-echo -e "  Gateway:  ${BLUE}/etc/sysctl.d/99-pigate.conf${NC} (ip_forward=1, rp_filter=${RP_FILTER}, nf_conntrack_acct=1)"
+echo -e "  Gateway:  ${BLUE}/etc/sysctl.d/99-pigate.conf${NC} (ip_forward=1, rp_filter=${RP_FILTER}, nf_conntrack_acct=1, nf_conntrack_events=1)"
 echo -e "  Modules:  ${BLUE}/etc/modules-load.d/pigate.conf${NC} (8021q, ifb, nf_conntrack)"
 echo ""
 echo -e "${YELLOW}คำสั่งถัดไป:${NC}"

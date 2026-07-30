@@ -46,6 +46,15 @@ func (f *fakeTrafficAccounting) DumpRuleCounters() (map[string]model.RuleCounter
 	return f.ruleResponses[idx], nil
 }
 
+// WatchFlowEnd is not driven through the real event plumbing by these tests
+// (they call TrafficStatsService.onFlowEnd directly for determinism) — this
+// stub only needs to satisfy kernel.TrafficAccountingManager and block until
+// ctx is cancelled, like the real/mock implementations' contract.
+func (f *fakeTrafficAccounting) WatchFlowEnd(ctx context.Context, cb func(model.FlowSample)) error {
+	<-ctx.Done()
+	return nil
+}
+
 // fakeDhcpForTraffic is a minimal DhcpManager stub — only GetActiveLeases is
 // exercised by TrafficStatsService.
 type fakeDhcpForTraffic struct {
@@ -167,6 +176,84 @@ func TestTrafficStats_Categorization(t *testing.T) {
 	}
 }
 
+// TestTrafficStats_OnFlowEnd_CreditsOnlyDeltaAboveBaseline is plan T-07 case
+// (ก): poll already credited 1000 bytes for a flow (baseline 0 -> 1000), then
+// the conntrack DESTROY event reports the flow's final cumulative count as
+// 1500. onFlowEnd must credit only the 500-byte difference — total observed
+// across poll+event must be 1500, never 1000+1500=2500 (plan Caution 1, the
+// core double-count regression this phase must not introduce).
+func TestTrafficStats_OnFlowEnd_CreditsOnlyDeltaAboveBaseline(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 0}},    // seed
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 1000}}, // delta 1000
+		},
+	}
+	s := newTestTrafficStatsService(t, acct, nil)
+	s.poll() // seed
+	s.poll() // delta 1000, baseline now 1000
+
+	s.onFlowEnd(model.FlowSample{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 1500})
+
+	detail := s.GetTrafficDetail("1h")
+	if detail.ObservedBytes != 1500 {
+		t.Fatalf("expected combined poll+event observed bytes of 1500 (1000 from poll + 500 from event delta), got %d", detail.ObservedBytes)
+	}
+	if _, exists := s.flowState["f1"]; exists {
+		t.Fatalf("expected flowState baseline for f1 to be deleted after onFlowEnd, so a later poll cannot double-credit it")
+	}
+}
+
+// TestTrafficStats_OnFlowEnd_NoBaselineCreditsFull is plan T-07 case (ข): a
+// flow that is born and dies entirely between two poll ticks has no baseline
+// in flowState at all when its DESTROY event arrives — onFlowEnd must credit
+// its full byte count in this case (this is exactly the gap this phase
+// exists to close).
+func TestTrafficStats_OnFlowEnd_NoBaselineCreditsFull(t *testing.T) {
+	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+
+	s.onFlowEnd(model.FlowSample{Key: "never-polled", SrcIP: "192.168.1.60", DstIP: "1.1.1.1", Proto: 17, DstPort: 53, Bytes: 777})
+
+	detail := s.GetTrafficDetail("1h")
+	if detail.ObservedBytes != 777 {
+		t.Fatalf("expected full 777 bytes credited for a flow never seen by poll, got %d", detail.ObservedBytes)
+	}
+	if len(detail.TopTalkers) != 1 || detail.TopTalkers[0].IP != "192.168.1.60" || detail.TopTalkers[0].Bytes != 777 {
+		t.Fatalf("unexpected top talkers: %+v", detail.TopTalkers)
+	}
+}
+
+// TestTrafficStats_OnFlowEnd_AfterPruneDoesNotGoNegative is plan T-07 case
+// (ค): a flow's baseline was already pruned by processFlows (flowStaleMisses
+// consecutive polls without seeing it — a stale/expired conntrack entry)
+// before its DESTROY event finally arrives. onFlowEnd must not underflow or
+// otherwise go negative; it degrades to the same "no baseline" full-credit
+// path as case (ข), which is always >= 0 by construction.
+func TestTrafficStats_OnFlowEnd_AfterPruneDoesNotGoNegative(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "f-prune", SrcIP: "192.168.1.70", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 500}}, // seed
+			{}, // miss 1
+			{}, // miss 2
+			{}, // miss 3 -> flowStaleMisses reached, baseline pruned
+		},
+	}
+	s := newTestTrafficStatsService(t, acct, nil)
+	for i := 0; i < 4; i++ {
+		s.poll()
+	}
+	if _, exists := s.flowState["f-prune"]; exists {
+		t.Fatalf("expected f-prune baseline to already be pruned after %d consecutive misses", flowStaleMisses)
+	}
+
+	s.onFlowEnd(model.FlowSample{Key: "f-prune", SrcIP: "192.168.1.70", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 900})
+
+	detail := s.GetTrafficDetail("1h")
+	if detail.ObservedBytes != 900 {
+		t.Fatalf("expected onFlowEnd to credit the full 900 bytes (no baseline survives the prune) without going negative/underflowed, got observed=%d", detail.ObservedBytes)
+	}
+}
+
 // TestCategorize_NoMatchFallsBackToOther exercises the categorizer directly
 // (bypassing the DB-backed Service Objects cache) so it can assert the "no
 // Service Object matches" -> "Other" fallback in isolation, and that the
@@ -216,23 +303,44 @@ func (a *raceFakeAcct) DumpRuleCounters() (map[string]model.RuleCounter, error) 
 	return map[string]model.RuleCounter{"race-rule": {Bytes: b, Packets: b / 100}}, nil
 }
 
+func (a *raceFakeAcct) WatchFlowEnd(ctx context.Context, cb func(model.FlowSample)) error {
+	<-ctx.Done()
+	return nil
+}
+
 // TestTrafficStats_GetTrafficDetailNoRaceWithPoll drives poll() (the
-// background collector goroutine, normally ticked every flowPollInterval)
-// concurrently with GetTrafficDetail() (the HTTP handler path) many times
-// over, to catch a concurrent map read/write between the two. Run with
-// `go test -race` — this test alone proves nothing under the normal (non
-// -race) test runner; the point is the race detector's instrumentation.
+// background collector goroutine, normally ticked every flowPollInterval),
+// onFlowEnd() (the conntrack DESTROY event callback, normally invoked from
+// the WatchFlowEnd goroutine started by StartFlowEndWatcher) and
+// GetTrafficDetail() (the HTTP handler path) concurrently and many times
+// over, to catch a concurrent map read/write between any pair of them (plan
+// T-07 case ง). Run with `go test -race` — this test alone proves nothing
+// under the normal (non -race) test runner; the point is the race detector's
+// instrumentation.
 func TestTrafficStats_GetTrafficDetailNoRaceWithPoll(t *testing.T) {
 	s := newTestTrafficStatsService(t, nil, nil)
 	s.acct = &raceFakeAcct{}
 
 	const iterations = 300
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		for i := 0; i < iterations; i++ {
 			s.poll()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			s.onFlowEnd(model.FlowSample{
+				Key:     fmt.Sprintf("race-event-%d", i),
+				SrcIP:   "192.168.1.99",
+				DstIP:   "1.1.1.1",
+				Proto:   17,
+				DstPort: 53,
+				Bytes:   uint64(i + 1),
+			})
 		}
 	}()
 	go func() {

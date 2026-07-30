@@ -8,6 +8,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"github.com/google/nftables"
+	"github.com/vishvananda/netlink/nl"
 	"golang.org/x/sys/unix"
 
 	"pigate/internal/model"
@@ -29,10 +30,11 @@ func NewRealCapabilityProber() *RealCapabilityProber {
 }
 
 // ProbeAll runs every registered probe and always returns exactly one result
-// per registered id (firewall, dbus, dnsmasq, resolved, conntrack), even when a probe
-// fails or times out. The whole batch is bounded by capabilityProbeTimeout.
+// per registered id (firewall, dbus, dnsmasq, resolved, conntrack,
+// conntrack-events), even when a probe fails or times out. The whole batch is
+// bounded by capabilityProbeTimeout.
 func (p *RealCapabilityProber) ProbeAll() []model.CapabilityProbeResult {
-	ids := []string{"firewall", "dbus", "dnsmasq", "resolved", "conntrack"}
+	ids := []string{"firewall", "dbus", "dnsmasq", "resolved", "conntrack", "conntrack-events"}
 
 	type resultsMsg struct {
 		results []model.CapabilityProbeResult
@@ -47,6 +49,7 @@ func (p *RealCapabilityProber) ProbeAll() []model.CapabilityProbeResult {
 			probeSystemdUnit("dnsmasq", "dnsmasq.service", dbusOK),
 			probeSystemdUnit("resolved", "systemd-resolved.service", dbusOK),
 			probeConntrack(),
+			probeConntrackEvents(),
 		}
 		done <- resultsMsg{results: results}
 	}()
@@ -182,6 +185,37 @@ func probeConntrack() model.CapabilityProbeResult {
 		}
 	}
 	return model.CapabilityProbeResult{ID: "conntrack", Available: true, Reason: model.CapabilityReasonOK}
+}
+
+// probeConntrackEvents detects whether the conntrack DESTROY event listener
+// (kernel.TrafficAccountingManager.WatchFlowEnd, real_conntrack_events.go) can
+// be subscribed to at all — i.e. that a NETLINK_NETFILTER socket can bind to
+// NFNLGRP_CONNTRACK_DESTROY (requires CAP_NET_ADMIN). This is a bind-only
+// probe: it opens and immediately closes the socket, without waiting for or
+// asserting that any event actually arrives (that would require exercising
+// live traffic and cannot be done in a fixed, read-only probe window) — a
+// kernel built without CONFIG_NF_CONNTRACK_EVENTS, or with
+// net.netfilter.nf_conntrack_events=0, may still let the socket bind
+// successfully; degraded operation in that case is only ever observed at
+// runtime once WatchFlowEnd is actually running (StartFlowEndWatcher logs it,
+// see service/traffic_stats.go). A failure here is reported as Degraded
+// (never Available=false): the "conntrack" capability above still lets the
+// existing poll-based accounting work, so the Dashboard cards remain usable —
+// this only means their accuracy label stays "estimated" instead of
+// "near-exact" (docs/ref/todo/traffic-accounting-accuracy-phase2-plan.md T-09).
+func probeConntrackEvents() model.CapabilityProbeResult {
+	sock, err := nl.Subscribe(unix.NETLINK_NETFILTER, unix.NFNLGRP_CONNTRACK_DESTROY)
+	if err != nil {
+		return model.CapabilityProbeResult{
+			ID:        "conntrack-events",
+			Available: true,
+			Degraded:  true,
+			Reason:    model.CapabilityReasonEventsUnavailable,
+			Err:       err.Error(),
+		}
+	}
+	sock.Close()
+	return model.CapabilityProbeResult{ID: "conntrack-events", Available: true, Reason: model.CapabilityReasonOK}
 }
 
 // classifyNetlinkErr maps a netlink/nftables error's underlying errno to one

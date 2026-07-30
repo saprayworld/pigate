@@ -126,6 +126,11 @@ export interface TrafficDetail {
   window: "1h" | "24h";
   observedBytes: number;
   estimated: boolean;
+  // "estimated": categories/topTalkers come from the 10s conntrack poll
+  // alone. "near-exact": the conntrack DESTROY event listener is also
+  // active, crediting each flow's final byte count at teardown (see
+  // docs/openapi.yaml TrafficDetail.accuracy).
+  accuracy: "estimated" | "near-exact";
   categories: TrafficCategorySlice[];
   topTalkers: TopTalker[];
   topRules: TopRule[];
@@ -324,6 +329,11 @@ export const dashboardService = {
         window,
         observedBytes,
         estimated: true,
+        // Mock mode's flow-end event watcher never fails to "subscribe"
+        // (kernel.MockTrafficAccounting.WatchFlowEnd has no real socket to
+        // fail), so it always reports the phase-2 "near-exact" accuracy —
+        // exercising that label in dev without needing a real board.
+        accuracy: "near-exact",
         categories,
         topTalkers,
         topRules,

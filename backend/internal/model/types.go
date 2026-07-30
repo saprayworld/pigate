@@ -571,10 +571,13 @@ type TrafficHistory struct {
 // FlowSample is one conntrack flow observed by kernel.TrafficAccountingManager.
 // DumpFlows (docs/ref/todo/dashboard-traffic-detail-plan.md §2.1). SrcIP is the
 // pre-NAT LAN-side source (Forward tuple), so it can be used directly as the
-// Top Talkers key. Key includes the flow's start time so a 5-tuple reused by a
-// brand-new flow is never mistaken for the flow that just died (Caution 3).
+// Top Talkers key. Key deliberately excludes the flow's start time (see
+// flowKeyFromParts and traffic-accounting-accuracy-phase2-plan.md Caution 2):
+// TimeStart is only populated when net.netfilter.nf_conntrack_timestamp is on,
+// and the poll and DESTROY-event paths must derive the same key regardless of
+// that sysctl, or a mismatch silently double-counts every flow.
 type FlowSample struct {
-	Key     string // hash of (family, proto, srcIP, srcPort, dstIP, dstPort, TimeStart)
+	Key     string // hash of (family, proto, srcIP, srcPort, dstIP, dstPort)
 	SrcIP   string
 	DstIP   string
 	Proto   uint8
@@ -626,12 +629,17 @@ type TopRule struct {
 // cards. ObservedBytes is the total the conntrack-based collector actually
 // saw in the window — Categories/TopTalkers percentages are computed against
 // this figure, NOT against the WAN total from /dashboard/traffic (Caution 8);
-// Estimated is always true for the conntrack-derived figures (§2.4 accuracy
-// estimate), independent of TopRules which is exact (kernel-counted).
+// Estimated is kept for backward compatibility (always true for the
+// conntrack-derived figures), independent of TopRules which is exact
+// (kernel-counted). Accuracy is the phase-2 refinement of the same signal:
+// "estimated" when only the 10s poll is feeding the collector, "near-exact"
+// once the conntrack DESTROY event listener (kernel.WatchFlowEnd) is also
+// active — see docs/ref/todo/traffic-accounting-accuracy-phase2-plan.md.
 type TrafficDetail struct {
 	Window        string                 `json:"window"` // "1h" or "24h"
 	ObservedBytes uint64                 `json:"observedBytes"`
 	Estimated     bool                   `json:"estimated"`
+	Accuracy      string                 `json:"accuracy"` // "estimated" | "near-exact"
 	Categories    []TrafficCategorySlice `json:"categories"`
 	TopTalkers    []TopTalker            `json:"topTalkers"`
 	TopRules      []TopRule              `json:"topRules"`

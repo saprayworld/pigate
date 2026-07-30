@@ -3375,7 +3375,7 @@ components:
           type: string
           description: >-
             Stable subsystem id (registry key), e.g. `firewall`, `dbus`,
-            `dnsmasq`, `resolved`, `conntrack`.
+            `dnsmasq`, `resolved`, `conntrack`, `conntrack-events`.
           example: firewall
         name:
           type: string
@@ -3403,6 +3403,7 @@ components:
             - apply_failed
             - probe_failed
             - acct_disabled
+            - events_unavailable
           example: not_supported
         detail:
           type: string
@@ -3544,7 +3545,7 @@ components:
 
     TrafficDetail:
       type: object
-      required: [window, observedBytes, estimated, categories, topTalkers, topRules, generatedAt]
+      required: [window, observedBytes, estimated, accuracy, categories, topTalkers, topRules, generatedAt]
       properties:
         window:
           type: string
@@ -3559,8 +3560,22 @@ components:
         estimated:
           type: boolean
           description: >-
-            Always true — categories/topTalkers are conntrack-poll estimates
-            (~95-99% typical accuracy). topRules is exact regardless.
+            Always true — categories/topTalkers are conntrack-derived figures.
+            Kept for backward compatibility; see `accuracy` for the current
+            (phase 2) accuracy signal. topRules is exact regardless.
+        accuracy:
+          type: string
+          enum: [estimated, near-exact]
+          description: >-
+            "estimated" when categories/topTalkers come from the 10s conntrack
+            poll alone (~95-99% typical accuracy, worse under bursts of
+            short-lived flows). "near-exact" once the conntrack DESTROY event
+            listener is also active, crediting the final byte count of every
+            flow at teardown — including flows that start and end entirely
+            between two polls. Falls back to "estimated" automatically when
+            the event listener is unavailable (see GET
+            /api/system/capabilities id `conntrack-events`); topRules is exact
+            regardless of this field.
         categories:
           type: array
           items:
