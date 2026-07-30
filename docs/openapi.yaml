@@ -377,6 +377,44 @@ paths:
               schema:
                 $ref: '#/components/schemas/TrafficDetail'
 
+  /statistics/traffic:
+    get:
+      tags:
+        - Statistics
+      summary: >-
+        Get the Statistics page's Top Source Hosts / Top Destinations / Top
+        Conversations / Top Denied cards
+      description: >
+        Backs the standalone Statistics page (`/logs/statistics`), separate
+        from the Dashboard "Detailed" tab. topSources/topDestinations/
+        topConversations are conntrack-derived byte estimates from the same
+        RAM bucket ring `/dashboard/traffic-detail` uses (percentages are
+        computed against `observedBytes`); deniedSources/deniedPorts are
+        **event counts, not bytes**, sourced from the NFLOG packet-filter log
+        and are always a sampled approximation (`deniedSampled` is always
+        true) because the underlying nftables log rules carry a rate limit
+        (3 pkt/min on most drop rules, 10 pkt/s on the final catch-all drop) —
+        never mix deniedSources/deniedPorts counts into observedBytes'
+        percentages. Nothing here is persisted to SQLite; all state resets on
+        reboot.
+      parameters:
+        - name: window
+          in: query
+          schema:
+            type: string
+            enum: [1h, 24h]
+            default: 1h
+          description: >
+            Aggregation window. Any value outside {1h, 24h} (including
+            omitted) silently falls back to 1h rather than erroring.
+      responses:
+        '200':
+          description: Traffic statistics retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrafficStatistics'
+
   /dashboard/logs:
     get:
       tags:
@@ -3688,6 +3726,200 @@ components:
           description: RAM-only Active Sessions history ring (30 minutes, 5s cadence) used to seed the Dashboard chart.
           items:
             $ref: '#/components/schemas/SessionHistoryPoint'
+
+    TopHost:
+      type: object
+      required: [ip, hostname, mac, bytes, percent, private]
+      description: >-
+        One ranked row for the Statistics page's Top Source Hosts / Top
+        Destinations cards (same shape for both).
+      properties:
+        ip:
+          type: string
+          example: 192.168.1.101
+        hostname:
+          type: string
+          description: DHCP lease/reservation hostname; falls back to the IP itself.
+          example: iPhone-13
+        mac:
+          type: string
+          example: '99:88:77:66:55:44'
+        bytes:
+          type: integer
+          format: int64
+          example: 2100000000
+        percent:
+          type: number
+          format: float
+          description: Share of observedBytes.
+          example: 38.7
+        private:
+          type: boolean
+          description: >-
+            True when ip is RFC1918/link-local/loopback/ULA (a LAN address).
+            A conversation initiated from the internet can appear as
+            "source" too (conntrack Forward tuple) — false in that case, so
+            the UI can visually separate LAN hosts from internet hosts.
+          example: true
+
+    TopConversation:
+      type: object
+      required: [srcIp, srcHostname, dstIp, dstHostname, proto, dstPort, bytes, percent]
+      description: >-
+        One src -> dst:port flow-tuple row for the Top Conversations card. A
+        4-tuple (no source port — model.FlowSample does not carry one; the
+        source port is ephemeral and not meaningful for ranking anyway).
+      properties:
+        srcIp:
+          type: string
+          example: 192.168.1.101
+        srcHostname:
+          type: string
+          example: iPhone-13
+        dstIp:
+          type: string
+          example: 142.250.80.46
+        dstHostname:
+          type: string
+          example: 142.250.80.46
+        proto:
+          type: string
+          description: '"TCP"/"UDP"/"ICMP", or "IP:<n>" for anything else.'
+          example: TCP
+        dstPort:
+          type: integer
+          example: 443
+        bytes:
+          type: integer
+          format: int64
+          example: 9000000
+        percent:
+          type: number
+          format: float
+          description: Share of observedBytes.
+          example: 12.4
+
+    TopDeniedSource:
+      type: object
+      required: [ip, hostname, count, percent]
+      description: >-
+        One ranked row for the Top Denied Sources card. count is an event
+        count, not bytes, and is a sampled approximation (see
+        TrafficStatistics.deniedSampled).
+      properties:
+        ip:
+          type: string
+          example: 203.0.113.9
+        hostname:
+          type: string
+          description: DHCP lease/reservation hostname; falls back to the IP itself.
+          example: 203.0.113.9
+        count:
+          type: integer
+          format: int64
+          example: 42
+        percent:
+          type: number
+          format: float
+          description: Share of deniedEvents (not observedBytes).
+          example: 55.3
+
+    TopDeniedPort:
+      type: object
+      required: [proto, port, count, percent]
+      description: >-
+        One ranked "protocol/port" row for the Top Denied Ports card. count
+        is an event count, not bytes, and is a sampled approximation (see
+        TrafficStatistics.deniedSampled).
+      properties:
+        proto:
+          type: string
+          example: TCP
+        port:
+          type: string
+          example: '22'
+        count:
+          type: integer
+          format: int64
+          example: 30
+        percent:
+          type: number
+          format: float
+          description: Share of deniedEvents (not observedBytes).
+          example: 39.5
+
+    TrafficStatistics:
+      type: object
+      required:
+        - window
+        - observedBytes
+        - accuracy
+        - topSources
+        - topDestinations
+        - topConversations
+        - deniedSources
+        - deniedPorts
+        - deniedSampled
+        - deniedEvents
+        - truncated
+        - generatedAt
+      description: >-
+        The /statistics/traffic response backing the Statistics page.
+      properties:
+        window:
+          type: string
+          enum: [1h, 24h]
+        observedBytes:
+          type: integer
+          format: int64
+          description: >-
+            Total bytes the conntrack-based collector observed in this
+            window — the denominator for topSources/topDestinations/
+            topConversations percentages.
+        accuracy:
+          type: string
+          enum: [estimated, near-exact]
+          description: Same signal as TrafficDetail.accuracy (see there for details).
+        topSources:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopHost'
+        topDestinations:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopHost'
+        topConversations:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopConversation'
+        deniedSources:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopDeniedSource'
+        deniedPorts:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopDeniedPort'
+        deniedSampled:
+          type: boolean
+          description: >-
+            Always true — deniedSources/deniedPorts come from a rate-limited
+            nftables log rule, so they are a sampled approximation, never an
+            exact packet count. Never mix these counts into observedBytes'
+            percentages.
+        deniedEvents:
+          type: integer
+          format: int64
+          description: Number of NFLOG DROP events actually counted in this window.
+        truncated:
+          type: boolean
+          description: >-
+            True when any per-bucket tracking map (hosts/destinations/
+            conversations/denied sources/denied ports) hit its cap during
+            this window — the ranking may be missing entries.
+        generatedAt:
+          type: string
+          format: date-time
 
     FirewallLog:
       type: object

@@ -215,6 +215,13 @@ func main() {
 	// (docs/ref/todo/dashboard-active-sessions-graph-plan.md Step 5).
 	systemStatusService.SetSessionCurrentFn(trafficStatsService.SessionCurrent)
 
+	// Statistics page (Top Source Hosts / Top Destinations / Top
+	// Conversations / Top Denied — docs/ref/todo/statistics-page-plan.md).
+	// No ticker/goroutine of its own: byte figures ride TrafficStatsService's
+	// existing poller, and the deny ring is fed by the stampAndPush hook
+	// below as NFLOG events arrive.
+	statisticsService := service.NewStatisticsService(trafficStatsService, repo, dhcp)
+
 	// Central event log: every subsystem funnels audit events through this one
 	// service (RAM queue + async batch writer to SQLite; see event_log.go).
 	eventLogService := service.NewEventLogService(repo)
@@ -341,7 +348,7 @@ func main() {
 		netlinkMonitor,
 	)
 
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker, wifiPresetService, systemServiceService, capabilityService, trafficStatsService)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker, wifiPresetService, systemServiceService, capabilityService, trafficStatsService, statisticsService)
 
 	// Apply config form database to kernel
 
@@ -391,6 +398,11 @@ func main() {
 		entry.Time = time.Now().UTC().Format(time.RFC3339Nano)
 		entry.ID = uuid.NewString()
 		ringBuffer.Add(entry)
+		// Feeds the Statistics page's deny ring (Top Denied Sources/Ports —
+		// docs/ref/todo/statistics-page-plan.md T-06). Must stay after
+		// ringBuffer.Add and be O(1)/non-blocking/panic-free: this closure
+		// runs on the NFLOG read loop (plan Caution 4).
+		statisticsService.RecordFirewallLog(entry)
 	}
 
 	// Start the forward-traffic log watcher. It feeds the shared ring buffer that

@@ -375,7 +375,9 @@ func TestTrafficStats_ProcessFlows_CapsTrackedFlows(t *testing.T) {
 
 	hostDeltas := make(map[string]uint64)
 	catDeltas := make(map[string]uint64)
-	s.processFlows(flows, hostDeltas, catDeltas) // seed poll — still populates flowState
+	dstDeltas := make(map[string]uint64)
+	convDeltas := make(map[string]uint64)
+	s.processFlows(flows, hostDeltas, catDeltas, dstDeltas, convDeltas) // seed poll — still populates flowState
 
 	if len(s.flowState) > maxTrackedFlows {
 		t.Fatalf("expected flowState capped at %d entries, got %d", maxTrackedFlows, len(s.flowState))
@@ -391,5 +393,139 @@ func TestMergeUint64Map_CapsNewKeys(t *testing.T) {
 	}
 	if len(dst) > 2 {
 		t.Fatalf("expected map capped at 2 entries, got %d: %+v", len(dst), dst)
+	}
+}
+
+// --- Statistics page (docs/ref/todo/statistics-page-plan.md T-04) ---
+
+// TestGetTrafficBreakdown_DstAndConvDeltas is plan T-04 case 1: polling twice
+// with the same flow must produce a *delta* (not cumulative) figure for both
+// Dests and Convs, and the sum of Hosts/Dests/Convs for a single-flow window
+// must each equal Observed (only one flow contributed).
+func TestGetTrafficBreakdown_DstAndConvDeltas(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, Bytes: 1000}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, Bytes: 1500}},
+		},
+	}
+	s := newTestTrafficStatsService(t, acct, nil)
+
+	s.poll() // seed only
+	s.poll() // delta = 500
+
+	bd := s.GetTrafficBreakdown("1h")
+	if bd.Observed != 500 {
+		t.Fatalf("expected observed=500, got %d", bd.Observed)
+	}
+	if bd.Hosts["192.168.1.50"] != 500 {
+		t.Fatalf("expected host delta 500, got %+v", bd.Hosts)
+	}
+	if bd.Dests["8.8.8.8"] != 500 {
+		t.Fatalf("expected dest delta 500, got %+v", bd.Dests)
+	}
+	wantKey := convKey(model.FlowSample{SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53})
+	if bd.Convs[wantKey] != 500 {
+		t.Fatalf("expected conversation delta 500 for key %q, got %+v", wantKey, bd.Convs)
+	}
+}
+
+// TestGetTrafficBreakdown_OnFlowEndDoesNotDoubleCountDstConv is plan T-04
+// case 2: once poll() has already credited a flow, its DESTROY event must
+// only credit dst/conv for the additional bytes above the poll baseline —
+// same invariant onFlowEnd already guarantees for Hosts (plan Caution 2).
+func TestGetTrafficBreakdown_OnFlowEndDoesNotDoubleCountDstConv(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 0}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 1000}},
+		},
+	}
+	s := newTestTrafficStatsService(t, acct, nil)
+	s.poll() // seed
+	s.poll() // delta 1000, baseline now 1000
+
+	s.onFlowEnd(model.FlowSample{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 1500})
+
+	bd := s.GetTrafficBreakdown("1h")
+	if bd.Observed != 1500 {
+		t.Fatalf("expected observed=1500 (no double count), got %d", bd.Observed)
+	}
+	if bd.Dests["1.1.1.1"] != 1500 {
+		t.Fatalf("expected dest total 1500 (no double count), got %+v", bd.Dests)
+	}
+	wantKey := convKey(model.FlowSample{SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443})
+	if bd.Convs[wantKey] != 1500 {
+		t.Fatalf("expected conversation total 1500 (no double count), got %+v", bd.Convs)
+	}
+}
+
+// TestGetTrafficBreakdown_OnFlowEndNoBaselineCreditsDstConvInFull is plan
+// T-04 case 3: a flow that is born and dies entirely between two poll ticks
+// (no baseline ever seen) must still show up in Dests/Convs, not just Hosts.
+func TestGetTrafficBreakdown_OnFlowEndNoBaselineCreditsDstConvInFull(t *testing.T) {
+	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+
+	s.onFlowEnd(model.FlowSample{Key: "never-polled", SrcIP: "192.168.1.60", DstIP: "9.9.9.9", Proto: 17, DstPort: 53, Bytes: 777})
+
+	bd := s.GetTrafficBreakdown("1h")
+	if bd.Hosts["192.168.1.60"] != 777 {
+		t.Fatalf("expected host credited in full, got %+v", bd.Hosts)
+	}
+	if bd.Dests["9.9.9.9"] != 777 {
+		t.Fatalf("expected dest credited in full, got %+v", bd.Dests)
+	}
+	wantKey := convKey(model.FlowSample{SrcIP: "192.168.1.60", DstIP: "9.9.9.9", Proto: 17, DstPort: 53})
+	if bd.Convs[wantKey] != 777 {
+		t.Fatalf("expected conversation credited in full for key %q, got %+v", wantKey, bd.Convs)
+	}
+}
+
+// TestGetTrafficBreakdown_CapsConversationsAndReportsTruncated is plan T-04
+// case 4: a burst of far more than maxTrackedConversations distinct
+// conversations must not panic, must cap each bucket's convBytes map at
+// maxTrackedConversations, and must surface Truncated=true.
+func TestGetTrafficBreakdown_CapsConversationsAndReportsTruncated(t *testing.T) {
+	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+
+	n := maxTrackedConversations + 1000
+	flows := make([]model.FlowSample, n)
+	for i := 0; i < n; i++ {
+		flows[i] = model.FlowSample{
+			Key:     fmt.Sprintf("scan-%d", i),
+			SrcIP:   "192.168.1.5",
+			DstIP:   fmt.Sprintf("10.0.%d.%d", i/255, i%255),
+			Proto:   6,
+			DstPort: uint16(1000 + i%1000),
+			Bytes:   0,
+		}
+	}
+	hostDeltas := make(map[string]uint64)
+	catDeltas := make(map[string]uint64)
+	dstDeltas := make(map[string]uint64)
+	convDeltas := make(map[string]uint64)
+	// This must not panic even though every key is brand new (seed poll).
+	s.processFlows(flows, hostDeltas, catDeltas, dstDeltas, convDeltas)
+	s.addBucket(time.Now(), hostDeltas, catDeltas, nil, dstDeltas, convDeltas, 0)
+
+	// A second pass with nonzero deltas so the caps are exercised on the
+	// live path (seed rounds never populate deltas).
+	for i := range flows {
+		flows[i].Bytes = 100
+	}
+	hostDeltas = make(map[string]uint64)
+	catDeltas = make(map[string]uint64)
+	dstDeltas = make(map[string]uint64)
+	convDeltas = make(map[string]uint64)
+	s.processFlows(flows, hostDeltas, catDeltas, dstDeltas, convDeltas)
+	s.addBucket(time.Now(), hostDeltas, catDeltas, nil, dstDeltas, convDeltas, 0)
+
+	if len(convDeltas) > maxTrackedConversations {
+		t.Fatalf("expected convDeltas capped at %d, got %d", maxTrackedConversations, len(convDeltas))
+	}
+
+	bd := s.GetTrafficBreakdown("1h")
+	if !bd.Truncated {
+		t.Fatalf("expected Truncated=true once a bucket hits the conversation cap")
 	}
 }

@@ -1,0 +1,90 @@
+package model
+
+// Statistics page DTOs (docs/ref/todo/statistics-page-plan.md) — the
+// /api/statistics/traffic response backing the "Statistics" page (Top
+// Source Hosts / Top Destinations / Top Conversations / Top Denied). Kept in
+// its own file rather than types.go (already very long) per plan T-01.
+//
+// All aggregation behind these DTOs is RAM-only (bucket ring in
+// service/traffic_stats.go + deny ring in service/statistics.go) — nothing
+// here is ever persisted to SQLite (plan Caution 9).
+
+// TopHost is one row ranked by observed bytes — used for both Top Source
+// Hosts and Top Destinations (same shape, different aggregation key).
+type TopHost struct {
+	IP       string  `json:"ip"`
+	Hostname string  `json:"hostname"`
+	MAC      string  `json:"mac"`
+	Bytes    uint64  `json:"bytes"`
+	Percent  float64 `json:"percent"`
+	// Private is true when IP is RFC1918/link-local/ULA (a LAN address). A
+	// flow that originated from the internet can appear as "source" too
+	// (conntrack Forward tuple, plan Caution 7) — the UI uses this flag to
+	// tell those rows apart from genuine LAN hosts.
+	Private bool `json:"private"`
+}
+
+// TopConversation is one src -> dst:port flow-tuple row (4-tuple: src IP,
+// dst IP, proto, dst port — no src port, plan §0: SrcPort does not exist in
+// model.FlowSample).
+type TopConversation struct {
+	SrcIP       string `json:"srcIp"`
+	SrcHostname string `json:"srcHostname"`
+	DstIP       string `json:"dstIp"`
+	DstHostname string `json:"dstHostname"`
+	// Proto is a display string: "TCP"/"UDP"/"ICMP"/"IP:<n>" for anything
+	// else.
+	Proto   string  `json:"proto"`
+	DstPort uint16  `json:"dstPort"`
+	Bytes   uint64  `json:"bytes"`
+	Percent float64 `json:"percent"`
+}
+
+// TopDeniedSource is one row of the Top Denied Sources card — ranked by
+// event *count*, not bytes (plan §1 item 4: the underlying nftables log rule
+// is rate-limited, so this is a sampled approximation, never a byte total).
+type TopDeniedSource struct {
+	IP       string  `json:"ip"`
+	Hostname string  `json:"hostname"`
+	Count    uint64  `json:"count"`
+	Percent  float64 `json:"percent"`
+}
+
+// TopDeniedPort is one row of the Top Denied Ports card, keyed by
+// proto+port (e.g. "TCP"/"443").
+type TopDeniedPort struct {
+	Proto   string  `json:"proto"`
+	Port    string  `json:"port"`
+	Count   uint64  `json:"count"`
+	Percent float64 `json:"percent"`
+}
+
+// TrafficStatistics is the /api/statistics/traffic response.
+type TrafficStatistics struct {
+	Window        string `json:"window"` // "1h" | "24h"
+	ObservedBytes uint64 `json:"observedBytes"`
+	// Accuracy mirrors TrafficDetail.Accuracy ("estimated" | "near-exact") —
+	// same conntrack-poll-vs-DESTROY-event signal, computed the same way.
+	Accuracy string `json:"accuracy"`
+
+	TopSources       []TopHost         `json:"topSources"`
+	TopDestinations  []TopHost         `json:"topDestinations"`
+	TopConversations []TopConversation `json:"topConversations"`
+
+	DeniedSources []TopDeniedSource `json:"deniedSources"`
+	DeniedPorts   []TopDeniedPort   `json:"deniedPorts"`
+	// DeniedSampled is always true: the nftables log rules that feed this
+	// data carry an expr.Limit (rate limit), so DeniedSources/DeniedPorts are
+	// a sampled approximation, never an exact packet count (plan Caution 3).
+	DeniedSampled bool `json:"deniedSampled"`
+	// DeniedEvents is the number of NFLOG DROP events actually counted in
+	// this window (not an estimate of real packets dropped).
+	DeniedEvents uint64 `json:"deniedEvents"`
+
+	// Truncated is true when any per-bucket map (hosts/dests/conversations)
+	// hit its tracking cap during this window (plan §2 T-02/T-03) — the UI
+	// should show a warning that the ranking may be incomplete.
+	Truncated bool `json:"truncated"`
+
+	GeneratedAt string `json:"generatedAt"`
+}
