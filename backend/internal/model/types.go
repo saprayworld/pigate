@@ -540,6 +540,42 @@ type SystemMetrics struct {
 	MemDetail  MemoryInfo      `json:"memDetail"`
 	TempDetail TemperatureInfo `json:"tempDetail"`
 	Storage    DiskUsage       `json:"storage"`
+	Sessions   SessionCounts   `json:"sessions"`
+}
+
+// SessionCounts is the conntrack session snapshot shared by both the SSE
+// /dashboard/performance/stream push and the /dashboard/traffic-detail
+// response. Total/Max/Available come straight from
+// /proc/sys/net/netfilter/nf_conntrack_count|max (fresh, ~5s cadence — the
+// session sampler ticker). TCP/UDP/ICMP/Other are counted from the conntrack
+// dump the traffic-accounting poller already does every 10s, so they can lag
+// Total by up to one poll cycle and are capped at kernel.MaxFlowsPerDump
+// (ProtoCapped=true when the dump hit that cap) — do NOT stack the per-proto
+// counts on top of Total in the same chart line, they are different
+// freshness/sources and will not sum cleanly.
+type SessionCounts struct {
+	Total          int    `json:"total"`
+	TCP            int    `json:"tcp"`
+	UDP            int    `json:"udp"`
+	ICMP           int    `json:"icmp"`
+	Other          int    `json:"other"`
+	Max            int    `json:"max"`
+	Available      bool   `json:"available"`
+	ProtoSampledAt string `json:"protoSampledAt"` // RFC3339 UTC; "" if never sampled yet
+	ProtoCapped    bool   `json:"protoCapped"`
+}
+
+// SessionHistoryPoint is one sample in the RAM-only Active Sessions ring
+// buffer (see TrafficStatsService session sampler) used to seed the
+// Dashboard "Active Sessions" chart. Total-only line data — TCP/UDP/ICMP/
+// Other are carried for the badges, not for stacking into the chart.
+type SessionHistoryPoint struct {
+	T     string `json:"t"` // RFC3339 UTC
+	Total int    `json:"total"`
+	TCP   int    `json:"tcp"`
+	UDP   int    `json:"udp"`
+	ICMP  int    `json:"icmp"`
+	Other int    `json:"other"`
 }
 
 // SystemInfo is the /api/system/info response (System Information card).
@@ -636,14 +672,16 @@ type TopRule struct {
 // once the conntrack DESTROY event listener (kernel.WatchFlowEnd) is also
 // active — see docs/ref/todo/traffic-accounting-accuracy-phase2-plan.md.
 type TrafficDetail struct {
-	Window        string                 `json:"window"` // "1h" or "24h"
-	ObservedBytes uint64                 `json:"observedBytes"`
-	Estimated     bool                   `json:"estimated"`
-	Accuracy      string                 `json:"accuracy"` // "estimated" | "near-exact"
-	Categories    []TrafficCategorySlice `json:"categories"`
-	TopTalkers    []TopTalker            `json:"topTalkers"`
-	TopRules      []TopRule              `json:"topRules"`
-	GeneratedAt   string                 `json:"generatedAt"`
+	Window         string                 `json:"window"` // "1h" or "24h"
+	ObservedBytes  uint64                 `json:"observedBytes"`
+	Estimated      bool                   `json:"estimated"`
+	Accuracy       string                 `json:"accuracy"` // "estimated" | "near-exact"
+	Categories     []TrafficCategorySlice `json:"categories"`
+	TopTalkers     []TopTalker            `json:"topTalkers"`
+	TopRules       []TopRule              `json:"topRules"`
+	GeneratedAt    string                 `json:"generatedAt"`
+	Sessions       SessionCounts          `json:"sessions"`
+	SessionHistory []SessionHistoryPoint  `json:"sessionHistory"`
 }
 
 // ParsePortSpec parses a "8080" or "8000-8010" port spec into an inclusive

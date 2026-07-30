@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"pigate/internal/db"
+	"pigate/internal/kernel"
 	"pigate/internal/model"
 )
 
@@ -82,7 +83,7 @@ func newTestTrafficStatsService(t *testing.T, acct *fakeTrafficAccounting, dhcp 
 	if dhcp == nil {
 		dhcp = &fakeDhcpForTraffic{}
 	}
-	return NewTrafficStatsService(acct, repo, dhcp)
+	return NewTrafficStatsService(acct, repo, dhcp, kernel.NewMockSystemStats())
 }
 
 func TestTrafficStats_SeedThenDelta(t *testing.T) {

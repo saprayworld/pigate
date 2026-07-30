@@ -172,6 +172,14 @@ type DhcpcdManager interface {
 	RestartDhcpcd(ifaceName string) error
 }
 
+// MaxFlowsPerDump caps how many conntrack flows a single DumpFlows call
+// processes (per IP family), so a port-scan/DDoS that inflates the conntrack
+// table cannot turn a routine poll into an unbounded memory/CPU spike (plan
+// Caution 5). Exported (and declared in this build-tag-free file) so the
+// service layer can compare a dump's length against it without needing the
+// linux-only real_traffic_account.go build.
+const MaxFlowsPerDump = 50000
+
 // SystemStatsManager abstracts host telemetry reads (/proc, /sys, statfs,
 // netlink counters). It is strictly read-only: no method mutates system state.
 // Implementations must degrade gracefully — a missing sysfs node (thermal zone,
@@ -196,6 +204,11 @@ type SystemStatsManager interface {
 	GetHostInfo() (*model.HostInfo, error)
 	// GetNetCounters returns cumulative rx/tx byte counters keyed by interface name.
 	GetNetCounters() (map[string]model.NetCounters, error)
+	// GetConntrackCount returns the live conntrack table occupancy from
+	// /proc/sys/net/netfilter/nf_conntrack_count|max. available=false (with
+	// count=max=0) when the nodes are absent (WSL/dev box, nf_conntrack not
+	// loaded) — never an error, never a per-call log line.
+	GetConntrackCount() (count int, max int, available bool)
 }
 
 // HostnameManager abstracts reading/writing the system hostname via

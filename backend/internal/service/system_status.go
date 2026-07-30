@@ -18,15 +18,18 @@ import (
 // SQLite) to preserve SD-card write cycles — it is accepted that it resets on
 // reboot, exactly like the firewall log ring buffer.
 const (
-	cpuSampleInterval   = 3 * time.Second
+	cpuSampleInterval   = 5 * time.Second
 	trafficPollInterval = 10 * time.Second
 	trafficBucketSpan   = 5 * time.Minute
 	trafficBucketMax    = 288 // 288 × 5min = 24h
 	diskUsagePath       = "/"
 	// metricsPushInterval is how often the SSE broadcaster composes and fans out a
 	// full SystemMetrics snapshot. Aligned with cpuSampleInterval so a push never
-	// carries a CPU figure older than one sampler tick.
-	metricsPushInterval = 3 * time.Second
+	// carries a CPU figure older than one sampler tick. Also matches
+	// sessionSampleInterval (traffic_stats.go) so the Active Sessions push
+	// riding along in this same snapshot needs little/no dedupe on the
+	// frontend (docs/ref/todo/dashboard-active-sessions-graph-plan.md).
+	metricsPushInterval = 5 * time.Second
 )
 
 // SystemStatusService owns host-telemetry sampling for the dashboard. It runs
@@ -55,6 +58,25 @@ type SystemStatusService struct {
 	// each on a timer; a slow subscriber is dropped rather than stalling the loop.
 	subMu       sync.Mutex
 	metricsSubs map[*metricsSub]struct{}
+
+	// sessionCurrentFn, when set, supplies the Active Sessions snapshot for
+	// GetSystemMetrics — wired from main.go to TrafficStatsService.SessionCurrent
+	// after both services are constructed, to avoid a circular dependency
+	// between the two service packages (docs/ref/todo/
+	// dashboard-active-sessions-graph-plan.md Step 5). Never reads /proc or
+	// calls the kernel itself — it only returns TrafficStatsService's own
+	// already-sampled cache, so GetSystemMetrics stays kernel-call-free here.
+	sessMu           sync.RWMutex
+	sessionCurrentFn func() model.SessionCounts
+}
+
+// SetSessionCurrentFn registers the Active Sessions snapshot source. See the
+// sessionCurrentFn field comment above for why this is a late-bound setter
+// rather than a constructor parameter.
+func (s *SystemStatusService) SetSessionCurrentFn(fn func() model.SessionCounts) {
+	s.sessMu.Lock()
+	defer s.sessMu.Unlock()
+	s.sessionCurrentFn = fn
 }
 
 type metricsSub struct {
@@ -331,6 +353,14 @@ func (s *SystemStatusService) GetSystemMetrics() model.SystemMetrics {
 	if disk, err := s.stats.GetDiskUsage(diskUsagePath); err == nil && disk != nil {
 		metrics.Storage = *disk
 	}
+
+	s.sessMu.RLock()
+	fn := s.sessionCurrentFn
+	s.sessMu.RUnlock()
+	if fn != nil {
+		metrics.Sessions = fn()
+	}
+
 	return metrics
 }
 

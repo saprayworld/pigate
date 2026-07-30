@@ -295,7 +295,7 @@ paths:
       summary: SSE stream for live hardware performance metrics (CPU/RAM/temp/storage)
       description: |
         Establishes a `text/event-stream` connection that pushes a full
-        `PerformanceMetrics` snapshot every ~3s (server-sampled, not client
+        `PerformanceMetrics` snapshot every ~5s (server-sampled, not client
         polling). Auth rides on the `pigate_session` cookie (`withCredentials`).
 
         Event format:
@@ -307,7 +307,7 @@ paths:
           (no dedupe/merge needed). Consume via `EventSource.onmessage`.
 
         The server re-checks the session on every push **without** sliding its
-        idle deadline, and closes the stream within ~3s once the session is
+        idle deadline, and closes the stream within ~5s once the session is
         revoked, deleted, or idles out. EventSource reconnects automatically; the
         next tick delivers a fresh snapshot, so no snapshot refetch is required.
         The plain `GET /dashboard/performance` endpoint is retained as the mock
@@ -3230,6 +3230,7 @@ components:
         - memDetail
         - tempDetail
         - storage
+        - sessions
       properties:
         cpu:
           type: number
@@ -3319,6 +3320,95 @@ components:
               type: number
               format: float
               example: 32.0
+        sessions:
+          $ref: '#/components/schemas/SessionCounts'
+
+    SessionCounts:
+      type: object
+      description: >
+        Conntrack session snapshot shared by PerformanceMetrics (SSE push,
+        ~5s) and TrafficDetail (poll, 60s). total/max/available come straight
+        from /proc/sys/net/netfilter/nf_conntrack_count|max (fresh, ~5s).
+        tcp/udp/icmp/other are counted from the conntrack dump the
+        traffic-detail poller already does every ~10s, so they can lag total
+        by up to one poll cycle and are capped server-side (protoCapped=true
+        when the dump hit that cap) — do not stack the per-proto counts on
+        top of total in the same chart line, they are different
+        freshness/sources and will not sum cleanly.
+      required:
+        - total
+        - tcp
+        - udp
+        - icmp
+        - other
+        - max
+        - available
+        - protoSampledAt
+        - protoCapped
+      properties:
+        total:
+          type: integer
+          example: 412
+        tcp:
+          type: integer
+          example: 288
+        udp:
+          type: integer
+          example: 103
+        icmp:
+          type: integer
+          example: 8
+        other:
+          type: integer
+          example: 13
+        max:
+          type: integer
+          description: nf_conntrack_max (0 when unavailable).
+          example: 262144
+        available:
+          type: boolean
+          description: false when nf_conntrack is not loaded (e.g. WSL/dev box).
+          example: true
+        protoSampledAt:
+          type: string
+          format: date-time
+          description: When tcp/udp/icmp/other were last sampled; "" if never sampled yet.
+          example: '2026-07-30T10:15:00Z'
+        protoCapped:
+          type: boolean
+          description: true when the conntrack dump that produced tcp/udp/icmp/other hit the per-dump flow cap.
+          example: false
+
+    SessionHistoryPoint:
+      type: object
+      description: One sample in the RAM-only Active Sessions history ring (30 minutes, 5s cadence).
+      required:
+        - t
+        - total
+        - tcp
+        - udp
+        - icmp
+        - other
+      properties:
+        t:
+          type: string
+          format: date-time
+          example: '2026-07-30T10:15:00Z'
+        total:
+          type: integer
+          example: 412
+        tcp:
+          type: integer
+          example: 288
+        udp:
+          type: integer
+          example: 103
+        icmp:
+          type: integer
+          example: 8
+        other:
+          type: integer
+          example: 13
 
     SystemInfo:
       type: object
@@ -3545,7 +3635,7 @@ components:
 
     TrafficDetail:
       type: object
-      required: [window, observedBytes, estimated, accuracy, categories, topTalkers, topRules, generatedAt]
+      required: [window, observedBytes, estimated, accuracy, categories, topTalkers, topRules, generatedAt, sessions, sessionHistory]
       properties:
         window:
           type: string
@@ -3591,6 +3681,13 @@ components:
         generatedAt:
           type: string
           format: date-time
+        sessions:
+          $ref: '#/components/schemas/SessionCounts'
+        sessionHistory:
+          type: array
+          description: RAM-only Active Sessions history ring (30 minutes, 5s cadence) used to seed the Dashboard chart.
+          items:
+            $ref: '#/components/schemas/SessionHistoryPoint'
 
     FirewallLog:
       type: object

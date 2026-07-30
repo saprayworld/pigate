@@ -17,12 +17,6 @@ import (
 	"pigate/internal/model"
 )
 
-// maxTrackedFlowsPerDump caps how many conntrack flows a single DumpFlows call
-// processes (per IP family), so a port-scan/DDoS that inflates the conntrack
-// table cannot turn a routine poll into an unbounded memory/CPU spike (plan
-// Caution 5).
-const maxTrackedFlowsPerDump = 50000
-
 // RealTrafficAccounting implements TrafficAccountingManager using conntrack
 // (via vishvananda/netlink) for per-flow byte accounting and nftables rule
 // counters (via google/nftables) for per-DB-rule byte accounting. Both
@@ -48,16 +42,16 @@ func (r *RealTrafficAccounting) DumpFlows() ([]model.FlowSample, error) {
 		v4Err = err
 		log.Printf("[RealTrafficAccounting] IPv4 conntrack dump failed: %v", err)
 	} else {
-		samples = append(samples, flowsToSamples(flows, maxTrackedFlowsPerDump)...)
+		samples = append(samples, flowsToSamples(flows, MaxFlowsPerDump)...)
 	}
 
 	if flows, err := safeConntrackList(unix.AF_INET6); err != nil {
 		v6Err = err
 		log.Printf("[RealTrafficAccounting] IPv6 conntrack dump failed: %v", err)
 	} else {
-		remaining := maxTrackedFlowsPerDump
-		if len(samples) < maxTrackedFlowsPerDump {
-			remaining = maxTrackedFlowsPerDump - len(samples)
+		remaining := MaxFlowsPerDump
+		if len(samples) < MaxFlowsPerDump {
+			remaining = MaxFlowsPerDump - len(samples)
 		} else {
 			remaining = 0
 		}
