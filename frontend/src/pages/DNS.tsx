@@ -127,6 +127,15 @@ export default function DNS() {
     <div className="space-y-4">
       <CapabilityBanner id="resolved" />
 
+      <Alert className="border-border bg-muted/50 px-3 py-2.5">
+        <Info className="h-4 w-4 text-muted-foreground" />
+        <AlertDescription className="text-xs text-muted-foreground">
+          ค่าที่ตั้งในหน้านี้มีผลกับตัวเครื่อง PiGate เอง (systemd-resolved) เท่านั้น ส่วน DNS ที่เครื่องลูกในเครือข่ายใช้ ให้ตั้งค่าที่หน้า{" "}
+          <strong className="text-foreground">DNS Server → แท็บ Settings → Upstream Resolvers</strong>{" "}
+          — การบันทึกหน้านี้จะ<strong className="text-foreground">ไม่</strong> restart DNS/DHCP ของเครือข่ายอีกต่อไป
+        </AlertDescription>
+      </Alert>
+
       <div className="grid gap-4 md:grid-cols-3">
       {/* DNS Settings Configuration Form */}
       <Card className="md:col-span-2">

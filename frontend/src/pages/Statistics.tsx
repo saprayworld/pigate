@@ -27,6 +27,7 @@ import {
   type TopConversation,
   type TopDeniedPort,
   type TopDeniedSource,
+  type TopDomain,
   type TopHost,
   type TrafficStatistics,
 } from "@/services/statisticsService"
@@ -93,6 +94,29 @@ function HostBar({ percent }: { percent: number }) {
 }
 
 function HostLabel({ host }: { host: TopHost }) {
+  // When the destination has a known domain (docs/ref/todo/
+  // statistics-dns-top-domain-plan.md T-13), show it as the primary line and
+  // demote the IP to a small font-mono label beside it — otherwise the
+  // layout is unchanged from before this feature existed (plan §5 item 12).
+  if (host.domain) {
+    return (
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="min-w-0">
+          <span className="block truncate text-foreground/90">{host.domain}</span>
+          <span className="block truncate font-mono text-[10px] text-muted-foreground">{host.ip}</span>
+        </span>
+        <Badge
+          variant="outline"
+          className={cn(
+            "shrink-0 font-normal text-[10px]",
+            host.private ? "border-primary/30 text-primary" : "border-muted-foreground/30 text-muted-foreground"
+          )}
+        >
+          {host.private ? "LAN" : "Internet"}
+        </Badge>
+      </span>
+    )
+  }
   return (
     <span className="flex min-w-0 items-center gap-2">
       <span className="truncate text-foreground/90">{host.hostname}</span>
@@ -178,9 +202,18 @@ function TopConversationsCard({ conversations }: { conversations: TopConversatio
                       )}
                     </TableCell>
                     <TableCell className="text-xs">
-                      <div className="truncate">{c.dstHostname}</div>
-                      {c.dstHostname !== c.dstIp && (
-                        <div className="font-mono text-[10px] text-muted-foreground">{c.dstIp}</div>
+                      {c.dstDomain ? (
+                        <>
+                          <div className="truncate">{c.dstDomain}</div>
+                          <div className="font-mono text-[10px] text-muted-foreground">{c.dstIp}</div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="truncate">{c.dstHostname}</div>
+                          {c.dstHostname !== c.dstIp && (
+                            <div className="font-mono text-[10px] text-muted-foreground">{c.dstIp}</div>
+                          )}
+                        </>
                       )}
                     </TableCell>
                     <TableCell className="text-xs font-mono">{c.proto}</TableCell>
@@ -193,6 +226,60 @@ function TopConversationsCard({ conversations }: { conversations: TopConversatio
               </TableBody>
             </Table>
           </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// TopDomainsCard is the "Top Queried Domains" card (docs/ref/todo/
+// statistics-dns-top-domain-plan.md T-13) — same visual layout as
+// TopHostsCard, but with an opt-in-aware empty state (dnsLoggingEnabled)
+// instead of the generic "no data yet" message, and a truncation badge.
+function TopDomainsCard({
+  domains,
+  dnsLoggingEnabled,
+  dnsTruncated,
+}: {
+  domains: TopDomain[]
+  dnsLoggingEnabled: boolean
+  dnsTruncated: boolean
+}) {
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+        <CardTitle className="text-base font-semibold">Top Queried Domains</CardTitle>
+        {dnsTruncated && (
+          <Badge variant="outline" className="font-normal border-warning/30 text-warning">
+            ข้อมูลอาจไม่ครบ
+          </Badge>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {!dnsLoggingEnabled ? (
+          <EmptyState label="ยังไม่ได้เปิดการเก็บสถิติ DNS — เปิดได้ที่หน้า DNS Server" />
+        ) : domains.length === 0 ? (
+          <EmptyState label="ยังไม่มีข้อมูล DNS query ในช่วงเวลานี้" />
+        ) : (
+          <>
+            {domains.map((d) => (
+              <div key={d.domain} className="space-y-1">
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-foreground/90">{d.domain}</span>
+                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{d.queryType}</span>
+                  </span>
+                  <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                    {d.count} · {d.percent}%
+                  </span>
+                </div>
+                <HostBar percent={d.percent} />
+              </div>
+            ))}
+            <p className="pt-1 text-[11px] text-muted-foreground">
+              ชื่อโดเมนมาจากที่ DNS ตอบ อาจไม่ตรงกับที่เห็นในเบราว์เซอร์
+            </p>
+          </>
         )}
       </CardContent>
     </Card>
@@ -310,7 +397,8 @@ export default function Statistics() {
       stats.topDestinations.length > 0 ||
       stats.topConversations.length > 0 ||
       stats.deniedSources.length > 0 ||
-      stats.deniedPorts.length > 0)
+      stats.deniedPorts.length > 0 ||
+      stats.topDomains.length > 0)
 
   return (
     <div className="space-y-4">
@@ -394,6 +482,11 @@ export default function Statistics() {
             sources={stats.deniedSources}
             ports={stats.deniedPorts}
             events={stats.deniedEvents}
+          />
+          <TopDomainsCard
+            domains={stats.topDomains}
+            dnsLoggingEnabled={stats.dnsLoggingEnabled}
+            dnsTruncated={stats.dnsTruncated}
           />
         </div>
       ) : null}

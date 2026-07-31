@@ -882,3 +882,193 @@ func TestImportDedupsConflictingAliases(t *testing.T) {
 		seen[lower] = i.Name
 	}
 }
+
+// TestImportLegacyDNSServerSettingsBackupUsesDefaultCacheLimits is
+// docs/ref/todo/statistics-dns-top-domain-plan.md T-11 item 13: a backup
+// file predating the DNS Statistics fields (TTL/cap unmarshal to their Go
+// zero value, 0) must restore to the package defaults (60/4096), never 0
+// (0 would silently disable the reverse cache).
+func TestImportLegacyDNSServerSettingsBackupUsesDefaultCacheLimits(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	// Simulate a pre-feature backup file: TTL/cap fields never existed, so
+	// they unmarshal as the Go zero value (0), not the seeded defaults.
+	file.Config.DnsServerSettings.DNSCacheTTLMinutes = 0
+	file.Config.DnsServerSettings.DNSCacheMaxEntries = 0
+	file.Config.DnsServerSettings.QueryLogging = false
+	file.Config.DnsServerSettings.Interfaces = []string{"eth0"}
+	sum, err := configChecksum(*file.Config)
+	if err != nil {
+		t.Fatalf("checksum: %v", err)
+	}
+	file.Meta.Checksum = sum
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	if _, err := bs.Import(raw, model.ImportOptions{}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	settings, err := repo.GetDNSServerSettings()
+	if err != nil {
+		t.Fatalf("GetDNSServerSettings: %v", err)
+	}
+	if settings.DNSCacheTTLMinutes != model.DNSCacheTTLDefault {
+		t.Errorf("DNSCacheTTLMinutes = %d, want default %d (not 0)", settings.DNSCacheTTLMinutes, model.DNSCacheTTLDefault)
+	}
+	if settings.DNSCacheMaxEntries != model.DNSCacheEntriesDefault {
+		t.Errorf("DNSCacheMaxEntries = %d, want default %d (not 0)", settings.DNSCacheMaxEntries, model.DNSCacheEntriesDefault)
+	}
+	if len(settings.Interfaces) != 1 || settings.Interfaces[0] != "eth0" {
+		t.Errorf("Interfaces = %v, want [eth0]", settings.Interfaces)
+	}
+}
+
+// TestImportPreservesCustomDNSCacheLimits round-trips a non-default TTL/cap
+// through export -> import and confirms the custom values survive (plan
+// Final Acceptance "Backup -> Restore ไฟล์ที่มีค่า custom").
+func TestImportPreservesCustomDNSCacheLimits(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	if err := repo.SetDNSServerSettings(true, 30, 8192, model.DNSUpstreamModeSystem, nil); err != nil {
+		t.Fatalf("seed custom dns server settings: %v", err)
+	}
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if file.Config.DnsServerSettings.DNSCacheTTLMinutes != 30 || file.Config.DnsServerSettings.DNSCacheMaxEntries != 8192 || !file.Config.DnsServerSettings.QueryLogging {
+		t.Fatalf("export did not capture custom dns server settings: %+v", file.Config.DnsServerSettings)
+	}
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Change the live DB away from the custom values before import, so the
+	// assertion below actually proves import restored them (rather than
+	// them having never changed).
+	if err := repo.SetDNSServerSettings(false, 60, 4096, model.DNSUpstreamModeSystem, nil); err != nil {
+		t.Fatalf("reset dns server settings: %v", err)
+	}
+
+	if _, err := bs.Import(raw, model.ImportOptions{}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	settings, err := repo.GetDNSServerSettings()
+	if err != nil {
+		t.Fatalf("GetDNSServerSettings: %v", err)
+	}
+	if settings.DNSCacheTTLMinutes != 30 {
+		t.Errorf("DNSCacheTTLMinutes = %d, want 30", settings.DNSCacheTTLMinutes)
+	}
+	if settings.DNSCacheMaxEntries != 8192 {
+		t.Errorf("DNSCacheMaxEntries = %d, want 8192", settings.DNSCacheMaxEntries)
+	}
+	if !settings.QueryLogging {
+		t.Errorf("QueryLogging = false, want true")
+	}
+}
+
+// TestImportPreservesCustomUpstreamSettings is T-08 item 6(a) (docs/ref/todo/
+// dns-server-settings-tab-and-upstream-plan.md): a backup file carrying a
+// "custom" upstream mode with 2 IPs must round-trip through export -> import
+// with both the mode and the exact IP list intact.
+func TestImportPreservesCustomUpstreamSettings(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	if err := repo.SetDNSServerSettings(false, model.DNSCacheTTLDefault, model.DNSCacheEntriesDefault, model.DNSUpstreamModeCustom, []string{"1.1.1.1", "9.9.9.9"}); err != nil {
+		t.Fatalf("seed custom upstream settings: %v", err)
+	}
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if file.Config.DnsServerSettings.UpstreamMode != model.DNSUpstreamModeCustom {
+		t.Fatalf("export did not capture upstream mode: %+v", file.Config.DnsServerSettings)
+	}
+	if len(file.Config.DnsServerSettings.UpstreamServers) != 2 {
+		t.Fatalf("export did not capture upstream servers: %+v", file.Config.DnsServerSettings)
+	}
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Change the live DB away from the custom values before import, so the
+	// assertion below actually proves import restored them.
+	if err := repo.SetDNSServerSettings(false, model.DNSCacheTTLDefault, model.DNSCacheEntriesDefault, model.DNSUpstreamModeSystem, nil); err != nil {
+		t.Fatalf("reset dns server settings: %v", err)
+	}
+
+	if _, err := bs.Import(raw, model.ImportOptions{}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	settings, err := repo.GetDNSServerSettings()
+	if err != nil {
+		t.Fatalf("GetDNSServerSettings: %v", err)
+	}
+	if settings.UpstreamMode != model.DNSUpstreamModeCustom {
+		t.Errorf("UpstreamMode = %q, want %q", settings.UpstreamMode, model.DNSUpstreamModeCustom)
+	}
+	if len(settings.UpstreamServers) != 2 || settings.UpstreamServers[0] != "1.1.1.1" || settings.UpstreamServers[1] != "9.9.9.9" {
+		t.Errorf("UpstreamServers = %v, want [1.1.1.1 9.9.9.9]", settings.UpstreamServers)
+	}
+}
+
+// TestImportLegacyDNSServerSettingsBackupDefaultsUpstreamToSystem is T-08
+// item 6(b): a backup file predating upstreamMode/upstreamServers (they
+// unmarshal to their Go zero values — "" and nil) must restore to
+// UpstreamMode="system" and an empty UpstreamServers list, without erroring
+// or panicking (plan §5 item 8: "" must never be treated as a recognized
+// mode).
+func TestImportLegacyDNSServerSettingsBackupDefaultsUpstreamToSystem(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	// Start from a non-default upstream so the assertions below actually
+	// prove the import reset it, rather than it having never changed.
+	if err := repo.SetDNSServerSettings(false, model.DNSCacheTTLDefault, model.DNSCacheEntriesDefault, model.DNSUpstreamModeCustom, []string{"1.1.1.1"}); err != nil {
+		t.Fatalf("seed pre-import upstream settings: %v", err)
+	}
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	// Simulate a pre-feature backup file: upstreamMode/upstreamServers never
+	// existed, so they unmarshal as the Go zero value ("" and nil).
+	file.Config.DnsServerSettings.UpstreamMode = ""
+	file.Config.DnsServerSettings.UpstreamServers = nil
+	file.Config.DnsServerSettings.Interfaces = []string{"eth0"}
+	sum, err := configChecksum(*file.Config)
+	if err != nil {
+		t.Fatalf("checksum: %v", err)
+	}
+	file.Meta.Checksum = sum
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	if _, err := bs.Import(raw, model.ImportOptions{}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	settings, err := repo.GetDNSServerSettings()
+	if err != nil {
+		t.Fatalf("GetDNSServerSettings: %v", err)
+	}
+	if settings.UpstreamMode != model.DNSUpstreamModeSystem {
+		t.Errorf("UpstreamMode = %q, want %q (not empty)", settings.UpstreamMode, model.DNSUpstreamModeSystem)
+	}
+	if len(settings.UpstreamServers) != 0 {
+		t.Errorf("UpstreamServers = %v, want empty", settings.UpstreamServers)
+	}
+}

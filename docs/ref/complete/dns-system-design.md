@@ -288,3 +288,12 @@ func (s *DNSService) listenToNetworkEvents() {
 interface อีก — เดิมมันต้องใช้สิทธิ์ Polkit ราย-link ที่ pigate user ไม่มี จึง fail
 (`Permission denied`) ทุกครั้งอยู่แล้ว = resolution ที่ใช้งานได้จริงมาจาก global drop-in 100%
 มาตลอด การลบ loop จึงเป็น cleanup ล้วน ไม่เปลี่ยนพฤติกรรมจริง (แต่เอา log noise + call ที่ fail ออก)
+
+---
+
+## Cross-reference: DNS Statistics (2026-07-30)
+
+Not part of this doc's scope (client-side resolution) — the opt-in "Top Queried Domains" /
+IP→domain enrichment feature lives entirely in the DNS **Server** (dnsmasq) path. See
+`docs/ref/complete/dnsmasq-design.md` ("DNS Statistics — query logging moved to a file")
+and `docs/ref/todo/statistics-dns-top-domain-plan.md` for the full design.

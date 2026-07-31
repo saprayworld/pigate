@@ -585,6 +585,13 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
 RuntimeDirectory=pigate dhcpcd
 RuntimeDirectoryMode=0755
+# Preserve /run/pigate across service restarts (not reboots) so dnsmasq's
+# query-log file (docs/ref/todo/statistics-dns-top-domain-plan.md, DNS
+# Statistics feature) is never left writing to an unlinked inode after a
+# `systemctl restart pigate` — see plan §5 item 4. Machines installed before
+# this option was added must re-run install.sh (or add this line to the unit
+# by hand) for it to take effect.
+RuntimeDirectoryPreserve=yes
 ExecStart=/usr/local/bin/pigate -config=/var/lib/pigate/pigate.conf -mock=false -db=/var/lib/pigate/pigate.db -https-port=443
 Restart=on-failure
 RestartSec=5s

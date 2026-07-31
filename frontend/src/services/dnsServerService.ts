@@ -28,7 +28,10 @@ function getLocalSettings(): DNSServerSettings {
     return initialDNSServerSettings;
   }
   try {
-    return JSON.parse(stored);
+    // Merge with defaults so a value saved to localStorage before
+    // upstreamMode/upstreamServers existed still comes back with them set
+    // (mock-mode equivalent of the backend's migration DEFAULT 'system').
+    return { ...initialDNSServerSettings, ...JSON.parse(stored) };
   } catch {
     return initialDNSServerSettings;
   }

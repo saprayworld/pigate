@@ -152,8 +152,21 @@ type QosManager interface {
 // upstreamServers carries the explicit forward resolvers (from System DNS) that
 // dnsmasq should use, replacing the broken resolvconf-populated resolv.conf.
 type DNSServerManager interface {
-	ApplyZones(zones []model.DNSZone, interfaces []string, upstreamServers []string) error
+	// ApplyZones now also takes queryLog: when true, dnsmasq's `log-queries`
+	// directive (writing to a tmpfs file) is enabled so WatchDNSLog below has
+	// something to read; when false, any previously-written log file is
+	// removed (docs/ref/todo/statistics-dns-top-domain-plan.md T-03/T-05).
+	// TTL/cap of the reverse cache are NOT passed here — they are pure
+	// service-layer parameters with no effect on the dnsmasq config file.
+	ApplyZones(zones []model.DNSZone, interfaces []string, upstreamServers []string, queryLog bool) error
 	ClearCache() error
+	// WatchDNSLog streams both query and answer (reply/cached ... is <IP>)
+	// events parsed from dnsmasq's query log. Blocking until ctx is done; cb
+	// must return promptly (it runs on the log read loop, mirroring
+	// TrafficLogManager.WatchForwardTraffic's contract). It is NOT an error
+	// for the log file to not exist or for query logging to be disabled — the
+	// implementation simply waits quietly rather than erroring.
+	WatchDNSLog(ctx context.Context, cb func(model.DNSLogEvent)) error
 }
 
 // DhcpcdManager abstracts starting/stopping the per-interface dhcpcd@ systemd

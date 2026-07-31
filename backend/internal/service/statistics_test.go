@@ -147,3 +147,168 @@ func TestStatisticsService_ConcurrentPollRecordAndGetStatistics(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+// TestStatisticsService_RecordDNSEvent_TopDomainsRanking is T-11 item 8:
+// query events must rank correctly and percent must be computed from the
+// query count (not observedBytes), with the total never exceeding 100%.
+func TestStatisticsService_RecordDNSEvent_TopDomainsRanking(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+	s.SetDNSLoggingEnabled(true)
+
+	for i := 0; i < 5; i++ {
+		s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogQuery, Domain: "www.youtube.com", QueryType: "A"})
+	}
+	for i := 0; i < 3; i++ {
+		s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogQuery, Domain: "netflix.com", QueryType: "A"})
+	}
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogQuery, Domain: "cdn.jsdelivr.net", QueryType: "AAAA"})
+
+	stats := s.GetStatistics("1h")
+	if stats.DNSQueries != 9 {
+		t.Fatalf("expected 9 total queries, got %d", stats.DNSQueries)
+	}
+	if len(stats.TopDomains) != 3 {
+		t.Fatalf("expected 3 distinct domains, got %+v", stats.TopDomains)
+	}
+	if stats.TopDomains[0].Domain != "www.youtube.com" || stats.TopDomains[0].Count != 5 {
+		t.Fatalf("expected top domain www.youtube.com/5, got %+v", stats.TopDomains[0])
+	}
+	var sumPercent float64
+	for _, d := range stats.TopDomains {
+		sumPercent += d.Percent
+	}
+	if sumPercent > 100.01 {
+		t.Fatalf("sum of TopDomains percent exceeds 100%%: %v", sumPercent)
+	}
+	if !stats.DNSLoggingEnabled {
+		t.Fatalf("expected DNSLoggingEnabled=true")
+	}
+}
+
+// TestStatisticsService_DomainRingCap is T-11 item 9: flooding with 5,000
+// unique domains must not panic, must respect maxTrackedDomains, and must
+// set DNSTruncated.
+func TestStatisticsService_DomainRingCap(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+	s.SetDNSLoggingEnabled(true)
+
+	for i := 0; i < 5000; i++ {
+		s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogQuery, Domain: fmt.Sprintf("d%d.example.com", i), QueryType: "A"})
+	}
+
+	stats := s.GetStatistics("1h")
+	if !stats.DNSTruncated {
+		t.Fatalf("expected DNSTruncated=true after flooding with 5000 unique domains")
+	}
+	if len(stats.TopDomains) > statsTopN {
+		t.Fatalf("TopDomains exceeds statsTopN: %d", len(stats.TopDomains))
+	}
+}
+
+// TestStatisticsService_ClearDNSStats is T-11 item 10: clearing wipes both
+// the domain ring and the reverse cache (via the destinations/conversations
+// domain enrichment) immediately.
+func TestStatisticsService_ClearDNSStats(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "142.250.80.46", Proto: 6, DstPort: 443, Bytes: 0}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "142.250.80.46", Proto: 6, DstPort: 443, Bytes: 1000}},
+		},
+	}
+	s := newTestStatisticsService(t, acct)
+	s.traffic.poll()
+	s.traffic.poll()
+
+	s.SetDNSLoggingEnabled(true)
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogQuery, Domain: "www.youtube.com", QueryType: "A"})
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogAnswer, Domain: "www.youtube.com", AnswerIP: "142.250.80.46"})
+
+	before := s.GetStatistics("1h")
+	if len(before.TopDomains) == 0 {
+		t.Fatalf("setup: expected at least one top domain before Clear")
+	}
+	if before.TopDestinations[0].Domain != "www.youtube.com" {
+		t.Fatalf("setup: expected destination domain enrichment before Clear, got %+v", before.TopDestinations[0])
+	}
+
+	s.ClearDNSStats()
+
+	after := s.GetStatistics("1h")
+	if len(after.TopDomains) != 0 {
+		t.Fatalf("expected TopDomains empty after ClearDNSStats, got %+v", after.TopDomains)
+	}
+	if after.TopDestinations[0].Domain != "" {
+		t.Fatalf("expected destination domain cleared after ClearDNSStats, got %+v", after.TopDestinations[0])
+	}
+	if after.TopDestinations[0].Bytes != before.TopDestinations[0].Bytes {
+		t.Fatalf("expected bytes unaffected by ClearDNSStats: before=%d after=%d", before.TopDestinations[0].Bytes, after.TopDestinations[0].Bytes)
+	}
+}
+
+// TestStatisticsService_TopHostsConversations_RegressionWhenDNSStatsEmpty is
+// T-11 item 11: with the DNS-stats switch off / cache empty (the default
+// state of a freshly constructed StatisticsService), TopDestinations/
+// TopConversations must be byte-for-byte identical to what they were before
+// this feature existed — same bytes/percent/hostname, Domain/DstDomain always
+// "".
+func TestStatisticsService_TopHostsConversations_RegressionWhenDNSStatsEmpty(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, Bytes: 0}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, Bytes: 1000}},
+		},
+	}
+	s := newTestStatisticsService(t, acct)
+	s.traffic.poll()
+	s.traffic.poll()
+
+	stats := s.GetStatistics("1h")
+	if stats.DNSLoggingEnabled {
+		t.Fatalf("expected DNSLoggingEnabled=false by default")
+	}
+	if len(stats.TopDomains) != 0 {
+		t.Fatalf("expected empty TopDomains by default, got %+v", stats.TopDomains)
+	}
+	if len(stats.TopDestinations) != 1 || stats.TopDestinations[0].IP != "8.8.8.8" || stats.TopDestinations[0].Bytes != 1000 {
+		t.Fatalf("unexpected top destinations: %+v", stats.TopDestinations)
+	}
+	if stats.TopDestinations[0].Domain != "" {
+		t.Fatalf("expected Domain empty when reverse cache has no data, got %q", stats.TopDestinations[0].Domain)
+	}
+	if len(stats.TopConversations) != 1 || stats.TopConversations[0].DstDomain != "" {
+		t.Fatalf("expected DstDomain empty when reverse cache has no data, got %+v", stats.TopConversations)
+	}
+}
+
+// TestStatisticsService_ConcurrentDNSEventsAndSetLimits is T-11 item 14: run
+// RecordDNSEvent + GetStatistics + SetReverseCacheLimits concurrently under
+// `go test -race`.
+func TestStatisticsService_ConcurrentDNSEventsAndSetLimits(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+	s.SetDNSLoggingEnabled(true)
+
+	const iterations = 200
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogQuery, Domain: fmt.Sprintf("d%d.example.com", i%50), QueryType: "A"})
+			s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogAnswer, Domain: fmt.Sprintf("d%d.example.com", i%50), AnswerIP: fmt.Sprintf("10.0.%d.%d", (i/256)%256, i%256)})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_ = s.GetStatistics("1h")
+			_ = s.GetStatistics("24h")
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			s.SetReverseCacheLimits(60+(i%10), 128+(i%100))
+		}
+	}()
+	wg.Wait()
+}

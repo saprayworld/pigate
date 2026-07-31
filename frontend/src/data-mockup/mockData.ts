@@ -700,14 +700,40 @@ export const initialDNSZones: DNSZone[] = [
   }
 ]
 
-// DNS Server listen interfaces (which real LAN interfaces auth-server binds to).
-// Kept independent from DHCP Server configuration — sourced from the Interface Service.
+// DNS Server listen interfaces (which real LAN interfaces auth-server binds to)
+// plus the DNS Statistics fields (docs/ref/todo/statistics-dns-top-domain-plan.md):
+// queryLogging (opt-in switch, restarts dnsmasq) and the reverse-cache
+// TTL/cap (live-tunable, no restart). Kept independent from DHCP Server
+// configuration — sourced from the Interface Service.
 export interface DNSServerSettings {
   interfaces: string[]
+  queryLogging: boolean
+  dnsCacheTtlMinutes: number
+  dnsCacheMaxEntries: number
+  // Upstream resolver source for the DNS Server itself (docs/ref/todo/
+  // dns-server-settings-tab-and-upstream-plan.md). "system" (default) reads
+  // System DNS (/dns page) at generate-time; "custom" forwards only to
+  // upstreamServers. Changing either field restarts dnsmasq.
+  upstreamMode: "system" | "custom"
+  upstreamServers: string[]
 }
 
+export const DNS_CACHE_TTL_MIN = 1
+export const DNS_CACHE_TTL_MAX = 1440
+export const DNS_CACHE_TTL_DEFAULT = 60
+export const DNS_CACHE_ENTRIES_MIN = 128
+export const DNS_CACHE_ENTRIES_MAX = 65536
+export const DNS_CACHE_ENTRIES_DEFAULT = 4096
+// Must match backend model.DNSUpstreamMaxServers.
+export const DNS_UPSTREAM_MAX_SERVERS = 4
+
 export const initialDNSServerSettings: DNSServerSettings = {
-  interfaces: ["eth0"]
+  interfaces: ["eth0"],
+  queryLogging: false,
+  dnsCacheTtlMinutes: DNS_CACHE_TTL_DEFAULT,
+  dnsCacheMaxEntries: DNS_CACHE_ENTRIES_DEFAULT,
+  upstreamMode: "system",
+  upstreamServers: [],
 }
 
 

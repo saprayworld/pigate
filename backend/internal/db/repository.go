@@ -2679,3 +2679,83 @@ func (r *Repository) SetDNSServerInterfaces(interfaces []string) error {
 	_, err := r.db.Exec("UPDATE dns_server_settings SET interfaces = ? WHERE id = 1", strings.Join(interfaces, ","))
 	return err
 }
+
+// GetDNSServerSettings returns the full DNS Server settings row, including the
+// DNS Statistics fields (docs/ref/todo/statistics-dns-top-domain-plan.md T-02).
+// Out-of-range TTL/cap values (e.g. a DB hand-edited or restored from a
+// corrupted backup) are clamped back to the package default with a warning
+// log rather than returned as-is — callers must never see a value that could
+// let the reverse cache grow unbounded (plan §5 item 17).
+func (r *Repository) GetDNSServerSettings() (model.DNSServerSettings, error) {
+	var stored string
+	var queryLogging int
+	var ttl, maxEntries int
+	var upstreamMode, upstreamServersStored string
+	err := r.db.QueryRow(
+		"SELECT interfaces, query_logging, dns_cache_ttl_minutes, dns_cache_max_entries, upstream_mode, upstream_servers FROM dns_server_settings WHERE id = 1",
+	).Scan(&stored, &queryLogging, &ttl, &maxEntries, &upstreamMode, &upstreamServersStored)
+	if err != nil {
+		return model.DNSServerSettings{}, err
+	}
+
+	// Non-nil (matches GetDNSServerInterfaces above): an empty JSON array
+	// ("[]") rather than "null" is what lets backup_repo.go's restore path
+	// tell "current-era backup with DNS Server configured to no interfaces"
+	// apart from "legacy backup predating this whole section" (nil).
+	interfaces := []string{}
+	if strings.TrimSpace(stored) != "" {
+		interfaces = strings.Split(stored, ",")
+	}
+
+	if ttl < model.DNSCacheTTLMin || ttl > model.DNSCacheTTLMax {
+		log.Printf("[Repository] dns_cache_ttl_minutes=%d out of range, clamping to default %d", ttl, model.DNSCacheTTLDefault)
+		ttl = model.DNSCacheTTLDefault
+	}
+	if maxEntries < model.DNSCacheEntriesMin || maxEntries > model.DNSCacheEntriesMax {
+		log.Printf("[Repository] dns_cache_max_entries=%d out of range, clamping to default %d", maxEntries, model.DNSCacheEntriesDefault)
+		maxEntries = model.DNSCacheEntriesDefault
+	}
+
+	// Clamp on read (defense-in-depth against a hand-edited/imported DB, plan
+	// §5 item 1): an unknown mode silently falls back to "system" rather than
+	// being propagated, and any IP that no longer parses is dropped so it
+	// never reaches buildDNSConfig via this path.
+	if upstreamMode != model.DNSUpstreamModeSystem && upstreamMode != model.DNSUpstreamModeCustom {
+		log.Printf("[Repository] upstream_mode=%q unrecognized, clamping to default %q", upstreamMode, model.DNSUpstreamModeSystem)
+		upstreamMode = model.DNSUpstreamModeSystem
+	}
+	upstreamServers := []string{}
+	if strings.TrimSpace(upstreamServersStored) != "" {
+		for _, raw := range strings.Split(upstreamServersStored, ",") {
+			if net.ParseIP(raw) == nil {
+				log.Printf("[Repository] upstream_servers entry %q is not a valid IP, dropping", raw)
+				continue
+			}
+			upstreamServers = append(upstreamServers, raw)
+		}
+	}
+
+	return model.DNSServerSettings{
+		Interfaces:         interfaces,
+		QueryLogging:       queryLogging != 0,
+		DNSCacheTTLMinutes: ttl,
+		DNSCacheMaxEntries: maxEntries,
+		UpstreamMode:       upstreamMode,
+		UpstreamServers:    upstreamServers,
+	}, nil
+}
+
+// SetDNSServerSettings persists the DNS Statistics fields (query_logging,
+// dns_cache_ttl_minutes, dns_cache_max_entries) plus the upstream resolver
+// mode/list (docs/ref/todo/dns-server-settings-tab-and-upstream-plan.md T-02)
+// without touching interfaces — callers that also need to change interfaces
+// should call SetDNSServerInterfaces separately (mirrors the existing split
+// so a caller that only wants to flip QueryLogging never has to know the
+// current interface list).
+func (r *Repository) SetDNSServerSettings(queryLogging bool, ttlMinutes int, maxEntries int, upstreamMode string, upstreamServers []string) error {
+	_, err := r.db.Exec(
+		"UPDATE dns_server_settings SET query_logging = ?, dns_cache_ttl_minutes = ?, dns_cache_max_entries = ?, upstream_mode = ?, upstream_servers = ? WHERE id = 1",
+		boolToInt(queryLogging), ttlMinutes, maxEntries, upstreamMode, strings.Join(upstreamServers, ","),
+	)
+	return err
+}

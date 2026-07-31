@@ -871,3 +871,21 @@ Mock backend ไม่แตะ (mock DNS/DHCP ไม่เขียนไฟล
 `model/dns_validate_test.go` (per-type valid/invalid + injection ตรงๆ),
 `api/dns_validation_test.go` (handler 400), `service/backup_test.go`
 (`TestImportRejectsDnsmasqInjection` — import ถูก reject, DB ไม่เปลี่ยน)
+
+
+### DNS Statistics — query logging moved to a file (2026-07-30, docs/ref/todo/statistics-dns-top-domain-plan.md)
+
+When the user enables "DNS Statistics" (DNS Server page, off by default), `ApplyZones`
+now appends `log-queries` / `log-facility=/run/pigate/dnsmasq-queries.log` /
+`log-async=25` to `pigate-dns.conf`. **This moves dnsmasq's query (and DHCPACK) log
+lines out of `journalctl -u dnsmasq` and into that tmpfs file instead** — an operator
+debugging via `journalctl` while this switch is on will see far less DHCP/DNS activity
+there than before. The log file is RAM-only (`/run`, tmpfs), 0640, owned by `pigate`,
+capped at 8 MiB (truncated in place), and deleted immediately when the switch is turned
+back off. `kernel.RealDNSServerManager.WatchDNSLog` tails and parses it into
+`model.DNSLogEvent`s consumed by `StatisticsService` (RAM-only domain ring + IP→domain
+reverse cache, never persisted to SQLite). See the plan doc for the full design,
+including why the reverse-cache TTL/cap live in `dns_server_settings` (DB) rather than a
+`main.go` flag, and `install.sh`'s `RuntimeDirectoryPreserve=yes` (keeps
+`/run/pigate` — and therefore this log file's inode — alive across a
+`systemctl restart pigate`, not just a reboot).

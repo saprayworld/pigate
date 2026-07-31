@@ -63,13 +63,25 @@ type StatisticsService struct {
 
 	mu          sync.RWMutex
 	denyBuckets []deniedBucket
+
+	// dns holds the "Top Queried Domains" ring + reverse cache (docs/ref/todo/
+	// statistics-dns-top-domain-plan.md T-07/T-08) — see dns_query_stats.go /
+	// dns_reverse_cache.go. Never nil (always constructed in
+	// NewStatisticsService), so RecordDNSEvent/GetStatistics never need a
+	// nil-check.
+	dns *dnsQueryStats
 }
 
 // NewStatisticsService constructs the service. traffic must be the same
 // *TrafficStatsService instance main.go already started (this service adds
 // no ticker/goroutine of its own — plan T-06).
 func NewStatisticsService(traffic *TrafficStatsService, repo *db.Repository, dhcp kernel.DhcpManager) *StatisticsService {
-	return &StatisticsService{traffic: traffic, repo: repo, dhcp: dhcp}
+	return &StatisticsService{
+		traffic: traffic,
+		repo:    repo,
+		dhcp:    dhcp,
+		dns:     &dnsQueryStats{reverseCache: newDNSReverseCache()},
+	}
 }
 
 // RecordFirewallLog is the NFLOG-watcher hook (main.go stampAndPush, plan
@@ -162,19 +174,40 @@ func (s *StatisticsService) GetStatistics(window string) model.TrafficStatistics
 
 	srcTotals, portTotals, deniedEvents, denyTruncated := s.denySnapshot(window)
 
+	domainTotals, typeByDomain, dnsQueries, dnsLoggingEnabled, dnsTruncated := s.domainSnapshot(window)
+
+	// ipDomain enrichment (T-08): resolved once per request (one RLock) from
+	// every IP that could appear in TopSources/TopDestinations/
+	// TopConversations. When query logging is off / the cache is empty this
+	// is just an empty map, so buildTopHosts/buildTopConversations fall back
+	// to their pre-existing behavior byte-for-byte (regression guard, plan
+	// §5 item 12 / T-11 item 11).
+	ips := make([]string, 0, len(breakdown.Hosts)+len(breakdown.Dests))
+	for ip := range breakdown.Hosts {
+		ips = append(ips, ip)
+	}
+	for ip := range breakdown.Dests {
+		ips = append(ips, ip)
+	}
+	ipDomain := s.dns.reverseCache.LookupMany(ips)
+
 	return model.TrafficStatistics{
-		Window:           window,
-		ObservedBytes:    breakdown.Observed,
-		Accuracy:         breakdown.Accuracy,
-		TopSources:       buildTopHosts(breakdown.Hosts, breakdown.Observed, leaseByIP, resByIP),
-		TopDestinations:  buildTopHosts(breakdown.Dests, breakdown.Observed, leaseByIP, resByIP),
-		TopConversations: buildTopConversations(breakdown.Convs, breakdown.Observed, leaseByIP, resByIP),
-		DeniedSources:    buildTopDeniedSources(srcTotals, deniedEvents, leaseByIP, resByIP),
-		DeniedPorts:      buildTopDeniedPorts(portTotals, deniedEvents),
-		DeniedSampled:    true,
-		DeniedEvents:     deniedEvents,
-		Truncated:        breakdown.Truncated || denyTruncated,
-		GeneratedAt:      time.Now().UTC().Format(time.RFC3339),
+		Window:            window,
+		ObservedBytes:     breakdown.Observed,
+		Accuracy:          breakdown.Accuracy,
+		TopSources:        buildTopHosts(breakdown.Hosts, breakdown.Observed, leaseByIP, resByIP, ipDomain),
+		TopDestinations:   buildTopHosts(breakdown.Dests, breakdown.Observed, leaseByIP, resByIP, ipDomain),
+		TopConversations:  buildTopConversations(breakdown.Convs, breakdown.Observed, leaseByIP, resByIP, ipDomain),
+		DeniedSources:     buildTopDeniedSources(srcTotals, deniedEvents, leaseByIP, resByIP),
+		DeniedPorts:       buildTopDeniedPorts(portTotals, deniedEvents),
+		DeniedSampled:     true,
+		DeniedEvents:      deniedEvents,
+		Truncated:         breakdown.Truncated || denyTruncated,
+		TopDomains:        buildTopDomains(domainTotals, typeByDomain, dnsQueries),
+		DNSQueries:        dnsQueries,
+		DNSLoggingEnabled: dnsLoggingEnabled,
+		DNSTruncated:      dnsTruncated,
+		GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
 }
 
@@ -182,7 +215,7 @@ func (s *StatisticsService) GetStatistics(window string) model.TrafficStatistics
 // breakdown.Dests — same shape) into the Top Source Hosts / Top Destinations
 // card rows. Sort is deterministic (bytes desc, then IP asc) so tests never
 // flake on map iteration order, mirroring buildTopTalkers.
-func buildTopHosts(totals map[string]uint64, observed uint64, leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation) []model.TopHost {
+func buildTopHosts(totals map[string]uint64, observed uint64, leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation, ipDomain map[string]string) []model.TopHost {
 	out := make([]model.TopHost, 0, len(totals))
 	for ip, bytes := range totals {
 		if bytes == 0 {
@@ -196,6 +229,7 @@ func buildTopHosts(totals map[string]uint64, observed uint64, leaseByIP map[stri
 			Bytes:    bytes,
 			Percent:  percentOf(bytes, observed),
 			Private:  isPrivateIP(ip),
+			Domain:   ipDomain[ip],
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -213,7 +247,7 @@ func buildTopHosts(totals map[string]uint64, observed uint64, leaseByIP map[stri
 // buildTopConversations turns breakdown.Convs (keyed by convKey: "src|dst|proto|dstPort")
 // back into display rows. A key that fails to parse (should never happen —
 // convKey is the only writer) is skipped defensively rather than panicking.
-func buildTopConversations(totals map[string]uint64, observed uint64, leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation) []model.TopConversation {
+func buildTopConversations(totals map[string]uint64, observed uint64, leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation, ipDomain map[string]string) []model.TopConversation {
 	out := make([]model.TopConversation, 0, len(totals))
 	for key, bytes := range totals {
 		if bytes == 0 {
@@ -239,6 +273,7 @@ func buildTopConversations(totals map[string]uint64, observed uint64, leaseByIP 
 			DstPort:     uint16(port),
 			Bytes:       bytes,
 			Percent:     percentOf(bytes, observed),
+			DstDomain:   ipDomain[dstIP],
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

@@ -506,6 +506,47 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
+	// Add query_logging/dns_cache_ttl_minutes/dns_cache_max_entries columns to
+	// dns_server_settings if they don't exist (docs/ref/todo/
+	// statistics-dns-top-domain-plan.md T-02) — an already-installed DB must
+	// upgrade in place, not require a restore. Defaults match model.DNSCacheTTLDefault/
+	// DNSCacheEntriesDefault (60/4096) so an upgraded row reads sane values
+	// immediately, not 0 (which would mean "cache disabled").
+	var sqlCreateDNSServerSettings string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='dns_server_settings'").Scan(&sqlCreateDNSServerSettings)
+	if err == nil {
+		if !strings.Contains(sqlCreateDNSServerSettings, "query_logging") {
+			if _, err = db.Exec("ALTER TABLE dns_server_settings ADD COLUMN query_logging INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return fmt.Errorf("failed to add query_logging column: %w", err)
+			}
+		}
+		if !strings.Contains(sqlCreateDNSServerSettings, "dns_cache_ttl_minutes") {
+			if _, err = db.Exec("ALTER TABLE dns_server_settings ADD COLUMN dns_cache_ttl_minutes INTEGER NOT NULL DEFAULT 60"); err != nil {
+				return fmt.Errorf("failed to add dns_cache_ttl_minutes column: %w", err)
+			}
+		}
+		if !strings.Contains(sqlCreateDNSServerSettings, "dns_cache_max_entries") {
+			if _, err = db.Exec("ALTER TABLE dns_server_settings ADD COLUMN dns_cache_max_entries INTEGER NOT NULL DEFAULT 4096"); err != nil {
+				return fmt.Errorf("failed to add dns_cache_max_entries column: %w", err)
+			}
+		}
+		// Add upstream_mode/upstream_servers columns (docs/ref/todo/
+		// dns-server-settings-tab-and-upstream-plan.md T-02). DEFAULT 'system'
+		// preserves byte-for-byte identical generated pigate-dns.conf output for
+		// already-installed DBs (the DNS Server keeps reading System DNS at
+		// generate-time, same as before this feature existed).
+		if !strings.Contains(sqlCreateDNSServerSettings, "upstream_mode") {
+			if _, err = db.Exec("ALTER TABLE dns_server_settings ADD COLUMN upstream_mode TEXT NOT NULL DEFAULT 'system'"); err != nil {
+				return fmt.Errorf("failed to add upstream_mode column: %w", err)
+			}
+		}
+		if !strings.Contains(sqlCreateDNSServerSettings, "upstream_servers") {
+			if _, err = db.Exec("ALTER TABLE dns_server_settings ADD COLUMN upstream_servers TEXT NOT NULL DEFAULT ''"); err != nil {
+				return fmt.Errorf("failed to add upstream_servers column: %w", err)
+			}
+		}
+	}
+
 	// Migrate data from old dhcp_config (if it exists) to new dhcp_configs
 	var sqlCreateOldDhcpConfig string
 	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='dhcp_config'").Scan(&sqlCreateOldDhcpConfig)

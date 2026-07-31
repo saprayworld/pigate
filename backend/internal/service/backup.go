@@ -109,11 +109,11 @@ func (s *BackupService) Export(includeUsers bool, passphrase string) (*model.Bac
 	if cfg.DnsZones, err = s.repo.GetDNSZones(); err != nil {
 		return nil, fmt.Errorf("read dns zones: %w", err)
 	}
-	dnsIfaces, err := s.repo.GetDNSServerInterfaces()
+	dnsServerSettings, err := s.repo.GetDNSServerSettings()
 	if err != nil {
 		return nil, fmt.Errorf("read dns server settings: %w", err)
 	}
-	cfg.DnsServerSettings = model.DNSServerSettings{Interfaces: dnsIfaces}
+	cfg.DnsServerSettings = dnsServerSettings
 
 	dnsCfg, err := s.repo.GetDNSConfig()
 	if err != nil {
