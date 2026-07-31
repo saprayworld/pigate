@@ -49,6 +49,7 @@ import {
 } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CapabilityBanner } from "@/components/CapabilityBanner"
+import { DnsStatisticsTab } from "@/components/dns/DnsStatisticsTab"
 import {
   type DNSZone,
   type DNSRecord,
@@ -72,6 +73,11 @@ import { ifaceLabel } from "@/lib/ifaceLabel"
 
 export default function DnsServer() {
   const { alert, confirm } = useAlert()
+
+  // Controlled active tab (docs/ref/todo/dns-query-statistics-drilldown-plan.md
+  // T-07): needed so the Statistics tab's empty state can programmatically
+  // send the user to the Settings tab where queryLogging lives.
+  const [activeTab, setActiveTab] = useState("zones")
 
   // --- State ---
   const [zones, setZones] = useState<DNSZone[]>([])
@@ -761,10 +767,11 @@ export default function DnsServer() {
         </div>
       </div>
 
-      <Tabs defaultValue="zones">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="zones" className="cursor-pointer">Zones &amp; Records</TabsTrigger>
           <TabsTrigger value="blocked" className="cursor-pointer">Blocked Domains</TabsTrigger>
+          <TabsTrigger value="stats" className="cursor-pointer">สถิติ</TabsTrigger>
           <TabsTrigger value="settings" className="cursor-pointer">Settings</TabsTrigger>
         </TabsList>
 
@@ -1155,6 +1162,16 @@ export default function DnsServer() {
               </div>
             </div>
           )}
+        </TabsContent>
+
+        <TabsContent value="stats" className="space-y-4">
+          {/* Row-click drill-down (T-08) is self-contained inside DnsStatisticsTab —
+              it shares the tab's own window_ state, so the dialog always refetches
+              against whichever window (1h/24h) is currently selected. */}
+          <DnsStatisticsTab
+            active={activeTab === "stats"}
+            onGoToSettings={() => setActiveTab("settings")}
+          />
         </TabsContent>
 
         <TabsContent value="settings" className="space-y-4">

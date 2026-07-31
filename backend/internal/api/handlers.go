@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -423,6 +424,85 @@ func (s *Server) HandleGetStatistics(w http.ResponseWriter, r *http.Request) {
 	}
 	s.writeJSON(w, http.StatusOK, s.statistics.GetStatistics(window))
 }
+
+// dnsStatsWindow whitelists the `window` query param to {"1h","24h"} exactly
+// like HandleGetStatistics/HandleGetTrafficDetail above — any other value
+// (including empty) silently falls back to "1h" rather than passing a
+// client-supplied raw string into the service (docs/ref/todo/
+// dns-query-statistics-drilldown-plan.md T-03).
+func dnsStatsWindow(r *http.Request) string {
+	window := r.URL.Query().Get("window")
+	if window != "24h" {
+		window = "1h"
+	}
+	return window
+}
+
+// HandleGetDNSQueryStatistics backs the DNS Query Statistics tab's two
+// top-level tables (Top Domains / Top Clients — drilldown plan T-03). No
+// client-supplied input besides the whitelisted window.
+func (s *Server) HandleGetDNSQueryStatistics(w http.ResponseWriter, r *http.Request) {
+	window := dnsStatsWindow(r)
+	s.writeJSON(w, http.StatusOK, s.statistics.GetDNSQueryStatistics(window))
+}
+
+// HandleGetDNSDomainClients backs the domain -> clients drill-down dialog
+// (drilldown plan T-03). `domain` is untrusted client input: it is validated/
+// normalized via model.NormalizeQueryDomain (same rules as the DNS log
+// parser's sanitizeDomain, so the normalized value matches the ring's key)
+// before being passed to the service. On validation failure it returns 400
+// with a generic message — the raw value the caller sent is never echoed
+// back (plan §5 item 5: avoid reflecting attacker-controlled input into the
+// response body even as JSON). A domain that validates but was never queried
+// still returns 200 with an empty client list (plan T-03: "not found" is a
+// normal outcome of window/timing, not an error).
+func (s *Server) HandleGetDNSDomainClients(w http.ResponseWriter, r *http.Request) {
+	window := dnsStatsWindow(r)
+	raw := r.URL.Query().Get("domain")
+	if raw == "" {
+		s.writeError(w, http.StatusBadRequest, "domain is required")
+		return
+	}
+	domain, ok := model.NormalizeQueryDomain(raw)
+	if !ok {
+		s.writeError(w, http.StatusBadRequest, "invalid domain")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, s.statistics.GetDNSDomainClients(window, domain))
+}
+
+// HandleGetDNSClientDomains backs the client -> domains drill-down dialog
+// (drilldown plan T-03). `client` is untrusted client input: it must either
+// parse as an IP address (netip.ParseAddr) or equal the reserved
+// "unknown" bucket exactly. A parsed IP is re-serialized via addr.String()
+// before being passed to the service so it matches the ring's normalized key
+// (e.g. IPv6 written in a non-canonical form still resolves to the same
+// bucket — plan §5 item 5). On validation failure it returns 400 with a
+// generic message; the raw value sent is never echoed back.
+func (s *Server) HandleGetDNSClientDomains(w http.ResponseWriter, r *http.Request) {
+	window := dnsStatsWindow(r)
+	raw := r.URL.Query().Get("client")
+	if raw == "" {
+		s.writeError(w, http.StatusBadRequest, "client is required")
+		return
+	}
+	client := raw
+	if raw != dnsUnknownClientParam {
+		addr, err := netip.ParseAddr(raw)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid client")
+			return
+		}
+		client = addr.String()
+	}
+	s.writeJSON(w, http.StatusOK, s.statistics.GetDNSClientDomains(window, client))
+}
+
+// dnsUnknownClientParam is the one non-IP value HandleGetDNSClientDomains
+// accepts for `client` — must match the dnsUnknownClient constant the
+// service's ring uses as its reserved bucket key
+// (service/dns_query_stats.go).
+const dnsUnknownClientParam = "unknown"
 
 // HandleGetRecentLogs backs the Dashboard "Recent Logs" widget. It reads the
 // same shared ring buffer as HandleGetTrafficLogs (so entries from all three
