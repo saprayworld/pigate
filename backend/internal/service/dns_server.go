@@ -48,10 +48,15 @@ func (s *DNSServerService) ApplyAll() error {
 
 	upstreams := s.resolveUpstreams(settings)
 
+	blocked, err := s.repo.GetBlockedDomains()
+	if err != nil {
+		return fmt.Errorf("failed to retrieve blocked domains from database: %w", err)
+	}
+
 	// QueryLogging is the only DNS Statistics field that affects the dnsmasq
 	// config (TTL/cap are pure service-layer parameters — plan T-07: "ไม่ต้อง
 	// ส่ง TTL/cap ไม่เกี่ยวกับ dnsmasq").
-	if err := s.manager.ApplyZones(enabledZones, settings.Interfaces, upstreams, settings.QueryLogging); err != nil {
+	if err := s.manager.ApplyZones(enabledZones, settings.Interfaces, upstreams, settings.QueryLogging, blocked); err != nil {
 		return fmt.Errorf("failed to apply DNS zone configurations: %w", err)
 	}
 

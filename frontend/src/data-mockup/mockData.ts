@@ -736,6 +736,22 @@ export const initialDNSServerSettings: DNSServerSettings = {
   upstreamServers: [],
 }
 
+// DNS Server deny-list (docs/ref/todo/dns-blocked-domains-plan.md). A domain
+// entry also blocks every subdomain of it — there is no exact-only mode.
+export interface BlockedDomain {
+  id: string
+  domain: string
+  mode: "nxdomain" | "sinkhole"
+  enabled: boolean
+  comment: string
+  createdAt?: string
+}
+
+// Must match backend model.DNSBlockedDomainsMax.
+export const DNS_BLOCKED_DOMAINS_MAX = 1000
+
+export const initialBlockedDomains: BlockedDomain[] = []
+
 
 
 

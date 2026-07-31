@@ -84,6 +84,12 @@ type BackupConfig struct {
 	// omitempty for the same checksum-compatibility reason as PortForwards
 	// above: older v2 backups lack this key entirely.
 	Presets []WifiPreset `json:"presets,omitempty"`
+	// BlockedDomains (docs/ref/todo/dns-blocked-domains-plan.md) MUST stay
+	// omitempty for the same checksum-compatibility reason as PortForwards
+	// above: older backups (which lack this key) must keep re-marshalling to
+	// the same bytes, or their checksum breaks and the whole file fails to
+	// import.
+	BlockedDomains []BlockedDomain `json:"blockedDomains,omitempty"`
 }
 
 // BackupUser mirrors a users row for backup purposes. Unlike model.User it

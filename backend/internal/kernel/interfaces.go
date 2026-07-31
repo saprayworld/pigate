@@ -158,7 +158,12 @@ type DNSServerManager interface {
 	// removed (docs/ref/todo/statistics-dns-top-domain-plan.md T-03/T-05).
 	// TTL/cap of the reverse cache are NOT passed here — they are pure
 	// service-layer parameters with no effect on the dnsmasq config file.
-	ApplyZones(zones []model.DNSZone, interfaces []string, upstreamServers []string, queryLog bool) error
+	// blocked is the deny-list (docs/ref/todo/dns-blocked-domains-plan.md):
+	// each enabled entry is rendered as a `server=/<domain>/` (nxdomain) or
+	// `address=/<domain>/<ip>` (sinkhole) directive appended after all zones;
+	// an empty/all-skipped list produces byte-for-byte the same output as
+	// before this parameter existed.
+	ApplyZones(zones []model.DNSZone, interfaces []string, upstreamServers []string, queryLog bool, blocked []model.BlockedDomain) error
 	ClearCache() error
 	// WatchDNSLog streams both query and answer (reply/cached ... is <IP>)
 	// events parsed from dnsmasq's query log. Blocking until ctx is done; cb

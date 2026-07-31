@@ -3310,6 +3310,191 @@ func stringSliceSetChanged(a, b []string) bool {
 }
 
 // =========================================================================
+// DNS SERVER — BLOCKED DOMAINS (deny-list, docs/ref/todo/
+// dns-blocked-domains-plan.md)
+// =========================================================================
+// SENSITIVE: domain/comment here are interpolated verbatim into
+// pigate-dns.conf (`server=/<domain>/` or `address=/<domain>/<ip>`), so every
+// write path (create/update, and the backup importer separately) MUST run
+// the value through model.ValidateBlockedDomain before it reaches the DB —
+// dnsmasq is directive-per-line, so an un-validated newline injects an
+// arbitrary config line (plan §5 Caution 1). CRUD handlers below write the DB
+// only — they never call dnsServerService.ApplyAll(); the user applies the
+// change explicitly via "Apply DNS Zones" (plan §5 Caution 6, avoids
+// restarting dnsmasq/DHCP on every single edit).
+
+// HandleGetBlockedDomains returns the full deny-list, ordered by domain.
+func (s *Server) HandleGetBlockedDomains(w http.ResponseWriter, r *http.Request) {
+	domains, err := s.repo.GetBlockedDomains()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if domains == nil {
+		domains = []model.BlockedDomain{}
+	}
+	s.writeJSON(w, http.StatusOK, domains)
+}
+
+// HandleCreateBlockedDomain validates and inserts a new deny-list entry.
+// The domain is normalized (lower-cased, trailing dot stripped) BEFORE
+// validation, matching how the user is expected to type a name and keeping
+// the stored/validated value in sync with what buildDNSConfig will emit.
+func (s *Server) HandleCreateBlockedDomain(w http.ResponseWriter, r *http.Request) {
+	var input model.BlockedDomainInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	domain := strings.ToLower(strings.TrimSuffix(input.Domain, "."))
+	mode := input.Mode
+	if mode == "" {
+		mode = model.DNSBlockModeNXDomain
+	}
+
+	count, err := s.repo.CountBlockedDomains()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if count >= model.DNSBlockedDomainsMax {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("blocked domains list is at its maximum of %d entries", model.DNSBlockedDomainsMax))
+		return
+	}
+
+	id, err := randomID("blk-")
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Could not generate ID")
+		return
+	}
+	blocked := model.BlockedDomain{
+		ID:      id,
+		Domain:  domain,
+		Mode:    mode,
+		Enabled: input.Enabled,
+		Comment: input.Comment,
+	}
+
+	if err := model.ValidateBlockedDomain(blocked); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// A block target that exactly matches an enabled zone name is ambiguous
+	// (plan §2 "การชนกับ zone เดิม" / §5 Caution 3) — reject up front so the
+	// user gets an explicit reason rather than the entry silently being
+	// skipped later by the generator.
+	zones, err := s.repo.GetDNSZones()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, z := range zones {
+		if z.Enabled && strings.EqualFold(strings.TrimSpace(z.ZoneName), domain) {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("domain %q matches an existing enabled DNS zone name", domain))
+			return
+		}
+	}
+
+	if err := s.repo.CreateBlockedDomain(blocked); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("domain %q already exists in the blocked domains list", domain))
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.logEvent(r, model.EventCategoryDns, "dns.blocked_domain_created", model.EventSeverityInfo,
+		domain, "Blocked domain \""+domain+"\" created")
+	s.writeJSON(w, http.StatusOK, blocked)
+}
+
+// HandleUpdateBlockedDomain replaces the domain/mode/enabled/comment of an
+// existing entry. Same normalization/validation/collision checks as create.
+func (s *Server) HandleUpdateBlockedDomain(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	existing, err := s.repo.GetBlockedDomainByID(id)
+	if err != nil || existing == nil {
+		s.writeError(w, http.StatusNotFound, "Blocked domain not found")
+		return
+	}
+
+	var input model.BlockedDomainInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	domain := strings.ToLower(strings.TrimSuffix(input.Domain, "."))
+	mode := input.Mode
+	if mode == "" {
+		mode = model.DNSBlockModeNXDomain
+	}
+
+	blocked := model.BlockedDomain{
+		ID:      id,
+		Domain:  domain,
+		Mode:    mode,
+		Enabled: input.Enabled,
+		Comment: input.Comment,
+	}
+
+	if err := model.ValidateBlockedDomain(blocked); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	zones, err := s.repo.GetDNSZones()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, z := range zones {
+		if z.Enabled && strings.EqualFold(strings.TrimSpace(z.ZoneName), domain) {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("domain %q matches an existing enabled DNS zone name", domain))
+			return
+		}
+	}
+
+	if err := s.repo.UpdateBlockedDomain(blocked); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("domain %q already exists in the blocked domains list", domain))
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.logEvent(r, model.EventCategoryDns, "dns.blocked_domain_updated", model.EventSeverityInfo,
+		domain, "Blocked domain \""+domain+"\" updated")
+	s.writeJSON(w, http.StatusOK, blocked)
+}
+
+// HandleDeleteBlockedDomain removes an entry.
+func (s *Server) HandleDeleteBlockedDomain(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.repo.DeleteBlockedDomain(id); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.logEvent(r, model.EventCategoryDns, "dns.blocked_domain_deleted", model.EventSeverityWarning,
+		id, "Blocked domain "+id+" deleted")
+	s.writeJSON(w, http.StatusOK, true)
+}
+
+// HandleToggleBlockedDomain flips enabled on/off.
+func (s *Server) HandleToggleBlockedDomain(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.repo.ToggleBlockedDomain(id); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.logEvent(r, model.EventCategoryDns, "dns.blocked_domain_toggled", model.EventSeverityInfo,
+		id, "Blocked domain "+id+" toggled")
+	s.writeJSON(w, http.StatusOK, true)
+}
+
+// =========================================================================
 // WI-FI SAVED NETWORKS (PRESETS) HANDLERS — issue #66
 // =========================================================================
 // SENSITIVE: every response body built in this section MUST run each

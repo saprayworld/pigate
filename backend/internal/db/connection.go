@@ -354,6 +354,18 @@ func migrate(db *sql.DB) error {
 			FOREIGN KEY (zone_id) REFERENCES dns_zones(id) ON DELETE CASCADE
 		);`,
 
+		// Deny-list of blocked domains for the DNS Server (docs/ref/todo/
+		// dns-blocked-domains-plan.md). A new, standalone table — additive to
+		// dns_zones/dns_records, so no ALTER migration is needed here.
+		`CREATE TABLE IF NOT EXISTS dns_blocked_domains (
+			id         TEXT PRIMARY KEY,
+			domain     TEXT NOT NULL UNIQUE COLLATE NOCASE,
+			mode       TEXT NOT NULL DEFAULT 'nxdomain' CHECK(mode IN ('nxdomain','sinkhole')),
+			enabled    INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+			comment    TEXT NOT NULL DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
+
 		// Listen interfaces for the DNS Server (auth-server binding). Kept independent
 		// from dhcp_configs so DNS Server interface selection doesn't depend on DHCP Server state.
 		`CREATE TABLE IF NOT EXISTS dns_server_settings (

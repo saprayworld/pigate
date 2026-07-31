@@ -74,4 +74,24 @@ func TestDNSAndDHCPInjectionRejected(t *testing.T) {
 	}); code == http.StatusBadRequest {
 		t.Errorf("valid DHCP config was rejected with 400")
 	}
+
+	// Injected blocked-domain domain → 400 and no row written (docs/ref/todo/
+	// dns-blocked-domains-plan.md T-07 item 3).
+	if code := post("/api/dns/blocked-domains", model.BlockedDomainInput{
+		Domain: "ads.example.com\nserver=/evil/6.6.6.6", Mode: model.DNSBlockModeNXDomain, Enabled: true,
+	}); code != http.StatusBadRequest {
+		t.Errorf("injected blocked domain: expected 400, got %d", code)
+	}
+	if domains, err := repo.GetBlockedDomains(); err != nil {
+		t.Fatalf("GetBlockedDomains: %v", err)
+	} else if len(domains) != 0 {
+		t.Errorf("expected no blocked domain rows after rejected injection, got %d", len(domains))
+	}
+
+	// Clean blocked domain → not 400.
+	if code := post("/api/dns/blocked-domains", model.BlockedDomainInput{
+		Domain: "ads.example.com", Mode: model.DNSBlockModeNXDomain, Enabled: true,
+	}); code == http.StatusBadRequest {
+		t.Errorf("valid blocked domain was rejected with 400")
+	}
 }

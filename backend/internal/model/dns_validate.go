@@ -335,6 +335,69 @@ func ValidateDNSConfigInput(mode, primaryDNS, secondaryDNS, localDomain string) 
 	return nil
 }
 
+// Blocked-domain (deny-list) modes (docs/ref/todo/dns-blocked-domains-plan.md
+// §2) and limits. DNSBlockModeNXDomain is the default/backward-compatible
+// mode: an empty Mode is treated as this mode, matching the pattern used for
+// DNSUpstreamMode above.
+const (
+	DNSBlockModeNXDomain = "nxdomain"
+	DNSBlockModeSinkhole = "sinkhole"
+
+	// DNSBlockedDomainsMax caps the deny-list size (plan §5 item 7): a much
+	// larger list would bloat pigate-dns.conf, slow `dnsmasq --test`, and stall
+	// the UI table. Bulk import of public blocklists is a future feature that
+	// would need a separate --conf-file, not this cap raised.
+	DNSBlockedDomainsMax = 1000
+	// DNSBlockedCommentMax bounds the free-text comment field.
+	DNSBlockedCommentMax = 128
+)
+
+// ValidateBlockedDomain checks a deny-list entry before it is written to the
+// DB or interpolated into pigate-dns.conf (`server=/<domain>/` or
+// `address=/<domain>/<ip>`). Like the other validators in this file it
+// REJECTS rather than trims/strips: Domain is not trimmed here, so a value
+// with edge whitespace is rejected outright, not silently accepted.
+func ValidateBlockedDomain(b BlockedDomain) error {
+	domain := b.Domain
+	if domain == "" {
+		return fmt.Errorf("domain must not be empty")
+	}
+	if strings.TrimSpace(domain) != domain {
+		return fmt.Errorf("domain %q must not have leading or trailing whitespace", b.Domain)
+	}
+	if len(domain) > 253 {
+		return fmt.Errorf("domain %q exceeds 253 characters", b.Domain)
+	}
+	if !reZoneName.MatchString(domain) {
+		return fmt.Errorf("domain %q contains invalid characters (allowed: letters, digits, '.', '-')", b.Domain)
+	}
+	if !strings.Contains(domain, ".") {
+		return fmt.Errorf("domain %q must contain at least one '.'", b.Domain)
+	}
+	if strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		return fmt.Errorf("domain %q must not start or end with '.'", b.Domain)
+	}
+	if strings.HasPrefix(domain, "-") || strings.HasSuffix(domain, "-") {
+		return fmt.Errorf("domain %q must not start or end with '-'", b.Domain)
+	}
+
+	mode := b.Mode
+	if mode == "" {
+		mode = DNSBlockModeNXDomain
+	}
+	if mode != DNSBlockModeNXDomain && mode != DNSBlockModeSinkhole {
+		return fmt.Errorf("mode %q is invalid (allowed: %q, %q)", b.Mode, DNSBlockModeNXDomain, DNSBlockModeSinkhole)
+	}
+
+	if strings.ContainsAny(b.Comment, "\n\r") {
+		return fmt.Errorf("comment must not contain newlines")
+	}
+	if len(b.Comment) > DNSBlockedCommentMax {
+		return fmt.Errorf("comment exceeds %d characters", DNSBlockedCommentMax)
+	}
+	return nil
+}
+
 // ValidateReservation validates every field of a reservation that is written to
 // the dnsmasq config: the MAC address, the reserved IP, and the device name.
 // MAC and IP are validated only when both are set, matching the writer, which

@@ -1,8 +1,9 @@
-import { type DNSZone, type DNSRecord, type DNSServerSettings, initialDNSZones, initialDNSServerSettings } from "@/data-mockup/mockData"
+import { type DNSZone, type DNSRecord, type DNSServerSettings, type BlockedDomain, initialDNSZones, initialDNSServerSettings, initialBlockedDomains } from "@/data-mockup/mockData"
 import { IS_MOCK_MODE, API_BASE_URL } from "./config"
 
 const ZONES_STORAGE_KEY = "pigate_dns_zones";
 const SETTINGS_STORAGE_KEY = "pigate_dns_server_settings";
+const BLOCKED_DOMAINS_STORAGE_KEY = "pigate_dns_blocked_domains";
 
 function getLocalZones(): DNSZone[] {
   const stored = localStorage.getItem(ZONES_STORAGE_KEY);
@@ -39,6 +40,23 @@ function getLocalSettings(): DNSServerSettings {
 
 function saveLocalSettings(settings: DNSServerSettings) {
   localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+}
+
+function getLocalBlockedDomains(): BlockedDomain[] {
+  const stored = localStorage.getItem(BLOCKED_DOMAINS_STORAGE_KEY);
+  if (!stored) {
+    localStorage.setItem(BLOCKED_DOMAINS_STORAGE_KEY, JSON.stringify(initialBlockedDomains));
+    return initialBlockedDomains;
+  }
+  try {
+    return JSON.parse(stored);
+  } catch {
+    return initialBlockedDomains;
+  }
+}
+
+function saveLocalBlockedDomains(domains: BlockedDomain[]) {
+  localStorage.setItem(BLOCKED_DOMAINS_STORAGE_KEY, JSON.stringify(domains));
 }
 
 export const dnsServerService = {
@@ -319,5 +337,103 @@ export const dnsServerService = {
       throw new Error(`Failed to update DNS server settings: ${response.statusText}`);
     }
     return response.json();
+  },
+
+  getBlockedDomains: async (): Promise<BlockedDomain[]> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return getLocalBlockedDomains();
+    }
+
+    const response = await fetch(`${API_BASE_URL}/dns/blocked-domains`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch blocked domains: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  createBlockedDomain: async (domain: Omit<BlockedDomain, "id" | "createdAt">): Promise<BlockedDomain> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const current = getLocalBlockedDomains();
+      const newDomain: BlockedDomain = {
+        ...domain,
+        id: "blk-" + Math.random().toString(36).substring(2, 9),
+        createdAt: new Date().toISOString(),
+      };
+      saveLocalBlockedDomains([...current, newDomain]);
+      return newDomain;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/dns/blocked-domains`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(domain),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to create blocked domain: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  updateBlockedDomain: async (id: string, domain: Omit<BlockedDomain, "id" | "createdAt">): Promise<BlockedDomain> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const current = getLocalBlockedDomains();
+      const updated = current.map((d) => (d.id === id ? { ...d, ...domain } : d));
+      saveLocalBlockedDomains(updated);
+      const target = updated.find((d) => d.id === id);
+      if (!target) throw new Error("Blocked domain not found");
+      return target;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/dns/blocked-domains/${id}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(domain),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to update blocked domain: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  deleteBlockedDomain: async (id: string): Promise<boolean> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const current = getLocalBlockedDomains();
+      saveLocalBlockedDomains(current.filter((d) => d.id !== id));
+      return true;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/dns/blocked-domains/${id}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to delete blocked domain: ${response.statusText}`);
+    }
+    return true;
+  },
+
+  toggleBlockedDomain: async (id: string): Promise<boolean> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const current = getLocalBlockedDomains();
+      const updated = current.map((d) => (d.id === id ? { ...d, enabled: !d.enabled } : d));
+      saveLocalBlockedDomains(updated);
+      return true;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/dns/blocked-domains/${id}/toggle`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to toggle blocked domain: ${response.statusText}`);
+    }
+    return true;
   },
 };
