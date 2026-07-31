@@ -223,3 +223,100 @@ func TestValidateDNSServerSettings(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateDNSServerSettings_Upstream covers T-08 item 2 (🔒): mode/list
+// validation for the DNS Server's own upstream resolver setting
+// (docs/ref/todo/dns-server-settings-tab-and-upstream-plan.md T-01).
+func TestValidateDNSServerSettings_Upstream(t *testing.T) {
+	base := func() DNSServerSettings {
+		return DNSServerSettings{DNSCacheTTLMinutes: DNSCacheTTLDefault, DNSCacheMaxEntries: DNSCacheEntriesDefault}
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*DNSServerSettings)
+		wantErr bool
+	}{
+		{"empty mode treated as system", func(s *DNSServerSettings) { s.UpstreamMode = "" }, false},
+		{"mode system explicit", func(s *DNSServerSettings) { s.UpstreamMode = DNSUpstreamModeSystem }, false},
+		{"mode garbage", func(s *DNSServerSettings) { s.UpstreamMode = "bogus" }, true},
+		{"custom with 0 entries", func(s *DNSServerSettings) { s.UpstreamMode = DNSUpstreamModeCustom }, true},
+		{"custom with 5 entries", func(s *DNSServerSettings) {
+			s.UpstreamMode = DNSUpstreamModeCustom
+			s.UpstreamServers = []string{"1.1.1.1", "8.8.8.8", "9.9.9.9", "1.0.0.1", "8.8.4.4"}
+		}, true},
+		{"custom valid v4+v6", func(s *DNSServerSettings) {
+			s.UpstreamMode = DNSUpstreamModeCustom
+			s.UpstreamServers = []string{"1.1.1.1", "2606:4700:4700::1111"}
+		}, false},
+		{"custom trailing space rejected", func(s *DNSServerSettings) {
+			s.UpstreamMode = DNSUpstreamModeCustom
+			s.UpstreamServers = []string{"1.1.1.1 "}
+		}, true},
+		{"custom newline injection rejected", func(s *DNSServerSettings) {
+			s.UpstreamMode = DNSUpstreamModeCustom
+			s.UpstreamServers = []string{"1.1.1.1\nlog-facility=/etc/x"}
+		}, true},
+		{"custom port suffix rejected", func(s *DNSServerSettings) {
+			s.UpstreamMode = DNSUpstreamModeCustom
+			s.UpstreamServers = []string{"8.8.8.8#5353"}
+		}, true},
+		{"custom hostname rejected", func(s *DNSServerSettings) {
+			s.UpstreamMode = DNSUpstreamModeCustom
+			s.UpstreamServers = []string{"dns.google"}
+		}, true},
+		{"custom loopback rejected", func(s *DNSServerSettings) {
+			s.UpstreamMode = DNSUpstreamModeCustom
+			s.UpstreamServers = []string{"127.0.0.1"}
+		}, true},
+		{"custom duplicate rejected", func(s *DNSServerSettings) {
+			s.UpstreamMode = DNSUpstreamModeCustom
+			s.UpstreamServers = []string{"1.1.1.1", "1.1.1.1"}
+		}, true},
+		{"system mode keeps stored-but-unused servers", func(s *DNSServerSettings) {
+			s.UpstreamMode = DNSUpstreamModeSystem
+			s.UpstreamServers = []string{"not-an-ip-but-not-checked-in-system-mode"}
+		}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := base()
+			tt.mutate(&s)
+			err := ValidateDNSServerSettings(s)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateDNSServerSettings(%+v) err = %v, wantErr %v", s, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateDNSConfigInput covers T-09 (🔒): System DNS input validation —
+// primaryDns/secondaryDns must be valid IPs in static mode, localDomain must
+// match the same whitelist used for the DHCP domain option.
+func TestValidateDNSConfigInput(t *testing.T) {
+	tests := []struct {
+		name                                  string
+		mode, primary, secondary, localDomain string
+		wantErr                               bool
+	}{
+		{"static valid", "static", "1.1.1.1", "8.8.8.8", "pigate.local", false},
+		{"static empty secondary ok", "static", "1.1.1.1", "", "pigate.local", false},
+		{"static empty primary rejected", "static", "", "8.8.8.8", "pigate.local", true},
+		{"static primary injection", "static", "1.1.1.1\nDNS=8.8.8.8", "", "pigate.local", true},
+		{"static secondary injection", "static", "1.1.1.1", "8.8.8.8\nDNS=1.2.3.4", "pigate.local", true},
+		{"static bad primary", "static", "not-an-ip", "", "pigate.local", true},
+		{"wan mode skips primary/secondary check", "wan", "not-an-ip\nDNS=x", "also-bad", "pigate.local", false},
+		{"localDomain empty ok", "wan", "", "", "", false},
+		{"localDomain injection", "wan", "", "", "evil\nDomains=~.", true},
+		{"localDomain invalid chars", "wan", "", "", "not a domain", true},
+		{"localDomain too long", "wan", "", "", strings.Repeat("a", 254), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateDNSConfigInput(tt.mode, tt.primary, tt.secondary, tt.localDomain)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateDNSConfigInput(%q,%q,%q,%q) err = %v, wantErr %v", tt.mode, tt.primary, tt.secondary, tt.localDomain, err, tt.wantErr)
+			}
+		})
+	}
+}

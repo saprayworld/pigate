@@ -2588,6 +2588,18 @@ paths:
       tags:
         - System & Maintenance
       summary: Update system-wide DNS configuration
+      description: >
+        Affects systemd-resolved for this device only (name resolution done
+        by PiGate itself). **Does not write to or restart the local DNS
+        Server (dnsmasq) anymore** — the DNS Server has its own upstream
+        resolver setting (`upstreamMode`/`upstreamServers` on
+        `PUT /api/dns/settings`, DNS Server page → Settings tab). In
+        `upstreamMode: system` the new value here is picked up the next time
+        pigate-dns.conf is regenerated (POST /api/dns/apply, a DNS Server
+        settings save, boot, or restore) — not immediately by this call.
+        `primaryDns`/`secondaryDns` (mode `static`) must be bare IP
+        addresses and `localDomain` must match `^[a-zA-Z0-9.-]+$`
+        (<=253 chars); invalid values return 400 rather than being written.
       requestBody:
         required: true
         content:
@@ -2601,6 +2613,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DNSConfigInput'
+        '400':
+          $ref: '#/components/responses/BadRequest'
 
   /system/password:
     put:
@@ -4869,6 +4883,43 @@ components:
             including evicting down to the new cap right away when
             lowered — does NOT restart dnsmasq or anything else.
           example: 4096
+        upstreamMode:
+          type: string
+          enum: [system, custom]
+          default: system
+          description: >-
+            Where the DNS Server (dnsmasq) sources its upstream resolvers
+            from when generating pigate-dns.conf (docs/ref/todo/
+            dns-server-settings-tab-and-upstream-plan.md). `system` (default)
+            *reads* System DNS (`GET/PUT /api/system/dns`) at the moment
+            pigate-dns.conf is generated (POST /api/dns/apply, this endpoint
+            when something else changes, boot, or restore) — it does not copy
+            or cache the value. `custom` forwards exclusively to
+            `upstreamServers`. Optional in the request body — an old client
+            that omits it is treated as `system`; the response always
+            includes it. Changing this value (or `upstreamServers`) RESTARTS
+            dnsmasq (DNS and DHCP briefly interrupted, same process), same as
+            `queryLogging` — unlike `dnsCacheTtlMinutes`/`dnsCacheMaxEntries`.
+            **`PUT /api/system/dns` no longer has any effect on dnsmasq** —
+            saving System DNS only ever updates systemd-resolved for this
+            device; the new value takes effect for the DNS Server the next
+            time one of the paths above regenerates pigate-dns.conf.
+        upstreamServers:
+          type: array
+          maxItems: 4
+          description: >-
+            Bare IPv4/IPv6 upstream resolver addresses used only when
+            `upstreamMode` is `custom` (max 4). No port suffix, hostname, DoT
+            or DoH URL is accepted — validation rejects (400) rather than
+            strips a malformed entry, since each value is written verbatim
+            into a `server=<ip>` directive in pigate-dns.conf. Loopback
+            addresses are also rejected (forwarding loop with dnsmasq itself
+            or systemd-resolved's stub resolver). Values entered while in
+            `system` mode are preserved (but unused) if the mode is later
+            switched back to `custom`.
+          items:
+            type: string
+          example: ["1.1.1.1", "8.8.8.8"]
 
     # --- Static Route Schemas ---
     RoutesConfig:

@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"net"
 	"strings"
 
 	"pigate/internal/model"
@@ -268,9 +269,27 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 		if maxEntries < model.DNSCacheEntriesMin || maxEntries > model.DNSCacheEntriesMax {
 			maxEntries = model.DNSCacheEntriesDefault
 		}
+		// upstream_mode/upstream_servers (docs/ref/todo/
+		// dns-server-settings-tab-and-upstream-plan.md T-07): a backup file
+		// from before this feature existed carries an empty/unrecognized mode
+		// — clamp to "system" rather than writing "" (an unrecognized mode).
+		// upstream_servers values come from an external file, so filter with
+		// net.ParseIP before writing, same discipline as the handler/kernel
+		// layers (plan §5 item 1: 3 layers of defense).
+		upstreamMode := cfg.DnsServerSettings.UpstreamMode
+		if upstreamMode != model.DNSUpstreamModeSystem && upstreamMode != model.DNSUpstreamModeCustom {
+			upstreamMode = model.DNSUpstreamModeSystem
+		}
+		validUpstreams := make([]string, 0, len(cfg.DnsServerSettings.UpstreamServers))
+		for _, ip := range cfg.DnsServerSettings.UpstreamServers {
+			if net.ParseIP(ip) == nil {
+				continue
+			}
+			validUpstreams = append(validUpstreams, ip)
+		}
 		if _, err := tx.Exec(
-			"UPDATE dns_server_settings SET interfaces = ?, query_logging = ?, dns_cache_ttl_minutes = ?, dns_cache_max_entries = ? WHERE id = 1",
-			strings.Join(cfg.DnsServerSettings.Interfaces, ","), boolToInt(cfg.DnsServerSettings.QueryLogging), ttl, maxEntries,
+			"UPDATE dns_server_settings SET interfaces = ?, query_logging = ?, dns_cache_ttl_minutes = ?, dns_cache_max_entries = ?, upstream_mode = ?, upstream_servers = ? WHERE id = 1",
+			strings.Join(cfg.DnsServerSettings.Interfaces, ","), boolToInt(cfg.DnsServerSettings.QueryLogging), ttl, maxEntries, upstreamMode, strings.Join(validUpstreams, ","),
 		); err != nil {
 			return fmt.Errorf("restore dns server settings: %w", err)
 		}

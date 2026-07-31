@@ -530,6 +530,21 @@ func migrate(db *sql.DB) error {
 				return fmt.Errorf("failed to add dns_cache_max_entries column: %w", err)
 			}
 		}
+		// Add upstream_mode/upstream_servers columns (docs/ref/todo/
+		// dns-server-settings-tab-and-upstream-plan.md T-02). DEFAULT 'system'
+		// preserves byte-for-byte identical generated pigate-dns.conf output for
+		// already-installed DBs (the DNS Server keeps reading System DNS at
+		// generate-time, same as before this feature existed).
+		if !strings.Contains(sqlCreateDNSServerSettings, "upstream_mode") {
+			if _, err = db.Exec("ALTER TABLE dns_server_settings ADD COLUMN upstream_mode TEXT NOT NULL DEFAULT 'system'"); err != nil {
+				return fmt.Errorf("failed to add upstream_mode column: %w", err)
+			}
+		}
+		if !strings.Contains(sqlCreateDNSServerSettings, "upstream_servers") {
+			if _, err = db.Exec("ALTER TABLE dns_server_settings ADD COLUMN upstream_servers TEXT NOT NULL DEFAULT ''"); err != nil {
+				return fmt.Errorf("failed to add upstream_servers column: %w", err)
+			}
+		}
 	}
 
 	// Migrate data from old dhcp_config (if it exists) to new dhcp_configs

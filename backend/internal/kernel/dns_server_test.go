@@ -107,6 +107,71 @@ func TestBuildDNSConfig_QueryLogByteIdentical(t *testing.T) {
 	}
 }
 
+// TestBuildDNSConfig_UpstreamValidation covers T-04/T-08 item 5 (🔒): each
+// upstream server string is validated with net.ParseIP as a last line of
+// defense before being written to `server=<ip>` (defense-in-depth against a
+// DB row written directly by config import, bypassing the handler/service
+// validators). Malformed values must never appear in the output.
+func TestBuildDNSConfig_UpstreamValidation(t *testing.T) {
+	t.Run("malformed entries are filtered, valid ones kept", func(t *testing.T) {
+		upstreams := []string{
+			"1.1.1.1",
+			"1.1.1.1\nlog-facility=/etc/x", // newline injection
+			"8.8.8.8#5353",                 // port suffix, not a bare IP
+			"dns.google",                   // hostname, not an IP
+			"8.8.8.8",
+		}
+		cfg := buildDNSConfig(nil, nil, upstreams, false)
+
+		for _, want := range []string{"server=1.1.1.1", "server=8.8.8.8"} {
+			if !strings.Contains(cfg, want) {
+				t.Errorf("expected valid upstream %q to be emitted, got:\n%s", want, cfg)
+			}
+		}
+		for _, bad := range []string{
+			"log-facility=/etc/x",
+			"server=8.8.8.8#5353",
+			"server=dns.google",
+		} {
+			if strings.Contains(cfg, bad) {
+				t.Errorf("malformed/injected upstream must not appear in config, found %q in:\n%s", bad, cfg)
+			}
+		}
+		if strings.Count(cfg, "no-resolv") != 1 {
+			t.Errorf("expected exactly one no-resolv line when valid upstreams remain, got:\n%s", cfg)
+		}
+	})
+
+	// Security-critical: no-resolv is process-global and tells dnsmasq to
+	// ignore /run/dnsmasq/resolv.conf entirely. If every configured upstream
+	// is filtered out but no-resolv is still emitted, dnsmasq is left with
+	// ZERO usable upstream — DNS for the whole network breaks (plan §5 item
+	// 4). The check must happen AFTER filtering, not before.
+	t.Run("all upstreams invalid means no no-resolv line at all", func(t *testing.T) {
+		upstreams := []string{
+			"1.1.1.1\nlog-facility=/etc/x",
+			"not-an-ip",
+			"8.8.8.8#5353",
+			"   ",
+			"",
+		}
+		cfg := buildDNSConfig(nil, nil, upstreams, false)
+		if strings.Contains(cfg, "no-resolv") {
+			t.Errorf("no-resolv must NOT appear when every upstream was filtered out (would leave dnsmasq with zero upstreams), got:\n%s", cfg)
+		}
+		if strings.Contains(cfg, "server=") {
+			t.Errorf("expected no server= lines when every upstream was filtered out, got:\n%s", cfg)
+		}
+	})
+
+	t.Run("empty upstream list means no no-resolv line", func(t *testing.T) {
+		cfg := buildDNSConfig(nil, nil, nil, false)
+		if strings.Contains(cfg, "no-resolv") {
+			t.Errorf("expected no no-resolv line for an empty upstream list, got:\n%s", cfg)
+		}
+	})
+}
+
 // TestBuildDNSConfig_QueryLogDirectives covers the opt-in query-logging
 // directives (plan §2) — path is the hardcoded DNSQueryLogPath constant,
 // never derived from any input.

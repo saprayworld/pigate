@@ -5,6 +5,7 @@ package kernel
 import (
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -132,21 +133,41 @@ func buildDNSConfig(zones []model.DNSZone, interfaces []string, upstreamServers 
 		sb.WriteString("\n")
 	}
 
-	// Explicit upstream resolvers. We deliberately combine `no-resolv` (ignore
-	// /run/dnsmasq/resolv.conf, which is broken on Debian when the resolvconf
-	// hook fails) with explicit `server=` lines drawn from System DNS. Only emit
-	// `no-resolv` when we actually have at least one upstream — emitting it with
-	// zero `server=` lines would leave dnsmasq with no upstream at all (worse than
-	// the default). Note: `no-resolv` is process-global, affecting the whole
-	// dnsmasq instance (including the DHCP config), which is fine here.
-	if len(upstreamServers) > 0 {
+	// Explicit upstream resolvers (either read from System DNS or the DNS
+	// Server's own "custom" upstreamServers — see service.resolveUpstreams).
+	// We deliberately combine `no-resolv` (ignore /run/dnsmasq/resolv.conf,
+	// which is broken on Debian when the resolvconf hook fails) with explicit
+	// `server=` lines. Each value is whitelist-validated here as a last line
+	// of defense (Caution 3/§5 item 1 of dns-server-settings-tab-and-upstream
+	// -plan.md): the config-import path can write these to the DB without
+	// going through the handler, and this value is interpolated verbatim into
+	// a `server=` directive, so an embedded newline would otherwise inject an
+	// arbitrary config line. Filter FIRST, then check len() — only emit
+	// `no-resolv` when at least one upstream survives validation; emitting it
+	// with zero `server=` lines would leave dnsmasq with no upstream at all
+	// (worse than the default, "DNS down for the whole house"). Note:
+	// `no-resolv` is process-global, affecting the whole dnsmasq instance
+	// (including the DHCP config), which is fine here.
+	validUpstreams := make([]string, 0, len(upstreamServers))
+	for _, ip := range upstreamServers {
+		ip = strings.TrimSpace(ip)
+		if ip == "" {
+			continue
+		}
+		if net.ParseIP(ip) == nil {
+			log.Printf("[DNS Server] Skipping invalid upstream server %q", ip)
+			continue
+		}
+		validUpstreams = append(validUpstreams, ip)
+	}
+	if len(validUpstreams) > 0 {
+		// Comment text kept identical to the pre-feature string ("from System
+		// DNS") so upstreamMode "system" output stays byte-for-byte identical
+		// after an upgrade (plan §2 point 1) — it also applies to "custom" now,
+		// but changing this line's text isn't worth breaking that guarantee.
 		sb.WriteString("# Upstream resolvers (from System DNS)\n")
 		sb.WriteString("no-resolv\n")
-		for _, ip := range upstreamServers {
-			ip = strings.TrimSpace(ip)
-			if ip == "" {
-				continue
-			}
+		for _, ip := range validUpstreams {
 			sb.WriteString(fmt.Sprintf("server=%s\n", ip))
 		}
 		sb.WriteString("\n")

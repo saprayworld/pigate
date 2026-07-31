@@ -52,10 +52,94 @@ func TestMigrationAddsDNSStatsColumnsToLegacyDNSServerSettings(t *testing.T) {
 	if settings.DNSCacheMaxEntries != model.DNSCacheEntriesDefault {
 		t.Errorf("DNSCacheMaxEntries = %d, want default %d", settings.DNSCacheMaxEntries, model.DNSCacheEntriesDefault)
 	}
+	if settings.UpstreamMode != model.DNSUpstreamModeSystem {
+		t.Errorf("UpstreamMode = %q, want %q (backward compat DEFAULT)", settings.UpstreamMode, model.DNSUpstreamModeSystem)
+	}
+	if len(settings.UpstreamServers) != 0 {
+		t.Errorf("UpstreamServers = %v, want empty", settings.UpstreamServers)
+	}
 
 	// Idempotent: running migrate again must not fail or duplicate columns.
 	if err := migrate(rawDB); err != nil {
 		t.Fatalf("second migrate failed (not idempotent): %v", err)
+	}
+}
+
+// TestMigrationAddsUpstreamColumnsToLegacyDNSServerSettings simulates
+// upgrading a box whose dns_server_settings table predates the upstream
+// resolver feature (docs/ref/todo/dns-server-settings-tab-and-upstream-plan.md
+// T-02/T-08 item 1): only the pre-upstream columns exist (interfaces,
+// query_logging, dns_cache_ttl_minutes, dns_cache_max_entries). After
+// migrate(), the new columns must exist and read back "system" + an empty
+// list, not zero-valued garbage — and the config generated afterward must be
+// unaffected (byte-for-byte, covered separately by
+// TestBuildDNSConfig_QueryLogByteIdentical in the kernel package).
+func TestMigrationAddsUpstreamColumnsToLegacyDNSServerSettings(t *testing.T) {
+	rawDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open sqlite: %v", err)
+	}
+	defer rawDB.Close()
+
+	if _, err := rawDB.Exec(`CREATE TABLE dns_server_settings (
+		id INTEGER PRIMARY KEY CHECK(id = 1),
+		interfaces TEXT NOT NULL DEFAULT '',
+		query_logging INTEGER NOT NULL DEFAULT 0,
+		dns_cache_ttl_minutes INTEGER NOT NULL DEFAULT 60,
+		dns_cache_max_entries INTEGER NOT NULL DEFAULT 4096
+	);`); err != nil {
+		t.Fatalf("failed to create pre-upstream dns_server_settings table: %v", err)
+	}
+	if _, err := rawDB.Exec(`INSERT INTO dns_server_settings (id, interfaces) VALUES (1, 'eth0')`); err != nil {
+		t.Fatalf("failed to seed pre-upstream row: %v", err)
+	}
+
+	if err := migrate(rawDB); err != nil {
+		t.Fatalf("migrate failed: %v", err)
+	}
+
+	repo := NewRepository(rawDB)
+	settings, err := repo.GetDNSServerSettings()
+	if err != nil {
+		t.Fatalf("GetDNSServerSettings failed after migration: %v", err)
+	}
+	if settings.UpstreamMode != model.DNSUpstreamModeSystem {
+		t.Errorf("UpstreamMode = %q, want %q", settings.UpstreamMode, model.DNSUpstreamModeSystem)
+	}
+	if len(settings.UpstreamServers) != 0 {
+		t.Errorf("UpstreamServers = %v, want empty", settings.UpstreamServers)
+	}
+
+	if err := migrate(rawDB); err != nil {
+		t.Fatalf("second migrate failed (not idempotent): %v", err)
+	}
+}
+
+// TestGetDNSServerSettings_ClampsUnknownUpstreamMode covers plan §5 item 1: a
+// mode value that ended up unrecognized in the DB (hand-edited, or imported)
+// must be clamped to "system" on read, never propagated as-is to a caller
+// that would pass it straight into buildDNSConfig.
+func TestGetDNSServerSettings_ClampsUnknownUpstreamMode(t *testing.T) {
+	rawDB, err := InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer rawDB.Close()
+
+	if _, err := rawDB.Exec("UPDATE dns_server_settings SET upstream_mode = 'bogus', upstream_servers = '1.1.1.1,not-an-ip,8.8.8.8' WHERE id = 1"); err != nil {
+		t.Fatalf("failed to seed bogus upstream values: %v", err)
+	}
+
+	repo := NewRepository(rawDB)
+	settings, err := repo.GetDNSServerSettings()
+	if err != nil {
+		t.Fatalf("GetDNSServerSettings failed: %v", err)
+	}
+	if settings.UpstreamMode != model.DNSUpstreamModeSystem {
+		t.Errorf("expected UpstreamMode clamped to %q, got %q", model.DNSUpstreamModeSystem, settings.UpstreamMode)
+	}
+	if len(settings.UpstreamServers) != 2 || settings.UpstreamServers[0] != "1.1.1.1" || settings.UpstreamServers[1] != "8.8.8.8" {
+		t.Errorf("expected non-IP entry dropped, got %v", settings.UpstreamServers)
 	}
 }
 

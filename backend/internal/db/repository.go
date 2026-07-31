@@ -2690,9 +2690,10 @@ func (r *Repository) GetDNSServerSettings() (model.DNSServerSettings, error) {
 	var stored string
 	var queryLogging int
 	var ttl, maxEntries int
+	var upstreamMode, upstreamServersStored string
 	err := r.db.QueryRow(
-		"SELECT interfaces, query_logging, dns_cache_ttl_minutes, dns_cache_max_entries FROM dns_server_settings WHERE id = 1",
-	).Scan(&stored, &queryLogging, &ttl, &maxEntries)
+		"SELECT interfaces, query_logging, dns_cache_ttl_minutes, dns_cache_max_entries, upstream_mode, upstream_servers FROM dns_server_settings WHERE id = 1",
+	).Scan(&stored, &queryLogging, &ttl, &maxEntries, &upstreamMode, &upstreamServersStored)
 	if err != nil {
 		return model.DNSServerSettings{}, err
 	}
@@ -2715,24 +2716,46 @@ func (r *Repository) GetDNSServerSettings() (model.DNSServerSettings, error) {
 		maxEntries = model.DNSCacheEntriesDefault
 	}
 
+	// Clamp on read (defense-in-depth against a hand-edited/imported DB, plan
+	// §5 item 1): an unknown mode silently falls back to "system" rather than
+	// being propagated, and any IP that no longer parses is dropped so it
+	// never reaches buildDNSConfig via this path.
+	if upstreamMode != model.DNSUpstreamModeSystem && upstreamMode != model.DNSUpstreamModeCustom {
+		log.Printf("[Repository] upstream_mode=%q unrecognized, clamping to default %q", upstreamMode, model.DNSUpstreamModeSystem)
+		upstreamMode = model.DNSUpstreamModeSystem
+	}
+	upstreamServers := []string{}
+	if strings.TrimSpace(upstreamServersStored) != "" {
+		for _, raw := range strings.Split(upstreamServersStored, ",") {
+			if net.ParseIP(raw) == nil {
+				log.Printf("[Repository] upstream_servers entry %q is not a valid IP, dropping", raw)
+				continue
+			}
+			upstreamServers = append(upstreamServers, raw)
+		}
+	}
+
 	return model.DNSServerSettings{
 		Interfaces:         interfaces,
 		QueryLogging:       queryLogging != 0,
 		DNSCacheTTLMinutes: ttl,
 		DNSCacheMaxEntries: maxEntries,
+		UpstreamMode:       upstreamMode,
+		UpstreamServers:    upstreamServers,
 	}, nil
 }
 
 // SetDNSServerSettings persists the DNS Statistics fields (query_logging,
-// dns_cache_ttl_minutes, dns_cache_max_entries) without touching interfaces —
-// callers that also need to change interfaces should call
-// SetDNSServerInterfaces separately (mirrors the existing split so a caller
-// that only wants to flip QueryLogging never has to know the current
-// interface list).
-func (r *Repository) SetDNSServerSettings(queryLogging bool, ttlMinutes int, maxEntries int) error {
+// dns_cache_ttl_minutes, dns_cache_max_entries) plus the upstream resolver
+// mode/list (docs/ref/todo/dns-server-settings-tab-and-upstream-plan.md T-02)
+// without touching interfaces — callers that also need to change interfaces
+// should call SetDNSServerInterfaces separately (mirrors the existing split
+// so a caller that only wants to flip QueryLogging never has to know the
+// current interface list).
+func (r *Repository) SetDNSServerSettings(queryLogging bool, ttlMinutes int, maxEntries int, upstreamMode string, upstreamServers []string) error {
 	_, err := r.db.Exec(
-		"UPDATE dns_server_settings SET query_logging = ?, dns_cache_ttl_minutes = ?, dns_cache_max_entries = ? WHERE id = 1",
-		boolToInt(queryLogging), ttlMinutes, maxEntries,
+		"UPDATE dns_server_settings SET query_logging = ?, dns_cache_ttl_minutes = ?, dns_cache_max_entries = ?, upstream_mode = ?, upstream_servers = ? WHERE id = 1",
+		boolToInt(queryLogging), ttlMinutes, maxEntries, upstreamMode, strings.Join(upstreamServers, ","),
 	)
 	return err
 }

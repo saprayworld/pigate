@@ -237,20 +237,100 @@ const (
 	DNSCacheEntriesMax     = 65536
 )
 
+// DNS Server upstream resolver modes (docs/ref/todo/
+// dns-server-settings-tab-and-upstream-plan.md §3 T-01). DNSUpstreamModeSystem
+// is the default/backward-compatible mode: an empty UpstreamMode from an old
+// client is treated as this mode.
+const (
+	DNSUpstreamModeSystem = "system"
+	DNSUpstreamModeCustom = "custom"
+
+	// DNSUpstreamMaxServers is the hard cap on custom upstream resolvers,
+	// confirmed with the project owner (bare IPs only, no port/hostname).
+	DNSUpstreamMaxServers = 4
+)
+
 // ValidateDNSServerSettings checks the DNS Statistics fields of
-// DNSServerSettings (TTL/cap of the IP->domain reverse cache). Interfaces is
-// validated separately by the handler (grandfathered dangling refs, see
-// HandleUpdateDNSServerSettings) so it is intentionally not checked here.
-// REJECTS out-of-range values with a readable error rather than clamping —
-// the caller (handler) must return 400 so the user knows the value was not
-// accepted (plan §5 item 17: clamping happens elsewhere, defense-in-depth,
-// but the API boundary itself must be explicit).
+// DNSServerSettings (TTL/cap of the IP->domain reverse cache) plus the
+// upstream resolver mode/list (T-01). Interfaces is validated separately by
+// the handler (grandfathered dangling refs, see HandleUpdateDNSServerSettings)
+// so it is intentionally not checked here.
+// REJECTS out-of-range/invalid values with a readable error rather than
+// clamping — the caller (handler) must return 400 so the user knows the value
+// was not accepted (plan §5 item 17: clamping happens elsewhere,
+// defense-in-depth, but the API boundary itself must be explicit).
 func ValidateDNSServerSettings(s DNSServerSettings) error {
 	if s.DNSCacheTTLMinutes < DNSCacheTTLMin || s.DNSCacheTTLMinutes > DNSCacheTTLMax {
 		return fmt.Errorf("dnsCacheTtlMinutes %d is out of range (allowed: %d-%d)", s.DNSCacheTTLMinutes, DNSCacheTTLMin, DNSCacheTTLMax)
 	}
 	if s.DNSCacheMaxEntries < DNSCacheEntriesMin || s.DNSCacheMaxEntries > DNSCacheEntriesMax {
 		return fmt.Errorf("dnsCacheMaxEntries %d is out of range (allowed: %d-%d)", s.DNSCacheMaxEntries, DNSCacheEntriesMin, DNSCacheEntriesMax)
+	}
+
+	// Empty mode = old client that predates this feature; treat as "system"
+	// rather than reject, matching the DB migration DEFAULT.
+	mode := s.UpstreamMode
+	if mode == "" {
+		mode = DNSUpstreamModeSystem
+	}
+	if mode != DNSUpstreamModeSystem && mode != DNSUpstreamModeCustom {
+		return fmt.Errorf("upstreamMode %q is invalid (allowed: %q, %q)", s.UpstreamMode, DNSUpstreamModeSystem, DNSUpstreamModeCustom)
+	}
+	if mode == DNSUpstreamModeCustom {
+		if len(s.UpstreamServers) == 0 {
+			return fmt.Errorf("upstreamServers must have at least 1 entry when upstreamMode is %q", DNSUpstreamModeCustom)
+		}
+		if len(s.UpstreamServers) > DNSUpstreamMaxServers {
+			return fmt.Errorf("upstreamServers has %d entries, maximum is %d", len(s.UpstreamServers), DNSUpstreamMaxServers)
+		}
+		seen := make(map[string]bool, len(s.UpstreamServers))
+		for _, raw := range s.UpstreamServers {
+			// No TrimSpace: the value is interpolated verbatim into
+			// pigate-dns.conf (`server=<ip>`), so edge whitespace/newlines
+			// must be rejected outright, not silently accepted.
+			ip := net.ParseIP(raw)
+			if ip == nil {
+				return fmt.Errorf("upstream server %q is not a valid bare IP address (hostnames, ports and DoT/DoH URLs are not supported)", raw)
+			}
+			if ip.IsLoopback() {
+				return fmt.Errorf("upstream server %q is a loopback address and would create a DNS forwarding loop with dnsmasq/systemd-resolved on this device", raw)
+			}
+			if seen[raw] {
+				return fmt.Errorf("upstream server %q is listed more than once", raw)
+			}
+			seen[raw] = true
+		}
+	}
+	// mode == "system": UpstreamServers may still be set (kept, not used) so
+	// that switching back from "custom" doesn't lose what the user entered.
+	return nil
+}
+
+// ValidateDNSConfigInput checks the System DNS (systemd-resolved) config
+// fields (mode/primaryDns/secondaryDns/localDomain) before they are
+// interpolated into /etc/systemd/resolved.conf.d/pigate.conf (`DNS=`,
+// `Domains=`) — see docs/ref/todo/dns-server-settings-tab-and-upstream-plan.md
+// T-09. Mirrors the no-trim, reject-not-strip discipline used elsewhere in
+// this file: a value carrying a newline must never reach the generated file.
+func ValidateDNSConfigInput(mode, primaryDNS, secondaryDNS, localDomain string) error {
+	if mode == "static" {
+		if primaryDNS == "" {
+			return fmt.Errorf("primaryDns must not be empty in static mode")
+		}
+		if net.ParseIP(primaryDNS) == nil {
+			return fmt.Errorf("primaryDns %q is not a valid IP address", primaryDNS)
+		}
+		if secondaryDNS != "" && net.ParseIP(secondaryDNS) == nil {
+			return fmt.Errorf("secondaryDns %q is not a valid IP address", secondaryDNS)
+		}
+	}
+	if localDomain != "" {
+		if len(localDomain) > 253 {
+			return fmt.Errorf("localDomain %q exceeds 253 characters", localDomain)
+		}
+		if !reZoneName.MatchString(localDomain) {
+			return fmt.Errorf("localDomain %q contains invalid characters (allowed: letters, digits, '.', '-')", localDomain)
+		}
 	}
 	return nil
 }

@@ -59,6 +59,18 @@ type DNSServerSettings struct {
 	// default 4096). Applies immediately (including evicting down to the new
 	// cap right away when lowered), no restart.
 	DNSCacheMaxEntries int `json:"dnsCacheMaxEntries"`
+	// UpstreamMode selects where the DNS Server (dnsmasq) sources its upstream
+	// resolvers from when generating pigate-dns.conf: DNSUpstreamModeSystem
+	// (default) reads System DNS (service/dns.go) at generate-time, read-only;
+	// DNSUpstreamModeCustom uses UpstreamServers exclusively. See
+	// docs/ref/todo/dns-server-settings-tab-and-upstream-plan.md §2. Changing
+	// this restarts dnsmasq (like QueryLogging), unlike TTL/cap.
+	UpstreamMode string `json:"upstreamMode"`
+	// UpstreamServers is used only when UpstreamMode == DNSUpstreamModeCustom
+	// (<= DNSUpstreamMaxServers bare IPv4/IPv6 addresses, no port/hostname/DoH/
+	// DoT). Kept (but unused) when switching back to "system" so the user's
+	// entries are not lost.
+	UpstreamServers []string `json:"upstreamServers"`
 }
 
 // DNS query-log event kinds emitted by kernel.DNSServerManager.WatchDNSLog

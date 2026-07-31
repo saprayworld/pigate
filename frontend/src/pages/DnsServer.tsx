@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react"
+import { Link } from "react-router-dom"
 import { getErrorMessage } from "@/lib/errors"
 import {
   Globe,
@@ -37,6 +38,14 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CapabilityBanner } from "@/components/CapabilityBanner"
 import {
   type DNSZone,
@@ -48,9 +57,11 @@ import {
   DNS_CACHE_ENTRIES_MIN,
   DNS_CACHE_ENTRIES_MAX,
   DNS_CACHE_ENTRIES_DEFAULT,
+  DNS_UPSTREAM_MAX_SERVERS,
 } from "@/data-mockup/mockData"
 import { dnsServerService } from "@/services/dnsServerService"
 import { interfaceService } from "@/services/interfaceService"
+import { systemService, type DNSConfig } from "@/services/systemService"
 import { useAlert } from "@/hooks/useAlert"
 import { isValidIp } from "@/lib/utils"
 import { ifaceLabel } from "@/lib/ifaceLabel"
@@ -110,15 +121,26 @@ export default function DnsServer() {
   const [dnsCacheLimitsError, setDnsCacheLimitsError] = useState("")
   const [isSavingCacheLimits, setIsSavingCacheLimits] = useState(false)
 
+  // Upstream Resolvers state (docs/ref/todo/
+  // dns-server-settings-tab-and-upstream-plan.md T-12): "system" (default)
+  // shows a read-only preview of what System DNS would resolve to right now;
+  // "custom" edits up to DNS_UPSTREAM_MAX_SERVERS bare IP entries directly.
+  const [upstreamMode, setUpstreamMode] = useState<"system" | "custom">("system")
+  const [upstreamServers, setUpstreamServers] = useState<string[]>([])
+  const [systemDnsConfig, setSystemDnsConfig] = useState<DNSConfig | null>(null)
+  const [upstreamError, setUpstreamError] = useState("")
+  const [isSavingUpstream, setIsSavingUpstream] = useState(false)
+
   useEffect(() => {
     // isLoading already starts true; avoid a synchronous setState in the effect body.
     // selectedZoneId is still its initial null value on this first-mount load.
     const initialLoad = async () => {
       try {
-        const [data, ifaces, settings] = await Promise.all([
+        const [data, ifaces, settings, sysDns] = await Promise.all([
           dnsServerService.getZones(),
           interfaceService.getAll(),
           dnsServerService.getSettings(),
+          systemService.getDNSConfig(),
         ])
         setZones(data || [])
         if ((data || []).length > 0) {
@@ -129,6 +151,9 @@ export default function DnsServer() {
         setQueryLogging(settings.queryLogging || false)
         setDnsCacheTtlInput(String(settings.dnsCacheTtlMinutes || DNS_CACHE_TTL_DEFAULT))
         setDnsCacheMaxInput(String(settings.dnsCacheMaxEntries || DNS_CACHE_ENTRIES_DEFAULT))
+        setUpstreamMode(settings.upstreamMode || "system")
+        setUpstreamServers(settings.upstreamServers || [])
+        setSystemDnsConfig(sysDns)
       } catch (err) {
         console.error(err)
         await alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูล DNS Server ได้: " + getErrorMessage(err))
@@ -155,6 +180,8 @@ export default function DnsServer() {
         queryLogging,
         dnsCacheTtlMinutes: Number(dnsCacheTtlInput) || DNS_CACHE_TTL_DEFAULT,
         dnsCacheMaxEntries: Number(dnsCacheMaxInput) || DNS_CACHE_ENTRIES_DEFAULT,
+        upstreamMode,
+        upstreamServers,
       })
       setSelectedInterfaces(next)
       setIsApplied(false)
@@ -176,6 +203,8 @@ export default function DnsServer() {
         queryLogging: checked,
         dnsCacheTtlMinutes: Number(dnsCacheTtlInput) || DNS_CACHE_TTL_DEFAULT,
         dnsCacheMaxEntries: Number(dnsCacheMaxInput) || DNS_CACHE_ENTRIES_DEFAULT,
+        upstreamMode,
+        upstreamServers,
       })
       setQueryLogging(checked)
       setIsApplied(false)
@@ -208,6 +237,8 @@ export default function DnsServer() {
         queryLogging,
         dnsCacheTtlMinutes: ttl,
         dnsCacheMaxEntries: max,
+        upstreamMode,
+        upstreamServers,
       })
     } catch (err) {
       // The backend re-validates (400 on out-of-range) even though the
@@ -215,6 +246,82 @@ export default function DnsServer() {
       setDnsCacheLimitsError(getErrorMessage(err))
     } finally {
       setIsSavingCacheLimits(false)
+    }
+  }
+
+  // --- Handlers: Upstream Resolvers (docs/ref/todo/
+  // dns-server-settings-tab-and-upstream-plan.md T-12) ---
+  // Effective "system" upstreams, computed the same way the backend does in
+  // resolveUpstreams (static -> primary/secondary; wan -> DHCP-provided DNS
+  // per WAN link) — shown read-only so the user knows what will actually be
+  // used without duplicating that value into this page's own state.
+  const effectiveSystemUpstreams = useMemo(() => {
+    if (!systemDnsConfig) return []
+    if (systemDnsConfig.mode === "static") {
+      return [systemDnsConfig.primaryDns, systemDnsConfig.secondaryDns].filter(Boolean)
+    }
+    return (systemDnsConfig.dynamicDnsServers || []).flatMap(d => d.dnsServers)
+  }, [systemDnsConfig])
+
+  const handleUpstreamModeChange = (mode: "system" | "custom") => {
+    setUpstreamMode(mode)
+    setUpstreamError("")
+  }
+
+  const handleUpstreamServerChange = (index: number, value: string) => {
+    setUpstreamServers(prev => prev.map((v, i) => i === index ? value : v))
+  }
+
+  const handleAddUpstreamServer = () => {
+    if (upstreamServers.length >= DNS_UPSTREAM_MAX_SERVERS) return
+    setUpstreamServers(prev => [...prev, ""])
+  }
+
+  const handleRemoveUpstreamServer = (index: number) => {
+    setUpstreamServers(prev => prev.filter((_, i) => i !== index))
+  }
+
+  const handleSaveUpstream = async () => {
+    setUpstreamError("")
+
+    const trimmed = upstreamServers.map(s => s.trim())
+    if (upstreamMode === "custom") {
+      if (trimmed.length === 0) {
+        setUpstreamError("โปรดกรอก Upstream DNS Server อย่างน้อย 1 รายการ")
+        return
+      }
+      for (const ip of trimmed) {
+        if (!isValidIp(ip)) {
+          setUpstreamError(`"${ip}" ไม่ใช่ IP address ที่ถูกต้อง (รับเฉพาะ IP เปล่า ไม่รองรับ port/ชื่อโฮสต์/DoH/DoT)`)
+          return
+        }
+      }
+      const dedup = new Set(trimmed)
+      if (dedup.size !== trimmed.length) {
+        setUpstreamError("มี IP ซ้ำกันในรายการ")
+        return
+      }
+    }
+
+    setIsSavingUpstream(true)
+    try {
+      await dnsServerService.updateSettings({
+        interfaces: selectedInterfaces,
+        queryLogging,
+        dnsCacheTtlMinutes: Number(dnsCacheTtlInput) || DNS_CACHE_TTL_DEFAULT,
+        dnsCacheMaxEntries: Number(dnsCacheMaxInput) || DNS_CACHE_ENTRIES_DEFAULT,
+        upstreamMode,
+        upstreamServers: upstreamMode === "custom" ? trimmed : upstreamServers,
+      })
+      if (upstreamMode === "custom") {
+        setUpstreamServers(trimmed)
+      }
+      setIsApplied(false)
+    } catch (err) {
+      // Surface the backend's 400 verbatim (defense-in-depth revalidation).
+      setUpstreamError(getErrorMessage(err))
+    } finally {
+      setIsSavingUpstream(false)
     }
   }
 
@@ -500,455 +607,596 @@ export default function DnsServer() {
     <div className="space-y-4">
       <CapabilityBanner id="dnsmasq" />
 
-      {/* 1. Listen Interfaces — real interfaces from Interface Service, independent of DHCP Server */}
-      <Card>
-        <CardHeader className="flex flex-col gap-3 space-y-0 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
-            <CardTitle className="flex items-center gap-2 text-base font-semibold">
-              <Network className="h-4 w-4 text-muted-foreground" />
-              DNS Server Listen Interfaces
-              {isSavingInterfaces && (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-              )}
-            </CardTitle>
-            <CardDescription className="text-xs">
-              เลือก Interface จริงที่มีอยู่ในเครื่อง (ดึงจาก Interface Service) ที่ต้องการให้ DNS Server (dnsmasq) เปิดรับคำขอ DNS — ค่านี้แยกอิสระจากการตั้งค่า DHCP Server
-            </CardDescription>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
+      {/* Header bar: Clear Cache / Apply DNS Zones — moved above the tabs so
+          both are reachable regardless of which tab is active (T-12 item 1). */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold text-foreground">DNS Server</h2>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            onClick={handleClearCache}
+            disabled={isClearingCache}
+            variant="outline"
+            size="sm"
+            className="cursor-pointer gap-2"
+          >
+            <RefreshCw className={`h-4 w-4 ${isClearingCache ? "animate-spin" : ""}`} />
+            Clear Cache
+          </Button>
+          {!isApplied && (
             <Button
-              onClick={handleClearCache}
-              disabled={isClearingCache}
-              variant="outline"
               size="sm"
-              className="cursor-pointer gap-2"
+              onClick={handleApplySettings}
+              disabled={isApplying}
+              className="animate-pulse cursor-pointer gap-1.5 bg-warning font-semibold text-warning-foreground hover:bg-warning/90"
             >
-              <RefreshCw className={`h-4 w-4 ${isClearingCache ? "animate-spin" : ""}`} />
-              Clear Cache
+              {isApplying ? (
+                <>
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  Applying...
+                </>
+              ) : (
+                <>
+                  <Check className="h-4 w-4" />
+                  Apply DNS Zones
+                </>
+              )}
             </Button>
-            {!isApplied && (
-              <Button
-                size="sm"
-                onClick={handleApplySettings}
-                disabled={isApplying}
-                className="animate-pulse cursor-pointer gap-1.5 bg-warning font-semibold text-warning-foreground hover:bg-warning/90"
-              >
-                {isApplying ? (
-                  <>
-                    <RefreshCw className="h-4 w-4 animate-spin" />
-                    Applying...
-                  </>
-                ) : (
-                  <>
-                    <Check className="h-4 w-4" />
-                    Apply DNS Zones
-                  </>
-                )}
-              </Button>
-            )}
-            {isApplied && (
-              <div className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/10 px-3 text-xs font-medium text-primary">
-                <CheckCircle2 className="h-4 w-4" />
-                DNS Server Synced
-              </div>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent>
-          {availableInterfaces.length === 0 && missingInterfaces.length === 0 ? (
-            <p className="text-xs italic text-muted-foreground">ไม่พบ Interface ที่มี Role เป็น LAN ในระบบ</p>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {availableInterfaces.map(iface => {
-                const checked = selectedInterfaces.includes(iface.name)
-                return (
-                  <label
-                    key={iface.id}
-                    className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 font-mono text-xs transition ${
-                      checked
-                        ? "border-primary/40 bg-primary/10 text-foreground"
-                        : "border-border bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={isSavingInterfaces}
-                      onChange={(e) => handleToggleInterface(iface.name, e.target.checked)}
-                      className="h-4 w-4 cursor-pointer accent-primary"
-                    />
-                    {ifaceLabel(iface)}
-                  </label>
-                )
-              })}
-              {missingInterfaces.map(name => (
-                <label
-                  key={`missing-${name}`}
-                  className="flex cursor-pointer items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 font-mono text-xs text-foreground transition"
-                >
-                  <input
-                    type="checkbox"
-                    checked
-                    disabled={isSavingInterfaces}
-                    onChange={() => handleToggleInterface(name, false)}
-                    className="h-4 w-4 cursor-pointer accent-destructive"
-                  />
-                  {name}
-                  <Badge variant="destructive">Missing</Badge>
-                </label>
-              ))}
+          )}
+          {isApplied && (
+            <div className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/10 px-3 text-xs font-medium text-primary">
+              <CheckCircle2 className="h-4 w-4" />
+              DNS Server Synced
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
-      {/* 1.5 DNS Statistics — query logging switch + reverse-cache TTL/cap
-          (docs/ref/todo/statistics-dns-top-domain-plan.md T-13) */}
-      <Card>
-        <CardHeader className="space-y-1">
-          <CardTitle className="flex items-center gap-2 text-base font-semibold">
-            <Info className="h-4 w-4 text-muted-foreground" />
-            DNS Statistics (สถิติ DNS)
-          </CardTitle>
-          <CardDescription className="text-xs">
-            ควบคุมการเก็บสถิติ "Top Queried Domains" และการเติมชื่อโดเมนให้ IP ปลายทางในหน้า Statistics
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/50 p-3">
-            <div className="space-y-0.5">
-              <Label className="text-xs font-semibold text-foreground">
-                เก็บสถิติ DNS query (Top Queried Domains + ชื่อโดเมนของ IP ปลายทาง)
-              </Label>
-              <p className="text-[10px] text-muted-foreground">
-                เมื่อเปิด จะเห็นรายชื่อโดเมนที่เครื่องในบ้านถามได้ในหน้า Statistics — โปรดพิจารณาความเป็นส่วนตัวก่อนเปิด
-                การเปิด/ปิดสวิตช์นี้จะ <span className="font-semibold text-warning">restart dnsmasq</span> (DNS/DHCP สะดุดสั้น ๆ)
-              </p>
-            </div>
-            <Switch
-              checked={queryLogging}
-              onCheckedChange={handleToggleQueryLogging}
-              disabled={isSavingQueryLogging}
-              className="cursor-pointer"
-            />
-          </div>
+      <Tabs defaultValue="zones">
+        <TabsList>
+          <TabsTrigger value="zones" className="cursor-pointer">Zones &amp; Records</TabsTrigger>
+          <TabsTrigger value="settings" className="cursor-pointer">Settings</TabsTrigger>
+        </TabsList>
 
-          <div className="space-y-3 rounded-lg border border-border bg-muted/50 p-3">
-            {dnsCacheLimitsError && (
-              <Alert variant="destructive" className="px-3 py-2.5">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription className="text-xs">{dnsCacheLimitsError}</AlertDescription>
-              </Alert>
-            )}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="dns-cache-ttl" className="block text-xs font-medium text-muted-foreground">
-                  อายุของ mapping IP→โดเมน (นาที)
-                </Label>
-                <Input
-                  id="dns-cache-ttl"
-                  type="number"
-                  min={DNS_CACHE_TTL_MIN}
-                  max={DNS_CACHE_TTL_MAX}
-                  value={dnsCacheTtlInput}
-                  onChange={(e) => setDnsCacheTtlInput(e.target.value)}
-                  className="h-9 font-mono text-sm"
-                />
-                <p className="text-[10px] text-muted-foreground">
-                  ค่าเริ่มต้น {DNS_CACHE_TTL_DEFAULT} นาที (ช่วง {DNS_CACHE_TTL_MIN}-{DNS_CACHE_TTL_MAX})
-                </p>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="dns-cache-max" className="block text-xs font-medium text-muted-foreground">
-                  จำนวน mapping สูงสุด
-                </Label>
-                <Input
-                  id="dns-cache-max"
-                  type="number"
-                  min={DNS_CACHE_ENTRIES_MIN}
-                  max={DNS_CACHE_ENTRIES_MAX}
-                  value={dnsCacheMaxInput}
-                  onChange={(e) => setDnsCacheMaxInput(e.target.value)}
-                  className="h-9 font-mono text-sm"
-                />
-                <p className="text-[10px] text-muted-foreground">
-                  ค่าเริ่มต้น {DNS_CACHE_ENTRIES_DEFAULT} รายการ (ช่วง {DNS_CACHE_ENTRIES_MIN}-{DNS_CACHE_ENTRIES_MAX})
-                </p>
-              </div>
-            </div>
-            <p className="text-[10px] text-muted-foreground">
-              ปรับแล้วมีผลทันที ไม่ต้อง restart บริการใด ๆ — ค่าสูงขึ้น = ชื่อโดเมนครบขึ้นแต่ใช้ RAM มากขึ้น /
-              ค่ายาวขึ้น = เสี่ยงเห็นชื่อเก่าที่ IP ถูกใช้ซ้ำแล้ว
-            </p>
-            <Button
-              onClick={handleSaveCacheLimits}
-              disabled={isSavingCacheLimits}
-              size="sm"
-              variant="outline"
-              className="cursor-pointer gap-1.5"
-            >
-              {isSavingCacheLimits ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-              บันทึกค่า Cache
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* 2. Split Screen Zones / Records */}
-      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
-        {/* Left Side: Zones list */}
-        <Card className="lg:col-span-4">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0">
-            <CardTitle className="flex items-center gap-2 text-base font-semibold">
-              <Database className="h-4 w-4 text-muted-foreground" />
-              DNS Zones
-              <Badge variant="secondary" className="rounded-full px-2 py-0 text-xs font-semibold">
-                {zones.length}
-              </Badge>
-            </CardTitle>
-            <Button
-              onClick={openCreateZoneModal}
-              size="sm"
-              className="cursor-pointer gap-1.5 font-semibold"
-            >
-              <Plus className="h-4 w-4" />
-              Add Zone
-            </Button>
-          </CardHeader>
-
-          <CardContent className="space-y-3">
-            <div className="relative">
-              <Search className="pointer-events-none absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                type="text"
-                value={zoneSearchQuery}
-                onChange={(e) => setZoneSearchQuery(e.target.value)}
-                placeholder="ค้นหาโดเมน/โซน..."
-                className="h-9 pl-8 text-xs"
-              />
-            </div>
-
-            <div className="max-h-[480px] space-y-2 overflow-y-auto pr-1">
-              {filteredZones.map(zone => (
-                <div
-                  key={zone.id}
-                  onClick={() => setSelectedZoneId(zone.id)}
-                  className={`flex cursor-pointer items-center justify-between rounded-lg border p-3 transition ${
-                    selectedZoneId === zone.id
-                      ? "border-primary/40 bg-primary/10 text-foreground"
-                      : "border-border bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
-                  }`}
+        <TabsContent value="zones" className="space-y-4">
+          {/* Split Screen Zones / Records */}
+          <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
+            {/* Left Side: Zones list */}
+            <Card className="lg:col-span-4">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                  <Database className="h-4 w-4 text-muted-foreground" />
+                  DNS Zones
+                  <Badge variant="secondary" className="rounded-full px-2 py-0 text-xs font-semibold">
+                    {zones.length}
+                  </Badge>
+                </CardTitle>
+                <Button
+                  onClick={openCreateZoneModal}
+                  size="sm"
+                  className="cursor-pointer gap-1.5 font-semibold"
                 >
-                  <div className="flex-1 select-none space-y-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-mono text-xs font-semibold">{zone.zoneName}</span>
-                      <Badge
-                        variant="outline"
-                        className={`rounded px-1.5 py-0 text-[10px] font-medium ${zone.isAuthoritative
-                          ? "border-primary/20 bg-primary/10 text-primary"
-                          : "border-border bg-muted text-muted-foreground"
-                          }`}
-                      >
-                        {zone.isAuthoritative ? "Local" : "Fwd"}
-                      </Badge>
-                    </div>
-                    {!zone.isAuthoritative && zone.forwardTo && (
-                      <p className="font-mono text-[10px] text-muted-foreground/60">
-                        {"->"} {zone.forwardTo}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="ml-2 flex items-center gap-2">
-                    <Switch
-                      size="sm"
-                      checked={zone.enabled}
-                      onCheckedChange={(checked) => handleToggleZone(zone.id, checked)}
-                      className="cursor-pointer"
-                    />
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openEditZoneModal(zone)
-                        }}
-                        className="cursor-pointer text-muted-foreground hover:bg-muted hover:text-foreground"
-                        title="แก้ไขโซน"
-                      >
-                        <Edit className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleDeleteZone(zone.id, zone.zoneName)
-                        }}
-                        className="cursor-pointer text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                        title="ลบโซน"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-
-              {filteredZones.length === 0 && (
-                <div className="p-6 text-center text-xs text-muted-foreground">
-                  {zoneSearchQuery ? "ไม่พบโซนที่ค้นหา" : "ยังไม่มีการสร้าง DNS Zone"}
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Right Side: DNS Records list for selected zone */}
-        <div className="space-y-4 lg:col-span-8">
-          {selectedZone ? (
-            <Card>
-              <CardHeader className="flex flex-col gap-3 space-y-0 sm:flex-row sm:items-center sm:justify-between">
-                <div className="space-y-1">
-                  <CardTitle className="flex items-center gap-2 text-base font-semibold">
-                    <Server className="h-4 w-4 text-muted-foreground" />
-                    DNS Records ของโซน <span className="font-mono">{selectedZone.zoneName}</span>
-                  </CardTitle>
-                  <CardDescription className="text-xs">
-                    {selectedZone.isAuthoritative
-                      ? "Local zone (ตอบจาก records ในระบบ ชื่อที่ไม่รู้จักตอบ NXDOMAIN)"
-                      : `โซน Forward (ระบบจะทำการส่งต่อคิวรีทั้งหมดไปให้ ${selectedZone.forwardTo})`}
-                  </CardDescription>
-                </div>
-                {selectedZone.isAuthoritative && (
-                  <Button
-                    onClick={openCreateRecModal}
-                    size="sm"
-                    className="cursor-pointer gap-1.5 font-semibold"
-                  >
-                    <Plus className="h-4 w-4" />
-                    Add Record
-                  </Button>
-                )}
+                  <Plus className="h-4 w-4" />
+                  Add Zone
+                </Button>
               </CardHeader>
 
-              <CardContent className="space-y-4">
-                {selectedZone.isAuthoritative ? (
-                  <>
-                    <div className="relative">
-                      <Search className="pointer-events-none absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        type="text"
-                        value={recordSearchQuery}
-                        onChange={(e) => setRecordSearchQuery(e.target.value)}
-                        placeholder="ค้นหาชื่อระเบียน, ประเภท หรือข้อมูล..."
-                        className="h-9 pl-8 text-xs"
-                      />
-                    </div>
+              <CardContent className="space-y-3">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    type="text"
+                    value={zoneSearchQuery}
+                    onChange={(e) => setZoneSearchQuery(e.target.value)}
+                    placeholder="ค้นหาโดเมน/โซน..."
+                    className="h-9 pl-8 text-xs"
+                  />
+                </div>
 
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="hover:bg-transparent">
-                          <TableHead className="w-[25%] text-xs font-medium text-muted-foreground">Host Name</TableHead>
-                          <TableHead className="w-[15%] text-xs font-medium text-muted-foreground">Type</TableHead>
-                          <TableHead className="w-[40%] text-xs font-medium text-muted-foreground">Value</TableHead>
-                          <TableHead className="w-[10%] text-xs font-medium text-muted-foreground">TTL</TableHead>
-                          <TableHead className="w-[10%] text-right text-xs font-medium text-muted-foreground"></TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {filteredRecords.length === 0 ? (
-                          <TableRow>
-                            <TableCell colSpan={5} className="py-8 text-center text-xs text-muted-foreground">
-                              {recordSearchQuery ? "ไม่พบระเบียน DNS ตามข้อความค้นหา" : "ยังไม่มีข้อมูลระเบียน DNS ในโซนนี้"}
-                            </TableCell>
-                          </TableRow>
-                        ) : (
-                          filteredRecords.map((rec) => (
-                            <TableRow key={rec.id}>
-                              <TableCell className="py-3">
-                                <span className="text-xs font-medium text-foreground">{rec.name}</span>
-                              </TableCell>
-                              <TableCell className="py-3">
-                                <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0 text-[10px] font-medium text-primary">
-                                  {rec.type}
-                                </Badge>
-                              </TableCell>
-                              <TableCell className="max-w-[200px] truncate py-3 font-mono text-xs font-medium text-foreground" title={rec.value}>
-                                {rec.value}
-                              </TableCell>
-                              <TableCell className="py-3 font-mono text-xs text-muted-foreground">
-                                {rec.ttl}s
-                              </TableCell>
-                              <TableCell className="py-3 text-right">
-                                <div className="flex items-center justify-end gap-2">
-                                  <Button
-                                    variant="outline"
-                                    size="icon-sm"
-                                    onClick={() => openEditRecModal(rec)}
-                                    className="cursor-pointer text-muted-foreground hover:text-foreground"
-                                    title="แก้ไขระเบียน"
-                                  >
-                                    <Edit className="h-4 w-4" />
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon-sm"
-                                    onClick={() => handleDeleteRecord(rec.id, rec.name)}
-                                    className="cursor-pointer text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                                    title="ลบระเบียน"
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                  </Button>
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          ))
+                <div className="max-h-[480px] space-y-2 overflow-y-auto pr-1">
+                  {filteredZones.map(zone => (
+                    <div
+                      key={zone.id}
+                      onClick={() => setSelectedZoneId(zone.id)}
+                      className={`flex cursor-pointer items-center justify-between rounded-lg border p-3 transition ${
+                        selectedZoneId === zone.id
+                          ? "border-primary/40 bg-primary/10 text-foreground"
+                          : "border-border bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                      }`}
+                    >
+                      <div className="flex-1 select-none space-y-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-xs font-semibold">{zone.zoneName}</span>
+                          <Badge
+                            variant="outline"
+                            className={`rounded px-1.5 py-0 text-[10px] font-medium ${zone.isAuthoritative
+                              ? "border-primary/20 bg-primary/10 text-primary"
+                              : "border-border bg-muted text-muted-foreground"
+                              }`}
+                          >
+                            {zone.isAuthoritative ? "Local" : "Fwd"}
+                          </Badge>
+                        </div>
+                        {!zone.isAuthoritative && zone.forwardTo && (
+                          <p className="font-mono text-[10px] text-muted-foreground/60">
+                            {"->"} {zone.forwardTo}
+                          </p>
                         )}
-                      </TableBody>
-                    </Table>
-                  </>
-                ) : (
-                  <div className="space-y-2 rounded-lg border border-dashed border-border p-8 text-center">
-                    <Globe className="mx-auto h-8 w-8 text-muted-foreground/60" />
-                    <p className="text-sm font-semibold text-foreground">โซนนี้ได้รับการตั้งค่าประเภทส่งต่อ (Forward Zone)</p>
-                    <p className="mx-auto max-w-md text-xs leading-relaxed text-muted-foreground">
-                      ระบบจะส่งคำขอความละเอียดชื่อระบบโดเมนทั้งหมดภายใต้โดเมน <strong className="text-foreground">{selectedZone.zoneName}</strong> ไปยัง
-                      ที่อยู่ IP <strong className="font-mono text-foreground">{selectedZone.forwardTo}</strong> โดยอัตโนมัติ
-                      คุณไม่จำเป็นต้องเพิ่มระเบียน DNS เอง
+                      </div>
+
+                      <div className="ml-2 flex items-center gap-2">
+                        <Switch
+                          size="sm"
+                          checked={zone.enabled}
+                          onCheckedChange={(checked) => handleToggleZone(zone.id, checked)}
+                          className="cursor-pointer"
+                        />
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              openEditZoneModal(zone)
+                            }}
+                            className="cursor-pointer text-muted-foreground hover:bg-muted hover:text-foreground"
+                            title="แก้ไขโซน"
+                          >
+                            <Edit className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleDeleteZone(zone.id, zone.zoneName)
+                            }}
+                            className="cursor-pointer text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            title="ลบโซน"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {filteredZones.length === 0 && (
+                    <div className="p-6 text-center text-xs text-muted-foreground">
+                      {zoneSearchQuery ? "ไม่พบโซนที่ค้นหา" : "ยังไม่มีการสร้าง DNS Zone"}
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Right Side: DNS Records list for selected zone */}
+            <div className="space-y-4 lg:col-span-8">
+              {selectedZone ? (
+                <Card>
+                  <CardHeader className="flex flex-col gap-3 space-y-0 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="space-y-1">
+                      <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                        <Server className="h-4 w-4 text-muted-foreground" />
+                        DNS Records ของโซน <span className="font-mono">{selectedZone.zoneName}</span>
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        {selectedZone.isAuthoritative
+                          ? "Local zone (ตอบจาก records ในระบบ ชื่อที่ไม่รู้จักตอบ NXDOMAIN)"
+                          : `โซน Forward (ระบบจะทำการส่งต่อคิวรีทั้งหมดไปให้ ${selectedZone.forwardTo})`}
+                      </CardDescription>
+                    </div>
+                    {selectedZone.isAuthoritative && (
+                      <Button
+                        onClick={openCreateRecModal}
+                        size="sm"
+                        className="cursor-pointer gap-1.5 font-semibold"
+                      >
+                        <Plus className="h-4 w-4" />
+                        Add Record
+                      </Button>
+                    )}
+                  </CardHeader>
+
+                  <CardContent className="space-y-4">
+                    {selectedZone.isAuthoritative ? (
+                      <>
+                        <div className="relative">
+                          <Search className="pointer-events-none absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            type="text"
+                            value={recordSearchQuery}
+                            onChange={(e) => setRecordSearchQuery(e.target.value)}
+                            placeholder="ค้นหาชื่อระเบียน, ประเภท หรือข้อมูล..."
+                            className="h-9 pl-8 text-xs"
+                          />
+                        </div>
+
+                        <Table>
+                          <TableHeader>
+                            <TableRow className="hover:bg-transparent">
+                              <TableHead className="w-[25%] text-xs font-medium text-muted-foreground">Host Name</TableHead>
+                              <TableHead className="w-[15%] text-xs font-medium text-muted-foreground">Type</TableHead>
+                              <TableHead className="w-[40%] text-xs font-medium text-muted-foreground">Value</TableHead>
+                              <TableHead className="w-[10%] text-xs font-medium text-muted-foreground">TTL</TableHead>
+                              <TableHead className="w-[10%] text-right text-xs font-medium text-muted-foreground"></TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {filteredRecords.length === 0 ? (
+                              <TableRow>
+                                <TableCell colSpan={5} className="py-8 text-center text-xs text-muted-foreground">
+                                  {recordSearchQuery ? "ไม่พบระเบียน DNS ตามข้อความค้นหา" : "ยังไม่มีข้อมูลระเบียน DNS ในโซนนี้"}
+                                </TableCell>
+                              </TableRow>
+                            ) : (
+                              filteredRecords.map((rec) => (
+                                <TableRow key={rec.id}>
+                                  <TableCell className="py-3">
+                                    <span className="text-xs font-medium text-foreground">{rec.name}</span>
+                                  </TableCell>
+                                  <TableCell className="py-3">
+                                    <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0 text-[10px] font-medium text-primary">
+                                      {rec.type}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell className="max-w-[200px] truncate py-3 font-mono text-xs font-medium text-foreground" title={rec.value}>
+                                    {rec.value}
+                                  </TableCell>
+                                  <TableCell className="py-3 font-mono text-xs text-muted-foreground">
+                                    {rec.ttl}s
+                                  </TableCell>
+                                  <TableCell className="py-3 text-right">
+                                    <div className="flex items-center justify-end gap-2">
+                                      <Button
+                                        variant="outline"
+                                        size="icon-sm"
+                                        onClick={() => openEditRecModal(rec)}
+                                        className="cursor-pointer text-muted-foreground hover:text-foreground"
+                                        title="แก้ไขระเบียน"
+                                      >
+                                        <Edit className="h-4 w-4" />
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon-sm"
+                                        onClick={() => handleDeleteRecord(rec.id, rec.name)}
+                                        className="cursor-pointer text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                        title="ลบระเบียน"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </Button>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                              ))
+                            )}
+                          </TableBody>
+                        </Table>
+                      </>
+                    ) : (
+                      <div className="space-y-2 rounded-lg border border-dashed border-border p-8 text-center">
+                        <Globe className="mx-auto h-8 w-8 text-muted-foreground/60" />
+                        <p className="text-sm font-semibold text-foreground">โซนนี้ได้รับการตั้งค่าประเภทส่งต่อ (Forward Zone)</p>
+                        <p className="mx-auto max-w-md text-xs leading-relaxed text-muted-foreground">
+                          ระบบจะส่งคำขอความละเอียดชื่อระบบโดเมนทั้งหมดภายใต้โดเมน <strong className="text-foreground">{selectedZone.zoneName}</strong> ไปยัง
+                          ที่อยู่ IP <strong className="font-mono text-foreground">{selectedZone.forwardTo}</strong> โดยอัตโนมัติ
+                          คุณไม่จำเป็นต้องเพิ่มระเบียน DNS เอง
+                        </p>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card>
+                  <CardContent className="flex flex-col items-center justify-center gap-2 py-8 text-center">
+                    <Globe className="h-8 w-8 text-muted-foreground/50" />
+                    <p className="text-sm text-muted-foreground">กรุณาเลือกโซนด้านซ้าย หรือกดสร้างโซนใหม่เพื่อจัดการระเบียน DNS</p>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          </div>
+
+          {/* Info note */}
+          <div className="flex gap-2 rounded-lg border border-border bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
+            <Info className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <strong className="text-foreground">ระเบียนประเภทต่างๆ ของ DNS Server:</strong>
+              <ul className="mt-1 list-disc space-y-1 pl-4">
+                <li><strong className="text-foreground">A</strong>: ชี้โดเมนย่อยไปที่ที่อยู่ IPv4 (เช่น router.pigate.local {"->"} 192.168.1.1)</li>
+                <li><strong className="text-foreground">AAAA</strong>: ชี้โดเมนย่อยไปที่ที่อยู่ IPv6</li>
+                <li><strong className="text-foreground">CNAME</strong>: ชื่อสมญา/ส่งต่อไปหาชื่อเครื่องอื่น (เช่น printer.pigate.local {"->"} hp-laser.pigate.local)</li>
+                <li><strong className="text-foreground">MX</strong>: ชี้เซิร์ฟเวอร์รับส่งอีเมลประจำโดเมน (ระบุรูปแบบ [Preference] [Host] เช่น 10 mail.example.com)</li>
+                <li><strong className="text-foreground">TXT</strong>: ระบุข้อมูลข้อความทั่วไป เช่น SPF หรือคีย์ยืนยันตัวตน</li>
+              </ul>
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="settings" className="space-y-4">
+          {/* Listen Interfaces — real interfaces from Interface Service, independent of DHCP Server */}
+          <Card>
+            <CardHeader className="space-y-1">
+              <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                <Network className="h-4 w-4 text-muted-foreground" />
+                DNS Server Listen Interfaces
+                {isSavingInterfaces && (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                )}
+              </CardTitle>
+              <CardDescription className="text-xs">
+                เลือก Interface จริงที่มีอยู่ในเครื่อง (ดึงจาก Interface Service) ที่ต้องการให้ DNS Server (dnsmasq) เปิดรับคำขอ DNS — ค่านี้แยกอิสระจากการตั้งค่า DHCP Server
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {availableInterfaces.length === 0 && missingInterfaces.length === 0 ? (
+                <p className="text-xs italic text-muted-foreground">ไม่พบ Interface ที่มี Role เป็น LAN ในระบบ</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {availableInterfaces.map(iface => {
+                    const checked = selectedInterfaces.includes(iface.name)
+                    return (
+                      <label
+                        key={iface.id}
+                        className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 font-mono text-xs transition ${
+                          checked
+                            ? "border-primary/40 bg-primary/10 text-foreground"
+                            : "border-border bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={isSavingInterfaces}
+                          onChange={(e) => handleToggleInterface(iface.name, e.target.checked)}
+                          className="h-4 w-4 cursor-pointer accent-primary"
+                        />
+                        {ifaceLabel(iface)}
+                      </label>
+                    )
+                  })}
+                  {missingInterfaces.map(name => (
+                    <label
+                      key={`missing-${name}`}
+                      className="flex cursor-pointer items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 font-mono text-xs text-foreground transition"
+                    >
+                      <input
+                        type="checkbox"
+                        checked
+                        disabled={isSavingInterfaces}
+                        onChange={() => handleToggleInterface(name, false)}
+                        className="h-4 w-4 cursor-pointer accent-destructive"
+                      />
+                      {name}
+                      <Badge variant="destructive">Missing</Badge>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Upstream Resolvers (DNS Server) — docs/ref/todo/
+              dns-server-settings-tab-and-upstream-plan.md T-12 item 2 */}
+          <Card>
+            <CardHeader className="space-y-1">
+              <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                <Globe className="h-4 w-4 text-muted-foreground" />
+                Upstream Resolvers (DNS Server)
+              </CardTitle>
+              <CardDescription className="text-xs">
+                กำหนดปลายทางที่ DNS Server (dnsmasq) จะส่งคิวรีต่อไปเมื่อไม่สามารถตอบเองได้ — แยกอิสระจากการตั้งค่า System DNS
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {upstreamError && (
+                <Alert variant="destructive" className="px-3 py-2.5">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription className="text-xs">{upstreamError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="space-y-1.5">
+                <Label className="block text-xs font-medium text-muted-foreground">
+                  แหล่งที่มาของ Upstream DNS
+                </Label>
+                <Select value={upstreamMode} onValueChange={(v) => handleUpstreamModeChange(v as "system" | "custom")}>
+                  <SelectTrigger className="h-9 w-full max-w-sm text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="system" className="text-xs">ใช้ตาม System DNS (ค่าเริ่มต้น)</SelectItem>
+                    <SelectItem value="custom" className="text-xs">กำหนดเอง</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {upstreamMode === "system" ? (
+                <div className="space-y-2 rounded-lg border border-border bg-muted/50 p-3">
+                  <Label className="text-xs font-semibold text-foreground">ค่าที่จะถูกใช้จริง (อ่านจาก System DNS)</Label>
+                  {effectiveSystemUpstreams.length === 0 ? (
+                    <p className="text-xs italic text-muted-foreground">ยังไม่มีค่า System DNS ที่ใช้ได้ในขณะนี้</p>
+                  ) : (
+                    <ul className="space-y-1 font-mono text-xs text-foreground">
+                      {effectiveSystemUpstreams.map((ip, idx) => (
+                        <li key={idx} className="flex items-center gap-1.5">
+                          <Check className="h-3 w-3 shrink-0 text-primary" />
+                          {ip}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="text-[10px] text-muted-foreground">
+                    ดูหรือแก้ไขได้ที่หน้า <Link to="/dns" className="text-primary underline underline-offset-2">System DNS</Link>
+                  </p>
+                  <p className="text-[10px] font-medium text-warning">
+                    การแก้ค่าในหน้า System DNS จะไม่อัปเดต DNS Server ให้อัตโนมัติอีกต่อไป — กด "Apply DNS Zones" เพื่อให้ค่าใหม่มีผลกับเครื่องลูก
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2 rounded-lg border border-border bg-muted/50 p-3">
+                  <Label className="text-xs font-semibold text-foreground">Upstream DNS Server (สูงสุด {DNS_UPSTREAM_MAX_SERVERS} รายการ)</Label>
+                  <div className="space-y-2">
+                    {upstreamServers.length === 0 && (
+                      <p className="text-xs italic text-muted-foreground">ยังไม่มีรายการ — กดปุ่ม "เพิ่ม" ด้านล่าง</p>
+                    )}
+                    {upstreamServers.map((ip, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <Input
+                          type="text"
+                          value={ip}
+                          onChange={(e) => handleUpstreamServerChange(idx, e.target.value)}
+                          placeholder="เช่น 1.1.1.1"
+                          className="h-9 font-mono text-sm"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => handleRemoveUpstreamServer(idx)}
+                          className="cursor-pointer shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                          title="ลบรายการนี้"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleAddUpstreamServer}
+                    disabled={upstreamServers.length >= DNS_UPSTREAM_MAX_SERVERS}
+                    className="cursor-pointer gap-1.5"
+                  >
+                    <Plus className="h-4 w-4" />
+                    เพิ่ม
+                  </Button>
+                  <p className="text-[10px] text-muted-foreground">
+                    รับเฉพาะหมายเลข IP (ไม่รองรับ port/ชื่อโฮสต์/DoH/DoT)
+                  </p>
+                  <p className="text-[10px] font-medium text-warning">
+                    การแก้ System DNS จะไม่มีผลกับ DNS Server อีกต่อไป
+                  </p>
+                </div>
+              )}
+
+              <p className="text-[10px] text-muted-foreground">
+                บันทึกแล้วจะ <span className="font-semibold text-warning">restart dnsmasq</span> (DNS/DHCP สะดุดสั้น ๆ)
+              </p>
+              <Button
+                onClick={handleSaveUpstream}
+                disabled={isSavingUpstream}
+                size="sm"
+                variant="outline"
+                className="cursor-pointer gap-1.5"
+              >
+                {isSavingUpstream ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                บันทึก Upstream Resolvers
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* DNS Statistics — query logging switch + reverse-cache TTL/cap
+              (docs/ref/todo/statistics-dns-top-domain-plan.md T-13) */}
+          <Card>
+            <CardHeader className="space-y-1">
+              <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                <Info className="h-4 w-4 text-muted-foreground" />
+                DNS Statistics (สถิติ DNS)
+              </CardTitle>
+              <CardDescription className="text-xs">
+                ควบคุมการเก็บสถิติ "Top Queried Domains" และการเติมชื่อโดเมนให้ IP ปลายทางในหน้า Statistics
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/50 p-3">
+                <div className="space-y-0.5">
+                  <Label className="text-xs font-semibold text-foreground">
+                    เก็บสถิติ DNS query (Top Queried Domains + ชื่อโดเมนของ IP ปลายทาง)
+                  </Label>
+                  <p className="text-[10px] text-muted-foreground">
+                    เมื่อเปิด จะเห็นรายชื่อโดเมนที่เครื่องในบ้านถามได้ในหน้า Statistics — โปรดพิจารณาความเป็นส่วนตัวก่อนเปิด
+                    การเปิด/ปิดสวิตช์นี้จะ <span className="font-semibold text-warning">restart dnsmasq</span> (DNS/DHCP สะดุดสั้น ๆ)
+                  </p>
+                </div>
+                <Switch
+                  checked={queryLogging}
+                  onCheckedChange={handleToggleQueryLogging}
+                  disabled={isSavingQueryLogging}
+                  className="cursor-pointer"
+                />
+              </div>
+
+              <div className="space-y-3 rounded-lg border border-border bg-muted/50 p-3">
+                {dnsCacheLimitsError && (
+                  <Alert variant="destructive" className="px-3 py-2.5">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription className="text-xs">{dnsCacheLimitsError}</AlertDescription>
+                  </Alert>
+                )}
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="dns-cache-ttl" className="block text-xs font-medium text-muted-foreground">
+                      อายุของ mapping IP→โดเมน (นาที)
+                    </Label>
+                    <Input
+                      id="dns-cache-ttl"
+                      type="number"
+                      min={DNS_CACHE_TTL_MIN}
+                      max={DNS_CACHE_TTL_MAX}
+                      value={dnsCacheTtlInput}
+                      onChange={(e) => setDnsCacheTtlInput(e.target.value)}
+                      className="h-9 font-mono text-sm"
+                    />
+                    <p className="text-[10px] text-muted-foreground">
+                      ค่าเริ่มต้น {DNS_CACHE_TTL_DEFAULT} นาที (ช่วง {DNS_CACHE_TTL_MIN}-{DNS_CACHE_TTL_MAX})
                     </p>
                   </div>
-                )}
-              </CardContent>
-            </Card>
-          ) : (
-            <Card>
-              <CardContent className="flex flex-col items-center justify-center gap-2 py-8 text-center">
-                <Globe className="h-8 w-8 text-muted-foreground/50" />
-                <p className="text-sm text-muted-foreground">กรุณาเลือกโซนด้านซ้าย หรือกดสร้างโซนใหม่เพื่อจัดการระเบียน DNS</p>
-              </CardContent>
-            </Card>
-          )}
-        </div>
-      </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="dns-cache-max" className="block text-xs font-medium text-muted-foreground">
+                      จำนวน mapping สูงสุด
+                    </Label>
+                    <Input
+                      id="dns-cache-max"
+                      type="number"
+                      min={DNS_CACHE_ENTRIES_MIN}
+                      max={DNS_CACHE_ENTRIES_MAX}
+                      value={dnsCacheMaxInput}
+                      onChange={(e) => setDnsCacheMaxInput(e.target.value)}
+                      className="h-9 font-mono text-sm"
+                    />
+                    <p className="text-[10px] text-muted-foreground">
+                      ค่าเริ่มต้น {DNS_CACHE_ENTRIES_DEFAULT} รายการ (ช่วง {DNS_CACHE_ENTRIES_MIN}-{DNS_CACHE_ENTRIES_MAX})
+                    </p>
+                  </div>
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  ปรับแล้วมีผลทันที ไม่ต้อง restart บริการใด ๆ — ค่าสูงขึ้น = ชื่อโดเมนครบขึ้นแต่ใช้ RAM มากขึ้น /
+                  ค่ายาวขึ้น = เสี่ยงเห็นชื่อเก่าที่ IP ถูกใช้ซ้ำแล้ว
+                </p>
+                <Button
+                  onClick={handleSaveCacheLimits}
+                  disabled={isSavingCacheLimits}
+                  size="sm"
+                  variant="outline"
+                  className="cursor-pointer gap-1.5"
+                >
+                  {isSavingCacheLimits ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  บันทึกค่า Cache
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
-      {/* 3. Info note */}
-      <div className="flex gap-2 rounded-lg border border-border bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
-        <Info className="mt-0.5 h-4 w-4 shrink-0" />
-        <div>
-          <strong className="text-foreground">ระเบียนประเภทต่างๆ ของ DNS Server:</strong>
-          <ul className="mt-1 list-disc space-y-1 pl-4">
-            <li><strong className="text-foreground">A</strong>: ชี้โดเมนย่อยไปที่ที่อยู่ IPv4 (เช่น router.pigate.local {"->"} 192.168.1.1)</li>
-            <li><strong className="text-foreground">AAAA</strong>: ชี้โดเมนย่อยไปที่ที่อยู่ IPv6</li>
-            <li><strong className="text-foreground">CNAME</strong>: ชื่อสมญา/ส่งต่อไปหาชื่อเครื่องอื่น (เช่น printer.pigate.local {"->"} hp-laser.pigate.local)</li>
-            <li><strong className="text-foreground">MX</strong>: ชี้เซิร์ฟเวอร์รับส่งอีเมลประจำโดเมน (ระบุรูปแบบ [Preference] [Host] เช่น 10 mail.example.com)</li>
-            <li><strong className="text-foreground">TXT</strong>: ระบุข้อมูลข้อความทั่วไป เช่น SPF หรือคีย์ยืนยันตัวตน</li>
-          </ul>
-        </div>
-      </div>
+      {/* Dialogs live outside <Tabs> so Radix unmounting the inactive
+          TabsContent never drops their open/edit state (T-12 item 1, plan §5
+          item 10). */}
 
-      {/* 4. Zone Add/Edit Dialog Modal */}
+      {/* Zone Add/Edit Dialog Modal */}
       <Drawer direction="right" open={isZoneModalOpen} onOpenChange={setIsZoneModalOpen}>
         <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[450px]">
           <DrawerHeader className="border-b border-border/50">
