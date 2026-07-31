@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react"
-import { Link } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 import { getErrorMessage } from "@/lib/errors"
 import {
   Globe,
@@ -49,7 +49,6 @@ import {
 } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CapabilityBanner } from "@/components/CapabilityBanner"
-import { DnsStatisticsTab } from "@/components/dns/DnsStatisticsTab"
 import {
   type DNSZone,
   type DNSRecord,
@@ -74,10 +73,32 @@ import { ifaceLabel } from "@/lib/ifaceLabel"
 export default function DnsServer() {
   const { alert, confirm } = useAlert()
 
-  // Controlled active tab (docs/ref/todo/dns-query-statistics-drilldown-plan.md
-  // T-07): needed so the Statistics tab's empty state can programmatically
-  // send the user to the Settings tab where queryLogging lives.
-  const [activeTab, setActiveTab] = useState("zones")
+  // ?tab= deep-link support (docs/ref/todo/statistics-nav-restructure-plan.md
+  // T-08): lets the standalone DNS Statistics page's empty state link
+  // straight to /network/dns-server?tab=settings, where queryLogging lives.
+  // Whitelisted to the three remaining tabs — any other value (including the
+  // now-dead "stats") falls back to "zones". activeTab stays the single
+  // source of truth for <Tabs value=...>; the param only seeds its initial
+  // value and is kept in sync on every tab switch below.
+  const VALID_TABS = ["zones", "blocked", "settings"] as const
+  type DnsServerTab = (typeof VALID_TABS)[number]
+  const [searchParams, setSearchParams] = useSearchParams()
+  const initialTab = searchParams.get("tab")
+  const [activeTab, setActiveTabState] = useState<DnsServerTab>(
+    VALID_TABS.includes(initialTab as DnsServerTab) ? (initialTab as DnsServerTab) : "zones"
+  )
+  const setActiveTab = (tab: string) => {
+    const next = VALID_TABS.includes(tab as DnsServerTab) ? (tab as DnsServerTab) : "zones"
+    setActiveTabState(next)
+    setSearchParams(
+      (prev) => {
+        const params = new URLSearchParams(prev)
+        params.set("tab", next)
+        return params
+      },
+      { replace: true }
+    )
+  }
 
   // --- State ---
   const [zones, setZones] = useState<DNSZone[]>([])
@@ -771,7 +792,6 @@ export default function DnsServer() {
         <TabsList>
           <TabsTrigger value="zones" className="cursor-pointer">Zones &amp; Records</TabsTrigger>
           <TabsTrigger value="blocked" className="cursor-pointer">Blocked Domains</TabsTrigger>
-          <TabsTrigger value="stats" className="cursor-pointer">สถิติ</TabsTrigger>
           <TabsTrigger value="settings" className="cursor-pointer">Settings</TabsTrigger>
         </TabsList>
 
@@ -1162,16 +1182,6 @@ export default function DnsServer() {
               </div>
             </div>
           )}
-        </TabsContent>
-
-        <TabsContent value="stats" className="space-y-4">
-          {/* Row-click drill-down (T-08) is self-contained inside DnsStatisticsTab —
-              it shares the tab's own window_ state, so the dialog always refetches
-              against whichever window (1h/24h) is currently selected. */}
-          <DnsStatisticsTab
-            active={activeTab === "stats"}
-            onGoToSettings={() => setActiveTab("settings")}
-          />
         </TabsContent>
 
         <TabsContent value="settings" className="space-y-4">

@@ -27,4 +27,14 @@ export default defineConfig([
       'react-refresh/only-export-components': 'off',
     },
   },
+  {
+    // Shared statistics presentation module (docs/ref/todo/
+    // statistics-nav-restructure-plan.md T-01) intentionally exports a hook
+    // (useStatsWindow) and a type (StatsWindow) alongside its components, by
+    // plan design — keeping all of them in one file is the point (§2.6).
+    files: ['src/components/statistics/DnsStatsShared.tsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])

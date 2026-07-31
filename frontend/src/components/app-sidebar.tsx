@@ -15,6 +15,7 @@ import {
   Users,
   ScrollText,
   BarChart3,
+  ChartColumnBig,
   ArrowRightLeft,
   ShieldAlert,
   Waypoints,
@@ -39,7 +40,15 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 
-type NavItem = { path: string; label: string; icon: React.ComponentType<{ className?: string }> }
+type NavItem = {
+  path: string
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+  // Opt-in: also treated active when the current path is a sub-route of
+  // `path` (e.g. /statistics/dns/domain/:domain highlights the DNS item).
+  // Kept opt-in so existing sibling paths never start matching each other.
+  matchPrefix?: boolean
+}
 type NavGroup = { title?: string; items: NavItem[] }
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
@@ -50,6 +59,13 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const groups: NavGroup[] = [
     {
       items: [{ path: "/dashboard", label: "Dashboard", icon: LayoutDashboard }],
+    },
+    {
+      title: "Statistics",
+      items: [
+        { path: "/statistics/overview", label: "Overview", icon: BarChart3 },
+        { path: "/statistics/dns", label: "DNS", icon: ChartColumnBig, matchPrefix: true },
+      ],
     },
     {
       title: "Network",
@@ -79,7 +95,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         { path: "/logs/traffic", label: "Forward Traffic", icon: ArrowRightLeft },
         { path: "/logs/local", label: "Local Traffic", icon: ShieldAlert },
         { path: "/logs/events", label: "System Events", icon: ScrollText },
-        { path: "/logs/statistics", label: "Statistics", icon: BarChart3 },
       ],
     },
     {
@@ -126,7 +141,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               <SidebarMenu>
                 {group.items.map((item) => {
                   const Icon = item.icon
-                  const isActive = location.pathname === item.path
+                  const isActive =
+                    location.pathname === item.path ||
+                    (item.matchPrefix === true && location.pathname.startsWith(item.path + "/"))
                   return (
                     <SidebarMenuItem key={item.path}>
                       <SidebarMenuButton asChild isActive={isActive} tooltip={item.label}>

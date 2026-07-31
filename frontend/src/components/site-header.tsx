@@ -10,6 +10,8 @@ import { cn } from "@/lib/utils"
 const TITLES: Record<string, string> = {
   "/": "Dashboard",
   "/dashboard": "Dashboard",
+  "/statistics/overview": "Statistics Overview",
+  "/statistics/dns": "DNS Statistics",
   "/network/interfaces": "Network Interfaces",
   "/network/dns": "DNS Settings",
   "/network/dns-server": "Local DNS Server",
@@ -28,9 +30,20 @@ const TITLES: Record<string, string> = {
   "/system/users": "User Management",
 }
 
+// Ordered prefix fallback, consulted only when TITLES misses an exact match —
+// used for routes carrying a path param (e.g. /statistics/dns/domain/:domain)
+// where the raw domain/IP itself should not appear in the header title.
+const PREFIX_TITLES: [string, string][] = [
+  ["/statistics/dns/domain/", "DNS Statistics — Domain"],
+  ["/statistics/dns/client/", "DNS Statistics — Source Host"],
+]
+
 export function SiteHeader() {
   const location = useLocation()
-  const title = TITLES[location.pathname] ?? "PiGate Controller"
+  const title =
+    TITLES[location.pathname] ??
+    PREFIX_TITLES.find(([p]) => location.pathname.startsWith(p))?.[1] ??
+    "PiGate Controller"
 
   // Live SoC temperature badge (unavailable on hosts without a thermal zone).
   // Sourced from the shared SSE metrics stream (MetricsProvider) — no own poll.
