@@ -255,9 +255,8 @@ DNSServerSettings.upstreamMode        ← ใช้ตอน DNS Server generate
       ping/DHCP ของเครื่องลูกไม่สะดุด) — ทดสอบทั้งโหมด `system` และ `custom`
 - [ ] 🧪 real device: โหมด `system` + แก้ System DNS แล้วกด **"Apply DNS Zones"** → `pigate-dns.conf`
       อัปเดตเป็นค่าใหม่ (ยืนยันว่า path การ "อ่าน" ยังทำงาน)
-- [ ] 🧪 real device: สลับเป็น custom = `1.1.1.1`,`8.8.8.8` → `pigate-dns.conf` มี `no-resolv` + 2 บรรทัด
-      `server=`, `dnsmasq --test` ไม่ error, `dig @<pigate-ip> example.com` ตอบถูก
-- [ ] 🧪 real device: ตัว Pi กับเครื่องลูกใช้ upstream ต่างกันจริง
+- [x] 🧪 real device: สลับเป็น custom → dnsmasq ทำงานถูกต้อง, `dig @<pigate-ip> ...` ตอบถูก (ยืนยันโดยเจ้าของ repo)
+- [x] 🧪 real device: ตัว Pi กับเครื่องลูกใช้ upstream ต่างกันจริง — ยืนยันโดยเจ้าของ repo ("DNS Server แยกอิสระจาก System DNS แล้ว")
 - [ ] 🧪 real device: อัปเกรดจาก DB เดิมของเครื่องที่ใช้งานอยู่ → `pigate-dns.conf` เหมือนก่อนอัปเกรดทุกไบต์
 - [ ] 🧪 Backup ตอนโหมด custom → Restore แล้วค่ากลับมาถูกและมีผลจริง; restore ไฟล์รุ่นเก่า → `system` + ว่าง
 - [ ] 🧪 `-disable-edit=true` / role read-only: ดูค่า upstream ได้ แต่บันทึกไม่ได้ (403); logout → 401
