@@ -405,10 +405,18 @@ func (m *MockDNSServerManager) ClearCache() error {
 
 // mockDNSQueryEvents are the synthetic query events WatchDNSLog cycles
 // through in -mock=true dev mode (docs/ref/todo/
-// statistics-dns-top-domain-plan.md T-06) — fixed domains from a few of the
-// same synthetic LAN clients MockDhcp/mockFlowTemplates already use, at
-// different relative frequencies so the "Top Queried Domains" card ranking
-// visibly differs row to row.
+// statistics-dns-top-domain-plan.md T-06, extended by
+// dns-query-statistics-drilldown-plan.md T-04). Deliberately a (domain,
+// client) *matrix* rather than a 1:1 mapping so both drill-down directions
+// in -mock=true show more than a single row:
+//   - www.youtube.com is queried from 3 distinct clients (.101/.102/.105)
+//     at different weights, for the domain->clients drill-down test.
+//   - netflix.com is queried from 2 distinct clients (.101/.102).
+//   - line-apps.com and cdn.jsdelivr.net are each queried from a single
+//     client, to exercise the single-row drill-down edge case.
+// Weights keep the same few LAN clients MockDhcp/mockFlowTemplates already
+// use, at different relative frequencies so the "Top Queried Domains" card
+// ranking visibly differs row to row.
 var mockDNSQueryEvents = []struct {
 	domain   string
 	qtype    string
@@ -416,8 +424,11 @@ var mockDNSQueryEvents = []struct {
 	weight   int // higher = queried more often
 }{
 	{"www.youtube.com", "A", "192.168.1.101", 5},
+	{"www.youtube.com", "A", "192.168.1.102", 3},
+	{"www.youtube.com", "A", "192.168.1.105", 1},
 	{"googlevideo.com", "A", "192.168.1.101", 4},
 	{"netflix.com", "A", "192.168.1.102", 3},
+	{"netflix.com", "A", "192.168.1.101", 2},
 	{"line-apps.com", "A", "192.168.1.105", 2},
 	{"cdn.jsdelivr.net", "A", "192.168.1.105", 1},
 }

@@ -415,6 +415,144 @@ paths:
               schema:
                 $ref: '#/components/schemas/TrafficStatistics'
 
+  /statistics/dns:
+    get:
+      tags:
+        - Statistics
+      summary: Get the DNS Query Statistics tab's Top Domains / Top Clients tables
+      description: >
+        Backs the "Statistics" tab on the DNS Server page
+        (docs/ref/todo/dns-query-statistics-drilldown-plan.md). Same
+        opt-in switch as TrafficStatistics.topDomains
+        (`dns/settings.queryLogging`) — `enabled` mirrors it and both
+        list fields are empty arrays (not omitted) when off. Fed by an
+        in-memory ring keyed by (domain, client) pairs; **RAM-only,
+        display-only** — nothing here is ever persisted to SQLite, and a
+        pigate restart resets all counts to zero. `topDomains` reuses the
+        same TopDomain shape as `/statistics/traffic`, but percent is
+        computed against this endpoint's own `totalQueries` (DNS query
+        count), never against `observedBytes`.
+      parameters:
+        - name: window
+          in: query
+          schema:
+            type: string
+            enum: [1h, 24h]
+            default: 1h
+          description: >
+            Aggregation window. Any value outside {1h, 24h} (including
+            omitted) silently falls back to 1h rather than erroring.
+      responses:
+        '200':
+          description: DNS query statistics retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSQueryStatistics'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /statistics/dns/domain:
+    get:
+      tags:
+        - Statistics
+      summary: Drill down a domain from the DNS Query Statistics tab into the clients that queried it
+      description: >
+        Given a domain, returns every client (source IP, or the reserved
+        `unknown` bucket for queries whose source IP could not be parsed)
+        that queried it within the window, with per-client counts. Same
+        RAM-only, display-only, opt-in data source as `/statistics/dns`
+        — never persisted to SQLite, resets on restart. `percent` here is
+        relative to this domain's own `totalQueries`, NOT the window's
+        overall total (a different denominator than
+        `/statistics/dns`'s `topDomains`/`topClients`). A domain that
+        passes validation but was never queried in the window still
+        returns 200 with an empty `clients` array (not 404 — a normal
+        outcome as the window slides).
+      parameters:
+        - name: domain
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 253
+          description: >
+            Domain to drill into. Lower-cased and a single trailing dot is
+            stripped before matching; only `a-z 0-9 . - _ *` are accepted
+            (max 253 bytes). An invalid value returns 400 with a generic
+            message — the submitted value is never echoed back in the
+            error response.
+        - name: window
+          in: query
+          schema:
+            type: string
+            enum: [1h, 24h]
+            default: 1h
+          description: >
+            Aggregation window. Any value outside {1h, 24h} (including
+            omitted) silently falls back to 1h rather than erroring.
+      responses:
+        '200':
+          description: Clients that queried this domain in the window
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSDomainDrilldown'
+        '400':
+          description: Missing or invalid `domain`
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /statistics/dns/client:
+    get:
+      tags:
+        - Statistics
+      summary: Drill down a client from the DNS Query Statistics tab into the domains it queried
+      description: >
+        Given a client, returns every domain it queried within the window,
+        with per-domain counts. Same RAM-only, display-only, opt-in data
+        source as `/statistics/dns` — never persisted to SQLite, resets on
+        restart. `percent` here is relative to this client's own
+        `totalQueries`, NOT the window's overall total (same rule as
+        `/statistics/dns/domain` above). A client that passes validation
+        but never queried anything in the window still returns 200 with an
+        empty `domains` array (not 404).
+      parameters:
+        - name: client
+          in: query
+          required: true
+          schema:
+            type: string
+            example: 192.168.1.101
+          description: >
+            Source IP of the client to drill into, or the reserved literal
+            `unknown` for queries whose source IP could not be parsed. Must
+            either parse as an IP address or equal `unknown` exactly;
+            anything else returns 400 with a generic message — the
+            submitted value is never echoed back in the error response. A
+            valid IP is re-normalized (e.g. non-canonical IPv6) before
+            lookup so it matches the ring's stored key.
+        - name: window
+          in: query
+          schema:
+            type: string
+            enum: [1h, 24h]
+            default: 1h
+          description: >
+            Aggregation window. Any value outside {1h, 24h} (including
+            omitted) silently falls back to 1h rather than erroring.
+      responses:
+        '200':
+          description: Domains this client queried in the window
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSClientDrilldown'
+        '400':
+          description: Missing or invalid `client`
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /dashboard/logs:
     get:
       tags:
@@ -4114,6 +4252,189 @@ components:
           description: >-
             True when the domain-query ring hit its per-bucket tracking cap
             during this window — topDomains may be missing entries.
+        generatedAt:
+          type: string
+          format: date-time
+
+    DNSClientStat:
+      type: object
+      required: [ip, hostname, count, percent]
+      description: >-
+        One ranked row for the "Top Clients" table on the DNS Query
+        Statistics tab (docs/ref/todo/dns-query-statistics-drilldown-plan.md)
+        — one row per source IP (or the reserved "unknown" bucket) that
+        issued DNS queries. RAM-only, display-only.
+      properties:
+        ip:
+          type: string
+          description: >-
+            Source IP that issued the query, or the reserved literal
+            "unknown" when the source IP could not be parsed.
+          example: 192.168.1.101
+        hostname:
+          type: string
+          description: DHCP lease/reservation hostname; empty when unknown.
+          example: laptop-living-room
+        count:
+          type: integer
+          format: int64
+          example: 340
+        percent:
+          type: number
+          format: float
+          description: >-
+            Share of the enclosing response's totalQueries — see that
+            response's schema for which totalQueries this is relative to.
+          example: 41.2
+
+    DNSQueryStatistics:
+      type: object
+      required:
+        - window
+        - enabled
+        - totalQueries
+        - truncated
+        - topDomains
+        - topClients
+        - generatedAt
+      description: >-
+        The /statistics/dns response backing the DNS Query Statistics tab's
+        two top-level tables (Top Domains / Top Clients). **RAM-only,
+        display-only**: sourced from an in-memory (domain, client) ring, never
+        persisted to SQLite — a pigate restart resets all counts to zero.
+        Opt-in via `dns/settings.queryLogging`; all fields are zero-valued
+        (empty arrays / false) rather than omitted when disabled, so a client
+        never has to special-case absence.
+      properties:
+        window:
+          type: string
+          enum: [1h, 24h]
+        enabled:
+          type: boolean
+          description: Mirrors DNSServerSettings.queryLogging.
+        totalQueries:
+          type: integer
+          format: int64
+          description: >-
+            Total DNS queries observed in this window — the denominator for
+            both topDomains and topClients percentages.
+        truncated:
+          type: boolean
+          description: >-
+            True when the domain×client pair ring or the per-bucket client
+            tracking cap was hit during this window — the ranking may be
+            missing entries.
+        topDomains:
+          type: array
+          description: Same shape as TrafficStatistics.topDomains, reused as-is.
+          items:
+            $ref: '#/components/schemas/TopDomain'
+        topClients:
+          type: array
+          items:
+            $ref: '#/components/schemas/DNSClientStat'
+        generatedAt:
+          type: string
+          format: date-time
+
+    DNSDomainDrilldown:
+      type: object
+      required:
+        - domain
+        - window
+        - enabled
+        - totalQueries
+        - truncated
+        - clients
+        - generatedAt
+      description: >-
+        The /statistics/dns/domain response — for a single domain, the
+        clients that queried it within the window. **RAM-only,
+        display-only**, same opt-in switch and reset-on-restart behavior as
+        DNSQueryStatistics.
+      properties:
+        domain:
+          type: string
+          description: The normalized domain this drill-down is for (as validated/echoed by the server, not the raw request value).
+          example: www.youtube.com
+        window:
+          type: string
+          enum: [1h, 24h]
+        enabled:
+          type: boolean
+          description: Mirrors DNSServerSettings.queryLogging.
+        totalQueries:
+          type: integer
+          format: int64
+          description: >-
+            Total queries for this domain in this window — the denominator
+            for clients[].percent (NOT the window-wide total; a different
+            denominator than DNSQueryStatistics.topDomains).
+        truncated:
+          type: boolean
+          description: >-
+            True when the domain×client pair ring or the per-bucket client
+            tracking cap was hit during this window — the client list may be
+            missing entries, and the sum of clients[].count may be less than
+            totalQueries.
+        clients:
+          type: array
+          items:
+            $ref: '#/components/schemas/DNSClientStat'
+        generatedAt:
+          type: string
+          format: date-time
+
+    DNSClientDrilldown:
+      type: object
+      required:
+        - client
+        - hostname
+        - window
+        - enabled
+        - totalQueries
+        - truncated
+        - domains
+        - generatedAt
+      description: >-
+        The /statistics/dns/client response — for a single client (source
+        IP, or the reserved "unknown" bucket), the domains it queried within
+        the window. **RAM-only, display-only**, same opt-in switch and
+        reset-on-restart behavior as DNSQueryStatistics.
+      properties:
+        client:
+          type: string
+          description: The client IP (or "unknown") this drill-down is for.
+          example: 192.168.1.101
+        hostname:
+          type: string
+          description: DHCP lease/reservation hostname for client; empty when unknown.
+          example: laptop-living-room
+        window:
+          type: string
+          enum: [1h, 24h]
+        enabled:
+          type: boolean
+          description: Mirrors DNSServerSettings.queryLogging.
+        totalQueries:
+          type: integer
+          format: int64
+          description: >-
+            Total queries this client made in this window — the denominator
+            for domains[].percent (NOT the window-wide total; a different
+            denominator than DNSQueryStatistics.topClients).
+        truncated:
+          type: boolean
+          description: >-
+            True when the domain×client pair ring or the per-bucket client
+            tracking cap was hit during this window — the domain list may be
+            missing entries, and the sum of domains[].count may be less than
+            totalQueries.
+        domains:
+          type: array
+          description: Same shape as TrafficStatistics.topDomains, reused as-is.
+          items:
+            $ref: '#/components/schemas/TopDomain'
         generatedAt:
           type: string
           format: date-time

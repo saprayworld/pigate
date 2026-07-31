@@ -126,3 +126,69 @@ type TrafficStatistics struct {
 
 	GeneratedAt string `json:"generatedAt"`
 }
+
+// DNSClientStat is one row of the "Top Clients" table on the DNS Query
+// Statistics tab (docs/ref/todo/dns-query-statistics-drilldown-plan.md T-01)
+// — ranked by query count, one row per source IP that issued DNS queries.
+type DNSClientStat struct {
+	IP string `json:"ip"`
+	// Hostname is resolved from a DHCP lease/reservation, same pattern as
+	// TopHost.Hostname/TopDeniedSource.Hostname above — display only, empty
+	// when unknown.
+	Hostname string  `json:"hostname"`
+	Count    uint64  `json:"count"`
+	Percent  float64 `json:"percent"`
+}
+
+// DNSQueryStatistics is the /api/statistics/dns response backing the DNS
+// Query Statistics tab's two top-level tables (Top Domains / Top Clients).
+// RAM-only, opt-in (query logging must be enabled from the DNS Server page)
+// — same source ring as TrafficStatistics.TopDomains, but with the client
+// dimension added (plan T-02).
+type DNSQueryStatistics struct {
+	Window       string `json:"window"` // "1h" | "24h"
+	Enabled      bool   `json:"enabled"`
+	TotalQueries uint64 `json:"totalQueries"`
+	// Truncated is true when the domain×client pair ring or the client ring
+	// hit its tracking cap during this window (plan §2.1
+	// maxTrackedDNSPairs/maxTrackedDNSClients).
+	Truncated bool `json:"truncated"`
+	// TopDomains reuses model.TopDomain (domain/queryType/count/percent) —
+	// no separate domain-row DTO for this endpoint (plan T-01 note).
+	TopDomains  []TopDomain     `json:"topDomains"`
+	TopClients  []DNSClientStat `json:"topClients"`
+	GeneratedAt string          `json:"generatedAt"`
+}
+
+// DNSDomainDrilldown is the /api/statistics/dns/domain response — for a
+// single domain, the list of clients that queried it in the window (plan
+// T-01/T-03). Percent here is relative to TotalQueries of this domain, NOT
+// the window total (different denominator than DNSQueryStatistics.TopClients
+// above — see plan §2 item 6).
+type DNSDomainDrilldown struct {
+	Domain       string          `json:"domain"`
+	Window       string          `json:"window"`
+	Enabled      bool            `json:"enabled"`
+	TotalQueries uint64          `json:"totalQueries"`
+	Truncated    bool            `json:"truncated"`
+	Clients      []DNSClientStat `json:"clients"`
+	GeneratedAt  string          `json:"generatedAt"`
+}
+
+// DNSClientDrilldown is the /api/statistics/dns/client response — for a
+// single client IP (or the "unknown" bucket), the list of domains it queried
+// in the window (plan T-01/T-03). Percent here is relative to TotalQueries
+// of this client, NOT the window total (same rule as DNSDomainDrilldown
+// above).
+type DNSClientDrilldown struct {
+	Client string `json:"client"`
+	// Hostname is resolved from a DHCP lease/reservation for Client, same
+	// pattern as DNSClientStat.Hostname — display only, empty when unknown.
+	Hostname     string      `json:"hostname"`
+	Window       string      `json:"window"`
+	Enabled      bool        `json:"enabled"`
+	TotalQueries uint64      `json:"totalQueries"`
+	Truncated    bool        `json:"truncated"`
+	Domains      []TopDomain `json:"domains"`
+	GeneratedAt  string      `json:"generatedAt"`
+}

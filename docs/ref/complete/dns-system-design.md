@@ -343,3 +343,43 @@ the deny-list lives entirely in the DNS **Server** (dnsmasq) path. Summary (see
 - **Apply semantics**: like zones/records, CRUD on blocked domains only writes the DB;
   `pigate-dns.conf` is only regenerated (and dnsmasq restarted) when the user presses
   "Apply DNS Zones" (`POST /dns/apply`), same batching rationale as zone/record edits.
+
+---
+
+## Cross-reference: DNS Query Statistics — domain↔client drill-down (2026-07-31)
+
+Also not part of this doc's scope (client-side resolution) — like DNS Statistics and the
+Blocked Domains deny-list above, this lives entirely in the DNS **Server** (dnsmasq)
+query-log path built on `DNSServerManager.WatchDNSLog`. Summary (see
+`docs/ref/todo/dns-query-statistics-drilldown-plan.md` for the full design):
+
+- **Scope expanded from the original DNS Statistics plan.** `statistics-dns-top-domain-plan.md`
+  §0 explicitly ruled out per-client drill-down at the time ("ไม่ทำ per-client drill-down") for
+  privacy/RAM reasons. The project owner asked to reopen that scope (2026-07-31); this plan
+  implements it, and the "not part of this doc's scope" note in the earlier
+  "Cross-reference: DNS Statistics (2026-07-30)" section above no longer means
+  "drill-down doesn't exist" — it now points here for the drill-down design.
+- **Ring is now keyed by (domain, client) pairs, not just domain.** `service/dns_query_stats.go`'s
+  5-minute bucket stores `pairs map[string]map[string]uint64` (domain → client IP → count)
+  instead of a bare `domainCount`. Per-domain totals (used by the unchanged "Top Queried
+  Domains" card at `/logs/statistics`) are derived by summing every client under a domain, so
+  the card and the new drill-down can never disagree.
+- **New caps per bucket**: `maxTrackedDNSPairs = 1200` and `maxTrackedDNSClients = 200`
+  (replacing the old `maxTrackedDomains = 500`); RAM worst case is ~40 MB across the
+  288-bucket/24h ring (typical home traffic ~7 MB). `queries` (the total count) is never
+  capped, only new distinct pairs/clients are — so totals stay accurate even once
+  `truncated == true`.
+- **Unparseable client IP collapses to the reserved key `"unknown"`** instead of being
+  dropped, so domain totals stay accurate; the UI shows it as "ไม่ทราบต้นทาง" but it is still
+  drill-down-able like any other client.
+- **New endpoints**: `GET /api/statistics/dns`, `GET /api/statistics/dns/domain`,
+  `GET /api/statistics/dns/client` — all `authRoute` (any logged-in role, matching the
+  privacy level already exposed by the existing `/api/statistics/traffic`), GET-only so
+  `-disable-edit=true`/read-only roles can still view them.
+- **Still RAM-only, still opt-in.** Same `DNSServerSettings.QueryLogging` switch as before;
+  turning it off clears both the per-domain totals and the new per-client pairs immediately
+  (`ClearDNSStats()`), and nothing is written to SQLite or disk — restarting `pigate.service`
+  resets the ring to empty. No new `db/` schema; `dns_server_settings` is unchanged.
+- **UI**: new "สถิติ" tab on the DNS Server page (two ranked tables — Domain Query Stats,
+  Source Hosts — plus a Dialog for drill-down in either direction), alongside the existing
+  Zones/Blocked Domains/Settings tabs.

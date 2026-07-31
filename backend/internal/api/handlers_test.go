@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/bcrypt"
@@ -1679,5 +1681,196 @@ func TestHandleUpdateDNSConfig_InvalidInputRejected(t *testing.T) {
 	}
 	if after.Mode != before.Mode || after.PrimaryDNS != before.PrimaryDNS || after.LocalDomain != before.LocalDomain {
 		t.Errorf("DB changed after rejected requests: before=%+v after=%+v", before, after)
+	}
+}
+
+// TestHandleGetDNSDomainClients_InputValidation is drilldown plan T-05 item
+// 8 (🔒): the `domain` param on GET /api/statistics/dns/domain must reject
+// script/control-char/oversized payloads with 400, and never echo the raw
+// value it rejected back in the response body.
+func TestHandleGetDNSDomainClients_InputValidation(t *testing.T) {
+	server, _ := buildTestServer(t, false)
+	server.statistics.SetDNSLoggingEnabled(true)
+	handler := RegisterRoutes(server)
+	AddSession("mock_session_id_test_token", "pigate")
+	token := "mock_session_id_test_token"
+
+	get := func(rawQuery string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/api/statistics/dns/domain?"+rawQuery, nil)
+		addSessionCookie(req, token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	badDomains := []string{
+		"<script>alert(1)</script>",
+		"evil.com%0Aextra",       // newline
+		"evil.com%00",            // NUL byte
+		"has space.example.com",  // space
+		strings.Repeat("a", 300), // too long
+	}
+	for _, d := range badDomains {
+		rec := get("domain=" + url.QueryEscape(d))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("domain=%q: expected 400, got %d. Body: %s", d, rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), d) {
+			t.Errorf("domain=%q: rejected value was echoed back in the response body: %s", d, rec.Body.String())
+		}
+	}
+
+	// No domain param at all -> 400.
+	if rec := get(""); rec.Code != http.StatusBadRequest {
+		t.Errorf("missing domain: expected 400, got %d", rec.Code)
+	}
+
+	// A valid domain never queried -> 200 with an empty client list, not 404.
+	rec := get("domain=" + url.QueryEscape("never-queried.example.com"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("valid-but-unqueried domain: expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var drill model.DNSDomainDrilldown
+	if err := json.Unmarshal(rec.Body.Bytes(), &drill); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(drill.Clients) != 0 {
+		t.Errorf("expected empty client list for an unqueried domain, got %+v", drill.Clients)
+	}
+
+	// window whitelist: an unrecognized value silently falls back to "1h".
+	rec = get("domain=example.com&window=evil")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("window=evil: expected 200, got %d", rec.Code)
+	}
+	var drill2 model.DNSDomainDrilldown
+	if err := json.Unmarshal(rec.Body.Bytes(), &drill2); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if drill2.Window != "1h" {
+		t.Errorf("expected window=evil to fall back to 1h, got %q", drill2.Window)
+	}
+}
+
+// TestHandleGetDNSClientDomains_InputValidation is drilldown plan T-05 item 8
+// (🔒): the `client` param on GET /api/statistics/dns/client must accept only
+// a parseable IP or the literal "unknown", rejecting anything else with 400.
+func TestHandleGetDNSClientDomains_InputValidation(t *testing.T) {
+	server, _ := buildTestServer(t, false)
+	server.statistics.SetDNSLoggingEnabled(true)
+	server.statistics.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogQuery, Domain: "example.com", QueryType: "A", ClientIP: ""})
+	handler := RegisterRoutes(server)
+	AddSession("mock_session_id_test_token", "pigate")
+	token := "mock_session_id_test_token"
+
+	get := func(rawQuery string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/api/statistics/dns/client?"+rawQuery, nil)
+		addSessionCookie(req, token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := get("client=notanip"); rec.Code != http.StatusBadRequest {
+		t.Errorf("client=notanip: expected 400, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	if rec := get(""); rec.Code != http.StatusBadRequest {
+		t.Errorf("missing client: expected 400, got %d", rec.Code)
+	}
+
+	// The reserved "unknown" bucket is a valid, non-IP value -> 200, and since
+	// we recorded an event with an empty ClientIP above it must show up here.
+	rec := get("client=unknown")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("client=unknown: expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var drill model.DNSClientDrilldown
+	if err := json.Unmarshal(rec.Body.Bytes(), &drill); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(drill.Domains) != 1 || drill.Domains[0].Domain != "example.com" {
+		t.Errorf("expected client=unknown to surface example.com, got %+v", drill.Domains)
+	}
+
+	// A syntactically valid IP that was never queried -> 200 with an empty
+	// domain list, not 404.
+	rec = get("client=192.168.99.99")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("valid-but-unqueried client: expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var drill2 model.DNSClientDrilldown
+	if err := json.Unmarshal(rec.Body.Bytes(), &drill2); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(drill2.Domains) != 0 {
+		t.Errorf("expected empty domain list for an unqueried client, got %+v", drill2.Domains)
+	}
+}
+
+// TestHandleGetDNSQueryStatistics_WindowWhitelistAndDisabledState mirrors
+// TestHandleGetTrafficDetail_WindowWhitelist above for the new
+// /api/statistics/dns endpoint, plus the disabled-switch empty-state case
+// (drilldown plan T-05 item 6/8).
+func TestHandleGetDNSQueryStatistics_WindowWhitelistAndDisabledState(t *testing.T) {
+	handler, _ := setupTestServer(t)
+	token := "mock_session_id_test_token"
+
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		addSessionCookie(req, token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	cases := []struct {
+		query        string
+		expectWindow string
+	}{
+		{"", "1h"},
+		{"?window=1h", "1h"},
+		{"?window=24h", "24h"},
+		{"?window=evil", "1h"},
+	}
+	for _, c := range cases {
+		rec := get("/api/statistics/dns" + c.query)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("query=%q: expected 200, got %d. Body: %s", c.query, rec.Code, rec.Body.String())
+		}
+		var stats model.DNSQueryStatistics
+		if err := json.Unmarshal(rec.Body.Bytes(), &stats); err != nil {
+			t.Fatalf("query=%q: decode failed: %v", c.query, err)
+		}
+		if stats.Window != c.expectWindow {
+			t.Errorf("query=%q: expected window=%q, got %q", c.query, c.expectWindow, stats.Window)
+		}
+		// setupTestServer's StatisticsService starts with query logging off.
+		if stats.Enabled {
+			t.Errorf("query=%q: expected Enabled=false (query logging opt-in is off by default)", c.query)
+		}
+		if stats.TopDomains == nil || stats.TopClients == nil {
+			t.Errorf("query=%q: expected non-nil (possibly empty) slices, got topDomains=%v topClients=%v", c.query, stats.TopDomains, stats.TopClients)
+		}
+	}
+}
+
+// TestDNSStatisticsEndpoints_RequireAuth is drilldown plan T-05 item 8 (🔒):
+// all three /api/statistics/dns* endpoints must require a valid session,
+// same as every other authRoute.
+func TestDNSStatisticsEndpoints_RequireAuth(t *testing.T) {
+	handler, _ := setupTestServer(t)
+
+	paths := []string{
+		"/api/statistics/dns",
+		"/api/statistics/dns/domain?domain=example.com",
+		"/api/statistics/dns/client?client=unknown",
+	}
+	for _, p := range paths {
+		req := httptest.NewRequest("GET", p, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("path=%q without session: expected 401, got %d", p, rec.Code)
+		}
 	}
 }
