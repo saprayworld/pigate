@@ -22,16 +22,25 @@ const (
 	domainBucketSpan = 5 * time.Minute
 	domainBucketMax  = 288
 
-	// maxTrackedDNSPairs bounds a single bucket's (domain, client) pair count
-	// the same way maxTrackedDenySources bounds the deny ring — a flood of
-	// unique domains/clients (or an attacker deliberately querying garbage
-	// names) cannot grow a bucket's maps without limit. Not user-configurable
-	// (drilldown plan §2.1: cap is a code constant, not exposed to settings).
-	maxTrackedDNSPairs = 1200
-	// maxTrackedDNSClients bounds a single bucket's distinct-client count,
-	// independently of maxTrackedDNSPairs (drilldown plan §2.1/Caution 3 —
-	// both caps must be enforced, missing either one makes it pointless).
-	maxTrackedDNSClients = 200
+	// defaultMaxTrackedDNSPairs/defaultMaxTrackedDNSClients are the fallback
+	// defaults used when a caller (NewStatisticsService) passes a non-positive
+	// value for the corresponding limit. The effective, normal-path values
+	// come from the bootstrap config keys dns-stats-max-pairs /
+	// dns-stats-max-clients (see docs/ref/todo/
+	// dns-stats-tracking-limits-config-plan.md) — config.Defaults() must stay
+	// in sync with these two literals.
+	//
+	// The caps bound a single bucket's (domain, client) pair count and
+	// distinct-client count the same way maxTrackedDenySources bounds the
+	// deny ring — a flood of unique domains/clients (or an attacker
+	// deliberately querying garbage names) cannot grow a bucket's maps
+	// without limit. Both caps must be enforced independently (drilldown plan
+	// §2.1/Caution 3 — missing either one makes the other pointless).
+	//
+	// RAM note: the cap is per 5-minute bucket and the ring holds 288 buckets
+	// (24h), so worst-case tracked pairs is roughly maxPairs x 288.
+	defaultMaxTrackedDNSPairs   = 2400
+	defaultMaxTrackedDNSClients = 200
 	// dnsUnknownClient is the reserved key used when the query-log event
 	// carries no parseable client IP (drilldown plan §2.1/Caution 6). It can
 	// never collide with a real client because the ring is keyed by IP, not
@@ -64,9 +73,9 @@ type domainBucket struct {
 	// (drilldown plan Caution 3).
 	pairCount int
 	// clientCount tracks how many times each distinct client has been seen
-	// in this bucket (summed across all domains) — used to enforce
-	// maxTrackedDNSClients independently of maxTrackedDNSPairs, and doubles
-	// as the per-bucket source for the "Top Clients" table.
+	// in this bucket (summed across all domains) — used to enforce the
+	// configurable per-bucket client cap independently of the pair cap, and
+	// doubles as the per-bucket source for the "Top Clients" table.
 	clientCount map[string]uint64
 
 	typeByDomain map[string]string
@@ -86,6 +95,15 @@ type dnsQueryStats struct {
 	enabled      bool
 	buckets      []domainBucket
 	reverseCache *dnsReverseCache
+
+	// maxPairs/maxClients are the effective per-bucket caps, set once at
+	// construction (NewStatisticsService) and never mutated afterwards —
+	// this is why the existing reads under mu.RLock() need no extra
+	// synchronization. A setter is deliberately not provided: changing the
+	// cap mid-flight would make the Truncated semantics meaningless for
+	// buckets that were filled under the old cap.
+	maxPairs   int
+	maxClients int
 }
 
 // RecordDNSEvent is the single entry point from the DNS query-log watcher
@@ -154,10 +172,10 @@ func (s *StatisticsService) recordDomainQuery(domain, qtype, client string) {
 		// A brand-new (domain, client) pair — only admitted while both the
 		// pair cap and the client cap still have room. An existing pair is
 		// always allowed to keep incrementing.
-		if b.pairCount >= maxTrackedDNSPairs {
+		if b.pairCount >= s.dns.maxPairs {
 			return
 		}
-		if _, clientSeen := b.clientCount[client]; !clientSeen && len(b.clientCount) >= maxTrackedDNSClients {
+		if _, clientSeen := b.clientCount[client]; !clientSeen && len(b.clientCount) >= s.dns.maxClients {
 			return
 		}
 		if clients == nil {
@@ -243,7 +261,7 @@ func (s *StatisticsService) domainSnapshot(window string) (totals map[string]uin
 			typeByDomain[k] = v
 		}
 		totalQueries += b.queries
-		if b.pairCount >= maxTrackedDNSPairs || len(b.clientCount) >= maxTrackedDNSClients {
+		if b.pairCount >= s.dns.maxPairs || len(b.clientCount) >= s.dns.maxClients {
 			truncated = true
 		}
 	}
@@ -317,7 +335,7 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 			typeByDomain[k] = v
 		}
 		totalQueries += b.queries
-		if b.pairCount >= maxTrackedDNSPairs || len(b.clientCount) >= maxTrackedDNSClients {
+		if b.pairCount >= s.dns.maxPairs || len(b.clientCount) >= s.dns.maxClients {
 			truncated = true
 		}
 	}
@@ -378,7 +396,7 @@ func (s *StatisticsService) GetDNSDomainClients(window, domain string) model.DNS
 			clientTotals[client] += count
 			totalQueries += count
 		}
-		if b.pairCount >= maxTrackedDNSPairs {
+		if b.pairCount >= s.dns.maxPairs {
 			truncated = true
 		}
 	}
@@ -443,7 +461,7 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 				}
 			}
 		}
-		if b.pairCount >= maxTrackedDNSPairs {
+		if b.pairCount >= s.dns.maxPairs {
 			truncated = true
 		}
 	}

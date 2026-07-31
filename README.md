@@ -180,7 +180,7 @@ The script will perform the following actions:
 - **View Log Output (Journal):** `sudo journalctl -u pigate -f`
 
 ### Configuration File
-Runtime settings can be changed without editing the systemd unit. `install.sh` creates `/var/lib/pigate/pigate.conf` (a simple `key=value` file, `#` for comments) with production defaults on first install. Keys are the CLI flag names without the leading `-`.
+Runtime settings can be changed without editing the systemd unit. `install.sh` creates `/var/lib/pigate/pigate.conf` (a simple `key=value` file, `#` for comments) with production defaults on first install. Most keys are the CLI flag names without the leading `-`; two keys (`dns-stats-max-pairs`, `dns-stats-max-clients`) are intentionally file-only tuning knobs with no CLI flag counterpart. See [`pigate.conf.example`](pigate.conf.example) in the repo root for a fully commented sample of every key, its default, and what it does.
 
 Precedence is **built-in default → config file → CLI flag** — a flag explicitly passed on the command line always wins over the file. Because the installed `ExecStart` still passes `-mock=false -db=… -https-port=443` as a safety net, editing those three keys in the file has no effect until they are removed from the unit; other keys (e.g. `docker-compat`) take effect from the file directly. Point at a different file with `-config=/path/to/file` (a missing explicit file is a hard error).
 

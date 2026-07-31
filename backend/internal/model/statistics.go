@@ -150,8 +150,9 @@ type DNSQueryStatistics struct {
 	Enabled      bool   `json:"enabled"`
 	TotalQueries uint64 `json:"totalQueries"`
 	// Truncated is true when the domain×client pair ring or the client ring
-	// hit its tracking cap during this window (plan §2.1
-	// maxTrackedDNSPairs/maxTrackedDNSClients).
+	// hit its tracking cap during this window (plan §2.1 — the configurable
+	// per-bucket caps set via dns-stats-max-pairs/dns-stats-max-clients in
+	// pigate.conf, see service/dns_query_stats.go).
 	Truncated bool `json:"truncated"`
 	// TopDomains reuses model.TopDomain (domain/queryType/count/percent) —
 	// no separate domain-row DTO for this endpoint (plan T-01 note).

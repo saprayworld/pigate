@@ -52,7 +52,10 @@ var version = "v0.1.0"
 
 func main() {
 	// 1. Register CLI flags. Their default values here must stay 1:1 with
-	// config.Defaults() (see internal/config/config.go). The returned pointers
+	// config.Defaults() (see internal/config/config.go) — except the two
+	// file-only keys dns-stats-max-pairs/dns-stats-max-clients, which
+	// intentionally have no flag counterpart at all (see internal/config's
+	// package doc comment). The returned pointers
 	// are intentionally not captured for most of these: flag.Parse() still
 	// validates/parses them (e.g. -port=abc still fails fast the same way it
 	// always has), but the resolved value each subsystem actually uses comes
@@ -96,6 +99,7 @@ func main() {
 	log.Printf("[Main] Prioritize Kernel Routes: %t", cfg.PrioritizeKernelRoutes)
 	log.Printf("[Main] Docker Compatibility: %t", cfg.DockerCompat)
 	log.Printf("[Main] HTTPS Port: %d (0 = HTTP only)", cfg.HTTPSPort)
+	log.Printf("[Main] DNS Stats Max Pairs/Clients per bucket: %d / %d", cfg.DNSStatsMaxPairs, cfg.DNSStatsMaxClients)
 
 	// 2. Initialize in-memory forward-traffic logs circular buffer (Ring Buffer).
 	// Fed live by the TrafficLogManager watcher below (real NFLOG or mock
@@ -220,7 +224,9 @@ func main() {
 	// No ticker/goroutine of its own: byte figures ride TrafficStatsService's
 	// existing poller, and the deny ring is fed by the stampAndPush hook
 	// below as NFLOG events arrive.
-	statisticsService := service.NewStatisticsService(trafficStatsService, repo, dhcp)
+	// DNSStatsMaxPairs/DNSStatsMaxClients come from the file-only bootstrap
+	// keys dns-stats-max-pairs / dns-stats-max-clients (no CLI flag by design).
+	statisticsService := service.NewStatisticsService(trafficStatsService, repo, dhcp, cfg.DNSStatsMaxPairs, cfg.DNSStatsMaxClients)
 
 	// Central event log: every subsystem funnels audit events through this one
 	// service (RAM queue + async batch writer to SQLite; see event_log.go).

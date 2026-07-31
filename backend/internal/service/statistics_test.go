@@ -11,7 +11,7 @@ import (
 func newTestStatisticsService(t *testing.T, acct *fakeTrafficAccounting) *StatisticsService {
 	t.Helper()
 	traffic := newTestTrafficStatsService(t, acct, nil)
-	return NewStatisticsService(traffic, traffic.repo, traffic.dhcp)
+	return NewStatisticsService(traffic, traffic.repo, traffic.dhcp, defaultMaxTrackedDNSPairs, defaultMaxTrackedDNSClients)
 }
 
 // TestStatisticsService_RecordFirewallLog_OnlyCountsDrop is plan T-04 case 5:
@@ -186,8 +186,9 @@ func TestStatisticsService_RecordDNSEvent_TopDomainsRanking(t *testing.T) {
 }
 
 // TestStatisticsService_DomainRingCap is T-11 item 9: flooding with 5,000
-// unique domains must not panic, must respect maxTrackedDomains, and must
-// set DNSTruncated.
+// unique domains must not panic, must respect the per-bucket DNS stats caps
+// (defaultMaxTrackedDNSPairs/defaultMaxTrackedDNSClients, configurable via
+// dns-stats-max-pairs/dns-stats-max-clients), and must set DNSTruncated.
 func TestStatisticsService_DomainRingCap(t *testing.T) {
 	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
 	s.SetDNSLoggingEnabled(true)
