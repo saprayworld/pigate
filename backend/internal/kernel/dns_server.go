@@ -54,6 +54,20 @@ func (m *RealDNSServerManager) ApplyZones(zones []model.DNSZone, interfaces []st
 	// file immediately (plan §5 item 1: privacy — turning the switch off erases
 	// history right away, not just on next boot).
 	if queryLog {
+		// Remove any pre-existing file first. There is no systemd ordering
+		// guarantee between pigate.service and the distro's dnsmasq.service
+		// (both are independently enabled units), and /run is tmpfs wiped on
+		// every reboot — so dnsmasq can win the race and lazily create this
+		// path itself on first log write, owned dnsmasq:root, mode 0660.
+		// Pigate then can't even open() that file (EACCES, not owner/group),
+		// so it would stay wrong-owned forever across every future restart.
+		// Pigate DOES own the containing directory (RuntimeDirectory
+		// pigate:netdev, 0755, no sticky bit), so unlink is always allowed
+		// regardless of the file's own owner — removing it here guarantees
+		// the O_CREATE below always produces a fresh, pigate-owned inode.
+		if err := os.Remove(DNSQueryLogPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("[DNS Server] Warning: could not remove stale query log file %s: %v", DNSQueryLogPath, err)
+		}
 		if f, err := os.OpenFile(DNSQueryLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0640); err != nil {
 			log.Printf("[DNS Server] Warning: could not pre-create query log file %s: %v", DNSQueryLogPath, err)
 		} else {
