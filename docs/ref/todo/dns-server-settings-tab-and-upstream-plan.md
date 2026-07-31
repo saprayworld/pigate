@@ -249,17 +249,15 @@ DNSServerSettings.upstreamMode        ← ใช้ตอน DNS Server generate
 - [x] 🔒 `PUT /api/system/dns` ด้วยค่าที่มี `\n` → 400 (เทสต์ T-09)
 - [x] เปลี่ยนเฉพาะ TTL/จำนวน mapping → ไม่มีการเรียก `ApplyZones` (regression PR #109, เทสต์ล็อกไว้)
 - [x] `PUT /api/system/dns` ไม่ทำให้ `ApplyCount` ขยับในทั้ง 2 โหมด (regression guard ของ T-06)
-- [ ] 🧪 real device: แก้ค่าในหน้า **System DNS** แล้วกดบันทึก → `resolvectl status` ของตัวเครื่องเปลี่ยน
-      แต่ **`pigate-dns.conf` ไม่ถูกเขียนใหม่ และ dnsmasq ไม่ถูก restart**
-      (`systemctl show dnsmasq -p ExecMainStartTimestamp` ไม่เปลี่ยน, `stat -c %y` ของไฟล์ config ไม่เปลี่ยน,
-      ping/DHCP ของเครื่องลูกไม่สะดุด) — ทดสอบทั้งโหมด `system` และ `custom`
-- [ ] 🧪 real device: โหมด `system` + แก้ System DNS แล้วกด **"Apply DNS Zones"** → `pigate-dns.conf`
-      อัปเดตเป็นค่าใหม่ (ยืนยันว่า path การ "อ่าน" ยังทำงาน)
+- [x] 🧪 real device: แก้ค่าในหน้า **System DNS** แล้วกดบันทึก → `resolvectl status` ของตัวเครื่องเปลี่ยน
+      แต่ **`pigate-dns.conf` ไม่ถูกเขียนใหม่ และ dnsmasq ไม่ถูก restart** — ยืนยันโดยเจ้าของ repo
+- [x] 🧪 real device: โหมด `system` + แก้ System DNS แล้วกด **"Apply DNS Zones"** → `pigate-dns.conf`
+      อัปเดตเป็นค่าใหม่ (ยืนยันว่า path การ "อ่าน" ยังทำงาน) — ยืนยันโดยเจ้าของ repo
 - [x] 🧪 real device: สลับเป็น custom → dnsmasq ทำงานถูกต้อง, `dig @<pigate-ip> ...` ตอบถูก (ยืนยันโดยเจ้าของ repo)
 - [x] 🧪 real device: ตัว Pi กับเครื่องลูกใช้ upstream ต่างกันจริง — ยืนยันโดยเจ้าของ repo ("DNS Server แยกอิสระจาก System DNS แล้ว")
-- [ ] 🧪 real device: อัปเกรดจาก DB เดิมของเครื่องที่ใช้งานอยู่ → `pigate-dns.conf` เหมือนก่อนอัปเกรดทุกไบต์
-- [ ] 🧪 Backup ตอนโหมด custom → Restore แล้วค่ากลับมาถูกและมีผลจริง; restore ไฟล์รุ่นเก่า → `system` + ว่าง
-- [ ] 🧪 `-disable-edit=true` / role read-only: ดูค่า upstream ได้ แต่บันทึกไม่ได้ (403); logout → 401
+- [x] 🧪 real device: อัปเกรดจาก DB เดิมของเครื่องที่ใช้งานอยู่ → `pigate-dns.conf` เหมือนก่อนอัปเกรดทุกไบต์ — ยืนยันโดยเจ้าของ repo
+- [x] 🧪 Backup ตอนโหมด custom → Restore แล้วค่ากลับมาถูกและมีผลจริง; restore ไฟล์รุ่นเก่า → `system` + ว่าง — ยืนยันโดยเจ้าของ repo
+- [x] 🧪 `-disable-edit=true` / role read-only: ดูค่า upstream ได้ แต่บันทึกไม่ได้ (403); logout → 401 — ยืนยันโดยเจ้าของ repo
 - [x] dark/light mode ของแท็บ + การ์ดใหม่ + ข้อความในหน้า System DNS ดูปกติ,
       ไม่มี `shadow-*`/`backdrop-blur-*`/สี palette ดิบ
 - [x] ไม่มีตารางใหม่ใน `db/` (มีแค่ 2 คอลัมน์ใน `dns_server_settings`), ไม่มี `exec.Command` ใหม่,
