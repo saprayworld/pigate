@@ -392,9 +392,9 @@ func NewMockDNSServerManager() *MockDNSServerManager {
 	return &MockDNSServerManager{}
 }
 
-func (m *MockDNSServerManager) ApplyZones(zones []model.DNSZone, interfaces []string, upstreamServers []string, queryLog bool) error {
+func (m *MockDNSServerManager) ApplyZones(zones []model.DNSZone, interfaces []string, upstreamServers []string, queryLog bool, blocked []model.BlockedDomain) error {
 	m.ApplyCount++
-	log.Printf("[MockDNSServer] ApplyZones called with %d zones, interfaces: %v, upstream servers: %v, queryLog: %t", len(zones), interfaces, upstreamServers, queryLog)
+	log.Printf("[MockDNSServer] ApplyZones called with %d zones, interfaces: %v, upstream servers: %v, queryLog: %t, %d blocked domains", len(zones), interfaces, upstreamServers, queryLog, len(blocked))
 	return nil
 }
 

@@ -73,6 +73,29 @@ type DNSServerSettings struct {
 	UpstreamServers []string `json:"upstreamServers"`
 }
 
+// BlockedDomain is one deny-list entry (docs/ref/todo/dns-blocked-domains-plan.md
+// §2). Domain and any Subdomain of it are answered NXDOMAIN or a sinkhole
+// address by dnsmasq, depending on Mode, instead of being forwarded upstream
+// or resolved against a zone. Stored in its own table (dns_blocked_domains) —
+// additive to, and independent from, dns_zones/dns_records.
+type BlockedDomain struct {
+	ID        string `json:"id"`
+	Domain    string `json:"domain"`
+	Mode      string `json:"mode"`
+	Enabled   bool   `json:"enabled"`
+	Comment   string `json:"comment"`
+	CreatedAt string `json:"createdAt"`
+}
+
+// BlockedDomainInput is the create/update request body for a BlockedDomain
+// (no ID/CreatedAt — server-assigned).
+type BlockedDomainInput struct {
+	Domain  string `json:"domain"`
+	Mode    string `json:"mode"`
+	Enabled bool   `json:"enabled"`
+	Comment string `json:"comment"`
+}
+
 // DNS query-log event kinds emitted by kernel.DNSServerManager.WatchDNSLog
 // (docs/ref/todo/statistics-dns-top-domain-plan.md T-03/T-04).
 const (

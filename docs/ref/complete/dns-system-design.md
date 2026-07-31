@@ -315,3 +315,31 @@ at the moment "Apply DNS Zones" is pressed — never automatically on a System D
 See `docs/ref/complete/dns-server-settings-tab-and-upstream-plan.md` and
 `docs/ref/complete/dnsmasq-design.md` ("DNS Server upstream resolvers, separated from
 System DNS") for the full design.
+
+---
+
+## Cross-reference: DNS Server "Blocked Domains" deny-list (2026-07-31)
+
+Also not part of this doc's scope (client-side resolution) — like DNS Statistics above,
+the deny-list lives entirely in the DNS **Server** (dnsmasq) path. Summary (see
+`docs/ref/todo/dns-blocked-domains-plan.md` for the full design):
+
+- **Schema**: a new standalone table `dns_blocked_domains` (`id`, `domain` UNIQUE
+  COLLATE NOCASE, `mode` — `nxdomain`/`sinkhole`, `enabled`, `comment`, `created_at`) —
+  additive, independent from `dns_zones`/`dns_records`.
+- **Directive mapping**: each enabled entry is rendered as its own block at the end of
+  `pigate-dns.conf`, after all zones. `nxdomain` (default) emits `server=/<domain>/`
+  (dnsmasq answers NXDOMAIN for the domain and every subdomain, without forwarding
+  upstream). `sinkhole` emits both `address=/<domain>/0.0.0.0` and
+  `address=/<domain>/::` (answers a fixed address instead — useful when a client handles
+  a fake address better than NXDOMAIN). There is no exact-only mode: blocking a domain
+  always blocks its subdomains too, since dnsmasq matches most-specific domain.
+  Generation is byte-for-byte unchanged from before this feature when the deny-list is
+  empty or every entry is filtered out.
+- **Collision with zones**: an entry whose name exactly matches an enabled `dns_zones`
+  name is rejected at write time (handler) and skipped again at generation time
+  (defense-in-depth) — blocking `pigate.local` or an active local zone name would break
+  name resolution for the whole LAN.
+- **Apply semantics**: like zones/records, CRUD on blocked domains only writes the DB;
+  `pigate-dns.conf` is only regenerated (and dnsmasq restarted) when the user presses
+  "Apply DNS Zones" (`POST /dns/apply`), same batching rationale as zone/record edits.

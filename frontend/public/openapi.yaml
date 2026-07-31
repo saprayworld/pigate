@@ -2325,6 +2325,116 @@ paths:
                 type: boolean
                 example: true
 
+  /dns/blocked-domains:
+    get:
+      tags:
+        - DNS Server
+      summary: List all blocked domains (deny-list), ordered by domain
+      responses:
+        '200':
+          description: List of blocked domains
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BlockedDomain'
+    post:
+      tags:
+        - DNS Server
+      summary: >-
+        Add a blocked domain. Writes to the database only — does NOT restart
+        dnsmasq; call POST /dns/apply afterwards to take effect.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BlockedDomainInput'
+      responses:
+        '200':
+          description: Blocked domain created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlockedDomain'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /dns/blocked-domains/{id}:
+    put:
+      tags:
+        - DNS Server
+      summary: >-
+        Update a blocked domain. Writes to the database only — does NOT
+        restart dnsmasq; call POST /dns/apply afterwards to take effect.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BlockedDomainInput'
+      responses:
+        '200':
+          description: Blocked domain updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlockedDomain'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Blocked domain not found
+    delete:
+      tags:
+        - DNS Server
+      summary: >-
+        Delete a blocked domain. Writes to the database only — does NOT
+        restart dnsmasq; call POST /dns/apply afterwards to take effect.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Blocked domain deleted
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
+  /dns/blocked-domains/{id}/toggle:
+    post:
+      tags:
+        - DNS Server
+      summary: >-
+        Toggle a blocked domain's enabled flag. Writes to the database only
+        — does NOT restart dnsmasq; call POST /dns/apply afterwards to take
+        effect.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Blocked domain toggled
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+
   /dns/apply:
     post:
       tags:
@@ -4920,6 +5030,82 @@ components:
           items:
             type: string
           example: ["1.1.1.1", "8.8.8.8"]
+
+    BlockedDomain:
+      type: object
+      description: >-
+        A DNS Server deny-list entry (docs/ref/todo/dns-blocked-domains-plan.md).
+        Blocking a domain automatically blocks every subdomain of it too
+        (dnsmasq matches most-specific domain, `server=/<domain>/` /
+        `address=/<domain>/<ip>` cover the whole subtree) — there is no
+        exact-only mode.
+      required:
+        - id
+        - domain
+        - mode
+        - enabled
+        - comment
+        - createdAt
+      properties:
+        id:
+          type: string
+          example: blk-a1b2c3d4
+        domain:
+          type: string
+          description: >-
+            Domain to block, plus all of its subdomains. Stored/rendered
+            lower-case with any trailing dot stripped.
+          example: ads.example.com
+        mode:
+          type: string
+          enum: [nxdomain, sinkhole]
+          default: nxdomain
+          description: >-
+            `nxdomain` (default) answers NXDOMAIN for the domain and every
+            subdomain, without forwarding upstream (`server=/<domain>/`).
+            `sinkhole` answers `0.0.0.0` / `::` instead
+            (`address=/<domain>/0.0.0.0` and `address=/<domain>/::`) — useful
+            for ad-block use cases where a browser handles a fake address
+            better than NXDOMAIN.
+          example: nxdomain
+        enabled:
+          type: boolean
+          example: true
+        comment:
+          type: string
+          description: Free-text note, max 128 characters, no newlines.
+          example: ad network
+        createdAt:
+          type: string
+          example: "2026-07-31 10:00:00"
+
+    BlockedDomainInput:
+      type: object
+      required:
+        - domain
+        - enabled
+      properties:
+        domain:
+          type: string
+          description: >-
+            Domain to block (letters, digits, '.', '-' only; must contain at
+            least one '.'; no leading/trailing '.', '-' or whitespace; max 253
+            chars). A value colliding with an existing enabled DNS zone name,
+            carrying an embedded newline, or exceeding the 1000-entry cap is
+            rejected with 400 (dnsmasq config injection guard).
+          example: ads.example.com
+        mode:
+          type: string
+          enum: [nxdomain, sinkhole]
+          default: nxdomain
+          example: nxdomain
+        enabled:
+          type: boolean
+          example: true
+        comment:
+          type: string
+          description: Max 128 characters, no newlines.
+          example: ad network
 
     # --- Static Route Schemas ---
     RoutesConfig:

@@ -320,3 +320,42 @@ func TestValidateDNSConfigInput(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateBlockedDomain covers docs/ref/todo/dns-blocked-domains-plan.md
+// T-07: the deny-list entry validator (config-injection boundary).
+func TestValidateBlockedDomain(t *testing.T) {
+	tests := []struct {
+		name    string
+		b       BlockedDomain
+		wantErr bool
+	}{
+		{"valid nxdomain default mode", BlockedDomain{Domain: "ads.example.com"}, false},
+		{"valid nxdomain explicit", BlockedDomain{Domain: "ads.example.com", Mode: DNSBlockModeNXDomain}, false},
+		{"valid sinkhole", BlockedDomain{Domain: "ads.example.com", Mode: DNSBlockModeSinkhole}, false},
+		{"valid with comment", BlockedDomain{Domain: "ads.example.com", Comment: "ad network"}, false},
+		{"empty domain", BlockedDomain{Domain: ""}, true},
+		{"leading whitespace", BlockedDomain{Domain: " ads.example.com"}, true},
+		{"trailing whitespace", BlockedDomain{Domain: "ads.example.com "}, true},
+		{"embedded newline", BlockedDomain{Domain: "ads.example.com\nserver=/evil/6.6.6.6"}, true},
+		{"embedded space", BlockedDomain{Domain: "ads example.com"}, true},
+		{"embedded hash", BlockedDomain{Domain: "ads.example.com#comment"}, true},
+		{"no dot", BlockedDomain{Domain: "localhost"}, true},
+		{"leading dot", BlockedDomain{Domain: ".example.com"}, true},
+		{"trailing dot", BlockedDomain{Domain: "example.com."}, true},
+		{"leading hyphen", BlockedDomain{Domain: "-example.com"}, true},
+		{"trailing hyphen", BlockedDomain{Domain: "example.com-"}, true},
+		{"too long", BlockedDomain{Domain: strings.Repeat("a", 250) + ".com"}, true},
+		{"underscore rejected", BlockedDomain{Domain: "bad_domain.com"}, true},
+		{"invalid mode", BlockedDomain{Domain: "ads.example.com", Mode: "block"}, true},
+		{"comment with newline", BlockedDomain{Domain: "ads.example.com", Comment: "line1\nline2"}, true},
+		{"comment too long", BlockedDomain{Domain: "ads.example.com", Comment: strings.Repeat("a", DNSBlockedCommentMax+1)}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateBlockedDomain(tt.b)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateBlockedDomain(%+v) err = %v, wantErr %v", tt.b, err, tt.wantErr)
+			}
+		})
+	}
+}

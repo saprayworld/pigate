@@ -98,6 +98,7 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 		"DELETE FROM dhcp_configs",
 		"DELETE FROM dns_records",
 		"DELETE FROM dns_zones",
+		"DELETE FROM dns_blocked_domains",
 		"DELETE FROM wifi_presets",
 	}
 	for _, q := range wipes {
@@ -239,6 +240,25 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 			); err != nil {
 				return fmt.Errorf("restore dns record %q: %w", rec.Name, err)
 			}
+		}
+	}
+
+	// --- 8.0.1 DNS Server — blocked domains (deny-list) -------------------
+	// A mode value that no longer matches the CHECK constraint (e.g. hand-edited
+	// or from a future schema) is clamped to the default "nxdomain" rather than
+	// failing the whole import — validateConfig already fail-closed rejected
+	// anything ValidateBlockedDomain considers invalid, so a bad mode here can
+	// only come from a value the CHECK constraint itself would reject.
+	for _, b := range cfg.BlockedDomains {
+		mode := b.Mode
+		if mode != model.DNSBlockModeNXDomain && mode != model.DNSBlockModeSinkhole {
+			mode = model.DNSBlockModeNXDomain
+		}
+		if _, err := tx.Exec(
+			"INSERT INTO dns_blocked_domains (id, domain, mode, enabled, comment) VALUES (?, ?, ?, ?, ?)",
+			b.ID, b.Domain, mode, boolToInt(b.Enabled), b.Comment,
+		); err != nil {
+			return fmt.Errorf("restore blocked domain %q: %w", b.Domain, err)
 		}
 	}
 

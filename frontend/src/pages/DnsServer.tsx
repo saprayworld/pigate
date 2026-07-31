@@ -15,7 +15,9 @@ import {
   Server,
   Database,
   Loader2,
-  Network
+  Network,
+  Ban,
+  ShieldAlert
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -51,6 +53,7 @@ import {
   type DNSZone,
   type DNSRecord,
   type NetworkInterface,
+  type BlockedDomain,
   DNS_CACHE_TTL_MIN,
   DNS_CACHE_TTL_MAX,
   DNS_CACHE_TTL_DEFAULT,
@@ -58,6 +61,7 @@ import {
   DNS_CACHE_ENTRIES_MAX,
   DNS_CACHE_ENTRIES_DEFAULT,
   DNS_UPSTREAM_MAX_SERVERS,
+  DNS_BLOCKED_DOMAINS_MAX,
 } from "@/data-mockup/mockData"
 import { dnsServerService } from "@/services/dnsServerService"
 import { interfaceService } from "@/services/interfaceService"
@@ -99,6 +103,18 @@ export default function DnsServer() {
   const [recTtl, setRecTtl] = useState("300")
   const [recError, setRecError] = useState("")
 
+  // Blocked Domains (deny-list, docs/ref/todo/dns-blocked-domains-plan.md)
+  const [blockedDomains, setBlockedDomains] = useState<BlockedDomain[]>([])
+  const [blockedSearchQuery, setBlockedSearchQuery] = useState("")
+  const [isBlockedModalOpen, setIsBlockedModalOpen] = useState(false)
+  const [editingBlockedDomain, setEditingBlockedDomain] = useState<BlockedDomain | null>(null)
+  const [blkDomain, setBlkDomain] = useState("")
+  const [blkMode, setBlkMode] = useState<"nxdomain" | "sinkhole">("nxdomain")
+  const [blkComment, setBlkComment] = useState("")
+  const [blkEnabled, setBlkEnabled] = useState(true)
+  const [blkError, setBlkError] = useState("")
+  const [isSavingBlocked, setIsSavingBlocked] = useState(false)
+
   // Apply & Save states
   const [isApplying, setIsApplying] = useState(false)
   const [isApplied, setIsApplied] = useState(true)
@@ -136,13 +152,15 @@ export default function DnsServer() {
     // selectedZoneId is still its initial null value on this first-mount load.
     const initialLoad = async () => {
       try {
-        const [data, ifaces, settings, sysDns] = await Promise.all([
+        const [data, ifaces, settings, sysDns, blocked] = await Promise.all([
           dnsServerService.getZones(),
           interfaceService.getAll(),
           dnsServerService.getSettings(),
           systemService.getDNSConfig(),
+          dnsServerService.getBlockedDomains(),
         ])
         setZones(data || [])
+        setBlockedDomains(blocked || [])
         if ((data || []).length > 0) {
           setSelectedZoneId(data[0].id)
         }
@@ -355,6 +373,22 @@ export default function DnsServer() {
       r.value.toLowerCase().includes(recordSearchQuery.toLowerCase())
     )
   }, [selectedZone, recordSearchQuery])
+
+  // Filtered Blocked Domains
+  const filteredBlockedDomains = useMemo(() => {
+    const q = blockedSearchQuery.toLowerCase()
+    return blockedDomains.filter(b =>
+      b.domain.toLowerCase().includes(q) || (b.comment || "").toLowerCase().includes(q)
+    )
+  }, [blockedDomains, blockedSearchQuery])
+
+  // Read-only suggestion (T-12, plan §5 item 3/§2 "Migration path ของ
+  // empty-zone workaround"): zones that look like they were created purely
+  // as the old empty-zone-NXDOMAIN workaround. No mutation is offered here —
+  // deleting/moving them is left entirely to the user.
+  const emptyZoneSuggestions = useMemo(() => {
+    return zones.filter(z => z.isAuthoritative && z.enabled && (z.records || []).length === 0)
+  }, [zones])
 
   // --- Handlers: Zone CRUD ---
   const openCreateZoneModal = () => {
@@ -569,6 +603,82 @@ export default function DnsServer() {
     }
   }
 
+  // --- Handlers: Blocked Domains CRUD (deny-list) ---
+  const openCreateBlockedModal = () => {
+    setEditingBlockedDomain(null)
+    setBlkDomain("")
+    setBlkMode("nxdomain")
+    setBlkComment("")
+    setBlkEnabled(true)
+    setBlkError("")
+    setIsBlockedModalOpen(true)
+  }
+
+  const openEditBlockedModal = (b: BlockedDomain) => {
+    setEditingBlockedDomain(b)
+    setBlkDomain(b.domain)
+    setBlkMode(b.mode)
+    setBlkComment(b.comment || "")
+    setBlkEnabled(b.enabled)
+    setBlkError("")
+    setIsBlockedModalOpen(true)
+  }
+
+  const handleDeleteBlockedDomain = async (id: string, domain: string) => {
+    if (await confirm("ยืนยันการลบ", `คุณต้องการลบโดเมนที่ถูกบล็อก "${domain}" ใช่หรือไม่?`)) {
+      try {
+        await dnsServerService.deleteBlockedDomain(id)
+        setBlockedDomains(prev => prev.filter(b => b.id !== id))
+        setIsApplied(false)
+      } catch (err) {
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบโดเมนที่ถูกบล็อกได้: " + getErrorMessage(err))
+      }
+    }
+  }
+
+  const handleToggleBlockedDomain = async (id: string, checked: boolean) => {
+    try {
+      await dnsServerService.toggleBlockedDomain(id)
+      setBlockedDomains(prev => prev.map(b => b.id === id ? { ...b, enabled: checked } : b))
+      setIsApplied(false)
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถเปิด/ปิดโดเมนที่ถูกบล็อกได้: " + getErrorMessage(err))
+    }
+  }
+
+  const handleSaveBlockedDomain = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setBlkError("")
+
+    const domain = blkDomain.trim().toLowerCase()
+    if (!domain) {
+      setBlkError("กรุณากรอกชื่อโดเมน")
+      return
+    }
+    if (!editingBlockedDomain && blockedDomains.length >= DNS_BLOCKED_DOMAINS_MAX) {
+      setBlkError(`รายการโดเมนที่ถูกบล็อกครบจำนวนสูงสุด ${DNS_BLOCKED_DOMAINS_MAX} รายการแล้ว`)
+      return
+    }
+
+    setIsSavingBlocked(true)
+    try {
+      const payload = { domain, mode: blkMode, enabled: blkEnabled, comment: blkComment.trim() }
+      if (editingBlockedDomain) {
+        const updated = await dnsServerService.updateBlockedDomain(editingBlockedDomain.id, payload)
+        setBlockedDomains(prev => prev.map(b => b.id === editingBlockedDomain.id ? updated : b))
+      } else {
+        const created = await dnsServerService.createBlockedDomain(payload)
+        setBlockedDomains(prev => [...prev, created])
+      }
+      setIsBlockedModalOpen(false)
+      setIsApplied(false)
+    } catch (err) {
+      setBlkError(getErrorMessage(err) || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
+    } finally {
+      setIsSavingBlocked(false)
+    }
+  }
+
   // --- Handlers: Apply & Cache ---
   const handleApplySettings = async () => {
     setIsApplying(true)
@@ -654,6 +764,7 @@ export default function DnsServer() {
       <Tabs defaultValue="zones">
         <TabsList>
           <TabsTrigger value="zones" className="cursor-pointer">Zones &amp; Records</TabsTrigger>
+          <TabsTrigger value="blocked" className="cursor-pointer">Blocked Domains</TabsTrigger>
           <TabsTrigger value="settings" className="cursor-pointer">Settings</TabsTrigger>
         </TabsList>
 
@@ -911,6 +1022,139 @@ export default function DnsServer() {
               </ul>
             </div>
           </div>
+        </TabsContent>
+
+        <TabsContent value="blocked" className="space-y-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
+              <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                <Ban className="h-4 w-4 text-muted-foreground" />
+                Blocked Domains
+                <Badge variant="secondary" className="rounded-full px-2 py-0 text-xs font-semibold">
+                  {blockedDomains.length}/{DNS_BLOCKED_DOMAINS_MAX}
+                </Badge>
+              </CardTitle>
+              <Button
+                onClick={openCreateBlockedModal}
+                size="sm"
+                disabled={blockedDomains.length >= DNS_BLOCKED_DOMAINS_MAX}
+                className="cursor-pointer gap-1.5 font-semibold"
+              >
+                <Plus className="h-4 w-4" />
+                Add Domain
+              </Button>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="relative">
+                <Search className="pointer-events-none absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  type="text"
+                  value={blockedSearchQuery}
+                  onChange={(e) => setBlockedSearchQuery(e.target.value)}
+                  placeholder="ค้นหาโดเมนที่ถูกบล็อก..."
+                  className="h-9 pl-8 text-xs"
+                />
+              </div>
+
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="w-[35%] text-xs font-medium text-muted-foreground">Domain</TableHead>
+                    <TableHead className="w-[15%] text-xs font-medium text-muted-foreground">Mode</TableHead>
+                    <TableHead className="w-[30%] text-xs font-medium text-muted-foreground">Comment</TableHead>
+                    <TableHead className="w-[10%] text-xs font-medium text-muted-foreground">Enabled</TableHead>
+                    <TableHead className="w-[10%] text-right text-xs font-medium text-muted-foreground"></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredBlockedDomains.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="py-8 text-center text-xs text-muted-foreground">
+                        {blockedSearchQuery ? "ไม่พบโดเมนที่ค้นหา" : "ยังไม่มีโดเมนที่ถูกบล็อก"}
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    filteredBlockedDomains.map((b) => (
+                      <TableRow key={b.id}>
+                        <TableCell className="py-3">
+                          <span className="font-mono text-xs font-medium text-foreground">{b.domain}</span>
+                        </TableCell>
+                        <TableCell className="py-3">
+                          <Badge
+                            variant="outline"
+                            className={`rounded px-1.5 py-0 text-[10px] font-medium ${b.mode === "sinkhole"
+                              ? "border-warning/30 bg-warning/10 text-warning"
+                              : "border-primary/20 bg-primary/10 text-primary"
+                              }`}
+                          >
+                            {b.mode === "sinkhole" ? "Sinkhole" : "NXDOMAIN"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="max-w-[220px] truncate py-3 text-xs text-muted-foreground" title={b.comment}>
+                          {b.comment || "-"}
+                        </TableCell>
+                        <TableCell className="py-3">
+                          <Switch
+                            size="sm"
+                            checked={b.enabled}
+                            onCheckedChange={(checked) => handleToggleBlockedDomain(b.id, checked)}
+                            className="cursor-pointer"
+                          />
+                        </TableCell>
+                        <TableCell className="py-3 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              variant="outline"
+                              size="icon-sm"
+                              onClick={() => openEditBlockedModal(b)}
+                              className="cursor-pointer text-muted-foreground hover:text-foreground"
+                              title="แก้ไข"
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={() => handleDeleteBlockedDomain(b.id, b.domain)}
+                              className="cursor-pointer text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                              title="ลบ"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
+          {/* Info note */}
+          <div className="flex gap-2 rounded-lg border border-border bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
+            <Info className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="space-y-1">
+              <p><strong className="text-foreground">การบล็อกครอบคลุมโดเมนย่อยทั้งหมดโดยอัตโนมัติ</strong> — บล็อก <span className="font-mono">ads.example.com</span> จะบล็อก <span className="font-mono">www.ads.example.com</span> ด้วย ไม่มีโหมดบล็อกเฉพาะชื่อเดียว</p>
+              <p><strong className="text-foreground">NXDOMAIN</strong> ตอบว่าไม่พบโดเมน (ไม่ส่งต่อไป upstream) ส่วน <strong className="text-foreground">Sinkhole</strong> ตอบที่อยู่ 0.0.0.0/:: แทน — เหมาะกับกรณีที่ต้องการให้เบราว์เซอร์จัดการ error ได้ดีกว่า NXDOMAIN</p>
+              <p>ถ้าเคยสร้าง "โซนเปล่า" (ไม่มี records) ไว้เพื่อบล็อกโดเมนมาก่อน แนะนำให้ย้ายมาเพิ่มในแท็บนี้แทน แล้วลบโซนเปล่านั้นได้เอง</p>
+            </div>
+          </div>
+
+          {emptyZoneSuggestions.length > 0 && (
+            <div className="flex gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs leading-relaxed text-warning">
+              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <strong>พบโซนเปล่าที่อาจถูกสร้างไว้เพื่อบล็อกโดเมน (ไม่มี records):</strong>
+                <ul className="mt-1 list-disc space-y-0.5 pl-4 font-mono">
+                  {emptyZoneSuggestions.map(z => (
+                    <li key={z.id}>{z.zoneName}</li>
+                  ))}
+                </ul>
+                <p className="mt-1 font-sans">พิจารณาย้ายมาที่แท็บนี้ แล้วลบโซนเปล่าเหล่านั้นเองในแท็บ "Zones &amp; Records" (ระบบไม่ลบ/แปลงให้อัตโนมัติ)</p>
+              </div>
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="settings" className="space-y-4">
@@ -1419,6 +1663,111 @@ export default function DnsServer() {
                 className="cursor-pointer px-6 font-semibold"
               >
                 {isSaving ? "Saving..." : editingRecord ? "Save Record" : "Create Record"}
+              </Button>
+            </div>
+          </form>
+          </div>
+        </DrawerContent>
+      </Drawer>
+
+      {/* Blocked Domain Add/Edit Drawer */}
+      <Drawer direction="right" open={isBlockedModalOpen} onOpenChange={setIsBlockedModalOpen}>
+        <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[450px]">
+          <DrawerHeader className="border-b border-border/50">
+            <DrawerTitle className="text-base font-semibold">
+              {editingBlockedDomain ? "แก้ไขโดเมนที่ถูกบล็อก" : "เพิ่มโดเมนที่ต้องการบล็อก"}
+            </DrawerTitle>
+          </DrawerHeader>
+
+          <div className="flex-1 overflow-y-auto p-4">
+          <form onSubmit={handleSaveBlockedDomain} className="space-y-4 text-sm">
+            {blkError && (
+              <Alert variant="destructive" className="px-3 py-2.5">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-xs">{blkError}</AlertDescription>
+              </Alert>
+            )}
+
+            {/* Field: Domain */}
+            <div className="space-y-1.5">
+              <Label htmlFor="blk-domain" className="block text-xs font-medium text-muted-foreground">
+                Domain (โดเมนที่ต้องการบล็อก) <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="blk-domain"
+                type="text"
+                required
+                value={blkDomain}
+                onChange={(e) => setBlkDomain(e.target.value)}
+                placeholder="เช่น ads.example.com"
+                className="h-9 font-mono text-sm"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                บล็อกครอบคลุมโดเมนย่อยทั้งหมดโดยอัตโนมัติ (www.ads.example.com ก็จะถูกบล็อกด้วย)
+              </p>
+            </div>
+
+            {/* Field: Mode */}
+            <div className="space-y-1.5">
+              <Label htmlFor="blk-mode" className="block text-xs font-medium text-muted-foreground">
+                Mode (วิธีตอบกลับ)
+              </Label>
+              <Select value={blkMode} onValueChange={(v) => setBlkMode(v as "nxdomain" | "sinkhole")}>
+                <SelectTrigger id="blk-mode" className="h-9 w-full text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="nxdomain" className="text-xs">NXDOMAIN (ค่าเริ่มต้น — ไม่พบโดเมน)</SelectItem>
+                  <SelectItem value="sinkhole" className="text-xs">Sinkhole (ตอบ 0.0.0.0 / ::)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Field: Comment */}
+            <div className="space-y-1.5">
+              <Label htmlFor="blk-comment" className="block text-xs font-medium text-muted-foreground">
+                Comment (หมายเหตุ)
+              </Label>
+              <Input
+                id="blk-comment"
+                type="text"
+                value={blkComment}
+                onChange={(e) => setBlkComment(e.target.value)}
+                placeholder="เช่น ad network"
+                maxLength={128}
+                className="h-9 text-sm"
+              />
+            </div>
+
+            {/* Field: Enabled */}
+            <div className="flex items-center justify-between rounded-lg border border-border bg-muted/50 p-3">
+              <div className="space-y-0.5">
+                <Label className="text-xs font-semibold text-foreground">Enabled</Label>
+                <p className="text-[10px] text-muted-foreground">ปิดเพื่อพักการบล็อกชั่วคราวโดยไม่ต้องลบรายการ</p>
+              </div>
+              <Switch
+                checked={blkEnabled}
+                onCheckedChange={setBlkEnabled}
+                className="cursor-pointer"
+              />
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center justify-end gap-3 border-t border-border/50 pt-4">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setIsBlockedModalOpen(false)}
+                className="cursor-pointer text-muted-foreground"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={isSavingBlocked}
+                className="cursor-pointer px-6 font-semibold"
+              >
+                {isSavingBlocked ? "Saving..." : editingBlockedDomain ? "Save Changes" : "Add Domain"}
               </Button>
             </div>
           </form>

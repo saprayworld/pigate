@@ -2759,3 +2759,79 @@ func (r *Repository) SetDNSServerSettings(queryLogging bool, ttlMinutes int, max
 	)
 	return err
 }
+
+// GetBlockedDomains returns the DNS Server deny-list (docs/ref/todo/
+// dns-blocked-domains-plan.md), ordered by domain ascending.
+func (r *Repository) GetBlockedDomains() ([]model.BlockedDomain, error) {
+	rows, err := r.db.Query("SELECT id, domain, mode, enabled, comment, created_at FROM dns_blocked_domains ORDER BY domain ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	domains := []model.BlockedDomain{}
+	for rows.Next() {
+		var b model.BlockedDomain
+		var enabled int
+		if err := rows.Scan(&b.ID, &b.Domain, &b.Mode, &enabled, &b.Comment, &b.CreatedAt); err != nil {
+			return nil, err
+		}
+		b.Enabled = enabled == 1
+		domains = append(domains, b)
+	}
+	return domains, nil
+}
+
+// GetBlockedDomainByID returns a single deny-list entry, or nil if not found.
+func (r *Repository) GetBlockedDomainByID(id string) (*model.BlockedDomain, error) {
+	row := r.db.QueryRow("SELECT id, domain, mode, enabled, comment, created_at FROM dns_blocked_domains WHERE id = ?", id)
+	var b model.BlockedDomain
+	var enabled int
+	err := row.Scan(&b.ID, &b.Domain, &b.Mode, &enabled, &b.Comment, &b.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	b.Enabled = enabled == 1
+	return &b, nil
+}
+
+// CountBlockedDomains returns the current deny-list size, used by the handler
+// to enforce model.DNSBlockedDomainsMax before inserting a new row.
+func (r *Repository) CountBlockedDomains() (int, error) {
+	var count int
+	err := r.db.QueryRow("SELECT COUNT(*) FROM dns_blocked_domains").Scan(&count)
+	return count, err
+}
+
+func (r *Repository) CreateBlockedDomain(b model.BlockedDomain) error {
+	enabled := 0
+	if b.Enabled {
+		enabled = 1
+	}
+	_, err := r.db.Exec("INSERT INTO dns_blocked_domains (id, domain, mode, enabled, comment) VALUES (?, ?, ?, ?, ?)",
+		b.ID, b.Domain, b.Mode, enabled, b.Comment)
+	return err
+}
+
+func (r *Repository) UpdateBlockedDomain(b model.BlockedDomain) error {
+	enabled := 0
+	if b.Enabled {
+		enabled = 1
+	}
+	_, err := r.db.Exec("UPDATE dns_blocked_domains SET domain = ?, mode = ?, enabled = ?, comment = ? WHERE id = ?",
+		b.Domain, b.Mode, enabled, b.Comment, b.ID)
+	return err
+}
+
+func (r *Repository) DeleteBlockedDomain(id string) error {
+	_, err := r.db.Exec("DELETE FROM dns_blocked_domains WHERE id = ?", id)
+	return err
+}
+
+func (r *Repository) ToggleBlockedDomain(id string) error {
+	_, err := r.db.Exec("UPDATE dns_blocked_domains SET enabled = NOT enabled WHERE id = ?", id)
+	return err
+}

@@ -109,6 +109,9 @@ func (s *BackupService) Export(includeUsers bool, passphrase string) (*model.Bac
 	if cfg.DnsZones, err = s.repo.GetDNSZones(); err != nil {
 		return nil, fmt.Errorf("read dns zones: %w", err)
 	}
+	if cfg.BlockedDomains, err = s.repo.GetBlockedDomains(); err != nil {
+		return nil, fmt.Errorf("read dns blocked domains: %w", err)
+	}
 	dnsServerSettings, err := s.repo.GetDNSServerSettings()
 	if err != nil {
 		return nil, fmt.Errorf("read dns server settings: %w", err)
@@ -707,6 +710,16 @@ func validateConfig(cfg model.BackupConfig) error {
 			}
 		}
 	}
+	// Same fail-closed treatment for the deny-list (docs/ref/todo/
+	// dns-blocked-domains-plan.md §5 Caution 1): backup import is a write path
+	// that bypasses HandleCreateBlockedDomain/HandleUpdateBlockedDomain, so it
+	// must run through the same validator or a crafted backup could inject a
+	// dnsmasq directive via an embedded newline.
+	for _, b := range cfg.BlockedDomains {
+		if err := model.ValidateBlockedDomain(b); err != nil {
+			return fmt.Errorf("blocked domain %q: %w", b.Domain, err)
+		}
+	}
 	for _, res := range cfg.DhcpReservations {
 		if err := model.ValidateReservation(res); err != nil {
 			return fmt.Errorf("dhcp reservation %q: %w", res.DeviceName, err)
@@ -745,6 +758,7 @@ func configCounts(cfg model.BackupConfig) map[string]int {
 		"dhcpReservations": len(cfg.DhcpReservations),
 		"dnsZones":         len(cfg.DnsZones),
 		"dnsRecords":       records,
+		"blockedDomains":   len(cfg.BlockedDomains),
 		"qosRules":         len(cfg.QosRules),
 		"users":            len(cfg.Users),
 		"wifiPresets":      len(cfg.Presets),

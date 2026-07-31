@@ -149,6 +149,14 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("GET /api/dns/settings", s.HandleGetDNSServerSettings)
 	authRoute("PUT /api/dns/settings", s.HandleUpdateDNSServerSettings)
 
+	// 8.2 DNS Server — Blocked Domains (deny-list, docs/ref/todo/
+	// dns-blocked-domains-plan.md)
+	authRoute("GET /api/dns/blocked-domains", s.HandleGetBlockedDomains)
+	authRoute("POST /api/dns/blocked-domains", s.HandleCreateBlockedDomain)
+	authRoute("PUT /api/dns/blocked-domains/{id}", s.HandleUpdateBlockedDomain)
+	authRoute("DELETE /api/dns/blocked-domains/{id}", s.HandleDeleteBlockedDomain)
+	authRoute("POST /api/dns/blocked-domains/{id}/toggle", s.HandleToggleBlockedDomain)
+
 	// 9. System Management & Backup
 	authRoute("GET /api/system/info", s.HandleGetSystemInfo)
 	authRoute("GET /api/system/capabilities", s.HandleGetSystemCapabilities)
