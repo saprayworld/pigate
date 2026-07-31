@@ -873,7 +873,7 @@ Mock backend ไม่แตะ (mock DNS/DHCP ไม่เขียนไฟล
 (`TestImportRejectsDnsmasqInjection` — import ถูก reject, DB ไม่เปลี่ยน)
 
 
-### DNS Statistics — query logging moved to a file (2026-07-30, docs/ref/todo/statistics-dns-top-domain-plan.md)
+### DNS Statistics — query logging moved to a file (2026-07-30, docs/ref/complete/statistics-dns-top-domain-plan.md)
 
 When the user enables "DNS Statistics" (DNS Server page, off by default), `ApplyZones`
 now appends `log-queries` / `log-facility=/run/pigate/dnsmasq-queries.log` /
@@ -889,3 +889,33 @@ including why the reverse-cache TTL/cap live in `dns_server_settings` (DB) rathe
 `main.go` flag, and `install.sh`'s `RuntimeDirectoryPreserve=yes` (keeps
 `/run/pigate` — and therefore this log file's inode — alive across a
 `systemctl restart pigate`, not just a reboot).
+
+### DNS Server upstream resolvers, separated from System DNS (2026-07-31, docs/ref/complete/dns-server-settings-tab-and-upstream-plan.md)
+
+Before this change, `ApplyZones`'s upstream `server=` lines always came from
+`DNSService.GetDNSConfig()` (System DNS) — there was no way to point LAN clients at a
+different resolver than the device itself uses, and setting System DNS to the Pi's own
+IP created a resolution loop. `DNSServerSettings` now has `UpstreamMode`
+(`"system"` default | `"custom"`) + `UpstreamServers` (≤4 bare IPs, no `#port`/hostname/
+DoT/DoH — validated in `model.ValidateDNSServerSettings`). `system` mode preserves the
+exact prior byte-for-byte config output (locked by test); `custom` mode never touches
+`DNSService` at all — `resolveUpstreams()` in `service/dns_server.go` branches on mode.
+`kernel/dns_server.go`'s `buildDNSConfig` filters each entry through `net.ParseIP`
+**before** checking the resulting count, so an all-invalid or empty list can never emit
+`no-resolv` (which would leave dnsmasq with zero upstreams — DNS dead for the whole LAN).
+
+The other half of this change: `HandleUpdateDNSConfig` (System DNS's PUT handler) no
+longer calls `dnsServerService.ApplyAll()` — see the System DNS design doc's
+"Cross-reference: System DNS no longer drives DNS Server's upstream" for why. In
+`system` mode, DNS Server only re-reads System DNS's current value when the operator
+presses "Apply DNS Zones" on the DNS Server page — both pages now say so in the UI.
+
+The DNS Server page also gained a **Settings** tab (separate from **Zones & Records**,
+which stays the default) grouping Listen Interfaces, DNS Statistics, and the new
+Upstream Resolvers card — see the plan doc for the full frontend layout. Migration is
+a plain `ALTER TABLE` adding `upstream_mode`/`upstream_servers` with defaults, so
+existing installs upgrade with identical dnsmasq output. This work also closed a
+pre-existing gap: System DNS input (`primaryDns`/`secondaryDns`/`localDomain`) had never
+been validated on the backend (`model.ValidateDNSConfigInput`, new) — same
+config-file-injection class of issue as the 2026-07-12 fix above, just on the System DNS
+side instead of DNS Server.

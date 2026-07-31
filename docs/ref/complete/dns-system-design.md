@@ -296,4 +296,22 @@ interface อีก — เดิมมันต้องใช้สิทธ�
 Not part of this doc's scope (client-side resolution) — the opt-in "Top Queried Domains" /
 IP→domain enrichment feature lives entirely in the DNS **Server** (dnsmasq) path. See
 `docs/ref/complete/dnsmasq-design.md` ("DNS Statistics — query logging moved to a file")
-and `docs/ref/todo/statistics-dns-top-domain-plan.md` for the full design.
+and `docs/ref/complete/statistics-dns-top-domain-plan.md` for the full design.
+
+---
+
+## Cross-reference: System DNS no longer drives DNS Server's upstream (2026-07-31)
+
+`ApplyDNSConfig` above (§ "Re-apply behavior & idempotency guard") still governs the
+device's own resolver (`systemd-resolved` global drop-in) exactly as described — **that
+part is unchanged**. What changed is a caller one level up: `HandleUpdateDNSConfig`
+(`api/handlers.go`) used to also call `dnsServerService.ApplyAll()` on every System DNS
+save, which rewrote `pigate-dns.conf` and restarted dnsmasq as a side effect. That call
+has been **removed** — editing System DNS now only affects the device itself, never the
+DNS Server dnsmasq gives to LAN clients. DNS Server has its own independent upstream
+resolver setting (`DNSServerSettings.UpstreamMode`/`UpstreamServers`); when left at the
+default `"system"` mode it reads (not subscribes to) System DNS's current value, but only
+at the moment "Apply DNS Zones" is pressed — never automatically on a System DNS save.
+See `docs/ref/complete/dns-server-settings-tab-and-upstream-plan.md` and
+`docs/ref/complete/dnsmasq-design.md` ("DNS Server upstream resolvers, separated from
+System DNS") for the full design.
