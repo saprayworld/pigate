@@ -96,12 +96,12 @@ function UpDownLine({ up, down }: { up: number; down: number }) {
   return (
     <span className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
       <span className="flex items-center gap-0.5 text-primary">
-        <ArrowUp className="size-2.5" />
-        {fmtBytes(up)}
-      </span>
-      <span className="flex items-center gap-0.5">
         <ArrowDown className="size-2.5" />
         {fmtBytes(down)}
+      </span>
+      <span className="flex items-center gap-0.5">
+        <ArrowUp className="size-2.5" />
+        {fmtBytes(up)}
       </span>
     </span>
   )
@@ -206,8 +206,8 @@ function TopConversationsCard({ conversations }: { conversations: TopConversatio
                   <TableHead>Destination</TableHead>
                   <TableHead className="w-20">Proto</TableHead>
                   <TableHead className="w-20 text-right">Port</TableHead>
-                  <TableHead className="w-24 text-right">Up</TableHead>
                   <TableHead className="w-24 text-right">Down</TableHead>
+                  <TableHead className="w-24 text-right">Up</TableHead>
                   <TableHead className="w-24 text-right">Total</TableHead>
                 </TableRow>
               </TableHeader>
@@ -238,10 +238,10 @@ function TopConversationsCard({ conversations }: { conversations: TopConversatio
                     <TableCell className="text-xs font-mono">{c.proto}</TableCell>
                     <TableCell className="text-right text-xs font-mono">{c.dstPort}</TableCell>
                     <TableCell className="text-right text-xs font-mono text-primary">
-                      {fmtBytes(c.bytesUp)}
+                      {fmtBytes(c.bytesDown)}
                     </TableCell>
                     <TableCell className="text-right text-xs font-mono text-muted-foreground">
-                      {fmtBytes(c.bytesDown)}
+                      {fmtBytes(c.bytesUp)}
                     </TableCell>
                     <TableCell className="text-right text-xs font-mono text-muted-foreground">
                       {fmtBytes(c.bytes)}
