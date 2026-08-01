@@ -17,14 +17,11 @@ type TopHost struct {
 	MAC      string  `json:"mac"`
 	Bytes    uint64  `json:"bytes"`
 	Percent  float64 `json:"percent"`
-	// BytesUp/BytesDown split Bytes by direction relative to IP above:
-	// BytesUp is bytes IP sent, BytesDown is bytes IP received
+	// BytesUp/BytesDown split Bytes by the flow's own orig/reply direction
+	// (orig = up, reply = down), same convention for Top Source Hosts and
+	// Top Destinations alike — not relative to IP's own role in the flow
 	// (bytesUp + bytesDown == bytes always — docs/ref/todo/
-	// statistics-split-upload-download-bytes-plan.md §2.5). For Top Source
-	// Hosts this is the flow's natural orig/reply direction; for Top
-	// Destinations the direction is FLIPPED (reply = up, orig = down) since
-	// IP is on the destination side of the flow there — see buildTopHosts's
-	// flip parameter.
+	// statistics-split-upload-download-bytes-plan.md §2.5).
 	BytesUp   uint64 `json:"bytesUp"`
 	BytesDown uint64 `json:"bytesDown"`
 	// Private is true when IP is RFC1918/link-local/ULA (a LAN address). A

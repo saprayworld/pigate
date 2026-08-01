@@ -10,12 +10,10 @@ export interface TopHost {
   mac: string;
   bytes: number;
   percent: number;
-  // bytesUp/bytesDown split bytes by direction relative to ip: bytesUp is
-  // bytes ip sent, bytesDown is bytes it received (bytesUp + bytesDown ==
-  // bytes always). For Top Source Hosts this is the flow's natural
-  // orig-direction traffic; for Top Destinations it is FLIPPED (ip is on the
-  // destination side of the flow there) — docs/ref/todo/
-  // statistics-split-upload-download-bytes-plan.md §2.5.
+  // bytesUp/bytesDown split bytes by the flow's own orig/reply direction
+  // (src -> dst is up, dst -> src is down), same convention for Top Source
+  // Hosts and Top Destinations alike — not relative to ip's own role in the
+  // flow (bytesUp + bytesDown == bytes always).
   bytesUp: number;
   bytesDown: number;
   // True when ip is a LAN address (RFC1918/link-local/loopback/ULA). A
