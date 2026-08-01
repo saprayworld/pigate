@@ -247,7 +247,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                           className="data-active:bg-transparent data-active:hover:bg-transparent group-data-[collapsible=icon]:data-active:bg-primary/10! group-data-[collapsible=icon]:data-active:hover:bg-primary/10!"
                         >
                           {GroupIcon && <GroupIcon className="size-4" />}
-                          <span>{group.title}</span>
+                          <span className="text-nowrap">{group.title}</span>
                           <ChevronRight className="ml-auto size-4 shrink-0 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
                         </SidebarMenuButton>
                       </CollapsibleTrigger>
