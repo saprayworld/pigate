@@ -17,6 +17,16 @@ type TopHost struct {
 	MAC      string  `json:"mac"`
 	Bytes    uint64  `json:"bytes"`
 	Percent  float64 `json:"percent"`
+	// BytesUp/BytesDown split Bytes by direction relative to IP above:
+	// BytesUp is bytes IP sent, BytesDown is bytes IP received
+	// (bytesUp + bytesDown == bytes always — docs/ref/todo/
+	// statistics-split-upload-download-bytes-plan.md §2.5). For Top Source
+	// Hosts this is the flow's natural orig/reply direction; for Top
+	// Destinations the direction is FLIPPED (reply = up, orig = down) since
+	// IP is on the destination side of the flow there — see buildTopHosts's
+	// flip parameter.
+	BytesUp   uint64 `json:"bytesUp"`
+	BytesDown uint64 `json:"bytesDown"`
 	// Private is true when IP is RFC1918/link-local/ULA (a LAN address). A
 	// flow that originated from the internet can appear as "source" too
 	// (conntrack Forward tuple, plan Caution 7) — the UI uses this flag to
@@ -43,6 +53,11 @@ type TopConversation struct {
 	DstPort uint16  `json:"dstPort"`
 	Bytes   uint64  `json:"bytes"`
 	Percent float64 `json:"percent"`
+	// BytesUp/BytesDown split Bytes by direction relative to SrcIP (the row's
+	// owner): BytesUp = Orig (SrcIP -> DstIP), BytesDown = Reply (DstIP ->
+	// SrcIP). bytesUp + bytesDown == bytes always.
+	BytesUp   uint64 `json:"bytesUp"`
+	BytesDown uint64 `json:"bytesDown"`
 	// DstDomain is the domain name dnsmasq most recently answered for DstIP —
 	// display only, empty when unknown/expired (same source/rules as
 	// TopHost.Domain above). SrcIP has no equivalent field: it is always a LAN

@@ -892,6 +892,12 @@ type mockFlowTemplate struct {
 	dstPort    uint16
 	ratePerSec float64
 	instances  int
+	// upRatio is the fraction of ratePerSec attributed to the orig direction
+	// (srcIP -> dstIP, i.e. "upload" relative to srcIP); the remainder goes to
+	// reply (dstIP -> srcIP, "download"). Deliberately asymmetric per traffic
+	// type (e.g. a video stream is mostly download) so -mock=true dev mode
+	// visibly exercises the Statistics page's up/down split (plan T-04).
+	upRatio float64
 }
 
 // mockFlowTemplates deliberately reuses the same LAN IPs as MockDhcp's
@@ -903,16 +909,16 @@ type mockFlowTemplate struct {
 // into the "Other" category, so both matched and unmatched Protocol
 // Breakdown segments are exercised in dev.
 var mockFlowTemplates = []mockFlowTemplate{
-	{"192.168.1.101", "142.250.80.46", 6, 443, 9000, 3},    // iPhone-13: HTTPS video/streaming
-	{"192.168.1.101", "1.1.1.1", 17, 53, 40, 2},            // iPhone-13: DNS
-	{"192.168.1.102", "173.194.76.94", 6, 443, 26000, 3},   // Android-SmartTV: HTTPS video (dominant talker)
-	{"192.168.1.102", "64.233.166.127", 17, 5060, 1200, 2}, // Android-SmartTV: VoIP/SIP
-	{"192.168.1.102", "8.8.8.8", 17, 53, 35, 2},            // Android-SmartTV: DNS
-	{"192.168.1.105", "151.101.1.69", 6, 80, 3000, 3},      // iPad-Pro: HTTP browsing
-	{"192.168.1.105", "151.101.1.69", 6, 443, 4500, 3},     // iPad-Pro: HTTPS browsing
-	{"192.168.1.105", "203.0.113.55", 6, 51820, 800, 2},    // iPad-Pro: unmatched port -> "Other"
-	{"192.168.1.101", "45.33.32.156", 17, 6881, 500, 2},    // iPhone-13: unmatched port -> "Other"
-	{"192.168.1.102", "198.51.100.9", 6, 22, 150, 2},       // Android-SmartTV: unmatched port -> "Other"
+	{"192.168.1.101", "142.250.80.46", 6, 443, 9000, 3, 0.08},    // iPhone-13: HTTPS video/streaming (mostly download)
+	{"192.168.1.101", "1.1.1.1", 17, 53, 40, 2, 0.45},            // iPhone-13: DNS (roughly balanced)
+	{"192.168.1.102", "173.194.76.94", 6, 443, 26000, 3, 0.08},   // Android-SmartTV: HTTPS video (dominant talker, mostly download)
+	{"192.168.1.102", "64.233.166.127", 17, 5060, 1200, 2, 0.5},  // Android-SmartTV: VoIP/SIP (symmetric)
+	{"192.168.1.102", "8.8.8.8", 17, 53, 35, 2, 0.45},            // Android-SmartTV: DNS
+	{"192.168.1.105", "151.101.1.69", 6, 80, 3000, 3, 0.15},      // iPad-Pro: HTTP browsing (mostly download)
+	{"192.168.1.105", "151.101.1.69", 6, 443, 4500, 3, 0.15},     // iPad-Pro: HTTPS browsing (mostly download)
+	{"192.168.1.105", "203.0.113.55", 6, 51820, 800, 2, 0.5},     // iPad-Pro: unmatched port -> "Other" (VPN, roughly symmetric)
+	{"192.168.1.101", "45.33.32.156", 17, 6881, 500, 2, 0.35},    // iPhone-13: unmatched port -> "Other" (P2P, upload-heavy)
+	{"192.168.1.102", "198.51.100.9", 6, 22, 150, 2, 0.6},        // Android-SmartTV: unmatched port -> "Other" (SSH, upload-leaning)
 }
 
 // MockTrafficAccounting implements TrafficAccountingManager for local/mock
@@ -952,13 +958,16 @@ func (m *MockTrafficAccounting) DumpFlows() ([]model.FlowSample, error) {
 			// instances of the same template aren't perfectly identical.
 			jitter := 0.85 + 0.3*float64(i)/float64(t.instances)
 			bytes := uint64(perInstance * elapsed * jitter)
+			origBytes := uint64(float64(bytes) * t.upRatio)
+			replyBytes := bytes - origBytes
 			out = append(out, model.FlowSample{
-				Key:     fmt.Sprintf("mock-flow-%d-%d", ti, i),
-				SrcIP:   t.srcIP,
-				DstIP:   t.dstIP,
-				Proto:   t.proto,
-				DstPort: t.dstPort,
-				Bytes:   bytes,
+				Key:        fmt.Sprintf("mock-flow-%d-%d", ti, i),
+				SrcIP:      t.srcIP,
+				DstIP:      t.dstIP,
+				Proto:      t.proto,
+				DstPort:    t.dstPort,
+				BytesOrig:  origBytes,
+				BytesReply: replyBytes,
 			})
 		}
 	}
@@ -1020,13 +1029,16 @@ func (m *MockTrafficAccounting) WatchFlowEnd(ctx context.Context, cb func(model.
 				elapsed = 0
 			}
 			bytes := uint64((t.ratePerSec / float64(max(t.instances, 1))) * elapsed)
+			origBytes := uint64(float64(bytes) * t.upRatio)
+			replyBytes := bytes - origBytes
 			cb(model.FlowSample{
-				Key:     fmt.Sprintf("mock-flow-%d-0", ti),
-				SrcIP:   t.srcIP,
-				DstIP:   t.dstIP,
-				Proto:   t.proto,
-				DstPort: t.dstPort,
-				Bytes:   bytes,
+				Key:        fmt.Sprintf("mock-flow-%d-0", ti),
+				SrcIP:      t.srcIP,
+				DstIP:      t.dstIP,
+				Proto:      t.proto,
+				DstPort:    t.dstPort,
+				BytesOrig:  origBytes,
+				BytesReply: replyBytes,
 			})
 		}
 	}

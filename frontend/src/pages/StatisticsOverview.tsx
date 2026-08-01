@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { BarChart3, RefreshCw, TriangleAlert } from "lucide-react"
+import { ArrowDown, ArrowUp, BarChart3, RefreshCw, TriangleAlert } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -87,6 +87,26 @@ function HostBar({ percent }: { percent: number }) {
   )
 }
 
+// UpDownLine renders the small "↑ up · ↓ down" byte sub-line shared by
+// TopHostsCard rows and the Conversations table (docs/ref/todo/
+// statistics-split-upload-download-bytes-plan.md T-11). Uses theme-variable
+// colors only (text-primary/text-muted-foreground) — never raw palette
+// classes, per rules_of_work.md.
+function UpDownLine({ up, down }: { up: number; down: number }) {
+  return (
+    <span className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
+      <span className="flex items-center gap-0.5 text-primary">
+        <ArrowUp className="size-2.5" />
+        {fmtBytes(up)}
+      </span>
+      <span className="flex items-center gap-0.5">
+        <ArrowDown className="size-2.5" />
+        {fmtBytes(down)}
+      </span>
+    </span>
+  )
+}
+
 function HostLabel({ host }: { host: TopHost }) {
   // When the destination has a known domain (docs/ref/todo/
   // statistics-dns-top-domain-plan.md T-13), show it as the primary line and
@@ -152,8 +172,11 @@ function TopHostsCard({
             <div key={h.ip} className="space-y-1">
               <div className="flex items-center justify-between gap-3 text-sm">
                 <HostLabel host={h} />
-                <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                  {fmtBytes(h.bytes)} · {h.percent}%
+                <span className="shrink-0 text-right">
+                  <span className="block font-mono text-xs text-muted-foreground">
+                    {fmtBytes(h.bytes)} · {h.percent}%
+                  </span>
+                  <UpDownLine up={h.bytesUp} down={h.bytesDown} />
                 </span>
               </div>
               <HostBar percent={h.percent} />
@@ -183,7 +206,9 @@ function TopConversationsCard({ conversations }: { conversations: TopConversatio
                   <TableHead>Destination</TableHead>
                   <TableHead className="w-20">Proto</TableHead>
                   <TableHead className="w-20 text-right">Port</TableHead>
-                  <TableHead className="w-32 text-right">Bytes</TableHead>
+                  <TableHead className="w-24 text-right">Up</TableHead>
+                  <TableHead className="w-24 text-right">Down</TableHead>
+                  <TableHead className="w-24 text-right">Total</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -212,6 +237,12 @@ function TopConversationsCard({ conversations }: { conversations: TopConversatio
                     </TableCell>
                     <TableCell className="text-xs font-mono">{c.proto}</TableCell>
                     <TableCell className="text-right text-xs font-mono">{c.dstPort}</TableCell>
+                    <TableCell className="text-right text-xs font-mono text-primary">
+                      {fmtBytes(c.bytesUp)}
+                    </TableCell>
+                    <TableCell className="text-right text-xs font-mono text-muted-foreground">
+                      {fmtBytes(c.bytesDown)}
+                    </TableCell>
                     <TableCell className="text-right text-xs font-mono text-muted-foreground">
                       {fmtBytes(c.bytes)}
                     </TableCell>

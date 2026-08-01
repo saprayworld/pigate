@@ -56,13 +56,13 @@ func TestStatisticsService_RecordFirewallLog_OnlyCountsDrop(t *testing.T) {
 func TestStatisticsService_GetStatistics_ComposesFromBreakdown(t *testing.T) {
 	acct := &fakeTrafficAccounting{
 		flowResponses: [][]model.FlowSample{
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, Bytes: 0}},
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, Bytes: 1000}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, BytesOrig: 0, BytesReply: 0}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, BytesOrig: 200, BytesReply: 800}},
 		},
 	}
 	s := newTestStatisticsService(t, acct)
 	s.traffic.poll() // seed
-	s.traffic.poll() // delta 1000
+	s.traffic.poll() // delta 1000 (orig 200 / reply 800)
 
 	stats := s.GetStatistics("1h")
 	if stats.ObservedBytes != 1000 {
@@ -71,11 +71,20 @@ func TestStatisticsService_GetStatistics_ComposesFromBreakdown(t *testing.T) {
 	if len(stats.TopSources) != 1 || stats.TopSources[0].IP != "192.168.1.50" || stats.TopSources[0].Bytes != 1000 {
 		t.Fatalf("unexpected top sources: %+v", stats.TopSources)
 	}
+	if stats.TopSources[0].BytesUp != 200 || stats.TopSources[0].BytesDown != 800 {
+		t.Fatalf("expected TopSources up=200/down=800 (orig=up for a source row), got %+v", stats.TopSources[0])
+	}
 	if !stats.TopSources[0].Private {
 		t.Fatalf("expected 192.168.1.50 to be flagged Private (RFC1918)")
 	}
 	if len(stats.TopDestinations) != 1 || stats.TopDestinations[0].IP != "8.8.8.8" || stats.TopDestinations[0].Bytes != 1000 {
 		t.Fatalf("unexpected top destinations: %+v", stats.TopDestinations)
+	}
+	// Top Destinations flips direction relative to TopSources (plan §2.5):
+	// the IP is on the dst side of the flow, so its "up" is the flow's Reply
+	// direction, not Orig.
+	if stats.TopDestinations[0].BytesUp != 800 || stats.TopDestinations[0].BytesDown != 200 {
+		t.Fatalf("expected TopDestinations up=800/down=200 (flipped vs TopSources), got %+v", stats.TopDestinations[0])
 	}
 	if stats.TopDestinations[0].Private {
 		t.Fatalf("expected 8.8.8.8 to NOT be flagged Private")
@@ -87,9 +96,25 @@ func TestStatisticsService_GetStatistics_ComposesFromBreakdown(t *testing.T) {
 	if conv.SrcIP != "192.168.1.50" || conv.DstIP != "8.8.8.8" || conv.Proto != "UDP" || conv.DstPort != 53 || conv.Bytes != 1000 {
 		t.Fatalf("unexpected conversation row: %+v", conv)
 	}
+	if conv.BytesUp != 200 || conv.BytesDown != 800 {
+		t.Fatalf("expected conversation up=200/down=800 (relative to SrcIP, same as TopSources), got %+v", conv)
+	}
 	for _, h := range stats.TopSources {
 		if h.Bytes > stats.ObservedBytes {
 			t.Fatalf("top source bytes exceed observedBytes: %+v", h)
+		}
+		if h.BytesUp+h.BytesDown != h.Bytes {
+			t.Fatalf("expected bytesUp+bytesDown == bytes for every TopSources row, got %+v", h)
+		}
+	}
+	for _, h := range stats.TopDestinations {
+		if h.BytesUp+h.BytesDown != h.Bytes {
+			t.Fatalf("expected bytesUp+bytesDown == bytes for every TopDestinations row, got %+v", h)
+		}
+	}
+	for _, c := range stats.TopConversations {
+		if c.BytesUp+c.BytesDown != c.Bytes {
+			t.Fatalf("expected bytesUp+bytesDown == bytes for every TopConversations row, got %+v", c)
 		}
 	}
 }
@@ -212,8 +237,8 @@ func TestStatisticsService_DomainRingCap(t *testing.T) {
 func TestStatisticsService_ClearDNSStats(t *testing.T) {
 	acct := &fakeTrafficAccounting{
 		flowResponses: [][]model.FlowSample{
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "142.250.80.46", Proto: 6, DstPort: 443, Bytes: 0}},
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "142.250.80.46", Proto: 6, DstPort: 443, Bytes: 1000}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "142.250.80.46", Proto: 6, DstPort: 443, BytesOrig: 0, BytesReply: 0}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "142.250.80.46", Proto: 6, DstPort: 443, BytesOrig: 150, BytesReply: 850}},
 		},
 	}
 	s := newTestStatisticsService(t, acct)
@@ -255,8 +280,8 @@ func TestStatisticsService_ClearDNSStats(t *testing.T) {
 func TestStatisticsService_TopHostsConversations_RegressionWhenDNSStatsEmpty(t *testing.T) {
 	acct := &fakeTrafficAccounting{
 		flowResponses: [][]model.FlowSample{
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, Bytes: 0}},
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, Bytes: 1000}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, BytesOrig: 0, BytesReply: 0}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, BytesOrig: 250, BytesReply: 750}},
 		},
 	}
 	s := newTestStatisticsService(t, acct)
@@ -284,6 +309,39 @@ func TestStatisticsService_TopHostsConversations_RegressionWhenDNSStatsEmpty(t *
 // TestStatisticsService_ConcurrentDNSEventsAndSetLimits is T-11 item 14: run
 // RecordDNSEvent + GetStatistics + SetReverseCacheLimits concurrently under
 // `go test -race`.
+// TestStatisticsService_TopDestinationsFlipsDirectionVsTopSources is plan
+// T-08 case 6 (§2.5 lock): a single LAN->internet flow must show up as
+// "up-heavy" in Top Source Hosts (the LAN IP's own perspective, Orig) and as
+// the OPPOSITE direction in Top Destinations (the internet IP's perspective,
+// Reply flipped to "up") — guarding against a future change accidentally
+// un-flipping buildTopHosts.
+func TestStatisticsService_TopDestinationsFlipsDirectionVsTopSources(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 0, BytesReply: 0}},
+			// Deliberately lopsided: 100 orig (LAN->internet, upload) vs 9000
+			// reply (internet->LAN, download) — a typical download-heavy flow.
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 100, BytesReply: 9000}},
+		},
+	}
+	s := newTestStatisticsService(t, acct)
+	s.traffic.poll()
+	s.traffic.poll()
+
+	stats := s.GetStatistics("1h")
+	if len(stats.TopSources) != 1 || len(stats.TopDestinations) != 1 {
+		t.Fatalf("expected exactly one source and one destination row, got sources=%+v dests=%+v", stats.TopSources, stats.TopDestinations)
+	}
+	src := stats.TopSources[0]
+	dst := stats.TopDestinations[0]
+	if src.BytesUp != 100 || src.BytesDown != 9000 {
+		t.Fatalf("expected LAN source row up=100 (orig)/down=9000 (reply), got %+v", src)
+	}
+	if dst.BytesUp != 9000 || dst.BytesDown != 100 {
+		t.Fatalf("expected internet destination row FLIPPED to up=9000 (reply)/down=100 (orig), got %+v", dst)
+	}
+}
+
 func TestStatisticsService_ConcurrentDNSEventsAndSetLimits(t *testing.T) {
 	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
 	s.SetDNSLoggingEnabled(true)

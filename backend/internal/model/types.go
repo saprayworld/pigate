@@ -618,8 +618,16 @@ type FlowSample struct {
 	DstIP   string
 	Proto   uint8
 	DstPort uint16
-	Bytes   uint64
+	// BytesOrig is the SrcIP -> DstIP direction (conntrack Forward tuple /
+	// CTA_COUNTERS_ORIG), always pre-NAT relative to SrcIP above.
+	BytesOrig uint64
+	// BytesReply is the DstIP -> SrcIP direction (conntrack Reverse tuple /
+	// CTA_COUNTERS_REPLY).
+	BytesReply uint64
 }
+
+// TotalBytes returns the combined byte count of both directions.
+func (f FlowSample) TotalBytes() uint64 { return f.BytesOrig + f.BytesReply }
 
 // RuleCounter is the bytes/packets nftables has counted for one DB policy
 // rule id, summed across every nft rule expansion that carries that id in its

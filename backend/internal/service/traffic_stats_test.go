@@ -89,8 +89,8 @@ func newTestTrafficStatsService(t *testing.T, acct *fakeTrafficAccounting, dhcp 
 func TestTrafficStats_SeedThenDelta(t *testing.T) {
 	acct := &fakeTrafficAccounting{
 		flowResponses: [][]model.FlowSample{
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 1000}},
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 1500}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 200, BytesReply: 800}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 300, BytesReply: 1200}},
 		},
 	}
 	s := newTestTrafficStatsService(t, acct, nil)
@@ -114,12 +114,12 @@ func TestTrafficStats_SeedThenDelta(t *testing.T) {
 func TestTrafficStats_NegativeDeltaClamped(t *testing.T) {
 	acct := &fakeTrafficAccounting{
 		flowResponses: [][]model.FlowSample{
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 5000}},
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 5000}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 1000, BytesReply: 4000}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 1000, BytesReply: 4000}},
 			// A brand-new flow reusing the same key with a smaller byte count
 			// (would happen if a dead flow's key were reused) must clamp to 0,
-			// never underflow.
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 100}},
+			// never underflow, in BOTH directions independently.
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 20, BytesReply: 80}},
 		},
 	}
 	s := newTestTrafficStatsService(t, acct, nil)
@@ -162,8 +162,8 @@ func TestTrafficStats_Categorization(t *testing.T) {
 		flowResponses: [][]model.FlowSample{
 			// proto 6 (TCP) dstPort 443 matches the default "HTTPS" object
 			// seeded by migrations (see newTestTrafficStatsService).
-			{{Key: "https", SrcIP: "192.168.1.10", Proto: 6, DstPort: 443, Bytes: 0}},
-			{{Key: "https", SrcIP: "192.168.1.10", Proto: 6, DstPort: 443, Bytes: 1000}},
+			{{Key: "https", SrcIP: "192.168.1.10", Proto: 6, DstPort: 443, BytesOrig: 0, BytesReply: 0}},
+			{{Key: "https", SrcIP: "192.168.1.10", Proto: 6, DstPort: 443, BytesOrig: 150, BytesReply: 850}},
 		},
 	}
 	s := newTestTrafficStatsService(t, acct, nil)
@@ -186,15 +186,19 @@ func TestTrafficStats_Categorization(t *testing.T) {
 func TestTrafficStats_OnFlowEnd_CreditsOnlyDeltaAboveBaseline(t *testing.T) {
 	acct := &fakeTrafficAccounting{
 		flowResponses: [][]model.FlowSample{
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 0}},    // seed
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 1000}}, // delta 1000
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 0, BytesReply: 0}},       // seed
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 200, BytesReply: 800}}, // delta 1000 (200/800)
 		},
 	}
 	s := newTestTrafficStatsService(t, acct, nil)
 	s.poll() // seed
-	s.poll() // delta 1000, baseline now 1000
+	s.poll() // delta 1000, baseline now (200,800)
 
-	s.onFlowEnd(model.FlowSample{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 1500})
+	// plan T-08 case 1 (§5): poll saw (200,800) -> event reports the flow's
+	// final cumulative count as (300,1200). onFlowEnd must credit only the
+	// (100,400) difference — total observed across poll+event must be 1500,
+	// never 1000+1500=2500.
+	s.onFlowEnd(model.FlowSample{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 300, BytesReply: 1200})
 
 	detail := s.GetTrafficDetail("1h")
 	if detail.ObservedBytes != 1500 {
@@ -202,6 +206,13 @@ func TestTrafficStats_OnFlowEnd_CreditsOnlyDeltaAboveBaseline(t *testing.T) {
 	}
 	if _, exists := s.flowState["f1"]; exists {
 		t.Fatalf("expected flowState baseline for f1 to be deleted after onFlowEnd, so a later poll cannot double-credit it")
+	}
+
+	// plan T-08 case 1: up/down must reflect the final cumulative split, not
+	// just the combined total (300 orig, 1200 reply).
+	bd := s.GetTrafficBreakdown("1h")
+	if got := bd.Hosts["192.168.1.50"]; got.Total() != 1500 || got.Orig != 300 || got.Reply != 1200 {
+		t.Fatalf("expected host total=1500 orig=300 reply=1200, got %+v", got)
 	}
 }
 
@@ -213,7 +224,7 @@ func TestTrafficStats_OnFlowEnd_CreditsOnlyDeltaAboveBaseline(t *testing.T) {
 func TestTrafficStats_OnFlowEnd_NoBaselineCreditsFull(t *testing.T) {
 	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
 
-	s.onFlowEnd(model.FlowSample{Key: "never-polled", SrcIP: "192.168.1.60", DstIP: "1.1.1.1", Proto: 17, DstPort: 53, Bytes: 777})
+	s.onFlowEnd(model.FlowSample{Key: "never-polled", SrcIP: "192.168.1.60", DstIP: "1.1.1.1", Proto: 17, DstPort: 53, BytesOrig: 300, BytesReply: 477})
 
 	detail := s.GetTrafficDetail("1h")
 	if detail.ObservedBytes != 777 {
@@ -221,6 +232,13 @@ func TestTrafficStats_OnFlowEnd_NoBaselineCreditsFull(t *testing.T) {
 	}
 	if len(detail.TopTalkers) != 1 || detail.TopTalkers[0].IP != "192.168.1.60" || detail.TopTalkers[0].Bytes != 777 {
 		t.Fatalf("unexpected top talkers: %+v", detail.TopTalkers)
+	}
+
+	// plan T-08 case 2: event of a key poll never saw credits BOTH
+	// directions in full, not just the combined total.
+	bd := s.GetTrafficBreakdown("1h")
+	if got := bd.Hosts["192.168.1.60"]; got.Orig != 300 || got.Reply != 477 {
+		t.Fatalf("expected full-credit both directions orig=300 reply=477, got %+v", got)
 	}
 }
 
@@ -233,7 +251,7 @@ func TestTrafficStats_OnFlowEnd_NoBaselineCreditsFull(t *testing.T) {
 func TestTrafficStats_OnFlowEnd_AfterPruneDoesNotGoNegative(t *testing.T) {
 	acct := &fakeTrafficAccounting{
 		flowResponses: [][]model.FlowSample{
-			{{Key: "f-prune", SrcIP: "192.168.1.70", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 500}}, // seed
+			{{Key: "f-prune", SrcIP: "192.168.1.70", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 100, BytesReply: 400}}, // seed
 			{}, // miss 1
 			{}, // miss 2
 			{}, // miss 3 -> flowStaleMisses reached, baseline pruned
@@ -247,11 +265,45 @@ func TestTrafficStats_OnFlowEnd_AfterPruneDoesNotGoNegative(t *testing.T) {
 		t.Fatalf("expected f-prune baseline to already be pruned after %d consecutive misses", flowStaleMisses)
 	}
 
-	s.onFlowEnd(model.FlowSample{Key: "f-prune", SrcIP: "192.168.1.70", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 900})
+	s.onFlowEnd(model.FlowSample{Key: "f-prune", SrcIP: "192.168.1.70", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 300, BytesReply: 600})
 
 	detail := s.GetTrafficDetail("1h")
 	if detail.ObservedBytes != 900 {
 		t.Fatalf("expected onFlowEnd to credit the full 900 bytes (no baseline survives the prune) without going negative/underflowed, got observed=%d", detail.ObservedBytes)
+	}
+
+	// plan T-08 case 3: after a prune, neither direction may underflow —
+	// both must simply be credited in full (no baseline to diff against).
+	bd := s.GetTrafficBreakdown("1h")
+	if got := bd.Hosts["192.168.1.70"]; got.Orig != 300 || got.Reply != 600 {
+		t.Fatalf("expected full-credit both directions after prune orig=300 reply=600, got %+v", got)
+	}
+}
+
+// TestTrafficStats_ProcessFlows_OneDirectionRegressesClampsIndependently is
+// plan T-08 case 4: a flow whose orig counter regresses (key collision/NAT
+// port reuse) while reply keeps growing normally must clamp ONLY the
+// regressed direction to 0, not treat the whole flow as invalid — the reply
+// direction's legitimate delta must still be counted (plan §5 Caution 3).
+func TestTrafficStats_ProcessFlows_OneDirectionRegressesClampsIndependently(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "f1", SrcIP: "192.168.1.80", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 5000, BytesReply: 1000}},
+			// orig regresses 5000 -> 1000 (must clamp to 0), reply grows
+			// normally 1000 -> 1600 (must credit the full 600 delta).
+			{{Key: "f1", SrcIP: "192.168.1.80", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 1000, BytesReply: 1600}},
+		},
+	}
+	s := newTestTrafficStatsService(t, acct, nil)
+	s.poll() // seed
+	s.poll() // orig delta clamped to 0, reply delta 600
+
+	bd := s.GetTrafficBreakdown("1h")
+	if bd.Observed != 600 {
+		t.Fatalf("expected only the reply direction's 600-byte delta observed (orig clamped, not underflowed), got %d", bd.Observed)
+	}
+	if got := bd.Hosts["192.168.1.80"]; got.Orig != 0 || got.Reply != 600 {
+		t.Fatalf("expected orig clamped to 0 and reply credited 600, got %+v", got)
 	}
 }
 
@@ -293,7 +345,7 @@ func (a *raceFakeAcct) DumpFlows() ([]model.FlowSample, error) {
 	b := a.bytes
 	a.mu.Unlock()
 	return []model.FlowSample{
-		{Key: "race-flow", SrcIP: "192.168.1.77", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: b},
+		{Key: "race-flow", SrcIP: "192.168.1.77", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: b / 5, BytesReply: b - b/5},
 	}, nil
 }
 
@@ -335,12 +387,13 @@ func TestTrafficStats_GetTrafficDetailNoRaceWithPoll(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < iterations; i++ {
 			s.onFlowEnd(model.FlowSample{
-				Key:     fmt.Sprintf("race-event-%d", i),
-				SrcIP:   "192.168.1.99",
-				DstIP:   "1.1.1.1",
-				Proto:   17,
-				DstPort: 53,
-				Bytes:   uint64(i + 1),
+				Key:        fmt.Sprintf("race-event-%d", i),
+				SrcIP:      "192.168.1.99",
+				DstIP:      "1.1.1.1",
+				Proto:      17,
+				DstPort:    53,
+				BytesOrig:  uint64(i + 1),
+				BytesReply: uint64(i + 1),
 			})
 		}
 	}()
@@ -364,19 +417,20 @@ func TestTrafficStats_ProcessFlows_CapsTrackedFlows(t *testing.T) {
 	flows := make([]model.FlowSample, maxTrackedFlows+500)
 	for i := range flows {
 		flows[i] = model.FlowSample{
-			Key:     fmt.Sprintf("flow-%d", i),
-			SrcIP:   "10.0.0.1",
-			DstIP:   "1.1.1.1",
-			Proto:   6,
-			DstPort: 443,
-			Bytes:   uint64(i),
+			Key:        fmt.Sprintf("flow-%d", i),
+			SrcIP:      "10.0.0.1",
+			DstIP:      "1.1.1.1",
+			Proto:      6,
+			DstPort:    443,
+			BytesOrig:  uint64(i),
+			BytesReply: uint64(i) * 2,
 		}
 	}
 
-	hostDeltas := make(map[string]uint64)
+	hostDeltas := make(map[string]dirBytes)
 	catDeltas := make(map[string]uint64)
-	dstDeltas := make(map[string]uint64)
-	convDeltas := make(map[string]uint64)
+	dstDeltas := make(map[string]dirBytes)
+	convDeltas := make(map[string]dirBytes)
 	s.processFlows(flows, hostDeltas, catDeltas, dstDeltas, convDeltas) // seed poll — still populates flowState
 
 	if len(s.flowState) > maxTrackedFlows {
@@ -405,28 +459,28 @@ func TestMergeUint64Map_CapsNewKeys(t *testing.T) {
 func TestGetTrafficBreakdown_DstAndConvDeltas(t *testing.T) {
 	acct := &fakeTrafficAccounting{
 		flowResponses: [][]model.FlowSample{
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, Bytes: 1000}},
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, Bytes: 1500}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, BytesOrig: 200, BytesReply: 800}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, BytesOrig: 300, BytesReply: 1200}},
 		},
 	}
 	s := newTestTrafficStatsService(t, acct, nil)
 
 	s.poll() // seed only
-	s.poll() // delta = 500
+	s.poll() // delta = 500 (orig 100 / reply 400)
 
 	bd := s.GetTrafficBreakdown("1h")
 	if bd.Observed != 500 {
 		t.Fatalf("expected observed=500, got %d", bd.Observed)
 	}
-	if bd.Hosts["192.168.1.50"] != 500 {
-		t.Fatalf("expected host delta 500, got %+v", bd.Hosts)
+	if got := bd.Hosts["192.168.1.50"]; got.Total() != 500 || got.Orig != 100 || got.Reply != 400 {
+		t.Fatalf("expected host delta total=500 orig=100 reply=400, got %+v", got)
 	}
-	if bd.Dests["8.8.8.8"] != 500 {
-		t.Fatalf("expected dest delta 500, got %+v", bd.Dests)
+	if got := bd.Dests["8.8.8.8"]; got.Total() != 500 || got.Orig != 100 || got.Reply != 400 {
+		t.Fatalf("expected dest delta total=500 orig=100 reply=400, got %+v", got)
 	}
 	wantKey := convKey(model.FlowSample{SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53})
-	if bd.Convs[wantKey] != 500 {
-		t.Fatalf("expected conversation delta 500 for key %q, got %+v", wantKey, bd.Convs)
+	if got := bd.Convs[wantKey]; got.Total() != 500 || got.Orig != 100 || got.Reply != 400 {
+		t.Fatalf("expected conversation delta total=500 orig=100 reply=400 for key %q, got %+v", wantKey, got)
 	}
 }
 
@@ -437,26 +491,26 @@ func TestGetTrafficBreakdown_DstAndConvDeltas(t *testing.T) {
 func TestGetTrafficBreakdown_OnFlowEndDoesNotDoubleCountDstConv(t *testing.T) {
 	acct := &fakeTrafficAccounting{
 		flowResponses: [][]model.FlowSample{
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 0}},
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 1000}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 0, BytesReply: 0}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 200, BytesReply: 800}},
 		},
 	}
 	s := newTestTrafficStatsService(t, acct, nil)
 	s.poll() // seed
-	s.poll() // delta 1000, baseline now 1000
+	s.poll() // delta 1000, baseline now (200,800)
 
-	s.onFlowEnd(model.FlowSample{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, Bytes: 1500})
+	s.onFlowEnd(model.FlowSample{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 300, BytesReply: 1200})
 
 	bd := s.GetTrafficBreakdown("1h")
 	if bd.Observed != 1500 {
 		t.Fatalf("expected observed=1500 (no double count), got %d", bd.Observed)
 	}
-	if bd.Dests["1.1.1.1"] != 1500 {
-		t.Fatalf("expected dest total 1500 (no double count), got %+v", bd.Dests)
+	if got := bd.Dests["1.1.1.1"]; got.Total() != 1500 {
+		t.Fatalf("expected dest total 1500 (no double count), got %+v", got)
 	}
 	wantKey := convKey(model.FlowSample{SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443})
-	if bd.Convs[wantKey] != 1500 {
-		t.Fatalf("expected conversation total 1500 (no double count), got %+v", bd.Convs)
+	if got := bd.Convs[wantKey]; got.Total() != 1500 {
+		t.Fatalf("expected conversation total 1500 (no double count), got %+v", got)
 	}
 }
 
@@ -466,18 +520,18 @@ func TestGetTrafficBreakdown_OnFlowEndDoesNotDoubleCountDstConv(t *testing.T) {
 func TestGetTrafficBreakdown_OnFlowEndNoBaselineCreditsDstConvInFull(t *testing.T) {
 	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
 
-	s.onFlowEnd(model.FlowSample{Key: "never-polled", SrcIP: "192.168.1.60", DstIP: "9.9.9.9", Proto: 17, DstPort: 53, Bytes: 777})
+	s.onFlowEnd(model.FlowSample{Key: "never-polled", SrcIP: "192.168.1.60", DstIP: "9.9.9.9", Proto: 17, DstPort: 53, BytesOrig: 333, BytesReply: 444})
 
 	bd := s.GetTrafficBreakdown("1h")
-	if bd.Hosts["192.168.1.60"] != 777 {
-		t.Fatalf("expected host credited in full, got %+v", bd.Hosts)
+	if got := bd.Hosts["192.168.1.60"]; got.Total() != 777 {
+		t.Fatalf("expected host credited in full, got %+v", got)
 	}
-	if bd.Dests["9.9.9.9"] != 777 {
-		t.Fatalf("expected dest credited in full, got %+v", bd.Dests)
+	if got := bd.Dests["9.9.9.9"]; got.Total() != 777 {
+		t.Fatalf("expected dest credited in full, got %+v", got)
 	}
 	wantKey := convKey(model.FlowSample{SrcIP: "192.168.1.60", DstIP: "9.9.9.9", Proto: 17, DstPort: 53})
-	if bd.Convs[wantKey] != 777 {
-		t.Fatalf("expected conversation credited in full for key %q, got %+v", wantKey, bd.Convs)
+	if got := bd.Convs[wantKey]; got.Total() != 777 {
+		t.Fatalf("expected conversation credited in full for key %q, got %+v", wantKey, got)
 	}
 }
 
@@ -497,13 +551,12 @@ func TestGetTrafficBreakdown_CapsConversationsAndReportsTruncated(t *testing.T) 
 			DstIP:   fmt.Sprintf("10.0.%d.%d", i/255, i%255),
 			Proto:   6,
 			DstPort: uint16(1000 + i%1000),
-			Bytes:   0,
 		}
 	}
-	hostDeltas := make(map[string]uint64)
+	hostDeltas := make(map[string]dirBytes)
 	catDeltas := make(map[string]uint64)
-	dstDeltas := make(map[string]uint64)
-	convDeltas := make(map[string]uint64)
+	dstDeltas := make(map[string]dirBytes)
+	convDeltas := make(map[string]dirBytes)
 	// This must not panic even though every key is brand new (seed poll).
 	s.processFlows(flows, hostDeltas, catDeltas, dstDeltas, convDeltas)
 	s.addBucket(time.Now(), hostDeltas, catDeltas, nil, dstDeltas, convDeltas, 0)
@@ -511,12 +564,13 @@ func TestGetTrafficBreakdown_CapsConversationsAndReportsTruncated(t *testing.T) 
 	// A second pass with nonzero deltas so the caps are exercised on the
 	// live path (seed rounds never populate deltas).
 	for i := range flows {
-		flows[i].Bytes = 100
+		flows[i].BytesOrig = 20
+		flows[i].BytesReply = 80
 	}
-	hostDeltas = make(map[string]uint64)
+	hostDeltas = make(map[string]dirBytes)
 	catDeltas = make(map[string]uint64)
-	dstDeltas = make(map[string]uint64)
-	convDeltas = make(map[string]uint64)
+	dstDeltas = make(map[string]dirBytes)
+	convDeltas = make(map[string]dirBytes)
 	s.processFlows(flows, hostDeltas, catDeltas, dstDeltas, convDeltas)
 	s.addBucket(time.Now(), hostDeltas, catDeltas, nil, dstDeltas, convDeltas, 0)
 

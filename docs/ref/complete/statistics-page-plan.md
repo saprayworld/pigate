@@ -26,7 +26,8 @@
 - **แยก byte เป็น upload/download ต่อ host** — ทำได้ (conntrack มี Forward/Reverse
   แยกกันอยู่แล้ว แต่ `flowsToSamples` บวกรวมทิ้งที่ `real_traffic_account.go:95`)
   แต่ต้องแก้ baseline ของ `onFlowEnd` เป็น 2 ชุด ซึ่งเสี่ยงต่อ invariant "ห้ามนับซ้ำ"
-  ของ Phase 2 → **เลื่อนไป Phase ถัดไป**
+  ของ Phase 2 → **เลื่อนไป Phase ถัดไป** — ทำแล้วใน
+  `docs/ref/todo/statistics-split-upload-download-bytes-plan.md` (Issue #107)
 - **SrcPort ใน `model.FlowSample`** — ไม่มีในโครงสร้างปัจจุบัน จึงไม่ทำ session row
   แบบ 5-tuple เต็ม ใช้ 4-tuple (src, dst, proto, dstPort) แทน ซึ่งเป็นสิ่งที่ผู้ใช้
   อยากเห็นจริง (src port เป็น ephemeral ไม่มีความหมายในการจัดอันดับ)
