@@ -3,13 +3,6 @@ import { BarChart3, RefreshCw, TriangleAlert } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
@@ -31,6 +24,7 @@ import {
   type TopHost,
   type TrafficStatistics,
 } from "@/services/statisticsService"
+import { useStatsWindow, StatsWindowSelect } from "@/components/statistics/DnsStatsShared"
 
 const REFRESH_INTERVAL = 10_000
 
@@ -357,8 +351,8 @@ function TopDeniedCard({
   )
 }
 
-export default function Statistics() {
-  const [window_, setWindow] = useState<"1h" | "24h">("1h")
+export default function StatisticsOverview() {
+  const [window_, setWindow] = useStatsWindow()
   const [stats, setStats] = useState<TrafficStatistics | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -409,22 +403,14 @@ export default function Statistics() {
             <BarChart3 className="size-5" />
           </div>
           <div>
-            <h1 className="text-lg font-bold tracking-tight">Statistics</h1>
+            <h1 className="text-lg font-bold tracking-tight">Overview</h1>
             <p className="text-xs text-muted-foreground">
               Top Source Hosts, Top Destinations, Top Conversations และ Top Denied ตามช่วงเวลา
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Select value={window_} onValueChange={(v) => setWindow(v as "1h" | "24h")}>
-            <SelectTrigger className="h-9 w-28 text-xs bg-background">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="1h" className="text-xs">1 ชั่วโมง</SelectItem>
-              <SelectItem value="24h" className="text-xs">24 ชั่วโมง</SelectItem>
-            </SelectContent>
-          </Select>
+          <StatsWindowSelect value={window_} onChange={setWindow} />
           {stats && <AccuracyBadge accuracy={stats.accuracy} />}
           <Button variant="outline" size="sm" onClick={() => load(window_, true)} disabled={isLoading}>
             <RefreshCw className={isLoading ? "size-4 animate-spin" : "size-4"} />

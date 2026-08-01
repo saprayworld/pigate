@@ -27,7 +27,10 @@ import QoS from "@/pages/QoS"
 import EventLogs from "@/pages/EventLogs"
 import ForwardTraffic from "@/pages/ForwardTraffic"
 import LocalTraffic from "@/pages/LocalTraffic"
-import Statistics from "@/pages/Statistics"
+import StatisticsOverview from "@/pages/StatisticsOverview"
+import StatisticsDns from "@/pages/StatisticsDns"
+import StatisticsDnsDomain from "@/pages/StatisticsDnsDomain"
+import StatisticsDnsClient from "@/pages/StatisticsDnsClient"
 import { SizeIndicator, TailwindIndicator } from "./components/tailwindIndicator"
 
 // A simple authentication route guard
@@ -146,6 +149,15 @@ export default function App() {
 
                   <Route path="dashboard" element={<Dashboard />} />
 
+                  {/* Statistics Routes */}
+                  <Route path="statistics">
+                    <Route index element={<Navigate to="/statistics/overview" replace />} />
+                    <Route path="overview" element={<StatisticsOverview />} />
+                    <Route path="dns" element={<StatisticsDns />} />
+                    <Route path="dns/domain/:domain" element={<StatisticsDnsDomain />} />
+                    <Route path="dns/client/:client" element={<StatisticsDnsClient />} />
+                  </Route>
+
                   {/* Network Routes */}
                   <Route path="network">
                     <Route path="interfaces" element={<Interfaces />} />
@@ -171,7 +183,7 @@ export default function App() {
                     <Route path="traffic" element={<ForwardTraffic />} />
                     <Route path="local" element={<LocalTraffic />} />
                     <Route path="events" element={<EventLogs />} />
-                    <Route path="statistics" element={<Statistics />} />
+                    <Route path="statistics" element={<Navigate to="/statistics/overview" replace />} />
                   </Route>
 
                   {/* System Routes */}

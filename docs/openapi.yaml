@@ -385,8 +385,8 @@ paths:
         Get the Statistics page's Top Source Hosts / Top Destinations / Top
         Conversations / Top Denied cards
       description: >
-        Backs the standalone Statistics page (`/logs/statistics`), separate
-        from the Dashboard "Detailed" tab. topSources/topDestinations/
+        Backs the standalone Statistics Overview page (`/statistics/overview`),
+        separate from the Dashboard "Detailed" tab. topSources/topDestinations/
         topConversations are conntrack-derived byte estimates from the same
         RAM bucket ring `/dashboard/traffic-detail` uses (percentages are
         computed against `observedBytes`); deniedSources/deniedPorts are
@@ -419,10 +419,11 @@ paths:
     get:
       tags:
         - Statistics
-      summary: Get the DNS Query Statistics tab's Top Domains / Top Clients tables
+      summary: Get the DNS Statistics page's Top Domains / Top Clients tables
       description: >
-        Backs the "Statistics" tab on the DNS Server page
-        (docs/ref/todo/dns-query-statistics-drilldown-plan.md). Same
+        Backs the standalone DNS Statistics page (`/statistics/dns`) — formerly
+        a "สถิติ" tab on the DNS Server page, promoted to its own route
+        (docs/ref/todo/statistics-nav-restructure-plan.md). Same
         opt-in switch as TrafficStatistics.topDomains
         (`dns/settings.queryLogging`) — `enabled` mirrors it and both
         list fields are empty arrays (not omitted) when off. Fed by an
@@ -456,7 +457,7 @@ paths:
     get:
       tags:
         - Statistics
-      summary: Drill down a domain from the DNS Query Statistics tab into the clients that queried it
+      summary: Drill down a domain from the DNS Statistics page into the clients that queried it
       description: >
         Given a domain, returns every client (source IP, or the reserved
         `unknown` bucket for queries whose source IP could not be parsed)
@@ -507,7 +508,7 @@ paths:
     get:
       tags:
         - Statistics
-      summary: Drill down a client from the DNS Query Statistics tab into the domains it queried
+      summary: Drill down a client from the DNS Statistics page into the domains it queried
       description: >
         Given a client, returns every domain it queried within the window,
         with per-domain counts. Same RAM-only, display-only, opt-in data
@@ -4175,7 +4176,8 @@ components:
         - dnsTruncated
         - generatedAt
       description: >-
-        The /statistics/traffic response backing the Statistics page.
+        The /statistics/traffic response backing the Statistics Overview page
+        (`/statistics/overview`).
       properties:
         window:
           type: string
@@ -4298,8 +4300,8 @@ components:
         - topClients
         - generatedAt
       description: >-
-        The /statistics/dns response backing the DNS Query Statistics tab's
-        two top-level tables (Top Domains / Top Clients). **RAM-only,
+        The /statistics/dns response backing the standalone DNS Statistics
+        page's two top-level tables (Top Domains / Top Clients). **RAM-only,
         display-only**: sourced from an in-memory (domain, client) ring, never
         persisted to SQLite — a pigate restart resets all counts to zero.
         Opt-in via `dns/settings.queryLogging`; all fields are zero-valued
