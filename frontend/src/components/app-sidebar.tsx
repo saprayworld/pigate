@@ -21,6 +21,12 @@ import {
   Waypoints,
   LogIn,
   LogOut,
+  ChevronRight,
+  LineChart,
+  Router,
+  Shield,
+  FileText,
+  Cog,
 } from "lucide-react"
 
 import { NavUser } from "@/components/nav-user"
@@ -28,33 +34,78 @@ import { PiGateLogo } from "@/components/PiGateLogo"
 import { authService } from "@/services/authService"
 import { useHostname } from "@/hooks/useHostname"
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
+import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
+  useSidebar,
 } from "@/components/ui/sidebar"
 
+type NavIcon = React.ComponentType<{ className?: string }>
 type NavItem = {
   path: string
   label: string
-  icon: React.ComponentType<{ className?: string }>
+  icon: NavIcon
   // Opt-in: also treated active when the current path is a sub-route of
   // `path` (e.g. /statistics/dns/domain/:domain highlights the DNS item).
   // Kept opt-in so existing sibling paths never start matching each other.
   matchPrefix?: boolean
 }
-type NavGroup = { title?: string; items: NavItem[] }
+// A group with a title renders as a FortiGate-style collapsible category row
+// (icon required); a group without one (Dashboard) renders as a plain
+// top-level link.
+type NavGroup = { title?: string; icon?: NavIcon; items: NavItem[] }
+
+function isItemActive(item: NavItem, pathname: string): boolean {
+  return (
+    pathname === item.path ||
+    (item.matchPrefix === true && pathname.startsWith(item.path + "/"))
+  )
+}
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const location = useLocation()
   const isSuperAdmin = authService.getRole() === "super_admin"
   const { hostname } = useHostname()
+  // Close the mobile Sheet after navigating so the destination page is
+  // visible right away instead of staying hidden behind the open sidebar.
+  const { isMobile, setOpenMobile, state, setOpen } = useSidebar()
+  const closeMobileSidebar = () => {
+    if (isMobile) setOpenMobile(false)
+  }
+
+  // On the icon-only desktop rail, opening a category should temporarily
+  // widen the whole sidebar back to normal so its sub-items are readable —
+  // then narrow it back to icons once focus leaves the sidebar entirely.
+  // Tracked outside React state since it must not itself trigger a render.
+  const autoExpandedRef = React.useRef(false)
+  const handleCategoryOpenChange = (title: string, open: boolean) => {
+    setOpenGroup(open ? title : null)
+    if (open && !isMobile && state === "collapsed") {
+      autoExpandedRef.current = true
+      setOpen(true)
+    }
+  }
+  const handleSidebarBlur = (e: React.FocusEvent<HTMLDivElement>) => {
+    if (!autoExpandedRef.current) return
+    const next = e.relatedTarget as Node | null
+    if (next && e.currentTarget.contains(next)) return
+    autoExpandedRef.current = false
+    setOpen(false)
+  }
 
   const groups: NavGroup[] = [
     {
@@ -62,6 +113,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     },
     {
       title: "Statistics",
+      icon: LineChart,
       items: [
         { path: "/statistics/overview", label: "Overview", icon: BarChart3 },
         { path: "/statistics/dns", label: "DNS", icon: ChartColumnBig, matchPrefix: true },
@@ -69,6 +121,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     },
     {
       title: "Network",
+      icon: Router,
       items: [
         { path: "/network/interfaces", label: "Interfaces", icon: Network },
         { path: "/network/dns", label: "DNS Settings", icon: Globe },
@@ -80,6 +133,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     },
     {
       title: "Policy & Objects",
+      icon: Shield,
       items: [
         { path: "/policy/firewall", label: "Firewall Policy", icon: Flame },
         { path: "/policy/local-in", label: "Local-In Policy", icon: LogIn },
@@ -91,6 +145,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     },
     {
       title: "Log & Report",
+      icon: FileText,
       items: [
         { path: "/logs/traffic", label: "Forward Traffic", icon: ArrowRightLeft },
         { path: "/logs/local", label: "Local Traffic", icon: ShieldAlert },
@@ -99,6 +154,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     },
     {
       title: "System",
+      icon: Cog,
       items: [
         { path: "/system/settings", label: "Settings & Maintenance", icon: Settings },
         // User Management is super_admin only; the backend enforces access, this
@@ -110,8 +166,18 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     },
   ]
 
+  // Accordion-style category collapse (FortiGate-like): only one titled group
+  // open at a time. Defaults to whichever group contains the current route so
+  // landing on a page never hides its own nav item.
+  const [openGroup, setOpenGroup] = React.useState<string | null>(() => {
+    const activeGroup = groups.find(
+      (g) => g.title && g.items.some((item) => isItemActive(item, location.pathname))
+    )
+    return activeGroup?.title ?? null
+  })
+
   return (
-    <Sidebar collapsible="icon" {...props}>
+    <Sidebar collapsible="icon" onBlur={handleSidebarBlur} {...props}>
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
@@ -119,7 +185,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               asChild
               className="h-8 data-[slot=sidebar-menu-button]:p-1.5! data-[slot=sidebar-menu-button]:pl-0!"
             >
-              <NavLink to="/dashboard">
+              <NavLink to="/dashboard" onClick={closeMobileSidebar}>
                 <div className="flex aspect-square size-8 items-center justify-center rounded-lg">
                   <PiGateLogo className="shrink-0 h-[28px]! w-[28px]!" />
                 </div>
@@ -134,31 +200,72 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
 
       <SidebarContent>
-        {groups.map((group, i) => (
-          <SidebarGroup key={group.title ?? `group-${i}`}>
-            {group.title && <SidebarGroupLabel className="text-nowrap">{group.title}</SidebarGroupLabel>}
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {group.items.map((item) => {
-                  const Icon = item.icon
-                  const isActive =
-                    location.pathname === item.path ||
-                    (item.matchPrefix === true && location.pathname.startsWith(item.path + "/"))
-                  return (
-                    <SidebarMenuItem key={item.path}>
-                      <SidebarMenuButton asChild isActive={isActive} tooltip={item.label}>
-                        <NavLink to={item.path}>
-                          <Icon className="size-4" />
-                          <span>{item.label}</span>
-                        </NavLink>
-                      </SidebarMenuButton>
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {groups.map((group) => {
+                // Ungrouped (Dashboard): a plain top-level link, no accordion.
+                if (!group.title) {
+                  return group.items.map((item) => {
+                    const Icon = item.icon
+                    const isActive = isItemActive(item, location.pathname)
+                    return (
+                      <SidebarMenuItem key={item.path}>
+                        <SidebarMenuButton asChild isActive={isActive} tooltip={item.label}>
+                          <NavLink to={item.path} onClick={closeMobileSidebar}>
+                            <Icon className="size-4" />
+                            <span>{item.label}</span>
+                          </NavLink>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    )
+                  })
+                }
+
+                const GroupIcon = group.icon
+                const hasActiveChild = group.items.some((item) =>
+                  isItemActive(item, location.pathname)
+                )
+
+                return (
+                  <Collapsible
+                    key={group.title}
+                    asChild
+                    open={openGroup === group.title}
+                    onOpenChange={(open) => handleCategoryOpenChange(group.title!, open)}
+                    className="group/collapsible"
+                  >
+                    <SidebarMenuItem>
+                      <CollapsibleTrigger asChild>
+                        <SidebarMenuButton isActive={hasActiveChild} tooltip={group.title}>
+                          {GroupIcon && <GroupIcon className="size-4" />}
+                          <span>{group.title}</span>
+                          <ChevronRight className="ml-auto size-4 shrink-0 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+                        </SidebarMenuButton>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <SidebarMenuSub>
+                          {group.items.map((item) => {
+                            const isActive = isItemActive(item, location.pathname)
+                            return (
+                              <SidebarMenuSubItem key={item.path}>
+                                <SidebarMenuSubButton asChild isActive={isActive}>
+                                  <NavLink to={item.path} onClick={closeMobileSidebar}>
+                                    <span>{item.label}</span>
+                                  </NavLink>
+                                </SidebarMenuSubButton>
+                              </SidebarMenuSubItem>
+                            )
+                          })}
+                        </SidebarMenuSub>
+                      </CollapsibleContent>
                     </SidebarMenuItem>
-                  )
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        ))}
+                  </Collapsible>
+                )
+              })}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
       </SidebarContent>
 
       <SidebarFooter>
