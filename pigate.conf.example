@@ -1,0 +1,109 @@
+# pigate.conf.example
+#
+# This is a fully-commented sample of PiGate's bootstrap runtime config file,
+# normally installed at /var/lib/pigate/pigate.conf and read via the -config
+# CLI flag (default path: /var/lib/pigate/pigate.conf — see cmd/pigate/main.go
+# and backend/internal/config/config.go). It is NOT the SQLite-backed
+# subsystem configuration (interfaces, firewall, DHCP, etc.) — only the small
+# set of process bootstrap parameters historically set via CLI flags in the
+# systemd unit's ExecStart line.
+#
+# Syntax: one "key=value" pair per line. Lines starting with '#' (after
+# trimming leading whitespace) are comments; blank lines are ignored. No
+# quoting is supported — a value is taken verbatim up to end of line, and may
+# itself contain '=' (e.g. a path with a query-string-like suffix), because
+# the line is split on the FIRST '=' only.
+#
+# Precedence (low to high): built-in code default < this config file < a CLI
+# flag explicitly passed on the command line. A flag you actually pass on the
+# command line always wins over the same key in this file.
+#
+# Real-world gotcha: install.sh's systemd ExecStart line keeps
+# "-mock=false -db=/var/lib/pigate/pigate.db -https-port=443" as
+# belt-and-suspenders CLI flags. Because an explicitly-passed flag always
+# wins, editing "mock", "db", or "https-port" in this file has NO EFFECT
+# while those three flags remain in the systemd unit — you must edit the
+# unit (or drop those three flags from it) if you want this file to control
+# them instead.
+
+# Port to run the API server on.
+port=2479
+
+# Path to SQLite database file.
+db=pigate.db
+# install.sh writes db=/var/lib/pigate/pigate.db in production (see the
+# ExecStart gotcha above).
+
+# Use mocked kernel operations (default true on PC).
+mock=true
+# install.sh writes mock=false in production (see the ExecStart gotcha
+# above).
+
+# Mock operations but initialize/pull from real kernel data at startup.
+mock-from-real=false
+
+# Disable edit operations (Read-only mode).
+disable-edit=false
+
+# Allow editing and deleting system predefined static routes.
+allow-edit-system-routes=false
+
+# Enable direct kernel management of system/kernel-only routes without
+# database.
+enable-edit-system-route=false
+
+# Prioritize kernel route information over database if duplicate.
+prioritize-kernel-routes=false
+
+# Enable Docker compatibility (bypass docker0 and br-* interfaces). Off by
+# default; opt in only on a gateway that also runs Docker/bridge networks.
+docker-compat=false
+
+# HTTPS port (0 = HTTP only; the systemd unit passes 443 to make HTTPS the
+# primary channel).
+https-port=0
+# install.sh writes https-port=443 in production (see the ExecStart gotcha
+# above).
+
+# Directory for the self-signed TLS cert/key (default: <dir of -db>/tls).
+tls-dir=
+
+# Echo CORS headers for frontend dev-server origins (localhost:5173/3000).
+# Off by default; only needed when running `yarn dev` against this backend.
+allow-dev-cors=false
+
+# --- FILE-ONLY keys (no CLI flag) -------------------------------------------
+# The two keys below are intentionally NOT settable via any CLI flag — they
+# are RAM-tuning knobs for an appliance, not day-to-day CLI switches (see
+# docs/ref/todo/dns-stats-tracking-limits-config-plan.md). They only take
+# effect through this file.
+#
+# Both bound the DNS Query Statistics ring (backend/internal/service/
+# dns_query_stats.go): a 5-minute-granularity bucket, 288 buckets deep (24h
+# total window). The cap applies PER BUCKET, independently for each of the
+# two dimensions below.
+#
+# Raising either value raises the worst-case RAM ceiling roughly linearly
+# (value x 288 tracked entries in the absolute worst case — i.e. only under a
+# sustained unique-domain/unique-client flood; normal home/office traffic
+# sits orders of magnitude below the cap).
+#
+# The cap only affects the per-domain/per-client BREAKDOWN (Top Domains, Top
+# Clients, and the drilldown views) — the total query count
+# (TotalQueries in /api/statistics/dns) is NEVER affected by either cap, and
+# the UI flags a capped window as "Truncated" so the breakdown is known to be
+# incomplete without hiding that queries still happened.
+#
+# Validation: a non-numeric value here (e.g. "abc") is a fatal startup error,
+# same as any other integer key. An out-of-range value (<=0, or above the
+# internal RAM-guard sanity ceiling) is NOT fatal — it is clamped back to the
+# default with a warning logged at startup, so a typo'd value can never turn
+# into a boot loop that takes the gateway's network off the air.
+
+# Maximum number of distinct (domain, client) pairs tracked per 5-minute
+# bucket in the DNS Query Statistics ring.
+dns-stats-max-pairs=2400
+
+# Maximum number of distinct clients tracked per 5-minute bucket in the DNS
+# Query Statistics ring (enforced independently of dns-stats-max-pairs).
+dns-stats-max-clients=200

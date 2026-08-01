@@ -10,7 +10,7 @@
 // The package is split into four pure functions so each stage is testable
 // without touching a real file:
 //
-//	Defaults()                                  -> code defaults (1:1 with cmd/pigate/main.go flags)
+//	Defaults()                                  -> code defaults (mostly 1:1 with cmd/pigate/main.go flags)
 //	Parse(r io.Reader)                          -> raw "key=value" syntax, no type conversion
 //	Resolve(defaults, fileVals, explicit)       -> merges + type-converts, defaults < file < explicit
 //	Write(w io.Writer, cfg Config)               -> serializes a Config back to "key=value" (round-trips with Parse)
@@ -20,6 +20,22 @@
 // file, calling flag.Visit) and for logging; this package never touches a
 // filesystem path or the log package directly, so it stays 100% unit
 // testable (see config_test.go).
+//
+// Deliberate exception to the "every key mirrors a CLI flag" rule above:
+// dns-stats-max-pairs / dns-stats-max-clients are intentionally FILE-ONLY —
+// no flag.Int is registered for them in cmd/pigate/main.go, by design (RAM-
+// tuning knobs for an appliance, not day-to-day CLI switches; see
+// docs/ref/todo/dns-stats-tracking-limits-config-plan.md). Because no flag
+// exists, flag.Visit can never populate them into the "explicit" layer passed
+// to Resolve, so precedence for these two keys collapses to code default <
+// config file — that's expected, not a bug.
+//
+// These two keys also use a two-tier validation rule that differs from every
+// other key: a non-integer value is still a fail-fast error from applyKey
+// (same as port/https-port), but an in-range-syntax value that is out of the
+// sane RAM-guard range (<=0 or absurdly large) is NOT fatal — Resolve clamps
+// it back to the default and appends a warning instead, so a typo'd value
+// never turns into a boot loop that takes the gateway's network off the air.
 package config
 
 import (
@@ -47,6 +63,13 @@ type Config struct {
 	HTTPSPort              int
 	TLSDir                 string
 	AllowDevCORS           bool
+
+	// DNSStatsMaxPairs/DNSStatsMaxClients are the ONLY two fields with no
+	// matching CLI flag in cmd/pigate/main.go — they are file-only tuning
+	// knobs (see the package doc comment above). Every other field here has
+	// a 1:1 flag counterpart.
+	DNSStatsMaxPairs   int
+	DNSStatsMaxClients int
 }
 
 // Defaults returns the Config populated with the exact same defaults as the
@@ -67,6 +90,11 @@ func Defaults() Config {
 		HTTPSPort:              0,
 		TLSDir:                 "",
 		AllowDevCORS:           false,
+
+		// Keep in sync with defaultMaxTrackedDNSPairs/defaultMaxTrackedDNSClients
+		// in internal/service/dns_query_stats.go.
+		DNSStatsMaxPairs:   2400,
+		DNSStatsMaxClients: 200,
 	}
 }
 
@@ -86,6 +114,22 @@ const (
 	keyHTTPSPort              = "https-port"
 	keyTLSDir                 = "tls-dir"
 	keyAllowDevCORS           = "allow-dev-cors"
+
+	// keyDNSStatsMaxPairs/keyDNSStatsMaxClients are file-only (no CLI flag —
+	// see the package doc comment).
+	keyDNSStatsMaxPairs   = "dns-stats-max-pairs"
+	keyDNSStatsMaxClients = "dns-stats-max-clients"
+)
+
+// maxDNSStatsPairsCap/maxDNSStatsClientsCap are RAM-guard sanity ceilings for
+// the two file-only DNS stats keys above. The cap applies per 5-minute
+// bucket and the ring holds 288 buckets (24h), so worst-case tracked pairs
+// is roughly dns-stats-max-pairs x 288 — an absurdly large value here is a
+// direct RAM-growth knob, so Resolve clamps anything above these ceilings
+// back to the default rather than trusting an arbitrary file value.
+const (
+	maxDNSStatsPairsCap   = 50000
+	maxDNSStatsClientsCap = 10000
 )
 
 // orderedKeys is the fixed key order used by Write (and reused by KnownKeys)
@@ -103,6 +147,11 @@ var orderedKeys = []string{
 	keyHTTPSPort,
 	keyTLSDir,
 	keyAllowDevCORS,
+	// Appended at the end (not alphabetized with the rest) so existing
+	// generated config files keep a stable diff — see T-01 in
+	// docs/ref/todo/dns-stats-tracking-limits-config-plan.md.
+	keyDNSStatsMaxPairs,
+	keyDNSStatsMaxClients,
 }
 
 // KnownKeys returns the list of recognized config/flag keys, in the fixed
@@ -198,6 +247,24 @@ func Resolve(defaults Config, fileVals, explicit map[string]string) (Config, []s
 		return Config{}, nil, err
 	}
 
+	// Range-sanity pass (T-01): runs after both layers have been applied, and
+	// uses `defaults` (the function argument) as the fallback rather than a
+	// package-level literal, so a caller passing custom defaults still
+	// behaves sanely. This is a clamp + warning, never a fatal error — see
+	// the package doc comment for the rationale.
+	if cfg.DNSStatsMaxPairs <= 0 || cfg.DNSStatsMaxPairs > maxDNSStatsPairsCap {
+		warnings = append(warnings, fmt.Sprintf(
+			"dns-stats-max-pairs=%d out of range (1..%d), using default %d",
+			cfg.DNSStatsMaxPairs, maxDNSStatsPairsCap, defaults.DNSStatsMaxPairs))
+		cfg.DNSStatsMaxPairs = defaults.DNSStatsMaxPairs
+	}
+	if cfg.DNSStatsMaxClients <= 0 || cfg.DNSStatsMaxClients > maxDNSStatsClientsCap {
+		warnings = append(warnings, fmt.Sprintf(
+			"dns-stats-max-clients=%d out of range (1..%d), using default %d",
+			cfg.DNSStatsMaxClients, maxDNSStatsClientsCap, defaults.DNSStatsMaxClients))
+		cfg.DNSStatsMaxClients = defaults.DNSStatsMaxClients
+	}
+
 	return cfg, warnings, nil
 }
 
@@ -268,6 +335,21 @@ func applyKey(cfg *Config, key, value string) error {
 			return fmt.Errorf("invalid bool for %q: %q: %w", key, value, err)
 		}
 		cfg.AllowDevCORS = b
+	case keyDNSStatsMaxPairs:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		// Range-checking (<=0, absurdly large) is deliberately NOT done here —
+		// see Resolve's post-processing pass, which clamps + warns instead of
+		// failing fast for an out-of-range (but syntactically valid) value.
+		cfg.DNSStatsMaxPairs = n
+	case keyDNSStatsMaxClients:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		cfg.DNSStatsMaxClients = n
 	default:
 		// Unreachable: callers only invoke applyKey for keys that passed
 		// isKnownKey. Kept as a safety net rather than a silent no-op.
@@ -304,6 +386,10 @@ func keyValue(cfg Config, key string) string {
 		return cfg.TLSDir
 	case keyAllowDevCORS:
 		return strconv.FormatBool(cfg.AllowDevCORS)
+	case keyDNSStatsMaxPairs:
+		return strconv.Itoa(cfg.DNSStatsMaxPairs)
+	case keyDNSStatsMaxClients:
+		return strconv.Itoa(cfg.DNSStatsMaxClients)
 	default:
 		return ""
 	}

@@ -364,11 +364,15 @@ query-log path built on `DNSServerManager.WatchDNSLog`. Summary (see
   instead of a bare `domainCount`. Per-domain totals (used by the unchanged "Top Queried
   Domains" card at `/logs/statistics`) are derived by summing every client under a domain, so
   the card and the new drill-down can never disagree.
-- **New caps per bucket**: `maxTrackedDNSPairs = 1200` and `maxTrackedDNSClients = 200`
-  (replacing the old `maxTrackedDomains = 500`); RAM worst case is ~40 MB across the
-  288-bucket/24h ring (typical home traffic ~7 MB). `queries` (the total count) is never
-  capped, only new distinct pairs/clients are — so totals stay accurate even once
-  `truncated == true`.
+- **New caps per bucket**: default 2400 pairs / 200 clients (replacing the old
+  `maxTrackedDomains = 500`, and raised from an earlier 1200-pair default); RAM worst case
+  scales with the cap across the 288-bucket/24h ring (typical home traffic sits far below
+  it). `queries` (the total count) is never capped, only new distinct pairs/clients are —
+  so totals stay accurate even once `truncated == true`. As of
+  docs/ref/todo/dns-stats-tracking-limits-config-plan.md both caps are configurable via the
+  file-only bootstrap keys `dns-stats-max-pairs` / `dns-stats-max-clients` in `pigate.conf`
+  (no CLI flag by design); `defaultMaxTrackedDNSPairs`/`defaultMaxTrackedDNSClients` in
+  `service/dns_query_stats.go` are now just the fallback defaults.
 - **Unparseable client IP collapses to the reserved key `"unknown"`** instead of being
   dropped, so domain totals stay accurate; the UI shows it as "ไม่ทราบต้นทาง" but it is still
   drill-down-able like any other client.

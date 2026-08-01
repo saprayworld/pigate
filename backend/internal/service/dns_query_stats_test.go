@@ -128,15 +128,17 @@ func TestStatisticsService_DNSDrilldown_UnknownClient(t *testing.T) {
 
 // TestStatisticsService_DNSPairCap is drilldown plan T-05 item 3: flooding
 // with 5,000 unique (domain, client) pairs must not panic, must respect
-// maxTrackedDNSPairs per bucket, set Truncated=true, yet TotalQueries must
-// still count every single event (never dropped by the pair cap).
+// the per-bucket pair cap (s.dns.maxPairs, defaultMaxTrackedDNSPairs for a
+// service constructed with the production defaults), set Truncated=true,
+// yet TotalQueries must still count every single event (never dropped by
+// the pair cap).
 func TestStatisticsService_DNSPairCap(t *testing.T) {
 	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
 	s.SetDNSLoggingEnabled(true)
 
 	// Every domain is unique (so the pair cap, not the client cap, is what
 	// gets exercised) but the client pool is small (well under
-	// maxTrackedDNSClients) so the client cap never interferes.
+	// s.dns.maxClients) so the client cap never interferes.
 	const total = 5000
 	for i := 0; i < total; i++ {
 		s.RecordDNSEvent(model.DNSLogEvent{
@@ -161,14 +163,52 @@ func TestStatisticsService_DNSPairCap(t *testing.T) {
 		if b.pairCount > maxPairCount {
 			maxPairCount = b.pairCount
 		}
-		if b.pairCount > maxTrackedDNSPairs {
-			t.Errorf("bucket pairCount %d exceeds maxTrackedDNSPairs %d", b.pairCount, maxTrackedDNSPairs)
+		if b.pairCount > s.dns.maxPairs {
+			t.Errorf("bucket pairCount %d exceeds s.dns.maxPairs %d", b.pairCount, s.dns.maxPairs)
 		}
 	}
 	s.dns.mu.RUnlock()
-	if maxPairCount != maxTrackedDNSPairs {
-		t.Fatalf("expected at least one bucket to hit the pair cap (%d), max seen was %d", maxTrackedDNSPairs, maxPairCount)
+	if maxPairCount != s.dns.maxPairs {
+		t.Fatalf("expected at least one bucket to hit the pair cap (%d), max seen was %d", s.dns.maxPairs, maxPairCount)
 	}
+}
+
+// TestStatisticsService_DNSPairCap_Configurable proves the per-bucket caps
+// are actually honored when a non-default value is passed to
+// NewStatisticsService (docs/ref/todo/dns-stats-tracking-limits-config-plan.md
+// T-06 item 3) — a service constructed with maxDNSPairs=10, maxDNSClients=3
+// must never let a bucket's pairCount/clientCount exceed those values, while
+// TotalQueries must still count every event unconditionally.
+func TestStatisticsService_DNSPairCap_Configurable(t *testing.T) {
+	traffic := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+	s := NewStatisticsService(traffic, traffic.repo, traffic.dhcp, 10, 3)
+	s.SetDNSLoggingEnabled(true)
+
+	const total = 100
+	for i := 0; i < total; i++ {
+		s.RecordDNSEvent(model.DNSLogEvent{
+			Kind:      model.DNSLogQuery,
+			Domain:    fmt.Sprintf("pair%d.example.com", i),
+			QueryType: "A",
+			ClientIP:  fmt.Sprintf("10.0.1.%d", i),
+		})
+	}
+
+	stats := s.GetDNSQueryStatistics("1h")
+	if stats.TotalQueries != total {
+		t.Fatalf("expected TotalQueries=%d (never capped), got %d", total, stats.TotalQueries)
+	}
+
+	s.dns.mu.RLock()
+	for _, b := range s.dns.buckets {
+		if b.pairCount > 10 {
+			t.Errorf("bucket pairCount %d exceeds configured cap 10", b.pairCount)
+		}
+		if len(b.clientCount) > 3 {
+			t.Errorf("bucket clientCount len %d exceeds configured cap 3", len(b.clientCount))
+		}
+	}
+	s.dns.mu.RUnlock()
 }
 
 // TestStatisticsService_DNSDrilldown_WindowSelection is drilldown plan T-05

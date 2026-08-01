@@ -75,12 +75,32 @@ type StatisticsService struct {
 // NewStatisticsService constructs the service. traffic must be the same
 // *TrafficStatsService instance main.go already started (this service adds
 // no ticker/goroutine of its own — plan T-06).
-func NewStatisticsService(traffic *TrafficStatsService, repo *db.Repository, dhcp kernel.DhcpManager) *StatisticsService {
+//
+// maxDNSPairs/maxDNSClients are the per-bucket DNS query-stats caps (see
+// dns_query_stats.go). In production they come from the bootstrap config
+// keys dns-stats-max-pairs / dns-stats-max-clients, resolved by
+// internal/config and wired through by cmd/pigate/main.go — this package
+// deliberately does not import internal/config itself, to keep the
+// service layer decoupled from the bootstrap config format. A <= 0 value is
+// defense-in-depth for direct callers (tests, future call sites) and falls
+// back to defaultMaxTrackedDNSPairs/defaultMaxTrackedDNSClients; the
+// authoritative range validation lives in config.Resolve, not here.
+func NewStatisticsService(traffic *TrafficStatsService, repo *db.Repository, dhcp kernel.DhcpManager, maxDNSPairs, maxDNSClients int) *StatisticsService {
+	if maxDNSPairs <= 0 {
+		maxDNSPairs = defaultMaxTrackedDNSPairs
+	}
+	if maxDNSClients <= 0 {
+		maxDNSClients = defaultMaxTrackedDNSClients
+	}
 	return &StatisticsService{
 		traffic: traffic,
 		repo:    repo,
 		dhcp:    dhcp,
-		dns:     &dnsQueryStats{reverseCache: newDNSReverseCache()},
+		dns: &dnsQueryStats{
+			reverseCache: newDNSReverseCache(),
+			maxPairs:     maxDNSPairs,
+			maxClients:   maxDNSClients,
+		},
 	}
 }
 

@@ -158,6 +158,69 @@ func TestResolve(t *testing.T) {
 			t.Fatalf("expected error for mock=x, got nil")
 		}
 	})
+
+	t.Run("dns stats keys default when absent", func(t *testing.T) {
+		cfg, warns, err := Resolve(Defaults(), nil, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.DNSStatsMaxPairs != 2400 || cfg.DNSStatsMaxClients != 200 {
+			t.Fatalf("got pairs=%d clients=%d, want 2400/200", cfg.DNSStatsMaxPairs, cfg.DNSStatsMaxClients)
+		}
+	})
+
+	t.Run("file overrides dns stats keys", func(t *testing.T) {
+		fileVals := map[string]string{"dns-stats-max-pairs": "5000", "dns-stats-max-clients": "500"}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.DNSStatsMaxPairs != 5000 || cfg.DNSStatsMaxClients != 500 {
+			t.Fatalf("got pairs=%d clients=%d, want 5000/500", cfg.DNSStatsMaxPairs, cfg.DNSStatsMaxClients)
+		}
+	})
+
+	t.Run("non-integer dns stats value fails fast", func(t *testing.T) {
+		fileVals := map[string]string{"dns-stats-max-pairs": "abc"}
+		_, _, err := Resolve(Defaults(), fileVals, nil)
+		if err == nil {
+			t.Fatalf("expected error for dns-stats-max-pairs=abc, got nil")
+		}
+	})
+
+	t.Run("zero/negative clamps to default with a warning", func(t *testing.T) {
+		fileVals := map[string]string{"dns-stats-max-pairs": "0", "dns-stats-max-clients": "-1"}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(warns) != 2 {
+			t.Fatalf("expected 2 warnings, got %v", warns)
+		}
+		if cfg.DNSStatsMaxPairs != 2400 || cfg.DNSStatsMaxClients != 200 {
+			t.Fatalf("got pairs=%d clients=%d, want defaults 2400/200", cfg.DNSStatsMaxPairs, cfg.DNSStatsMaxClients)
+		}
+	})
+
+	t.Run("absurdly large clamps to default with a warning", func(t *testing.T) {
+		fileVals := map[string]string{"dns-stats-max-pairs": "999999"}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(warns) != 1 {
+			t.Fatalf("expected 1 warning, got %v", warns)
+		}
+		if cfg.DNSStatsMaxPairs != 2400 {
+			t.Fatalf("got pairs=%d, want default 2400", cfg.DNSStatsMaxPairs)
+		}
+	})
 }
 
 func TestWriteParseRoundTrip(t *testing.T) {
@@ -168,6 +231,8 @@ func TestWriteParseRoundTrip(t *testing.T) {
 	cfg.HTTPSPort = 443
 	cfg.DockerCompat = true
 	cfg.TLSDir = ""
+	cfg.DNSStatsMaxPairs = 3000
+	cfg.DNSStatsMaxClients = 300
 
 	var buf bytes.Buffer
 	if err := Write(&buf, cfg); err != nil {
@@ -211,13 +276,25 @@ func TestWriteParseRoundTripDefaults(t *testing.T) {
 
 func TestKnownKeys(t *testing.T) {
 	keys := KnownKeys()
-	if len(keys) != 12 {
-		t.Fatalf("expected 12 known keys, got %d: %v", len(keys), keys)
+	if len(keys) != 14 {
+		t.Fatalf("expected 14 known keys, got %d: %v", len(keys), keys)
 	}
 	// "config" and "v" must never be treated as config-file keys.
 	for _, k := range keys {
 		if k == "config" || k == "v" {
 			t.Fatalf("KnownKeys must not include %q", k)
 		}
+	}
+	var hasPairs, hasClients bool
+	for _, k := range keys {
+		if k == "dns-stats-max-pairs" {
+			hasPairs = true
+		}
+		if k == "dns-stats-max-clients" {
+			hasClients = true
+		}
+	}
+	if !hasPairs || !hasClients {
+		t.Fatalf("expected dns-stats-max-pairs/dns-stats-max-clients in KnownKeys, got %v", keys)
 	}
 }
