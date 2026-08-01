@@ -215,8 +215,8 @@ func (s *StatisticsService) GetStatistics(window string) model.TrafficStatistics
 		Window:            window,
 		ObservedBytes:     breakdown.Observed,
 		Accuracy:          breakdown.Accuracy,
-		TopSources:        buildTopHosts(breakdown.Hosts, breakdown.Observed, leaseByIP, resByIP, ipDomain, false),
-		TopDestinations:   buildTopHosts(breakdown.Dests, breakdown.Observed, leaseByIP, resByIP, ipDomain, true),
+		TopSources:        buildTopHosts(breakdown.Hosts, breakdown.Observed, leaseByIP, resByIP, ipDomain),
+		TopDestinations:   buildTopHosts(breakdown.Dests, breakdown.Observed, leaseByIP, resByIP, ipDomain),
 		TopConversations:  buildTopConversations(breakdown.Convs, breakdown.Observed, leaseByIP, resByIP, ipDomain),
 		DeniedSources:     buildTopDeniedSources(srcTotals, deniedEvents, leaseByIP, resByIP),
 		DeniedPorts:       buildTopDeniedPorts(portTotals, deniedEvents),
@@ -236,14 +236,12 @@ func (s *StatisticsService) GetStatistics(window string) model.TrafficStatistics
 // card rows. Sort is deterministic (bytes desc, then IP asc) so tests never
 // flake on map iteration order, mirroring buildTopTalkers.
 //
-// flip controls the up/down direction relative to ip (plan §2.5): false
-// (Top Source Hosts, ip == SrcIP) maps Orig -> up / Reply -> down; true (Top
-// Destinations, ip == DstIP) swaps them, since a destination IP "sends" the
-// Reply-direction bytes. Ranking/Bytes/Percent are always v.Total() either
-// way, so the flip never changes ordering or the pre-existing `bytes` field —
-// only which of the two additive bytesUp/bytesDown fields each direction
-// lands in.
-func buildTopHosts(totals map[string]dirBytes, observed uint64, leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation, ipDomain map[string]string, flip bool) []model.TopHost {
+// bytesUp/bytesDown are always the flow's own orig/reply direction (Orig ->
+// up, Reply -> down) regardless of whether ip is the flow's SrcIP or DstIP —
+// i.e. "down" consistently means the download-heavy reply traffic (e.g. a
+// file fetched from an internet destination), matching Top Conversations.
+// Ranking/Bytes/Percent are always v.Total().
+func buildTopHosts(totals map[string]dirBytes, observed uint64, leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation, ipDomain map[string]string) []model.TopHost {
 	out := make([]model.TopHost, 0, len(totals))
 	for ip, v := range totals {
 		bytes := v.Total()
@@ -251,9 +249,6 @@ func buildTopHosts(totals map[string]dirBytes, observed uint64, leaseByIP map[st
 			continue
 		}
 		up, down := v.Orig, v.Reply
-		if flip {
-			up, down = v.Reply, v.Orig
-		}
 		hostname, mac := hostnameFor(ip, leaseByIP, resByIP)
 		out = append(out, model.TopHost{
 			IP:        ip,

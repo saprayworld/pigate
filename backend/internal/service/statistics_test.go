@@ -80,11 +80,10 @@ func TestStatisticsService_GetStatistics_ComposesFromBreakdown(t *testing.T) {
 	if len(stats.TopDestinations) != 1 || stats.TopDestinations[0].IP != "8.8.8.8" || stats.TopDestinations[0].Bytes != 1000 {
 		t.Fatalf("unexpected top destinations: %+v", stats.TopDestinations)
 	}
-	// Top Destinations flips direction relative to TopSources (plan §2.5):
-	// the IP is on the dst side of the flow, so its "up" is the flow's Reply
-	// direction, not Orig.
-	if stats.TopDestinations[0].BytesUp != 800 || stats.TopDestinations[0].BytesDown != 200 {
-		t.Fatalf("expected TopDestinations up=800/down=200 (flipped vs TopSources), got %+v", stats.TopDestinations[0])
+	// Top Destinations uses the same orig-is-up/reply-is-down convention as
+	// TopSources and TopConversations — no flip.
+	if stats.TopDestinations[0].BytesUp != 200 || stats.TopDestinations[0].BytesDown != 800 {
+		t.Fatalf("expected TopDestinations up=200/down=800 (same convention as TopSources), got %+v", stats.TopDestinations[0])
 	}
 	if stats.TopDestinations[0].Private {
 		t.Fatalf("expected 8.8.8.8 to NOT be flagged Private")
@@ -309,13 +308,14 @@ func TestStatisticsService_TopHostsConversations_RegressionWhenDNSStatsEmpty(t *
 // TestStatisticsService_ConcurrentDNSEventsAndSetLimits is T-11 item 14: run
 // RecordDNSEvent + GetStatistics + SetReverseCacheLimits concurrently under
 // `go test -race`.
-// TestStatisticsService_TopDestinationsFlipsDirectionVsTopSources is plan
-// T-08 case 6 (§2.5 lock): a single LAN->internet flow must show up as
-// "up-heavy" in Top Source Hosts (the LAN IP's own perspective, Orig) and as
-// the OPPOSITE direction in Top Destinations (the internet IP's perspective,
-// Reply flipped to "up") — guarding against a future change accidentally
-// un-flipping buildTopHosts.
-func TestStatisticsService_TopDestinationsFlipsDirectionVsTopSources(t *testing.T) {
+// TestStatisticsService_TopDestinationsSameConventionAsTopSources guards
+// the up/down convention (fix for the PR 117 up/down swap bug): a single
+// LAN->internet flow must show up as "down-heavy" (download) in BOTH Top
+// Source Hosts and Top Destinations, since bytesUp/bytesDown always track
+// the flow's own orig/reply direction regardless of which side (src or
+// dst) the row's ip is on — guarding against a future change
+// re-introducing a per-row flip.
+func TestStatisticsService_TopDestinationsSameConventionAsTopSources(t *testing.T) {
 	acct := &fakeTrafficAccounting{
 		flowResponses: [][]model.FlowSample{
 			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 0, BytesReply: 0}},
@@ -337,8 +337,8 @@ func TestStatisticsService_TopDestinationsFlipsDirectionVsTopSources(t *testing.
 	if src.BytesUp != 100 || src.BytesDown != 9000 {
 		t.Fatalf("expected LAN source row up=100 (orig)/down=9000 (reply), got %+v", src)
 	}
-	if dst.BytesUp != 9000 || dst.BytesDown != 100 {
-		t.Fatalf("expected internet destination row FLIPPED to up=9000 (reply)/down=100 (orig), got %+v", dst)
+	if dst.BytesUp != 100 || dst.BytesDown != 9000 {
+		t.Fatalf("expected internet destination row up=100 (orig)/down=9000 (reply), same convention as TopSources, got %+v", dst)
 	}
 }
 
