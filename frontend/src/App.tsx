@@ -31,7 +31,7 @@ import StatisticsOverview from "@/pages/StatisticsOverview"
 import StatisticsDns from "@/pages/StatisticsDns"
 import StatisticsDnsDomain from "@/pages/StatisticsDnsDomain"
 import StatisticsDnsClient from "@/pages/StatisticsDnsClient"
-import { SizeIndicator, TailwindIndicator } from "./components/tailwindIndicator"
+import { SizeIndicatorSystem } from "./components/tailwindIndicator"
 
 // A simple authentication route guard
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -114,7 +114,7 @@ export default function App() {
   return (
     <>
       <ThemeProvider defaultTheme="dark" storageKey="pigate-ui-theme">
-        <SizeIndicator className="top-0 z-[9999] fixed" />
+        <SizeIndicatorSystem />
         <TooltipProvider>
           <AlertDialogProvider>
             <BrowserRouter>
@@ -207,7 +207,6 @@ export default function App() {
           </AlertDialogProvider>
         </TooltipProvider>
       </ThemeProvider>
-      <TailwindIndicator />
     </>
   )
 }

@@ -1,9 +1,10 @@
 import { cn } from "@/lib/utils";
+import React from "react";
 
-export function TailwindIndicator() {
+export function TailwindIndicator({ className, onClick }: { className?: string; onClick: () => void; }) {
 
   return (
-    <div className="fixed bottom-1 left-1 z-50 flex h-6 w-6 items-center justify-center rounded-full bg-foreground text-background p-3 font-mono text-xs">
+    <div onClick={onClick} className={cn("fixed bottom-1 left-1 z-50 flex h-6 w-6 items-center justify-center rounded-full bg-foreground text-background p-3 font-mono text-xs", className)}>
       <div className="block sm:hidden">xs</div>
       <div className="hidden sm:block md:hidden">sm</div>
       <div className="hidden md:block lg:hidden">md</div>
@@ -14,7 +15,7 @@ export function TailwindIndicator() {
   );
 }
 
-export function SizeIndicator({ className }: { className?: string}) {
+export function SizeIndicator({ className }: { className?: string }) {
 
   return (
     <div className={cn("fixed w-full flex overflow-hidden justify-start", className)}>
@@ -56,4 +57,15 @@ export function SizeIndicator({ className }: { className?: string}) {
       </div>
     </div>
   );
+}
+
+export function SizeIndicatorSystem() {
+  const [showTopIndicator, setShowTopIndicator] = React.useState(false);
+
+  return (
+    <>
+      {showTopIndicator && <SizeIndicator className="top-0 z-[9999] fixed" />}
+      <TailwindIndicator onClick={() => setShowTopIndicator(!showTopIndicator)} />
+    </>
+  )
 }
