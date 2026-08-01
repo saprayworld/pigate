@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import { ArrowDown, ArrowUp, BarChart3, RefreshCw, TriangleAlert } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -24,7 +25,7 @@ import {
   type TopHost,
   type TrafficStatistics,
 } from "@/services/statisticsService"
-import { useStatsWindow, StatsWindowSelect } from "@/components/statistics/DnsStatsShared"
+import { useStatsWindow, StatsWindowSelect, type StatsWindow } from "@/components/statistics/DnsStatsShared"
 
 const REFRESH_INTERVAL = 10_000
 
@@ -265,11 +266,14 @@ function TopDomainsCard({
   domains,
   dnsLoggingEnabled,
   dnsTruncated,
+  window_,
 }: {
   domains: TopDomain[]
   dnsLoggingEnabled: boolean
   dnsTruncated: boolean
+  window_: StatsWindow
 }) {
+  const navigate = useNavigate()
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
@@ -291,7 +295,16 @@ function TopDomainsCard({
               <div key={d.domain} className="space-y-1">
                 <div className="flex items-center justify-between gap-3 text-sm">
                   <span className="flex min-w-0 items-center gap-2">
-                    <span className="truncate text-foreground/90">{d.domain}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        navigate(`/statistics/dns/domain/${encodeURIComponent(d.domain)}?window=${window_}`)
+                      }
+                      title="คลิกเพื่อดูว่าเครื่องไหนถามโดเมนนี้บ้าง"
+                      className="min-w-0 cursor-pointer truncate text-left text-foreground/90 hover:text-primary hover:underline"
+                    >
+                      {d.domain}
+                    </button>
                     <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{d.queryType}</span>
                   </span>
                   <span className="shrink-0 font-mono text-xs text-muted-foreground">
@@ -504,6 +517,7 @@ export default function StatisticsOverview() {
             domains={stats.topDomains}
             dnsLoggingEnabled={stats.dnsLoggingEnabled}
             dnsTruncated={stats.dnsTruncated}
+            window_={window_}
           />
         </div>
       ) : null}
