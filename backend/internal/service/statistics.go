@@ -215,8 +215,8 @@ func (s *StatisticsService) GetStatistics(window string) model.TrafficStatistics
 		Window:            window,
 		ObservedBytes:     breakdown.Observed,
 		Accuracy:          breakdown.Accuracy,
-		TopSources:        buildTopHosts(breakdown.Hosts, breakdown.Observed, leaseByIP, resByIP, ipDomain),
-		TopDestinations:   buildTopHosts(breakdown.Dests, breakdown.Observed, leaseByIP, resByIP, ipDomain),
+		TopSources:        buildTopHosts(breakdown.Hosts, breakdown.Observed, leaseByIP, resByIP, ipDomain, false),
+		TopDestinations:   buildTopHosts(breakdown.Dests, breakdown.Observed, leaseByIP, resByIP, ipDomain, true),
 		TopConversations:  buildTopConversations(breakdown.Convs, breakdown.Observed, leaseByIP, resByIP, ipDomain),
 		DeniedSources:     buildTopDeniedSources(srcTotals, deniedEvents, leaseByIP, resByIP),
 		DeniedPorts:       buildTopDeniedPorts(portTotals, deniedEvents),
@@ -235,21 +235,36 @@ func (s *StatisticsService) GetStatistics(window string) model.TrafficStatistics
 // breakdown.Dests — same shape) into the Top Source Hosts / Top Destinations
 // card rows. Sort is deterministic (bytes desc, then IP asc) so tests never
 // flake on map iteration order, mirroring buildTopTalkers.
-func buildTopHosts(totals map[string]uint64, observed uint64, leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation, ipDomain map[string]string) []model.TopHost {
+//
+// flip controls the up/down direction relative to ip (plan §2.5): false
+// (Top Source Hosts, ip == SrcIP) maps Orig -> up / Reply -> down; true (Top
+// Destinations, ip == DstIP) swaps them, since a destination IP "sends" the
+// Reply-direction bytes. Ranking/Bytes/Percent are always v.Total() either
+// way, so the flip never changes ordering or the pre-existing `bytes` field —
+// only which of the two additive bytesUp/bytesDown fields each direction
+// lands in.
+func buildTopHosts(totals map[string]dirBytes, observed uint64, leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation, ipDomain map[string]string, flip bool) []model.TopHost {
 	out := make([]model.TopHost, 0, len(totals))
-	for ip, bytes := range totals {
+	for ip, v := range totals {
+		bytes := v.Total()
 		if bytes == 0 {
 			continue
 		}
+		up, down := v.Orig, v.Reply
+		if flip {
+			up, down = v.Reply, v.Orig
+		}
 		hostname, mac := hostnameFor(ip, leaseByIP, resByIP)
 		out = append(out, model.TopHost{
-			IP:       ip,
-			Hostname: hostname,
-			MAC:      mac,
-			Bytes:    bytes,
-			Percent:  percentOf(bytes, observed),
-			Private:  isPrivateIP(ip),
-			Domain:   ipDomain[ip],
+			IP:        ip,
+			Hostname:  hostname,
+			MAC:       mac,
+			Bytes:     bytes,
+			Percent:   percentOf(bytes, observed),
+			BytesUp:   up,
+			BytesDown: down,
+			Private:   isPrivateIP(ip),
+			Domain:    ipDomain[ip],
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -267,9 +282,10 @@ func buildTopHosts(totals map[string]uint64, observed uint64, leaseByIP map[stri
 // buildTopConversations turns breakdown.Convs (keyed by convKey: "src|dst|proto|dstPort")
 // back into display rows. A key that fails to parse (should never happen —
 // convKey is the only writer) is skipped defensively rather than panicking.
-func buildTopConversations(totals map[string]uint64, observed uint64, leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation, ipDomain map[string]string) []model.TopConversation {
+func buildTopConversations(totals map[string]dirBytes, observed uint64, leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation, ipDomain map[string]string) []model.TopConversation {
 	out := make([]model.TopConversation, 0, len(totals))
-	for key, bytes := range totals {
+	for key, v := range totals {
+		bytes := v.Total()
 		if bytes == 0 {
 			continue
 		}
@@ -293,6 +309,8 @@ func buildTopConversations(totals map[string]uint64, observed uint64, leaseByIP 
 			DstPort:     uint16(port),
 			Bytes:       bytes,
 			Percent:     percentOf(bytes, observed),
+			BytesUp:     v.Orig,
+			BytesDown:   v.Reply,
 			DstDomain:   ipDomain[dstIP],
 		})
 	}

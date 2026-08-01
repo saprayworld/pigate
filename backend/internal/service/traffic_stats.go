@@ -79,8 +79,8 @@ const (
 // consecutive-miss counter (for pruning an expired conntrack entry —
 // plan Caution 5).
 type flowSampleState struct {
-	bytes  uint64
-	misses int
+	orig, reply uint64
+	misses      int
 }
 
 // trafficDetailBucket is one 5-minute bucket of accumulated deltas across
@@ -88,7 +88,7 @@ type flowSampleState struct {
 // Caution 12, mirrors TrafficBucket in system_status.go).
 type trafficDetailBucket struct {
 	ts        string // RFC3339, 5-minute-aligned bucket start
-	hostBytes map[string]uint64
+	hostBytes map[string]dirBytes
 	catBytes  map[string]uint64
 	ruleBytes map[string]model.RuleCounter
 	observed  uint64
@@ -100,9 +100,24 @@ type trafficDetailBucket struct {
 	// (plan Caution 2: never compute a second delta).
 	// dstBytes is keyed by destination IP; convBytes is keyed by
 	// convKey(srcIP, dstIP, proto, dstPort).
-	dstBytes  map[string]uint64
-	convBytes map[string]uint64
+	//
+	// hostBytes/dstBytes/convBytes store flow-relative direction (Orig =
+	// srcIP -> dstIP, Reply = dstIP -> srcIP) — never up/down; the
+	// up/down/flip mapping happens only at the presentation layer
+	// (service/statistics.go buildTopHosts, per plan §2.5) so bucket data can
+	// never itself go stale relative to that mapping.
+	dstBytes  map[string]dirBytes
+	convBytes map[string]dirBytes
 }
+
+// dirBytes is a flow-relative pair of byte counts: Orig is the srcIP->dstIP
+// direction, Reply is dstIP->srcIP (see FlowSample.BytesOrig/BytesReply).
+// Kept as a computed-total type rather than caching Total as a third field,
+// so there is exactly one source of truth for the sum (plan §2.3).
+type dirBytes struct{ Orig, Reply uint64 }
+
+// Total returns the combined byte count of both directions.
+func (d dirBytes) Total() uint64 { return d.Orig + d.Reply }
 
 // categoryEntry is one Service-Object-derived Protocol Breakdown category
 // lookup rule (plan §2.2). isICMP entries have no port range and only match
@@ -344,25 +359,30 @@ func (s *TrafficStatsService) runFlowEndWatcher(ctx context.Context) {
 // in real_conntrack_events.go about ordering.
 func (s *TrafficStatsService) onFlowEnd(f model.FlowSample) {
 	s.flowMu.Lock()
-	var delta uint64
+	var dOrig, dReply uint64
 	if st, ok := s.flowState[f.Key]; ok {
-		if f.Bytes > st.bytes {
-			delta = f.Bytes - st.bytes
+		if f.BytesOrig > st.orig {
+			dOrig = f.BytesOrig - st.orig
+		}
+		if f.BytesReply > st.reply {
+			dReply = f.BytesReply - st.reply
 		}
 		delete(s.flowState, f.Key)
 	} else {
-		delta = f.Bytes
+		dOrig = f.BytesOrig
+		dReply = f.BytesReply
 	}
 	s.flowMu.Unlock()
 
+	delta := dOrig + dReply
 	if delta == 0 {
 		return
 	}
 
-	hostDeltas := map[string]uint64{f.SrcIP: delta}
+	hostDeltas := map[string]dirBytes{f.SrcIP: {Orig: dOrig, Reply: dReply}}
 	catDeltas := map[string]uint64{s.categorize(f.Proto, f.DstPort): delta}
-	dstDeltas := map[string]uint64{f.DstIP: delta}
-	convDeltas := map[string]uint64{convKey(f): delta}
+	dstDeltas := map[string]dirBytes{f.DstIP: {Orig: dOrig, Reply: dReply}}
+	convDeltas := map[string]dirBytes{convKey(f): {Orig: dOrig, Reply: dReply}}
 	s.addBucket(time.Now(), hostDeltas, catDeltas, nil, dstDeltas, convDeltas, delta)
 }
 
@@ -372,10 +392,10 @@ func (s *TrafficStatsService) onFlowEnd(f model.FlowSample) {
 // cached bucket ring.
 func (s *TrafficStatsService) poll() {
 	now := time.Now()
-	hostDeltas := make(map[string]uint64)
+	hostDeltas := make(map[string]dirBytes)
 	catDeltas := make(map[string]uint64)
-	dstDeltas := make(map[string]uint64)
-	convDeltas := make(map[string]uint64)
+	dstDeltas := make(map[string]dirBytes)
+	convDeltas := make(map[string]dirBytes)
 	var observed uint64
 
 	if flows, err := s.acct.DumpFlows(); err != nil {
@@ -404,7 +424,7 @@ func (s *TrafficStatsService) poll() {
 // Caution 4), clamping negative deltas to 0 (Caution 3), and pruning flow
 // keys absent for flowStaleMisses consecutive polls (Caution 5). Returns the
 // total observed byte delta this poll.
-func (s *TrafficStatsService) processFlows(flows []model.FlowSample, hostDeltas, catDeltas, dstDeltas, convDeltas map[string]uint64) uint64 {
+func (s *TrafficStatsService) processFlows(flows []model.FlowSample, hostDeltas map[string]dirBytes, catDeltas map[string]uint64, dstDeltas, convDeltas map[string]dirBytes) uint64 {
 	s.flowMu.Lock()
 	defer s.flowMu.Unlock()
 
@@ -441,29 +461,57 @@ func (s *TrafficStatsService) processFlows(flows []model.FlowSample, hostDeltas,
 			s.flowState[f.Key] = st
 		}
 
-		delta := int64(f.Bytes) - int64(st.bytes)
-		st.bytes = f.Bytes
-		st.misses = 0
+		// Per-direction delta + clamp (plan §5 Caution 3: this is a deliberate
+		// change from Phase 2's single combined clamp — a counter monotonic
+		// per direction means clamping per direction is strictly more correct
+		// than clamping the sum, which could otherwise let one direction's
+		// legitimate growth mask the other direction's counter reset/key
+		// collision). st.orig and st.reply are ALWAYS updated together on the
+		// same line (plan §5 Caution 2) so neither direction's baseline can
+		// silently fall behind and get re-credited every poll.
+		dOrigI := int64(f.BytesOrig) - int64(st.orig)
+		dReplyI := int64(f.BytesReply) - int64(st.reply)
+		st.orig, st.reply, st.misses = f.BytesOrig, f.BytesReply, 0
+		if dOrigI < 0 {
+			dOrigI = 0
+		}
+		if dReplyI < 0 {
+			dReplyI = 0
+		}
+		dOrig, dReply := uint64(dOrigI), uint64(dReplyI)
 
-		if firstPoll || delta <= 0 {
+		if firstPoll || dOrig+dReply == 0 {
 			continue
 		}
-		d := uint64(delta)
+		// Single combined delta `d` — the only value that flows into
+		// observed/catDeltas; host/dst/conv receive the (dOrig, dReply) pair
+		// derived from that same computation, never a second delta (plan §5
+		// Caution 1/2, invariant 5 of §2.1).
+		d := dOrig + dReply
 		observed += d
 		if _, exists := hostDeltas[f.SrcIP]; exists || len(hostDeltas) < maxTrackedHosts {
-			hostDeltas[f.SrcIP] += d
+			cur := hostDeltas[f.SrcIP]
+			cur.Orig += dOrig
+			cur.Reply += dReply
+			hostDeltas[f.SrcIP] = cur
 		}
 		catDeltas[s.categorize(f.Proto, f.DstPort)] += d
-		// Same delta `d` feeds Top Destinations/Top Conversations
+		// Same (dOrig, dReply) feeds Top Destinations/Top Conversations
 		// (docs/ref/todo/statistics-page-plan.md T-02 step 4, Caution 2) —
 		// never compute a second delta for these, or a stray poll/event race
 		// would silently double-count.
 		if _, exists := dstDeltas[f.DstIP]; exists || len(dstDeltas) < maxTrackedDests {
-			dstDeltas[f.DstIP] += d
+			cur := dstDeltas[f.DstIP]
+			cur.Orig += dOrig
+			cur.Reply += dReply
+			dstDeltas[f.DstIP] = cur
 		}
 		ck := convKey(f)
 		if _, exists := convDeltas[ck]; exists || len(convDeltas) < maxTrackedConversations {
-			convDeltas[ck] += d
+			cur := convDeltas[ck]
+			cur.Orig += dOrig
+			cur.Reply += dReply
+			convDeltas[ck] = cur
 		}
 	}
 
@@ -666,7 +714,7 @@ func parseServicePortRange(port string) (start, end int, ok bool) {
 // addBucket merges this poll's deltas into the current (or a freshly rolled)
 // 5-minute bucket, evicting the oldest bucket past trafficDetailBucketMax —
 // mirrors SystemStatusService.addToBucketLocked.
-func (s *TrafficStatsService) addBucket(now time.Time, hostDeltas, catDeltas map[string]uint64, ruleDeltas map[string]model.RuleCounter, dstDeltas, convDeltas map[string]uint64, observed uint64) {
+func (s *TrafficStatsService) addBucket(now time.Time, hostDeltas map[string]dirBytes, catDeltas map[string]uint64, ruleDeltas map[string]model.RuleCounter, dstDeltas, convDeltas map[string]dirBytes, observed uint64) {
 	ts := now.Truncate(trafficDetailBucketSpan).Format(time.RFC3339)
 
 	s.mu.Lock()
@@ -674,29 +722,29 @@ func (s *TrafficStatsService) addBucket(now time.Time, hostDeltas, catDeltas map
 
 	if n := len(s.buckets); n > 0 && s.buckets[n-1].ts == ts {
 		b := &s.buckets[n-1]
-		mergeUint64Map(b.hostBytes, hostDeltas, maxTrackedHosts)
+		mergeDirMap(b.hostBytes, hostDeltas, maxTrackedHosts)
 		mergeUint64Map(b.catBytes, catDeltas, 0)
 		mergeRuleMap(b.ruleBytes, ruleDeltas)
-		mergeUint64Map(b.dstBytes, dstDeltas, maxTrackedDests)
-		mergeUint64Map(b.convBytes, convDeltas, maxTrackedConversations)
+		mergeDirMap(b.dstBytes, dstDeltas, maxTrackedDests)
+		mergeDirMap(b.convBytes, convDeltas, maxTrackedConversations)
 		b.observed += observed
 		return
 	}
 
 	b := trafficDetailBucket{
 		ts:        ts,
-		hostBytes: make(map[string]uint64, len(hostDeltas)),
+		hostBytes: make(map[string]dirBytes, len(hostDeltas)),
 		catBytes:  make(map[string]uint64, len(catDeltas)),
 		ruleBytes: make(map[string]model.RuleCounter, len(ruleDeltas)),
-		dstBytes:  make(map[string]uint64, len(dstDeltas)),
-		convBytes: make(map[string]uint64, len(convDeltas)),
+		dstBytes:  make(map[string]dirBytes, len(dstDeltas)),
+		convBytes: make(map[string]dirBytes, len(convDeltas)),
 		observed:  observed,
 	}
-	mergeUint64Map(b.hostBytes, hostDeltas, maxTrackedHosts)
+	mergeDirMap(b.hostBytes, hostDeltas, maxTrackedHosts)
 	mergeUint64Map(b.catBytes, catDeltas, 0)
 	mergeRuleMap(b.ruleBytes, ruleDeltas)
-	mergeUint64Map(b.dstBytes, dstDeltas, maxTrackedDests)
-	mergeUint64Map(b.convBytes, convDeltas, maxTrackedConversations)
+	mergeDirMap(b.dstBytes, dstDeltas, maxTrackedDests)
+	mergeDirMap(b.convBytes, convDeltas, maxTrackedConversations)
 
 	s.buckets = append(s.buckets, b)
 	if len(s.buckets) > trafficDetailBucketMax {
@@ -739,6 +787,21 @@ func mergeUint64Map(dst, src map[string]uint64, capAt int) {
 			continue
 		}
 		dst[k] += v
+	}
+}
+
+// mergeDirMap is mergeUint64Map's counterpart for dirBytes-valued maps —
+// same cap semantics exactly (a brand-new key is dropped once dst already
+// holds capAt entries, existing keys keep accumulating in both directions).
+func mergeDirMap(dst, src map[string]dirBytes, capAt int) {
+	for k, v := range src {
+		if _, exists := dst[k]; !exists && capAt > 0 && len(dst) >= capAt {
+			continue
+		}
+		cur := dst[k]
+		cur.Orig += v.Orig
+		cur.Reply += v.Reply
+		dst[k] = cur
 	}
 }
 
@@ -791,8 +854,12 @@ func (s *TrafficStatsService) GetTrafficDetail(window string) model.TrafficDetai
 		windowBuckets = s.buckets
 	}
 	for _, b := range windowBuckets {
+		// Summed via .Total() — GetTrafficDetail's response (Dashboard
+		// "Detailed" tab) MUST NOT change out of this plan (plan §5 Caution
+		// 6): it stays a single combined byte figure, identical to what the
+		// pre-split map[string]uint64 would have produced.
 		for k, v := range b.hostBytes {
-			hostTotals[k] += v
+			hostTotals[k] += v.Total()
 		}
 		for k, v := range b.catBytes {
 			catTotals[k] += v
@@ -835,7 +902,7 @@ func (s *TrafficStatsService) GetTrafficDetail(window string) model.TrafficDetai
 // convKey); StatisticsService is responsible for turning those keys back
 // into display rows (hostname lookup, percent, sorting).
 type TrafficBreakdown struct {
-	Hosts, Dests, Convs map[string]uint64
+	Hosts, Dests, Convs map[string]dirBytes
 	Observed            uint64
 	Truncated           bool
 	Accuracy            string
@@ -853,9 +920,9 @@ func (s *TrafficStatsService) GetTrafficBreakdown(window string) TrafficBreakdow
 		window = trafficWindow1h
 	}
 
-	hostTotals := make(map[string]uint64)
-	dstTotals := make(map[string]uint64)
-	convTotals := make(map[string]uint64)
+	hostTotals := make(map[string]dirBytes)
+	dstTotals := make(map[string]dirBytes)
+	convTotals := make(map[string]dirBytes)
 	var observed uint64
 	var truncated bool
 
@@ -872,13 +939,22 @@ func (s *TrafficStatsService) GetTrafficBreakdown(window string) TrafficBreakdow
 	}
 	for _, b := range windowBuckets {
 		for k, v := range b.hostBytes {
-			hostTotals[k] += v
+			cur := hostTotals[k]
+			cur.Orig += v.Orig
+			cur.Reply += v.Reply
+			hostTotals[k] = cur
 		}
 		for k, v := range b.dstBytes {
-			dstTotals[k] += v
+			cur := dstTotals[k]
+			cur.Orig += v.Orig
+			cur.Reply += v.Reply
+			dstTotals[k] = cur
 		}
 		for k, v := range b.convBytes {
-			convTotals[k] += v
+			cur := convTotals[k]
+			cur.Orig += v.Orig
+			cur.Reply += v.Reply
+			convTotals[k] = cur
 		}
 		observed += b.observed
 		if len(b.hostBytes) >= maxTrackedHosts || len(b.dstBytes) >= maxTrackedDests || len(b.convBytes) >= maxTrackedConversations {

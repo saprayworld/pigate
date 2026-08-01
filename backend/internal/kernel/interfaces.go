@@ -46,7 +46,8 @@ type TrafficLogManager interface {
 // requires `net.netfilter.nf_conntrack_acct=1` to be set on the host for
 // DumpFlows to return non-zero byte counts (see the "conntrack" capability
 // probe) — an unset sysctl is not itself an error, it just yields
-// FlowSample.Bytes==0 for every flow. Callers (service.TrafficStatsService)
+// FlowSample.BytesOrig==0 and FlowSample.BytesReply==0 for every flow.
+// Callers (service.TrafficStatsService)
 // are responsible for polling on a background goroutine and caching the
 // result; neither method may be called directly from an HTTP request handler
 // (plan Caution 6).

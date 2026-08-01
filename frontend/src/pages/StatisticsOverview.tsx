@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { BarChart3, RefreshCw, TriangleAlert } from "lucide-react"
+import { useNavigate } from "react-router-dom"
+import { ArrowDown, ArrowUp, BarChart3, RefreshCw, TriangleAlert } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -24,7 +25,7 @@ import {
   type TopHost,
   type TrafficStatistics,
 } from "@/services/statisticsService"
-import { useStatsWindow, StatsWindowSelect } from "@/components/statistics/DnsStatsShared"
+import { useStatsWindow, StatsWindowSelect, type StatsWindow } from "@/components/statistics/DnsStatsShared"
 
 const REFRESH_INTERVAL = 10_000
 
@@ -84,6 +85,26 @@ function HostBar({ percent }: { percent: number }) {
         style={{ width: `${Math.min(100, Math.max(percent, 0))}%` }}
       />
     </div>
+  )
+}
+
+// UpDownLine renders the small "↑ up · ↓ down" byte sub-line shared by
+// TopHostsCard rows and the Conversations table (docs/ref/todo/
+// statistics-split-upload-download-bytes-plan.md T-11). Uses theme-variable
+// colors only (text-primary/text-muted-foreground) — never raw palette
+// classes, per rules_of_work.md.
+function UpDownLine({ up, down }: { up: number; down: number }) {
+  return (
+    <span className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
+      <span className="flex items-center gap-0.5 text-primary">
+        <ArrowDown className="size-2.5" />
+        {fmtBytes(down)}
+      </span>
+      <span className="flex items-center gap-0.5">
+        <ArrowUp className="size-2.5" />
+        {fmtBytes(up)}
+      </span>
+    </span>
   )
 }
 
@@ -152,8 +173,11 @@ function TopHostsCard({
             <div key={h.ip} className="space-y-1">
               <div className="flex items-center justify-between gap-3 text-sm">
                 <HostLabel host={h} />
-                <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                  {fmtBytes(h.bytes)} · {h.percent}%
+                <span className="shrink-0 text-right">
+                  <span className="block font-mono text-xs text-muted-foreground">
+                    {fmtBytes(h.bytes)} · {h.percent}%
+                  </span>
+                  <UpDownLine up={h.bytesUp} down={h.bytesDown} />
                 </span>
               </div>
               <HostBar percent={h.percent} />
@@ -183,7 +207,9 @@ function TopConversationsCard({ conversations }: { conversations: TopConversatio
                   <TableHead>Destination</TableHead>
                   <TableHead className="w-20">Proto</TableHead>
                   <TableHead className="w-20 text-right">Port</TableHead>
-                  <TableHead className="w-32 text-right">Bytes</TableHead>
+                  <TableHead className="w-24 text-right">Down</TableHead>
+                  <TableHead className="w-24 text-right">Up</TableHead>
+                  <TableHead className="w-24 text-right">Total</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -212,6 +238,12 @@ function TopConversationsCard({ conversations }: { conversations: TopConversatio
                     </TableCell>
                     <TableCell className="text-xs font-mono">{c.proto}</TableCell>
                     <TableCell className="text-right text-xs font-mono">{c.dstPort}</TableCell>
+                    <TableCell className="text-right text-xs font-mono text-primary">
+                      {fmtBytes(c.bytesDown)}
+                    </TableCell>
+                    <TableCell className="text-right text-xs font-mono text-muted-foreground">
+                      {fmtBytes(c.bytesUp)}
+                    </TableCell>
                     <TableCell className="text-right text-xs font-mono text-muted-foreground">
                       {fmtBytes(c.bytes)}
                     </TableCell>
@@ -234,11 +266,14 @@ function TopDomainsCard({
   domains,
   dnsLoggingEnabled,
   dnsTruncated,
+  window_,
 }: {
   domains: TopDomain[]
   dnsLoggingEnabled: boolean
   dnsTruncated: boolean
+  window_: StatsWindow
 }) {
+  const navigate = useNavigate()
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
@@ -260,7 +295,16 @@ function TopDomainsCard({
               <div key={d.domain} className="space-y-1">
                 <div className="flex items-center justify-between gap-3 text-sm">
                   <span className="flex min-w-0 items-center gap-2">
-                    <span className="truncate text-foreground/90">{d.domain}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        navigate(`/statistics/dns/domain/${encodeURIComponent(d.domain)}?window=${window_}`)
+                      }
+                      title="คลิกเพื่อดูว่าเครื่องไหนถามโดเมนนี้บ้าง"
+                      className="min-w-0 cursor-pointer truncate text-left text-foreground/90 hover:text-primary hover:underline"
+                    >
+                      {d.domain}
+                    </button>
                     <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{d.queryType}</span>
                   </span>
                   <span className="shrink-0 font-mono text-xs text-muted-foreground">
@@ -473,6 +517,7 @@ export default function StatisticsOverview() {
             domains={stats.topDomains}
             dnsLoggingEnabled={stats.dnsLoggingEnabled}
             dnsTruncated={stats.dnsTruncated}
+            window_={window_}
           />
         </div>
       ) : null}

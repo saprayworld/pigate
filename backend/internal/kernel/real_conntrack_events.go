@@ -226,12 +226,13 @@ func safeParseConntrackDestroy(msg syscall.NetlinkMessage) (sample model.FlowSam
 
 	key := flowKeyFromParts(family, proto, srcIP.String(), srcPort, dstIP.String(), dstPort)
 	return model.FlowSample{
-		Key:     key,
-		SrcIP:   srcIP.String(),
-		DstIP:   dstIP.String(),
-		Proto:   proto,
-		DstPort: dstPort,
-		Bytes:   origBytes + replyBytes,
+		Key:        key,
+		SrcIP:      srcIP.String(),
+		DstIP:      dstIP.String(),
+		Proto:      proto,
+		DstPort:    dstPort,
+		BytesOrig:  origBytes,
+		BytesReply: replyBytes,
 	}, true
 }
 

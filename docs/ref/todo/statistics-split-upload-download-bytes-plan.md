@@ -8,6 +8,11 @@
 >
 > วันที่เขียน: 2026-08-01 · Branch ที่จะใช้: `feat/statistics-updown-bytes` (ตั้งต้นจาก `main`)
 > README Feature Status: Statistics ยัง Completed เหมือนเดิม (แผนนี้เพิ่มมิติข้อมูล ไม่เพิ่มฟีเจอร์ใหม่)
+>
+> **แก้ไขครั้งที่ 1 (2026-08-01, หลัง audit โค้ดจริง):** ปรับ file:line ของ frontend mock branch,
+> เพิ่ม T-03b (แก้ doc comment ค้างใน `kernel/interfaces.go`), เติมรายละเอียดที่ขาดใน T-05/T-07,
+> แก้จำนวน literal ใน T-08 และปรับเกณฑ์ 🔒 ของ `interfaces.go` จาก "ห้ามอยู่ใน diff" เป็น
+> "ห้ามเปลี่ยนลายเซ็น method (comment แก้ได้)"
 
 ## 0. เป้าหมายและขอบเขต
 
@@ -20,7 +25,8 @@
 - ทุกแถวต้องคง invariant `bytesUp + bytesDown == bytes` เสมอ และผลรวมทั้งหมด
   ยังต้อง ≤ `observedBytes` (ไม่พองขึ้น = ไม่นับซ้ำ)
 - ทำงานได้ทั้ง `-mock=true` และของจริง, ไม่เพิ่ม kernel capability ใหม่, ไม่แตะ
-  `real_firewall.go` / `interfaces.go` (ลายเซ็น interface ไม่เปลี่ยน)
+  `real_firewall.go` และ **ไม่เปลี่ยนลายเซ็น method ใด ๆ ใน `interfaces.go`**
+  (แก้ได้เฉพาะ doc comment ที่อ้างชื่อฟิลด์เก่า — ดู T-03b)
 
 **นอกขอบเขต (ตัดชัดเจน)**
 - **การ์ด Dashboard แท็บ Detailed** (`model.TopTalker`, `GetTrafficDetail`) — ไม่แตะ response
@@ -38,7 +44,7 @@
 | conntrack poll | มี `f.Forward.Bytes` / `f.Reverse.Bytes` แยกอยู่แล้ว แต่ **บวกทิ้ง** เป็น `bytes` ก้อนเดียว | `kernel/real_traffic_account.go:95` (`flowsToSamples`) |
 | conntrack DESTROY event | parse `CTA_COUNTERS_ORIG`/`CTA_COUNTERS_REPLY` แยกกันอยู่แล้ว (`origBytes`, `replyBytes`) แต่ **บวกทิ้ง** ตอนสร้าง FlowSample | `kernel/real_conntrack_events.go:216-234` |
 | DTO ชั้นล่าง | `model.FlowSample` มีฟิลด์เดียว `Bytes uint64` | `model/types.go:607-622` |
-| kernel interface | `TrafficAccountingManager` 3 เมธอด — **ลายเซ็นไม่ต้องเปลี่ยน** (เปลี่ยนแค่เนื้อใน FlowSample) | `kernel/interfaces.go:41-73` |
+| kernel interface | `TrafficAccountingManager` 3 เมธอด — **ลายเซ็นไม่ต้องเปลี่ยน** แต่ doc comment `:49` อ้าง `FlowSample.Bytes==0` ซึ่งจะค้างหลังแก้ (ดู T-03b) | `kernel/interfaces.go:41-73` |
 | mock | `MockTrafficAccounting.DumpFlows`/`WatchFlowEnd` สังเคราะห์ byte รวมทางเดียว ไม่มีมิติทิศทาง | `kernel/mock.go:939-966`, `:1003-1033` |
 | baseline ของ poll | `flowSampleState{bytes, misses}` — baseline ก้อนเดียวต่อ key | `service/traffic_stats.go:81-84`, `processFlows :407-492` |
 | baseline ของ event | `onFlowEnd` เครดิต `f.Bytes - st.bytes` แล้ว `delete(flowState, key)` ทันที | `service/traffic_stats.go:345-367` |
@@ -46,11 +52,11 @@
 | accessor ของหน้า Statistics | `GetTrafficBreakdown` คืน `Hosts/Dests/Convs map[string]uint64` | `service/traffic_stats.go:837-903` |
 | ประกอบ response | `buildTopHosts` / `buildTopConversations` (percent = `percentOf(bytes, observed)`) | `service/statistics.go:238-315` |
 | DTO ของ API | `model.TopHost{Bytes}`, `model.TopConversation{Bytes}` | `model/statistics.go:14-51` |
-| handler/route | `HandleGetStatistics` + `authRoute("GET /api/statistics/traffic")` — **ไม่ต้องแก้** | `api/handlers.go:413-425`, `api/router.go:42` |
-| openapi | schema `TopHost` (:3993), `TopConversation` (:4040) มีทั้ง 2 ไฟล์ที่ต้อง sync | `docs/openapi.yaml`, `frontend/public/openapi.yaml` |
-| frontend client | `TopHost.bytes` / `TopConversation.bytes` + mock branch สังเคราะห์เอง | `frontend/src/services/statisticsService.ts:7-56`, `:119-142` |
+| handler/route | `HandleGetStatistics` + `authRoute("GET /api/statistics/traffic")` — **ไม่ต้องแก้** | `api/handlers.go:413-426`, `api/router.go:42` |
+| openapi | schema `TopHost` (:3993), `TopConversation` (:4040) มีทั้ง 2 ไฟล์ที่ต้อง sync (เลขบรรทัดตรงกันทั้งคู่) | `docs/openapi.yaml`, `frontend/public/openapi.yaml` |
+| frontend client | `TopHost.bytes` / `TopConversation.bytes` + mock branch สังเคราะห์เอง | `frontend/src/services/statisticsService.ts:7-56`, `:116-143` |
 | frontend UI | `TopHostsCard` แสดง `fmtBytes(h.bytes) · h.percent%`; ตาราง Conversations มีคอลัมน์ Bytes เดียว | `frontend/src/pages/StatisticsOverview.tsx:133-166`, `:168-227` |
-| test ที่คุม invariant Phase 2 | `TestTrafficStats_OnFlowEnd_*` 3 เคส + `TestGetTrafficBreakdown_OnFlowEnd*` 2 เคส + race test | `service/traffic_stats_test.go:186-256`, `:437-487`, `:321-360` |
+| test ที่คุม invariant Phase 2 | `TestTrafficStats_OnFlowEnd_*` 3 เคส + `TestGetTrafficBreakdown_OnFlowEnd*` 2 เคส + race test; property `Σ bytes ≤ observedBytes` มีอยู่แล้วที่ `statistics_test.go:91` | `service/traffic_stats_test.go:186-256`, `:437-487`, `:321-360` |
 | DB / migration | ไม่มีตารางที่เกี่ยวข้องเลย (RAM ล้วน) | — |
 
 **สรุป:** ข้อมูลทิศทาง**มีอยู่แล้วทั้งสองเส้นทาง** (poll และ event) แค่ถูกบวกทิ้งที่บรรทัดเดียว
@@ -94,9 +100,11 @@ func (f FlowSample) TotalBytes() uint64 { return f.BytesOrig + f.BytesReply }
   ลืมเซ็ต แล้ว consumer อ่านคนละฟิลด์ = นับหาย/นับซ้ำแบบเงียบ) — เป็นความเสี่ยง
   ประเภทเดียวกับที่ Phase 2 พยายามกำจัด
 - การลบฟิลด์ทำให้ **compiler ชี้ call site ให้ครบทุกจุด** (producer 3 จุด: real poll, real event,
-  mock; consumer 2 จุด: `processFlows`, `onFlowEnd`; test literal ~34 จุดใน 2 ไฟล์) →
+  mock; consumer 2 จุด: `processFlows`, `onFlowEnd`; test literal 29 จุดใน 2 ไฟล์ — ดู T-08) →
   ไม่มีทางลืมจุดใดจุดหนึ่งแบบเงียบ ๆ
 - `FlowSample` เป็น struct ภายใน ไม่เคย marshal เป็น JSON ออก API → ไม่มี contract ภายนอกแตก
+  (ตรวจแล้ว: consumer ของ `.Bytes` มีแค่ `traffic_stats.go:349,350,354,444,445`;
+  `real_capability.go:173` ใช้ `f.Forward.Bytes` ของ netlink ไม่ใช่ `model.FlowSample` → ไม่ต้องแก้)
 
 ### 2.3 ชั้น service — baseline และ bucket เป็นคู่
 
@@ -153,6 +161,16 @@ bucket เก็บแบบ **flow-relative เสมอ** (orig = src→dst) �
 `origBytes`/`replyBytes` ถูก parse แยกอยู่แล้ว → ใส่ลงฟิลด์ใหม่ตรง ๆ แทน `origBytes + replyBytes`
 คงพฤติกรรม "acct ปิด = 0 ทั้งคู่ ไม่ใช่ error" ไว้เหมือนเดิม
 
+### T-03b — แก้ doc comment ที่ค้างใน kernel interface (comment เท่านั้น)
+**ไฟล์:** `backend/internal/kernel/interfaces.go` (~:49 ใน doc comment ของ
+`TrafficAccountingManager`)
+ประโยคเดิม "…it just yields `FlowSample.Bytes==0` for every flow" จะกลายเป็นคอมเมนต์ผีทันที
+ที่ T-01 ลบฟิลด์ `Bytes` → แก้ให้อ้าง `FlowSample.BytesOrig`/`BytesReply` เป็น 0 **ทั้งคู่** แทน
+> **ข้อจำกัดเด็ดขาด:** แก้ได้เฉพาะ**ตัวคอมเมนต์** — ห้ามเปลี่ยนชื่อ/ลายเซ็น/ลำดับ method ของ
+> interface ใด ๆ ในไฟล์นี้แม้แต่ตัวเดียว (เกณฑ์ตรวจอยู่ที่ §5 ข้อ 13 และ §6)
+**acceptance:** `git diff backend/internal/kernel/interfaces.go` มีบรรทัด `+`/`-` เป็นคอมเมนต์
+(`//`) ล้วน และ `go build ./...` ผ่าน
+
 ### T-04 — mock (ห้ามแตะ OS)
 **ไฟล์:** `backend/internal/kernel/mock.go` (`DumpFlows` ~:939, `WatchFlowEnd` ~:1003,
 `mockFlowTemplate` ~:888)
@@ -176,10 +194,17 @@ bucket เก็บแบบ **flow-relative เสมอ** (orig = src→dst) �
    ```
    `observed += d`, `catDeltas[...] += d` (คงเป็น uint64), ส่วน host/dst/conv รับ
    `dirBytes{dOrig, dReply}` — **ห้ามคำนวณ delta ชุดที่สองเด็ดขาด** (invariant ข้อ 5)
+   - **อย่าลืม `poll()` (~:373-400)**: เป็นคนประกาศ local `hostDeltas` / `dstDeltas` /
+     `convDeltas` (`map[string]uint64` ในปัจจุบัน) ที่ส่งเข้า `processFlows` แล้วส่งต่อให้
+     `addBucket` → ทั้งสามตัวต้องเปลี่ยนเป็น `map[string]dirBytes` (`catDeltas` คงเป็น
+     `map[string]uint64`) และต้องแก้พารามิเตอร์ของ `processFlows` ให้ตรงกันด้วย
 4. `onFlowEnd` (~:345) — ตรรกะเดิมเป๊ะ แต่ทำสองทิศ: มี baseline → เครดิต
    `f.BytesOrig-st.orig` และ `f.BytesReply-st.reply` (clamp แยกกัน) แล้ว `delete` key;
    ไม่มี baseline → เครดิตเต็มทั้งสองทิศ; `delta == 0` ทั้งคู่ → return ก่อนเรียก `addBucket`
    (invariant ข้อ 2 ต้องยังลบ key ก่อนออกทุกกรณีที่เจอ baseline)
+   - **อย่าลืมบรรทัด ~:362-366**: `hostDeltas`/`dstDeltas`/`convDeltas` ที่สร้างสด ๆ ตรงนี้
+     ก็เป็น `map[string]uint64` เช่นกัน → เปลี่ยนเป็น `map[string]dirBytes{...}` ให้เข้ากับ
+     `addBucket` ใหม่ (`catDeltas` ยังเป็น `map[string]uint64{cat: dOrig+dReply}`)
 5. `addBucket` (~:669) — เปลี่ยน signature ของ host/dst/conv เป็น `map[string]dirBytes`
    และเรียก `mergeDirMap` ด้วย cap ตัวเดิม (`maxTrackedHosts`/`maxTrackedDests`/
    `maxTrackedConversations`) — ค่าคงที่ห้ามเปลี่ยน
@@ -197,18 +222,30 @@ Top Destinations สลับทิศแล้ว
 ### T-07 — ประกอบ response + สลับทิศให้ Top Destinations
 **ไฟล์:** `backend/internal/service/statistics.go` (`buildTopHosts` ~:238,
 `buildTopConversations` ~:270, `GetStatistics` ~:187)
-- `buildTopHosts(totals map[string]dirBytes, ..., flip bool)` — `flip=false` สำหรับ
-  `TopSources`, `flip=true` สำหรับ `TopDestinations` (ดูตาราง §2.5) และตั้ง
+- ลายเซ็นปัจจุบันมีพารามิเตอร์ `ipDomain` อยู่แล้ว — **คงของเดิมไว้ครบ เพิ่มแค่ `flip`**:
+  ```go
+  func buildTopHosts(totals map[string]dirBytes, observed uint64,
+      leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation,
+      ipDomain map[string]string, flip bool) []model.TopHost
+  ```
+  `flip=false` สำหรับ `TopSources`, `flip=true` สำหรับ `TopDestinations` (ดูตาราง §2.5) และตั้ง
   `Bytes = v.Total()` เสมอ เพื่อให้ **การจัดอันดับและ `percent` ไม่เปลี่ยนจากของเดิมเลย**
-- `buildTopConversations` — `BytesUp = Orig`, `BytesDown = Reply`
+- `buildTopConversations` — เปลี่ยน `totals` เป็น `map[string]dirBytes` (พารามิเตอร์อื่นคงเดิม
+  รวมถึง `ipDomain`), `BytesUp = Orig`, `BytesDown = Reply`
+- `GetStatistics` (~:205-211) วนอ่านแค่ **key** ของ `breakdown.Hosts`/`Dests` เพื่อทำ ipDomain
+  → ไม่ต้องแก้ตรรกะ แค่ให้ compile ผ่านกับ value type ใหม่
 > **ไม่ต้อง** แก้ `api/handlers.go` / `router.go` / `NewServer` — response เป็น additive
-> และ `window` ยัง whitelist ที่เดิม (`handlers.go:413-425`) ไม่มี input ใหม่จาก client
+> และ `window` ยัง whitelist ที่เดิม (`handlers.go:413-426`) ไม่มี input ใหม่จาก client
 
 ### T-08 — regression test ของ invariant (งานสำคัญที่สุดของแผนนี้)
 **ไฟล์:** `backend/internal/service/traffic_stats_test.go`, `.../statistics_test.go`
-- อัปเดต literal `Bytes:` เดิม (~34 จุดใน 2 ไฟล์) เป็น `BytesOrig`/`BytesReply` โดย
+- อัปเดต literal `Bytes:` ของ **`model.FlowSample` ซึ่งมี 29 จุด**
+  (`traffic_stats_test.go` 23 จุด + `statistics_test.go` 6 จุด) เป็น `BytesOrig`/`BytesReply` โดย
   **แบ่งค่าเดิมแบบไม่สมมาตร** (เช่น 1000 → 200/800) เพื่อให้ทุกเคสเดิมยังตรวจยอดรวมได้เท่าเดิม
   และจับสลับทิศผิดได้ด้วย
+- ⚠️ **ห้ามแตะ literal `Bytes:` ของ `model.RuleCounter` อีก 4 จุด**
+  (`traffic_stats_test.go:139-142` และ `:304`) — เป็นคนละ struct กัน (rule counter ของ nftables
+  ไม่มีมิติทิศทาง, §0 "นอกขอบเขต") การไล่ replace ทั้งไฟล์จะทำให้ปนกันทันที
 - เคสใหม่ที่ต้องมี:
   1. poll เห็น (200,800) → event ปิดที่ (300,1200) → รวมต้องได้ 1500 **ไม่ใช่ 3500**
      และ up=300 / down=1200 (ต่อยอด `TestTrafficStats_OnFlowEnd_CreditsOnlyDeltaAboveBaseline`)
@@ -216,7 +253,8 @@ Top Destinations สลับทิศแล้ว
   3. หลัง prune แล้ว event มาถึง → ไม่ underflow ทั้งสองทิศ
   4. **ทิศเดียวถอยหลัง**: orig ลด/reply เพิ่ม → orig clamp เป็น 0, reply นับปกติ, ไม่มี underflow
   5. **property**: ทุกแถวของ 3 การ์ด `bytesUp + bytesDown == bytes` และ
-     `Σ bytes ของ TopSources ≤ observedBytes`
+     `Σ bytes ของ TopSources ≤ observedBytes` — assertion ตัวหลังมีอยู่แล้วที่
+     `statistics_test.go:91` → **ต่อยอดของเดิม อย่าเขียนเคสซ้ำ**
   6. **สลับทิศ**: flow LAN→internet ก้อนเดียว → ใน TopSources เป็น up, ใน TopDestinations
      ต้องกลายเป็น down (ล็อกตาราง §2.5 ไม่ให้กลับด้านโดยไม่ตั้งใจ)
   7. `-race` เดิม (`TestTrafficStats_GetTrafficDetailNoRaceWithPoll` ~:321) ต้องยังผ่าน
@@ -224,13 +262,14 @@ Top Destinations สลับทิศแล้ว
 
 ### T-09 — API contract
 **ไฟล์:** `docs/openapi.yaml` (`TopHost` ~:3993, `TopConversation` ~:4040) **และ**
-`frontend/public/openapi.yaml` (ต้องเหมือนกันเป๊ะ)
+`frontend/public/openapi.yaml` (ต้องเหมือนกันเป๊ะ — สองไฟล์นี้เลขบรรทัดตรงกันอยู่แล้ว)
 เพิ่ม `bytesUp`/`bytesDown` ใน `properties` + `required` พร้อม description ว่าเป็นค่าเทียบกับ
 IP ของแถวนั้น และ `bytesUp + bytesDown == bytes` เสมอ
 > **ไม่ต้อง** แก้ `backend/internal/api/dist/openapi.yaml` (build artifact ที่ `build.sh` ทับให้)
 
 ### T-10 — frontend API client + mock branch
-**ไฟล์:** `frontend/src/services/statisticsService.ts` (~:7-56 types, ~:119-142 mock)
+**ไฟล์:** `frontend/src/services/statisticsService.ts` (~:7-56 types, ~:116-143 mock —
+`mockTopHosts` ~:116, `mockTopConversations` ~:133)
 เพิ่ม `bytesUp`/`bytesDown` ใน `TopHost`/`TopConversation` และใน mock generator ให้แบ่งสัดส่วน
 ไม่สมมาตร (สอดคล้องกับ `upRatio` ของ T-04) — ถ้าลืม mock branch tsc จะพัง
 
@@ -270,8 +309,9 @@ read-only (ถือเป็นเกณฑ์ทดสอบ) และไม�
    ถูกนับซ้ำทุก poll ทีละก้อนสะสม (แย่กว่าข้อ 1 เพราะซ้ำทุก ๆ 10 วินาที)
    **ป้องกัน:** อัปเดตทั้งสองฟิลด์ในบรรทัดเดียวกัน (`st.orig, st.reply = ...`) และเทสต์ T-08
    ข้อ 4 ที่ขยับทีละทิศ
-3. **การ clamp เปลี่ยนความหมายเล็กน้อย** — เดิม clamp ที่ผลรวม ตอนนี้ clamp ต่อทิศ กรณี
-   counter ทิศหนึ่งถอยหลัง (key ชน/NAT port reuse) ตัวเลขรวมอาจต่างจากเดิมเล็กน้อย
+3. **การ clamp เปลี่ยนความหมายเล็กน้อย** — เดิม clamp ที่ผลรวม (`traffic_stats.go:444-450`,
+   `delta <= 0 → continue`) ตอนนี้ clamp ต่อทิศ กรณี counter ทิศหนึ่งถอยหลัง (key ชน/NAT port
+   reuse) ตัวเลขรวมอาจต่างจากเดิมเล็กน้อย
    **ป้องกัน:** เขียนกำกับใน doc comment ของ `processFlows` ว่าเป็นพฤติกรรมที่ตั้งใจ
    (per-direction clamp ถูกต้องกว่า เพราะ counter monotonic แยกทิศ) และเทสต์ T-08 ข้อ 4
    ล็อกค่าไว้ ไม่ให้คนหลังคิดว่าเป็นบั๊ก
@@ -294,7 +334,9 @@ read-only (ถือเป็นเกณฑ์ทดสอบ) และไม�
    ใด ๆ ในแผนนี้ และวัด RSS หลังรัน ≥1 ชม.
 9. **`nf_conntrack_acct=0`** — ถ้า sysctl ปิด ทั้งสองทิศจะเป็น 0 (ไม่ใช่ error) เหมือนเดิม
    **ป้องกัน:** อย่าตีความ 0/0 เป็นความผิดพลาด, capability probe `conntrack` เดิมยังเป็นตัวบอก
-   ผู้ใช้อยู่แล้ว — ไม่ต้องแก้ `real_capability.go`
+   ผู้ใช้อยู่แล้ว — ไม่ต้องแก้ `real_capability.go` (ที่นั่นอ่าน `f.Forward.Bytes` ของ netlink
+   โดยตรง ไม่ผ่าน `model.FlowSample` จึงไม่กระทบ) แต่ **ต้องแก้ doc comment ใน
+   `interfaces.go:49` ที่อธิบายเคสนี้** ให้ตรงกับชื่อฟิลด์ใหม่ (T-03b)
 10. **mock ต้องปลอดภัย 100%** — dev รัน `-mock=true` บน WSL ที่ไม่มี conntrack
     **ป้องกัน:** T-04 ห้ามเพิ่ม socket/ไฟล์/`exec.Command` ใด ๆ
 11. **frontend mock branch ต้องอัปเดตพร้อม type** — ถ้าเพิ่มฟิลด์ใน interface แต่ลืม mock
@@ -302,7 +344,10 @@ read-only (ถือเป็นเกณฑ์ทดสอบ) และไม�
 12. **ห้าม persist** — ตลอดแผนนี้ `git diff --stat` ต้องไม่มี `backend/internal/db/`
     และไม่มี migration ใหม่ (SD card wear)
 13. 🔒 **หลักฐานว่าไม่หลุดขอบเขต** — `git diff --stat` ต้องไม่มี `kernel/real_firewall.go`
-    และไม่มี `kernel/interfaces.go` (ลายเซ็นไม่เปลี่ยน) ถ้ามีแปลว่าหลุด §0
+    ส่วน `kernel/interfaces.go` **อยู่ใน diff ได้เฉพาะกรณี T-03b (comment-only)**: เกณฑ์จริงคือ
+    **ลายเซ็น method ของทุก interface ในไฟล์นี้ห้ามเปลี่ยน** — ตรวจด้วย
+    `git diff backend/internal/kernel/interfaces.go` แล้วบรรทัด `+`/`-` ต้องเป็นคอมเมนต์
+    (`//`) ล้วน ถ้ามีบรรทัดโค้ดจริงเปลี่ยน = หลุด §0
 14. **ทดสอบบนบอร์ดจริงปลอดภัย** — แผนนี้อ่านอย่างเดียว ไม่แตะ firewall/routing จึงไม่มีความ
     เสี่ยงล็อกตัวเองออกจากเครื่อง แต่ยังควรทดสอบตอนเข้าถึงเครื่องได้
 
@@ -312,18 +357,23 @@ read-only (ถือเป็นเกณฑ์ทดสอบ) และไม�
 - [ ] T-01 `model/types.go`: `FlowSample.BytesOrig/BytesReply` + `TotalBytes()`
 - [ ] T-02 `kernel/real_traffic_account.go` `flowsToSamples` 🔒 (ห้ามแตะ flowKey*)
 - [ ] T-03 `kernel/real_conntrack_events.go` `safeParseConntrackDestroy` 🔒
+- [ ] T-03b `kernel/interfaces.go` แก้ doc comment `:49` เท่านั้น (ลายเซ็น method ห้ามเปลี่ยน)
 - [ ] T-04 `kernel/mock.go` `DumpFlows`/`WatchFlowEnd` + `upRatio` (ไม่มี side effect)
 
 **Service / API**
 - [ ] T-05 `service/traffic_stats.go`: `flowSampleState` คู่, `dirBytes`+`mergeDirMap`,
-      `processFlows`, `onFlowEnd`, `addBucket`, `GetTrafficBreakdown`, `GetTrafficDetail` คงเดิม 🔒
+      local map ของ `poll()` (~:373-400), `processFlows`, `onFlowEnd` (รวม map ที่ ~:362-366),
+      `addBucket`, `GetTrafficBreakdown`, `GetTrafficDetail` คงเดิม 🔒
 - [ ] T-06 `model/statistics.go`: `bytesUp`/`bytesDown` (additive)
-- [ ] T-07 `service/statistics.go`: `buildTopHosts(flip)` + `buildTopConversations`
-- [ ] T-08 test ครบ 7 เคส + อัปเดต literal เดิม; `cd backend && go build ./... && go test -race ./...`
+- [ ] T-07 `service/statistics.go`: `buildTopHosts(totals, observed, leaseByIP, resByIP,
+      ipDomain, flip)` + `buildTopConversations`
+- [ ] T-08 test ครบ 7 เคส + อัปเดต literal ของ FlowSample 29 จุด (traffic_stats_test 23 +
+      statistics_test 6) **โดยไม่แตะ `RuleCounter{Bytes:}` อีก 4 จุด**;
+      `cd backend && go build ./... && go test -race ./...`
 
 **Docs / Frontend**
 - [ ] T-09 `docs/openapi.yaml` + `frontend/public/openapi.yaml` (diff ตรงกันเป๊ะ)
-- [ ] T-10 `frontend/src/services/statisticsService.ts` (type + mock branch)
+- [ ] T-10 `frontend/src/services/statisticsService.ts` (type + mock branch ~:116-143)
 - [ ] T-11 `frontend/src/pages/StatisticsOverview.tsx` (up/down ทั้ง 3 การ์ด)
 - [ ] `cd frontend && yarn build && yarn lint` ผ่าน
 - [ ] T-12 (optional) เอกสาร
@@ -348,6 +398,7 @@ read-only (ถือเป็นเกณฑ์ทดสอบ) และไม�
 - [ ] `-disable-edit=true` และ role read-only ยังเปิดหน้านี้ได้ครบ; logout แล้วเรียก
       `/api/statistics/traffic` ตรง ๆ → 401
 - [ ] `go test -race ./...` และ `yarn build && yarn lint` ผ่านทั้งคู่
-- [ ] 🔒 `git diff --stat` ไม่มี `real_firewall.go`, ไม่มี `kernel/interfaces.go`, ไม่มี `db/`
+- [ ] 🔒 `git diff --stat` ไม่มี `real_firewall.go` และไม่มี `db/`; `kernel/interfaces.go`
+      มีได้เฉพาะ diff ที่เป็นคอมเมนต์ล้วน (**ลายเซ็น method ห้ามเปลี่ยน**)
 - [ ] ทุกอย่างอยู่บน branch `feat/statistics-updown-bytes` และเข้า main ผ่าน PR เท่านั้น
       (PR body ใส่ `Closes #107`)

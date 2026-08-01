@@ -3992,7 +3992,7 @@ components:
 
     TopHost:
       type: object
-      required: [ip, hostname, mac, bytes, percent, private, domain]
+      required: [ip, hostname, mac, bytes, percent, bytesUp, bytesDown, private, domain]
       description: >-
         One ranked row for the Statistics page's Top Source Hosts / Top
         Destinations cards (same shape for both).
@@ -4016,6 +4016,22 @@ components:
           format: float
           description: Share of observedBytes.
           example: 38.7
+        bytesUp:
+          type: integer
+          format: int64
+          description: >-
+            Bytes sent BY ip, relative to ip's own direction: bytesUp +
+            bytesDown always equals bytes. For Top Source Hosts this is the
+            flow's natural orig-direction traffic (ip is the flow's SrcIP);
+            for Top Destinations it is FLIPPED to the flow's reply-direction
+            traffic, since ip is on the destination side of the flow there
+            (docs/ref/todo/statistics-split-upload-download-bytes-plan.md §2.5).
+          example: 168000000
+        bytesDown:
+          type: integer
+          format: int64
+          description: Bytes received BY ip; see bytesUp for the direction convention.
+          example: 1932000000
         private:
           type: boolean
           description: >-
@@ -4039,7 +4055,7 @@ components:
 
     TopConversation:
       type: object
-      required: [srcIp, srcHostname, dstIp, dstHostname, proto, dstPort, bytes, percent, dstDomain]
+      required: [srcIp, srcHostname, dstIp, dstHostname, proto, dstPort, bytes, percent, bytesUp, bytesDown, dstDomain]
       description: >-
         One src -> dst:port flow-tuple row for the Top Conversations card. A
         4-tuple (no source port — model.FlowSample does not carry one; the
@@ -4073,6 +4089,18 @@ components:
           format: float
           description: Share of observedBytes.
           example: 12.4
+        bytesUp:
+          type: integer
+          format: int64
+          description: >-
+            Bytes sent srcIp -> dstIp (the flow's orig direction). bytesUp +
+            bytesDown always equals bytes.
+          example: 900000
+        bytesDown:
+          type: integer
+          format: int64
+          description: Bytes sent dstIp -> srcIp (the flow's reply direction).
+          example: 8100000
         dstDomain:
           type: string
           description: >-

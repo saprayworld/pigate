@@ -92,14 +92,14 @@ func flowsToSamples(flows []*netlink.ConntrackFlow, limit int) []model.FlowSampl
 		if len(out) >= limit {
 			break
 		}
-		bytes := f.Forward.Bytes + f.Reverse.Bytes
 		out = append(out, model.FlowSample{
-			Key:     flowKey(f),
-			SrcIP:   f.Forward.SrcIP.String(),
-			DstIP:   f.Forward.DstIP.String(),
-			Proto:   f.Forward.Protocol,
-			DstPort: f.Forward.DstPort,
-			Bytes:   bytes,
+			Key:        flowKey(f),
+			SrcIP:      f.Forward.SrcIP.String(),
+			DstIP:      f.Forward.DstIP.String(),
+			Proto:      f.Forward.Protocol,
+			DstPort:    f.Forward.DstPort,
+			BytesOrig:  f.Forward.Bytes,
+			BytesReply: f.Reverse.Bytes,
 		})
 	}
 	return out
