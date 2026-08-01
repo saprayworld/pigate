@@ -81,6 +81,16 @@ const (
 type flowSampleState struct {
 	orig, reply uint64
 	misses      int
+	// lanFlip is set ONCE when this state is first created (from the flow's
+	// own SrcIP/DstIP, via lanFlipFor) and never touched again — it decides
+	// whether Orig/Reply map to up/down or down/up for the bucket-level
+	// LAN-relative Observed total (plan docs/ref/todo/
+	// statistics-overview-bandwidth-chart-plan.md §2.2/T-02 item 2). A flow's
+	// (srcIP, dstIP) pair never changes for the lifetime of a flowKey (the key
+	// is hashed from that same pair — kernel/real_traffic_account.go:112-142),
+	// so recomputing this on every poll would be wasted work, not a
+	// correctness fix.
+	lanFlip bool
 }
 
 // trafficDetailBucket is one 5-minute bucket of accumulated deltas across
@@ -91,7 +101,13 @@ type trafficDetailBucket struct {
 	hostBytes map[string]dirBytes
 	catBytes  map[string]uint64
 	ruleBytes map[string]model.RuleCounter
-	observed  uint64
+	// observed is the bucket's LAN-relative total (Orig = up/leaving the LAN,
+	// Reply = down/entering the LAN — see lanFlipFor below), unlike
+	// hostBytes/dstBytes/convBytes below which stay flow-relative. This is a
+	// deliberate, documented exception (plan §2.2): Observed is a whole-network
+	// total with no single "row owner" to give Orig/Reply a flow-relative
+	// meaning against, so it is flipped once here instead, at write time.
+	observed dirBytes
 
 	// dstBytes/convBytes back the Statistics page (Top Destinations / Top
 	// Conversations, docs/ref/todo/statistics-page-plan.md T-02) — same
@@ -105,9 +121,24 @@ type trafficDetailBucket struct {
 	// srcIP -> dstIP, Reply = dstIP -> srcIP) — never up/down; the
 	// up/down/flip mapping happens only at the presentation layer
 	// (service/statistics.go buildTopHosts, per plan §2.5) so bucket data can
-	// never itself go stale relative to that mapping.
+	// never itself go stale relative to that mapping. observed above is the
+	// one deliberate exception to this rule — see its own comment.
 	dstBytes  map[string]dirBytes
 	convBytes map[string]dirBytes
+}
+
+// lanFlipFor reports whether Orig/Reply must be swapped to get LAN-relative
+// up/down for a flow between srcIP and dstIP (plan docs/ref/todo/
+// statistics-overview-bandwidth-chart-plan.md §2.2 — the single source of
+// this classification, used by both processFlows and onFlowEnd so the two
+// paths can never disagree):
+//
+//	src / dst                    | up (leaving LAN) | down (entering LAN)
+//	private -> public            | Orig              | Reply
+//	public -> private            | Reply             | Orig
+//	private/private, public/public (unchanged)         | Orig | Reply
+func lanFlipFor(srcIP, dstIP string) bool {
+	return !isPrivateIP(srcIP) && isPrivateIP(dstIP)
 }
 
 // dirBytes is a flow-relative pair of byte counts: Orig is the srcIP->dstIP
@@ -383,7 +414,19 @@ func (s *TrafficStatsService) onFlowEnd(f model.FlowSample) {
 	catDeltas := map[string]uint64{s.categorize(f.Proto, f.DstPort): delta}
 	dstDeltas := map[string]dirBytes{f.DstIP: {Orig: dOrig, Reply: dReply}}
 	convDeltas := map[string]dirBytes{convKey(f): {Orig: dOrig, Reply: dReply}}
-	s.addBucket(time.Now(), hostDeltas, catDeltas, nil, dstDeltas, convDeltas, delta)
+
+	// LAN-relative Observed delta (plan §2.2 T-02 item 6): computed straight
+	// from f.SrcIP/f.DstIP, not from flowState (the baseline for this key was
+	// just deleted above, and the "no baseline" branch never had one to begin
+	// with) — lanFlipFor is pure and keyed off the same IP pair regardless, so
+	// this always agrees with what processFlows would have used.
+	var observed dirBytes
+	if lanFlipFor(f.SrcIP, f.DstIP) {
+		observed = dirBytes{Orig: dReply, Reply: dOrig}
+	} else {
+		observed = dirBytes{Orig: dOrig, Reply: dReply}
+	}
+	s.addBucket(time.Now(), hostDeltas, catDeltas, nil, dstDeltas, convDeltas, observed)
 }
 
 // poll is one collection tick: DumpFlows + DumpRuleCounters must never be
@@ -396,7 +439,7 @@ func (s *TrafficStatsService) poll() {
 	catDeltas := make(map[string]uint64)
 	dstDeltas := make(map[string]dirBytes)
 	convDeltas := make(map[string]dirBytes)
-	var observed uint64
+	var observed dirBytes
 
 	if flows, err := s.acct.DumpFlows(); err != nil {
 		log.Printf("[TrafficStats] DumpFlows failed (traffic cards will show stale/empty data): %v", err)
@@ -411,7 +454,7 @@ func (s *TrafficStatsService) poll() {
 		s.processRuleCounters(counters, ruleDeltas)
 	}
 
-	if observed == 0 && len(hostDeltas) == 0 && len(catDeltas) == 0 && len(ruleDeltas) == 0 {
+	if observed.Total() == 0 && len(hostDeltas) == 0 && len(catDeltas) == 0 && len(ruleDeltas) == 0 {
 		// Either a seed-only first poll (plan Caution 4) or a genuinely quiet
 		// tick — nothing to add to the bucket ring.
 		return
@@ -423,14 +466,17 @@ func (s *TrafficStatsService) poll() {
 // deltas, seeding (not counting) on the very first call ever made (plan
 // Caution 4), clamping negative deltas to 0 (Caution 3), and pruning flow
 // keys absent for flowStaleMisses consecutive polls (Caution 5). Returns the
-// total observed byte delta this poll.
-func (s *TrafficStatsService) processFlows(flows []model.FlowSample, hostDeltas map[string]dirBytes, catDeltas map[string]uint64, dstDeltas, convDeltas map[string]dirBytes) uint64 {
+// total observed byte delta this poll, as a LAN-relative dirBytes (Orig = up
+// leaving the LAN, Reply = down entering it — plan §2.2/T-02 item 4), derived
+// from each flow's own st.lanFlip (set once when its flowSampleState was
+// created — see that struct's comment) rather than recomputed here.
+func (s *TrafficStatsService) processFlows(flows []model.FlowSample, hostDeltas map[string]dirBytes, catDeltas map[string]uint64, dstDeltas, convDeltas map[string]dirBytes) dirBytes {
 	s.flowMu.Lock()
 	defer s.flowMu.Unlock()
 
 	firstPoll := !s.flowSeeded
 	seen := make(map[string]bool, len(flows))
-	var observed uint64
+	var observed dirBytes
 	var protoTCP, protoUDP, protoICMP, protoOther int
 
 	for _, f := range flows {
@@ -457,7 +503,9 @@ func (s *TrafficStatsService) processFlows(flows []model.FlowSample, hostDeltas 
 			if len(s.flowState) >= maxTrackedFlows {
 				continue // memory cap (plan Caution 5) — drop tracking for this flow
 			}
-			st = &flowSampleState{}
+			// lanFlip is computed once here from this flow's own SrcIP/DstIP and
+			// never touched again (plan §2.2/T-02 item 2/Caution 1).
+			st = &flowSampleState{lanFlip: lanFlipFor(f.SrcIP, f.DstIP)}
 			s.flowState[f.Key] = st
 		}
 
@@ -488,7 +536,16 @@ func (s *TrafficStatsService) processFlows(flows []model.FlowSample, hostDeltas 
 		// derived from that same computation, never a second delta (plan §5
 		// Caution 1/2, invariant 5 of §2.1).
 		d := dOrig + dReply
-		observed += d
+		// observed accumulates LAN-relative up/down (Orig field = up, Reply
+		// field = down), using st.lanFlip fixed once at flowSampleState
+		// creation — never recomputed per poll (plan §2.2/§5 Caution 1).
+		if st.lanFlip {
+			observed.Orig += dReply
+			observed.Reply += dOrig
+		} else {
+			observed.Orig += dOrig
+			observed.Reply += dReply
+		}
 		if _, exists := hostDeltas[f.SrcIP]; exists || len(hostDeltas) < maxTrackedHosts {
 			cur := hostDeltas[f.SrcIP]
 			cur.Orig += dOrig
@@ -714,7 +771,7 @@ func parseServicePortRange(port string) (start, end int, ok bool) {
 // addBucket merges this poll's deltas into the current (or a freshly rolled)
 // 5-minute bucket, evicting the oldest bucket past trafficDetailBucketMax —
 // mirrors SystemStatusService.addToBucketLocked.
-func (s *TrafficStatsService) addBucket(now time.Time, hostDeltas map[string]dirBytes, catDeltas map[string]uint64, ruleDeltas map[string]model.RuleCounter, dstDeltas, convDeltas map[string]dirBytes, observed uint64) {
+func (s *TrafficStatsService) addBucket(now time.Time, hostDeltas map[string]dirBytes, catDeltas map[string]uint64, ruleDeltas map[string]model.RuleCounter, dstDeltas, convDeltas map[string]dirBytes, observed dirBytes) {
 	ts := now.Truncate(trafficDetailBucketSpan).Format(time.RFC3339)
 
 	s.mu.Lock()
@@ -727,7 +784,8 @@ func (s *TrafficStatsService) addBucket(now time.Time, hostDeltas map[string]dir
 		mergeRuleMap(b.ruleBytes, ruleDeltas)
 		mergeDirMap(b.dstBytes, dstDeltas, maxTrackedDests)
 		mergeDirMap(b.convBytes, convDeltas, maxTrackedConversations)
-		b.observed += observed
+		b.observed.Orig += observed.Orig
+		b.observed.Reply += observed.Reply
 		return
 	}
 
@@ -870,7 +928,7 @@ func (s *TrafficStatsService) GetTrafficDetail(window string) model.TrafficDetai
 			cur.Packets += v.Packets
 			ruleTotals[k] = cur
 		}
-		observed += b.observed
+		observed += b.observed.Total()
 	}
 	s.mu.RUnlock()
 
@@ -906,6 +964,13 @@ type TrafficBreakdown struct {
 	Observed            uint64
 	Truncated           bool
 	Accuracy            string
+	// Series is the bandwidth-over-time chart data (plan docs/ref/todo/
+	// statistics-overview-bandwidth-chart-plan.md T-03) — computed in the SAME
+	// RLock/loop as Observed above (not a separate method/lock) so
+	// sum(Series[].Bytes) == Observed holds by construction, not by luck (plan
+	// §2.5). Not itself serialized — StatisticsService.GetStatistics copies it
+	// straight into model.TrafficStatistics.Series.
+	Series []model.BandwidthPoint
 }
 
 // GetTrafficBreakdown is GetTrafficDetail's sibling for the Statistics page:
@@ -925,6 +990,23 @@ func (s *TrafficStatsService) GetTrafficBreakdown(window string) TrafficBreakdow
 	convTotals := make(map[string]dirBytes)
 	var observed uint64
 	var truncated bool
+
+	// series axis (plan §2.5/T-03 step 2): n points, oldest -> newest, ending
+	// at the current (possibly still-open) bucket. Computed BEFORE taking
+	// s.mu.RLock and reused unchanged inside the loop below, so every bucket
+	// in windowBuckets is aggregated into both Observed and Series under the
+	// exact same lock acquisition — the race the plan's revision 2 fixed
+	// (§2.5 item 1) is structurally impossible here.
+	n := trafficWindow1hBuckets
+	if window == trafficWindow24h {
+		n = trafficDetailBucketMax
+	}
+	axisEnd := time.Now().Truncate(trafficDetailBucketSpan)
+	axisStart := axisEnd.Add(-time.Duration(n-1) * trafficDetailBucketSpan)
+	series := make([]model.BandwidthPoint, n)
+	for i := range series {
+		series[i].Ts = axisStart.Add(time.Duration(i) * trafficDetailBucketSpan).Format(time.RFC3339)
+	}
 
 	s.mu.RLock()
 	var windowBuckets []trafficDetailBucket
@@ -956,7 +1038,29 @@ func (s *TrafficStatsService) GetTrafficBreakdown(window string) TrafficBreakdow
 			cur.Reply += v.Reply
 			convTotals[k] = cur
 		}
-		observed += b.observed
+		observed += b.observed.Total()
+
+		// Plot this bucket into series (plan §2.5 item 2 / T-03 step 4): index
+		// by elapsed time from axisStart, carried into the nearest edge point
+		// when the ring covers a wider span than the window (older than the
+		// axis -> index 0, newer -> index n-1, e.g. after an NTP step back) or
+		// when b.ts fails to parse (should never happen — addBucket is the
+		// only writer) — this carry rule is what keeps
+		// sum(Series[].Bytes) == Observed true even when the window is
+		// bucket-count-based, not time-based (§7 item 6 / §2.5 item 2).
+		idx := 0
+		if bt, err := time.Parse(time.RFC3339, b.ts); err == nil {
+			idx = int(bt.Sub(axisStart) / trafficDetailBucketSpan)
+			if idx < 0 {
+				idx = 0
+			} else if idx >= n {
+				idx = n - 1
+			}
+		}
+		series[idx].BytesUp += b.observed.Orig
+		series[idx].BytesDown += b.observed.Reply
+		series[idx].Bytes += b.observed.Total()
+
 		if len(b.hostBytes) >= maxTrackedHosts || len(b.dstBytes) >= maxTrackedDests || len(b.convBytes) >= maxTrackedConversations {
 			truncated = true
 		}
@@ -975,6 +1079,7 @@ func (s *TrafficStatsService) GetTrafficBreakdown(window string) TrafficBreakdow
 		Observed:  observed,
 		Truncated: truncated,
 		Accuracy:  accuracy,
+		Series:    series,
 	}
 }
 
