@@ -237,7 +237,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                   >
                     <SidebarMenuItem>
                       <CollapsibleTrigger asChild>
-                        <SidebarMenuButton isActive={hasActiveChild} tooltip={group.title}>
+                        <SidebarMenuButton
+                          isActive={hasActiveChild}
+                          tooltip={group.title}
+                          // Expanded sidebar: parent row only tints text (no bg) when a
+                          // child is active, even on hover. Icon-only rail: restore the
+                          // bg highlight (also under hover), since the collapsed icon
+                          // stands in for the active leaf itself.
+                          className="data-active:bg-transparent data-active:hover:bg-transparent group-data-[collapsible=icon]:data-active:bg-primary/10! group-data-[collapsible=icon]:data-active:hover:bg-primary/10!"
+                        >
                           {GroupIcon && <GroupIcon className="size-4" />}
                           <span>{group.title}</span>
                           <ChevronRight className="ml-auto size-4 shrink-0 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
