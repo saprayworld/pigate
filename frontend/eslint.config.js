@@ -37,4 +37,14 @@ export default defineConfig([
       'react-refresh/only-export-components': 'off',
     },
   },
+  {
+    // Shared Traffic-page presentation module (docs/ref/todo/
+    // statistics-traffic-page-plan.md T-08) — same rationale as
+    // DnsStatsShared.tsx above: intentionally exports hooks
+    // (useSortableRows, useTextFilter) and types alongside its components.
+    files: ['src/components/statistics/TrafficStatsShared.tsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])

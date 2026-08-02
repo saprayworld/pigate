@@ -36,6 +36,11 @@
 // sane RAM-guard range (<=0 or absurdly large) is NOT fatal — Resolve clamps
 // it back to the default and appends a warning instead, so a typo'd value
 // never turns into a boot loop that takes the gateway's network off the air.
+//
+// traffic-stats-max-hosts / -max-dests / -max-conversations (docs/ref/todo/
+// statistics-traffic-page-plan.md §1.6/T-02) mirror this exact pattern —
+// file-only, same two-tier validation — for the Statistics -> Traffic page's
+// per-bucket tracking caps (service/traffic_stats.go).
 package config
 
 import (
@@ -70,6 +75,14 @@ type Config struct {
 	// a 1:1 flag counterpart.
 	DNSStatsMaxPairs   int
 	DNSStatsMaxClients int
+
+	// TrafficStatsMaxHosts/TrafficStatsMaxDests/TrafficStatsMaxConversations
+	// are also file-only (no matching CLI flag) — same rationale as
+	// DNSStatsMaxPairs/DNSStatsMaxClients above (docs/ref/todo/
+	// statistics-traffic-page-plan.md §1.6/T-02).
+	TrafficStatsMaxHosts         int
+	TrafficStatsMaxDests         int
+	TrafficStatsMaxConversations int
 }
 
 // Defaults returns the Config populated with the exact same defaults as the
@@ -95,6 +108,13 @@ func Defaults() Config {
 		// in internal/service/dns_query_stats.go.
 		DNSStatsMaxPairs:   2400,
 		DNSStatsMaxClients: 200,
+
+		// Keep in sync with defaultMaxTrackedHosts/defaultMaxTrackedDests/
+		// defaultMaxTrackedConversations in internal/service/traffic_stats.go
+		// (docs/ref/todo/statistics-traffic-page-plan.md §1.6 table).
+		TrafficStatsMaxHosts:         500,
+		TrafficStatsMaxDests:         500,
+		TrafficStatsMaxConversations: 600,
 	}
 }
 
@@ -119,6 +139,12 @@ const (
 	// see the package doc comment).
 	keyDNSStatsMaxPairs   = "dns-stats-max-pairs"
 	keyDNSStatsMaxClients = "dns-stats-max-clients"
+
+	// keyTrafficStatsMax{Hosts,Dests,Conversations} are also file-only (no
+	// CLI flag — docs/ref/todo/statistics-traffic-page-plan.md §1.6).
+	keyTrafficStatsMaxHosts         = "traffic-stats-max-hosts"
+	keyTrafficStatsMaxDests         = "traffic-stats-max-dests"
+	keyTrafficStatsMaxConversations = "traffic-stats-max-conversations"
 )
 
 // maxDNSStatsPairsCap/maxDNSStatsClientsCap are RAM-guard sanity ceilings for
@@ -131,6 +157,17 @@ const (
 	maxDNSStatsPairsCap   = 50000
 	maxDNSStatsClientsCap = 10000
 )
+
+// maxTrafficStatsCap is the shared RAM-guard sanity ceiling for all three
+// traffic-stats-max-* keys (docs/ref/todo/statistics-traffic-page-plan.md
+// §1.6). The cap applies per 5-minute bucket and the ring holds 288 buckets
+// (24h): a conversation entry costs ~110 bytes (≈45-char key + 16 B dirBytes
+// + map overhead), so even at this ceiling (20000) the worst case is
+// 20000 x 288 x 110B ≈ 634 MB — an operator raising a key this high has
+// deliberately chosen to trade RAM for a wider tracking window; Resolve still
+// clamps a syntactically-valid-but-insane value back to the default rather
+// than trusting it blindly, exactly like the DNS stats caps above.
+const maxTrafficStatsCap = 20000
 
 // orderedKeys is the fixed key order used by Write (and reused by KnownKeys)
 // so the generated file is stable/diffable across runs.
@@ -152,6 +189,11 @@ var orderedKeys = []string{
 	// docs/ref/todo/dns-stats-tracking-limits-config-plan.md.
 	keyDNSStatsMaxPairs,
 	keyDNSStatsMaxClients,
+	// Also appended at the end, after the DNS stats keys (docs/ref/todo/
+	// statistics-traffic-page-plan.md T-02 step 1).
+	keyTrafficStatsMaxHosts,
+	keyTrafficStatsMaxDests,
+	keyTrafficStatsMaxConversations,
 }
 
 // KnownKeys returns the list of recognized config/flag keys, in the fixed
@@ -264,6 +306,24 @@ func Resolve(defaults Config, fileVals, explicit map[string]string) (Config, []s
 			cfg.DNSStatsMaxClients, maxDNSStatsClientsCap, defaults.DNSStatsMaxClients))
 		cfg.DNSStatsMaxClients = defaults.DNSStatsMaxClients
 	}
+	if cfg.TrafficStatsMaxHosts <= 0 || cfg.TrafficStatsMaxHosts > maxTrafficStatsCap {
+		warnings = append(warnings, fmt.Sprintf(
+			"traffic-stats-max-hosts=%d out of range (1..%d), using default %d",
+			cfg.TrafficStatsMaxHosts, maxTrafficStatsCap, defaults.TrafficStatsMaxHosts))
+		cfg.TrafficStatsMaxHosts = defaults.TrafficStatsMaxHosts
+	}
+	if cfg.TrafficStatsMaxDests <= 0 || cfg.TrafficStatsMaxDests > maxTrafficStatsCap {
+		warnings = append(warnings, fmt.Sprintf(
+			"traffic-stats-max-dests=%d out of range (1..%d), using default %d",
+			cfg.TrafficStatsMaxDests, maxTrafficStatsCap, defaults.TrafficStatsMaxDests))
+		cfg.TrafficStatsMaxDests = defaults.TrafficStatsMaxDests
+	}
+	if cfg.TrafficStatsMaxConversations <= 0 || cfg.TrafficStatsMaxConversations > maxTrafficStatsCap {
+		warnings = append(warnings, fmt.Sprintf(
+			"traffic-stats-max-conversations=%d out of range (1..%d), using default %d",
+			cfg.TrafficStatsMaxConversations, maxTrafficStatsCap, defaults.TrafficStatsMaxConversations))
+		cfg.TrafficStatsMaxConversations = defaults.TrafficStatsMaxConversations
+	}
 
 	return cfg, warnings, nil
 }
@@ -350,6 +410,26 @@ func applyKey(cfg *Config, key, value string) error {
 			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
 		}
 		cfg.DNSStatsMaxClients = n
+	case keyTrafficStatsMaxHosts:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		// Range-checking is deliberately NOT done here — see Resolve's
+		// post-processing pass (clamp + warn, not fail-fast).
+		cfg.TrafficStatsMaxHosts = n
+	case keyTrafficStatsMaxDests:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		cfg.TrafficStatsMaxDests = n
+	case keyTrafficStatsMaxConversations:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		cfg.TrafficStatsMaxConversations = n
 	default:
 		// Unreachable: callers only invoke applyKey for keys that passed
 		// isKnownKey. Kept as a safety net rather than a silent no-op.
@@ -390,6 +470,12 @@ func keyValue(cfg Config, key string) string {
 		return strconv.Itoa(cfg.DNSStatsMaxPairs)
 	case keyDNSStatsMaxClients:
 		return strconv.Itoa(cfg.DNSStatsMaxClients)
+	case keyTrafficStatsMaxHosts:
+		return strconv.Itoa(cfg.TrafficStatsMaxHosts)
+	case keyTrafficStatsMaxDests:
+		return strconv.Itoa(cfg.TrafficStatsMaxDests)
+	case keyTrafficStatsMaxConversations:
+		return strconv.Itoa(cfg.TrafficStatsMaxConversations)
 	default:
 		return ""
 	}

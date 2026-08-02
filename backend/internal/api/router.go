@@ -40,6 +40,11 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("GET /api/dashboard/traffic", s.HandleGetTrafficHistory)
 	authRoute("GET /api/dashboard/traffic-detail", s.HandleGetTrafficDetail)
 	authRoute("GET /api/statistics/traffic", s.HandleGetStatistics)
+	// Statistics -> Traffic page (docs/ref/todo/statistics-traffic-page-plan.md
+	// T-04): full top-hosts lists + per-IP drill-down, additive to the
+	// existing /api/statistics/traffic above (distinct paths, no shadowing).
+	authRoute("GET /api/statistics/traffic/hosts", s.HandleGetTrafficTopHosts)
+	authRoute("GET /api/statistics/traffic/host", s.HandleGetTrafficHostDetail)
 	// DNS Query Statistics tab (docs/ref/todo/dns-query-statistics-drilldown-plan.md
 	// T-03/§2.3 option A): authRoute like the traffic statistics endpoint above —
 	// the data exposed (domain + source IP) is the same sensitivity level as

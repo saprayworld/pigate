@@ -31,7 +31,13 @@ export function UpDownLine({ up, down }: { up: number; down: number }) {
   )
 }
 
-export function HostLabel({ host }: { host: TopHost }) {
+// onClick is OPTIONAL (docs/ref/todo/statistics-traffic-page-plan.md T-12):
+// when supplied, the primary label renders as a real <button> (same click
+// affordance the Top Queried Domains card already uses — cursor-pointer +
+// hover:text-primary hover:underline + a Thai title tooltip) that opens the
+// Traffic drill-down for this host; without it, HostLabel renders byte-for-
+// byte as before (Dashboard/other callers unaffected).
+export function HostLabel({ host, onClick }: { host: TopHost; onClick?: () => void }) {
   // When the destination has a known domain (docs/ref/todo/
   // statistics-dns-top-domain-plan.md T-13), show it as the primary line and
   // demote the IP to a small font-mono label beside it — otherwise the
@@ -40,7 +46,18 @@ export function HostLabel({ host }: { host: TopHost }) {
     return (
       <span className="flex min-w-0 items-center gap-2">
         <span className="min-w-0">
-          <span className="block truncate text-foreground/90">{host.domain}</span>
+          {onClick ? (
+            <button
+              type="button"
+              onClick={onClick}
+              title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
+              className="block max-w-full cursor-pointer truncate text-left text-foreground/90 hover:text-primary hover:underline"
+            >
+              {host.domain}
+            </button>
+          ) : (
+            <span className="block truncate text-foreground/90">{host.domain}</span>
+          )}
           <span className="block truncate font-mono text-[10px] text-muted-foreground">{host.ip}</span>
         </span>
         <Badge
@@ -57,10 +74,23 @@ export function HostLabel({ host }: { host: TopHost }) {
   }
   return (
     <span className="flex min-w-0 items-center gap-2">
-      <span className="truncate text-foreground/90">{host.hostname}</span>
-      {host.hostname !== host.ip && (
-        <span className="shrink-0 font-mono text-xs text-muted-foreground">{host.ip}</span>
-      )}
+      <span className="min-w-0">
+        {onClick ? (
+          <button
+            type="button"
+            onClick={onClick}
+            title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
+            className="block max-w-full cursor-pointer truncate text-left text-foreground/90 hover:text-primary hover:underline"
+          >
+            {host.hostname}
+          </button>
+        ) : (
+          <span className="block truncate text-foreground/90">{host.hostname}</span>
+        )}
+        {host.hostname !== host.ip && (
+          <span className="block truncate font-mono text-[10px] text-muted-foreground">{host.ip}</span>
+        )}
+      </span>
       <Badge
         variant="outline"
         className={cn(

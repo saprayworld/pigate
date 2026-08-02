@@ -100,6 +100,7 @@ func main() {
 	log.Printf("[Main] Docker Compatibility: %t", cfg.DockerCompat)
 	log.Printf("[Main] HTTPS Port: %d (0 = HTTP only)", cfg.HTTPSPort)
 	log.Printf("[Main] DNS Stats Max Pairs/Clients per bucket: %d / %d", cfg.DNSStatsMaxPairs, cfg.DNSStatsMaxClients)
+	log.Printf("[Main] Traffic Stats Max Hosts/Dests/Conversations per bucket: %d / %d / %d", cfg.TrafficStatsMaxHosts, cfg.TrafficStatsMaxDests, cfg.TrafficStatsMaxConversations)
 
 	// 2. Initialize in-memory forward-traffic logs circular buffer (Ring Buffer).
 	// Fed live by the TrafficLogManager watcher below (real NFLOG or mock
@@ -213,7 +214,10 @@ func main() {
 	systemStatusService := service.NewSystemStatusService(sysStats, repo, hostnameService, timeService, version)
 	// Dashboard "Detailed" tab traffic-analytics pipeline (Protocol Breakdown /
 	// Top Talkers / Top Rules by Traffic — docs/ref/todo/dashboard-traffic-detail-plan.md).
-	trafficStatsService := service.NewTrafficStatsService(trafficAcct, repo, dhcp, sysStats)
+	// TrafficStatsMaxHosts/Dests/Conversations come from the file-only
+	// bootstrap keys traffic-stats-max-hosts / -max-dests / -max-conversations
+	// (no CLI flag by design — docs/ref/todo/statistics-traffic-page-plan.md §1.6).
+	trafficStatsService := service.NewTrafficStatsService(trafficAcct, repo, dhcp, sysStats, cfg.TrafficStatsMaxHosts, cfg.TrafficStatsMaxDests, cfg.TrafficStatsMaxConversations)
 	// Wire the Active Sessions snapshot into the SSE metrics push after both
 	// services exist above, to avoid a circular dependency between them
 	// (docs/ref/todo/dashboard-active-sessions-graph-plan.md Step 5).

@@ -14,7 +14,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { cn } from "@/lib/utils"
 import { getErrorMessage } from "@/lib/errors"
 import { fmtBytes } from "@/lib/formatBytes"
 import {
@@ -28,28 +27,16 @@ import {
 } from "@/services/statisticsService"
 import { useStatsWindow, StatsWindowSelect, type StatsWindow } from "@/components/statistics/DnsStatsShared"
 import { UpDownLine, HostLabel } from "@/components/statistics/HostCells"
+import { AccuracyBadge, HostBar } from "@/components/statistics/TrafficStatsShared"
 import { BandwidthTrendCard } from "@/components/statistics/BandwidthTrendCard"
 import { TopHostsShareCard } from "@/components/statistics/TopHostsShareCard"
 
 const REFRESH_INTERVAL = 10_000
 
-// AccuracyBadge mirrors the Dashboard "Detailed" tab's badge exactly
-// (Dashboard.tsx) — driven by the API's accuracy field, never hardcoded, so
-// this page never repeats that fixed-label bug.
-function AccuracyBadge({ accuracy }: { accuracy?: "estimated" | "near-exact" }) {
-  const isNearExact = accuracy === "near-exact"
-  return (
-    <Badge
-      variant="outline"
-      className={cn(
-        "font-normal",
-        isNearExact ? "border-primary/30 text-primary" : "border-muted-foreground/30 text-muted-foreground"
-      )}
-    >
-      {isNearExact ? "ใกล้เคียงจริง" : "ประมาณการ"}
-    </Badge>
-  )
-}
+// AccuracyBadge/HostBar moved to @/components/statistics/TrafficStatsShared
+// (docs/ref/todo/statistics-traffic-page-plan.md T-09) so the new Traffic
+// pages reuse the exact same definitions instead of duplicating them —
+// imported above.
 
 function SampledBadge() {
   return (
@@ -73,29 +60,26 @@ function CardSkeleton() {
   )
 }
 
-function HostBar({ percent }: { percent: number }) {
-  return (
-    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-      <div
-        className="h-full rounded-full bg-primary transition-all duration-500"
-        style={{ width: `${Math.min(100, Math.max(percent, 0))}%` }}
-      />
-    </div>
-  )
-}
-
 // UpDownLine/HostLabel moved to @/components/statistics/HostCells (docs/ref/
 // todo/statistics-overview-bandwidth-chart-plan.md T-08A) — imported above.
 
+// role tells TopHostsCard which side of the drill-down a row click should
+// open (docs/ref/todo/statistics-traffic-page-plan.md T-12): "src" for Top
+// Source Hosts rows, "dst" for Top Destinations rows.
 function TopHostsCard({
   title,
   hosts,
   emptyLabel,
+  role,
+  window_,
 }: {
   title: string
   hosts: TopHost[]
   emptyLabel: string
+  role: "src" | "dst"
+  window_: StatsWindow
 }) {
+  const navigate = useNavigate()
   return (
     <Card>
       <CardHeader className="space-y-0">
@@ -108,7 +92,12 @@ function TopHostsCard({
           hosts.map((h) => (
             <div key={h.ip} className="space-y-1">
               <div className="flex items-center justify-between gap-3 text-sm">
-                <HostLabel host={h} />
+                <HostLabel
+                  host={h}
+                  onClick={() =>
+                    navigate(`/statistics/traffic/host/${encodeURIComponent(h.ip)}?window=${window_}&role=${role}`)
+                  }
+                />
                 <span className="shrink-0 text-right">
                   <span className="block font-mono text-xs text-muted-foreground">
                     {fmtBytes(h.bytes)} · {h.percent}%
@@ -125,7 +114,17 @@ function TopHostsCard({
   )
 }
 
-function TopConversationsCard({ conversations }: { conversations: TopConversation[] }) {
+function TopConversationsCard({
+  conversations,
+  window_,
+}: {
+  conversations: TopConversation[]
+  window_: StatsWindow
+}) {
+  const navigate = useNavigate()
+  const goToHost = (ip: string, role: "src" | "dst") => {
+    navigate(`/statistics/traffic/host/${encodeURIComponent(ip)}?window=${window_}&role=${role}`)
+  }
   return (
     <Card>
       <CardHeader className="space-y-0">
@@ -152,7 +151,14 @@ function TopConversationsCard({ conversations }: { conversations: TopConversatio
                 {conversations.map((c, i) => (
                   <TableRow key={`${c.srcIp}-${c.dstIp}-${c.proto}-${c.dstPort}-${i}`}>
                     <TableCell className="text-xs">
-                      <div className="truncate">{c.srcHostname}</div>
+                      <button
+                        type="button"
+                        onClick={() => goToHost(c.srcIp, "src")}
+                        title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
+                        className="block max-w-full cursor-pointer truncate text-left hover:text-primary hover:underline"
+                      >
+                        {c.srcHostname}
+                      </button>
                       {c.srcHostname !== c.srcIp && (
                         <div className="font-mono text-[10px] text-muted-foreground">{c.srcIp}</div>
                       )}
@@ -160,12 +166,26 @@ function TopConversationsCard({ conversations }: { conversations: TopConversatio
                     <TableCell className="text-xs">
                       {c.dstDomain ? (
                         <>
-                          <div className="truncate">{c.dstDomain}</div>
+                          <button
+                            type="button"
+                            onClick={() => goToHost(c.dstIp, "dst")}
+                            title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
+                            className="block max-w-full cursor-pointer truncate text-left hover:text-primary hover:underline"
+                          >
+                            {c.dstDomain}
+                          </button>
                           <div className="font-mono text-[10px] text-muted-foreground">{c.dstIp}</div>
                         </>
                       ) : (
                         <>
-                          <div className="truncate">{c.dstHostname}</div>
+                          <button
+                            type="button"
+                            onClick={() => goToHost(c.dstIp, "dst")}
+                            title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
+                            className="block max-w-full cursor-pointer truncate text-left hover:text-primary hover:underline"
+                          >
+                            {c.dstHostname}
+                          </button>
                           {c.dstHostname !== c.dstIp && (
                             <div className="font-mono text-[10px] text-muted-foreground">{c.dstIp}</div>
                           )}
@@ -463,13 +483,17 @@ export default function StatisticsOverview() {
             title="Top Source Hosts"
             hosts={stats.topSources}
             emptyLabel="ยังไม่มีข้อมูล source host ในช่วงเวลานี้"
+            role="src"
+            window_={window_}
           />
           <TopHostsCard
             title="Top Destinations"
             hosts={stats.topDestinations}
             emptyLabel="ยังไม่มีข้อมูล destination ในช่วงเวลานี้"
+            role="dst"
+            window_={window_}
           />
-          <TopConversationsCard conversations={stats.topConversations} />
+          <TopConversationsCard conversations={stats.topConversations} window_={window_} />
           <TopDeniedCard
             sources={stats.deniedSources}
             ports={stats.deniedPorts}

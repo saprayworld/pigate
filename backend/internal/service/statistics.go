@@ -215,8 +215,8 @@ func (s *StatisticsService) GetStatistics(window string) model.TrafficStatistics
 		Window:            window,
 		ObservedBytes:     breakdown.Observed,
 		Accuracy:          breakdown.Accuracy,
-		TopSources:        buildTopHosts(breakdown.Hosts, breakdown.Observed, leaseByIP, resByIP, ipDomain),
-		TopDestinations:   buildTopHosts(breakdown.Dests, breakdown.Observed, leaseByIP, resByIP, ipDomain),
+		TopSources:        buildTopHosts(breakdown.Hosts, breakdown.Observed, leaseByIP, resByIP, ipDomain, statsTopN),
+		TopDestinations:   buildTopHosts(breakdown.Dests, breakdown.Observed, leaseByIP, resByIP, ipDomain, statsTopN),
 		TopConversations:  buildTopConversations(breakdown.Convs, breakdown.Observed, leaseByIP, resByIP, ipDomain),
 		DeniedSources:     buildTopDeniedSources(srcTotals, deniedEvents, leaseByIP, resByIP),
 		DeniedPorts:       buildTopDeniedPorts(portTotals, deniedEvents),
@@ -234,15 +234,20 @@ func (s *StatisticsService) GetStatistics(window string) model.TrafficStatistics
 
 // buildTopHosts ranks a byte-total map (either breakdown.Hosts or
 // breakdown.Dests — same shape) into the Top Source Hosts / Top Destinations
-// card rows. Sort is deterministic (bytes desc, then IP asc) so tests never
-// flake on map iteration order, mirroring buildTopTalkers.
+// card rows, cut to at most limit rows. Sort is deterministic (bytes desc,
+// then IP asc) so tests never flake on map iteration order, mirroring
+// buildTopTalkers. This is the ONE ranking/sorting implementation shared by
+// GetStatistics (which always passes statsTopN, keeping /api/statistics/traffic
+// byte-for-byte unchanged) and GetTrafficTopHosts (statistics_traffic.go,
+// which passes the caller's clamped limit — docs/ref/todo/
+// statistics-traffic-page-plan.md T-03).
 //
 // bytesUp/bytesDown are always the flow's own orig/reply direction (Orig ->
 // up, Reply -> down) regardless of whether ip is the flow's SrcIP or DstIP —
 // i.e. "down" consistently means the download-heavy reply traffic (e.g. a
 // file fetched from an internet destination), matching Top Conversations.
 // Ranking/Bytes/Percent are always v.Total().
-func buildTopHosts(totals map[string]dirBytes, observed uint64, leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation, ipDomain map[string]string) []model.TopHost {
+func buildTopHosts(totals map[string]dirBytes, observed uint64, leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation, ipDomain map[string]string, limit int) []model.TopHost {
 	out := make([]model.TopHost, 0, len(totals))
 	for ip, v := range totals {
 		bytes := v.Total()
@@ -269,8 +274,8 @@ func buildTopHosts(totals map[string]dirBytes, observed uint64, leaseByIP map[st
 		}
 		return out[i].IP < out[j].IP
 	})
-	if len(out) > statsTopN {
-		out = out[:statsTopN]
+	if len(out) > limit {
+		out = out[:limit]
 	}
 	return out
 }

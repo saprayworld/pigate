@@ -123,13 +123,17 @@ export interface TrafficStatistics {
 // fraction of a row's bytes sent BY that IP (its "up" direction) — kept
 // asymmetric per traffic type so -mock=true visibly exercises the up/down
 // split rather than an even 50/50.
-const mockHosts = [
+// Exported (not just module-private) so trafficStatisticsService.ts can
+// reuse the same base rows/domains for the Statistics -> Traffic page's mock
+// data rather than duplicating them (docs/ref/todo/
+// statistics-traffic-page-plan.md T-07).
+export const mockHosts = [
   { ip: "192.168.1.102", hostname: "Android-SmartTV", mac: "AA:BB:CC:DD:EE:FF", upRatio: 0.08 }, // HTTPS video: mostly download
   { ip: "192.168.1.101", hostname: "iPhone-13", mac: "99:88:77:66:55:44", upRatio: 0.15 }, // HTTPS streaming: mostly download
   { ip: "192.168.1.105", hostname: "iPad-Pro", mac: "B4:F1:DA:C8:E2:10", upRatio: 0.3 }, // browsing: download-leaning
 ];
 
-const mockDests = [
+export const mockDests = [
   { ip: "173.194.76.94", hostname: "173.194.76.94", upRatio: 0.92 }, // Android-SmartTV: HTTPS video (dest "sends" the reply/download)
   { ip: "142.250.80.46", hostname: "142.250.80.46", upRatio: 0.85 }, // iPhone-13: HTTPS streaming
   { ip: "151.101.1.69", hostname: "151.101.1.69", upRatio: 0.7 }, // iPad-Pro: HTTP/HTTPS browsing
@@ -141,7 +145,7 @@ const mockDests = [
 // mockFlowTemplates map to a domain, and 8.8.8.8/64.233.166.127 are
 // deliberately left unmapped so the "unknown IP" fallback path is visible in
 // dev mode too.
-const mockIpDomains: Record<string, string> = {
+export const mockIpDomains: Record<string, string> = {
   "142.250.80.46": "www.youtube.com",
   "173.194.76.94": "googlevideo.com",
   "151.101.1.69": "cdn.jsdelivr.net",
@@ -187,11 +191,21 @@ function mockTopHosts(rows: ReturnType<typeof mockTopHostsRaw>, observedBytes: n
 // mockBandwidthSeries builds a fixed-length (12 for 1h, 288 for 24h),
 // zero-filled, oldest -> newest series with visible shape (sine + a
 // per-index baseline, with a few zero-value gaps to exercise the zero-fill/
-// carry rendering — plan T-06 item 2), scaled so its total is ~12% above
-// targetTotal (so the Top 5 Hosts card in mock mode always has a visible
-// "Other" segment, plan T-06 item 3). Download leads upload (upRatio ~0.15),
-// matching mockHosts.upRatio's asymmetry above.
-function mockBandwidthSeries(window: "1h" | "24h", targetTotal: number): { series: BandwidthPoint[]; total: number } {
+// carry rendering — plan T-06 item 2) whose bytes sum to EXACTLY
+// exactTotal (docs/ref/todo/statistics-traffic-bandwidth-chart-plan.md T-05
+// item 1 — callers that want mock's traditional ~12%-above-topSources
+// headroom, e.g. the Statistics Overview/Traffic list pages, must multiply
+// their own target by 1.12 themselves before calling this; the "push the
+// rounding remainder onto the last nonzero point" mechanism below still
+// applies so the invariant is exact, not approximate). Exported so
+// trafficStatisticsService.ts can build BOTH the network-wide series (list
+// page) and true per-IP series (drill-down page) from the same shape
+// generator without duplicating it (T-05 item 3/4). upRatio defaults to
+// 0.15 (download-leaning, matching mockHosts.upRatio's asymmetry) but a
+// caller drilling into a specific IP passes that IP's own real up/down
+// split instead, so the mock series' up/down proportions are consistent
+// with the mock totals shown next to it.
+export function mockBandwidthSeries(window: "1h" | "24h", exactTotal: number, upRatio = 0.15): { series: BandwidthPoint[]; total: number } {
   const n = window === "24h" ? 288 : 12;
   const spanMs = 5 * 60 * 1000;
   const now = Date.now();
@@ -208,20 +222,18 @@ function mockBandwidthSeries(window: "1h" | "24h", targetTotal: number): { serie
     shape.push(0.4 + Math.max(0, Math.sin((i / n) * Math.PI * 6)));
   }
   const shapeSum = shape.reduce((a, b) => a + b, 0) || 1;
-  const target = Math.round(targetTotal * 1.12);
-  const bytesPerPoint = shape.map((v) => Math.round((v / shapeSum) * target));
+  const bytesPerPoint = shape.map((v) => Math.round((v / shapeSum) * exactTotal));
   const roundedSum = bytesPerPoint.reduce((a, b) => a + b, 0);
   // Push the rounding remainder onto the last nonzero point so the series
-  // total is exactly `target` (mirrors the backend invariant sum(series) ==
-  // observedBytes, applied here to mock data too).
+  // total is exactly `exactTotal` (mirrors the backend invariant sum(series)
+  // == observedBytes/totalBytes, applied here to mock data too).
   for (let i = n - 1; i >= 0; i--) {
     if (bytesPerPoint[i] > 0 || i === n - 1) {
-      bytesPerPoint[i] += target - roundedSum;
+      bytesPerPoint[i] += exactTotal - roundedSum;
       break;
     }
   }
 
-  const upRatio = 0.15;
   const series: BandwidthPoint[] = bytesPerPoint.map((bytes, i) => {
     const bytesUp = Math.round(bytes * upRatio);
     const ts = new Date(now - (n - 1 - i) * spanMs).toISOString();
@@ -291,8 +303,12 @@ export const statisticsService = {
       // series' total drives observedBytes (plan T-06 item 3), NOT
       // sum(topSources[].bytes) as before — this keeps the mock invariant the
       // same as the real backend's (sum(series) == observedBytes) and gives
-      // the Top 5 Hosts card mock data an "Other" segment to render.
-      const { series, total: observedBytes } = mockBandwidthSeries(window, topSourcesRawTotal);
+      // the Top 5 Hosts card mock data an "Other" segment to render. The
+      // *1.12 headroom used to live inside mockBandwidthSeries itself; it now
+      // lives here at the callsite (statistics-traffic-bandwidth-chart-plan.md
+      // T-05 item 1) so this page's numbers are unchanged (regression guard)
+      // while the function itself guarantees an exact sum for other callers.
+      const { series, total: observedBytes } = mockBandwidthSeries(window, Math.round(topSourcesRawTotal * 1.12));
       const topSources = mockTopHosts(topSourcesRaw, observedBytes);
       const topDestinations = mockTopHosts(mockTopHostsRaw(scale, mockDests.map((d) => ({ ...d, mac: "" }))), observedBytes);
       const deniedSources = mockDeniedSources(scale);

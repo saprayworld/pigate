@@ -28,6 +28,8 @@ import EventLogs from "@/pages/EventLogs"
 import ForwardTraffic from "@/pages/ForwardTraffic"
 import LocalTraffic from "@/pages/LocalTraffic"
 import StatisticsOverview from "@/pages/StatisticsOverview"
+import StatisticsTraffic from "@/pages/StatisticsTraffic"
+import StatisticsTrafficHost from "@/pages/StatisticsTrafficHost"
 import StatisticsDns from "@/pages/StatisticsDns"
 import StatisticsDnsDomain from "@/pages/StatisticsDnsDomain"
 import StatisticsDnsClient from "@/pages/StatisticsDnsClient"
@@ -153,6 +155,8 @@ export default function App() {
                   <Route path="statistics">
                     <Route index element={<Navigate to="/statistics/overview" replace />} />
                     <Route path="overview" element={<StatisticsOverview />} />
+                    <Route path="traffic" element={<StatisticsTraffic />} />
+                    <Route path="traffic/host/:ip" element={<StatisticsTrafficHost />} />
                     <Route path="dns" element={<StatisticsDns />} />
                     <Route path="dns/domain/:domain" element={<StatisticsDnsDomain />} />
                     <Route path="dns/client/:client" element={<StatisticsDnsClient />} />

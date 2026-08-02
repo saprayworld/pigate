@@ -23,6 +23,7 @@ import {
   LogOut,
   ChevronRight,
   LineChart,
+  ArrowLeftRight,
   Router,
   Shield,
   FileText,
@@ -116,6 +117,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       icon: LineChart,
       items: [
         { path: "/statistics/overview", label: "Overview", icon: BarChart3 },
+        { path: "/statistics/traffic", label: "Traffic", icon: ArrowLeftRight, matchPrefix: true },
         { path: "/statistics/dns", label: "DNS", icon: ChartColumnBig, matchPrefix: true },
       ],
     },

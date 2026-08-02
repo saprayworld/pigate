@@ -28,11 +28,6 @@ const (
 	flowPollInterval        = 10 * time.Second
 	trafficDetailBucketSpan = 5 * time.Minute
 	trafficDetailBucketMax  = 288 // 288 x 5min = 24h
-	// maxTrackedHosts bounds how many distinct source IPs a single bucket
-	// remembers, so a port-scan/P2P burst can't grow a bucket's host map
-	// without limit (plan §5 Caution 5). Existing hosts already in a bucket
-	// keep accumulating past the cap; only brand-new hosts are dropped.
-	maxTrackedHosts = 500
 	// maxTrackedFlows bounds the flow-baseline map across polls, mirroring
 	// the per-dump cap already applied in the kernel layer (plan Caution 5).
 	maxTrackedFlows = 50000
@@ -47,16 +42,32 @@ const (
 	// topN caps how many rows each of Top Talkers / Top Rules returns.
 	topN = 10
 
-	// maxTrackedDests/maxTrackedConversations bound the Statistics page's
-	// per-bucket destination/conversation maps the same way maxTrackedHosts
-	// bounds hostBytes — a port-scan/P2P burst can't grow either map without
-	// limit (docs/ref/todo/statistics-page-plan.md T-02, plan Caution 5/8).
+	// defaultMaxTrackedHosts/defaultMaxTrackedDests/defaultMaxTrackedConversations
+	// are the fallback values used when NewTrafficStatsService is passed a
+	// <=0 value (defense-in-depth for direct callers — tests, future call
+	// sites — mirroring dns_query_stats.go's defaultMaxTrackedDNSPairs/
+	// defaultMaxTrackedDNSClients). The authoritative range validation for
+	// the config-file-sourced production values lives in config.Resolve, not
+	// here (docs/ref/todo/statistics-traffic-page-plan.md §1.6/T-02). Keep
+	// these in sync with config.Defaults()'s TrafficStatsMaxHosts/
+	// TrafficStatsMaxDests/TrafficStatsMaxConversations.
+	//
+	// maxTrackedHosts/maxTrackedDests/maxTrackedConversations bound how many
+	// distinct source IPs/destination IPs/conversations a single bucket
+	// remembers, so a port-scan/P2P burst can't grow a bucket's map without
+	// limit (plan §5 Caution 5, docs/ref/todo/statistics-page-plan.md T-02,
+	// plan Caution 5/8). Existing keys already in a bucket keep accumulating
+	// past the cap; only brand-new keys are dropped. These used to be package
+	// consts; they are now per-service fields (s.maxTrackedHosts etc.) set
+	// once at construction from the file-only traffic-stats-max-* config
+	// keys, so an operator can raise them without a rebuild.
+	defaultMaxTrackedHosts         = 500
+	defaultMaxTrackedDests         = 500
+	defaultMaxTrackedConversations = 600
 	// statsTopN caps how many rows the Statistics page's top-N lists return
 	// (kept distinct from topN, which the Dashboard "Detailed" tab cards use
 	// and must not be touched by this plan).
-	maxTrackedDests         = 300
-	maxTrackedConversations = 200
-	statsTopN               = 10
+	statsTopN = 10
 
 	trafficWindow1h  = "1h"
 	trafficWindow24h = "24h"
@@ -172,6 +183,16 @@ type TrafficStatsService struct {
 	dhcp  kernel.DhcpManager
 	stats kernel.SystemStatsManager
 
+	// maxTrackedHosts/maxTrackedDests/maxTrackedConversations are the
+	// effective per-bucket caps, set once at construction from the file-only
+	// traffic-stats-max-* config keys (or defaultMaxTracked* when the caller
+	// passes <=0 — see NewTrafficStatsService). Read-only after
+	// construction, so no mutex guards these (same pattern as
+	// dnsQueryStats.maxPairs/maxClients).
+	maxTrackedHosts         int
+	maxTrackedDests         int
+	maxTrackedConversations int
+
 	// Bucket ring — the aggregated deltas GetTrafficDetail reads from.
 	mu      sync.RWMutex
 	buckets []trafficDetailBucket
@@ -224,14 +245,38 @@ type TrafficStatsService struct {
 // the real or mock kernel implementation (main.go selects per -mock); stats is
 // nil-safe (sampleSessions no-ops when nil, e.g. in older tests that don't
 // exercise the Active Sessions feature).
-func NewTrafficStatsService(acct kernel.TrafficAccountingManager, repo *db.Repository, dhcp kernel.DhcpManager, stats kernel.SystemStatsManager) *TrafficStatsService {
+//
+// maxHosts/maxDests/maxConversations are the per-bucket tracking caps (see
+// the field comments on TrafficStatsService). In production they come from
+// the bootstrap config keys traffic-stats-max-hosts / -max-dests /
+// -max-conversations, resolved by internal/config and wired through by
+// cmd/pigate/main.go — this package deliberately does not import
+// internal/config itself (same rationale as NewStatisticsService's
+// maxDNSPairs/maxDNSClients). A <=0 value is defense-in-depth for direct
+// callers (tests, future call sites) and falls back to
+// defaultMaxTrackedHosts/defaultMaxTrackedDests/
+// defaultMaxTrackedConversations; the authoritative range validation lives
+// in config.Resolve, not here.
+func NewTrafficStatsService(acct kernel.TrafficAccountingManager, repo *db.Repository, dhcp kernel.DhcpManager, stats kernel.SystemStatsManager, maxHosts, maxDests, maxConversations int) *TrafficStatsService {
+	if maxHosts <= 0 {
+		maxHosts = defaultMaxTrackedHosts
+	}
+	if maxDests <= 0 {
+		maxDests = defaultMaxTrackedDests
+	}
+	if maxConversations <= 0 {
+		maxConversations = defaultMaxTrackedConversations
+	}
 	return &TrafficStatsService{
-		acct:         acct,
-		repo:         repo,
-		dhcp:         dhcp,
-		stats:        stats,
-		flowState:    make(map[string]*flowSampleState),
-		ruleBaseline: make(map[string]model.RuleCounter),
+		acct:                    acct,
+		repo:                    repo,
+		dhcp:                    dhcp,
+		stats:                   stats,
+		maxTrackedHosts:         maxHosts,
+		maxTrackedDests:         maxDests,
+		maxTrackedConversations: maxConversations,
+		flowState:               make(map[string]*flowSampleState),
+		ruleBaseline:            make(map[string]model.RuleCounter),
 	}
 }
 
@@ -546,7 +591,7 @@ func (s *TrafficStatsService) processFlows(flows []model.FlowSample, hostDeltas 
 			observed.Orig += dOrig
 			observed.Reply += dReply
 		}
-		if _, exists := hostDeltas[f.SrcIP]; exists || len(hostDeltas) < maxTrackedHosts {
+		if _, exists := hostDeltas[f.SrcIP]; exists || len(hostDeltas) < s.maxTrackedHosts {
 			cur := hostDeltas[f.SrcIP]
 			cur.Orig += dOrig
 			cur.Reply += dReply
@@ -557,14 +602,14 @@ func (s *TrafficStatsService) processFlows(flows []model.FlowSample, hostDeltas 
 		// (docs/ref/todo/statistics-page-plan.md T-02 step 4, Caution 2) —
 		// never compute a second delta for these, or a stray poll/event race
 		// would silently double-count.
-		if _, exists := dstDeltas[f.DstIP]; exists || len(dstDeltas) < maxTrackedDests {
+		if _, exists := dstDeltas[f.DstIP]; exists || len(dstDeltas) < s.maxTrackedDests {
 			cur := dstDeltas[f.DstIP]
 			cur.Orig += dOrig
 			cur.Reply += dReply
 			dstDeltas[f.DstIP] = cur
 		}
 		ck := convKey(f)
-		if _, exists := convDeltas[ck]; exists || len(convDeltas) < maxTrackedConversations {
+		if _, exists := convDeltas[ck]; exists || len(convDeltas) < s.maxTrackedConversations {
 			cur := convDeltas[ck]
 			cur.Orig += dOrig
 			cur.Reply += dReply
@@ -779,11 +824,11 @@ func (s *TrafficStatsService) addBucket(now time.Time, hostDeltas map[string]dir
 
 	if n := len(s.buckets); n > 0 && s.buckets[n-1].ts == ts {
 		b := &s.buckets[n-1]
-		mergeDirMap(b.hostBytes, hostDeltas, maxTrackedHosts)
+		mergeDirMap(b.hostBytes, hostDeltas, s.maxTrackedHosts)
 		mergeUint64Map(b.catBytes, catDeltas, 0)
 		mergeRuleMap(b.ruleBytes, ruleDeltas)
-		mergeDirMap(b.dstBytes, dstDeltas, maxTrackedDests)
-		mergeDirMap(b.convBytes, convDeltas, maxTrackedConversations)
+		mergeDirMap(b.dstBytes, dstDeltas, s.maxTrackedDests)
+		mergeDirMap(b.convBytes, convDeltas, s.maxTrackedConversations)
 		b.observed.Orig += observed.Orig
 		b.observed.Reply += observed.Reply
 		return
@@ -798,11 +843,11 @@ func (s *TrafficStatsService) addBucket(now time.Time, hostDeltas map[string]dir
 		convBytes: make(map[string]dirBytes, len(convDeltas)),
 		observed:  observed,
 	}
-	mergeDirMap(b.hostBytes, hostDeltas, maxTrackedHosts)
+	mergeDirMap(b.hostBytes, hostDeltas, s.maxTrackedHosts)
 	mergeUint64Map(b.catBytes, catDeltas, 0)
 	mergeRuleMap(b.ruleBytes, ruleDeltas)
-	mergeDirMap(b.dstBytes, dstDeltas, maxTrackedDests)
-	mergeDirMap(b.convBytes, convDeltas, maxTrackedConversations)
+	mergeDirMap(b.dstBytes, dstDeltas, s.maxTrackedDests)
+	mergeDirMap(b.convBytes, convDeltas, s.maxTrackedConversations)
 
 	s.buckets = append(s.buckets, b)
 	if len(s.buckets) > trafficDetailBucketMax {
@@ -971,6 +1016,16 @@ type TrafficBreakdown struct {
 	// §2.5). Not itself serialized — StatisticsService.GetStatistics copies it
 	// straight into model.TrafficStatistics.Series.
 	Series []model.BandwidthPoint
+	// HostSeries is nil whenever getTrafficBreakdown is called without a
+	// focus IP (i.e. every call through GetTrafficBreakdown) — only
+	// GetTrafficBreakdownForIP populates it (docs/ref/todo/
+	// statistics-traffic-bandwidth-chart-plan.md §2.3/T-02). Unlike Series
+	// above (network-wide, LAN-relative), HostSeries is the focus IP's own
+	// traffic only, flow-relative (Orig = up, Reply = down), computed from
+	// the SAME b.convBytes map Convs is summed from in the same RLock/loop —
+	// so sum(HostSeries[].Bytes) == sum(Convs[...].Total()) for that IP holds
+	// by construction (plan §2.2 decision 1).
+	HostSeries []model.BandwidthPoint
 }
 
 // GetTrafficBreakdown is GetTrafficDetail's sibling for the Statistics page:
@@ -980,7 +1035,33 @@ type TrafficBreakdown struct {
 // Truncated reports whether any bucket in the window hit one of its
 // tracking caps (maxTrackedHosts/maxTrackedDests/maxTrackedConversations) —
 // a signal that the ranking below may be missing entries.
+//
+// GetTrafficBreakdown is unchanged behavior-wise from before plan
+// statistics-traffic-bandwidth-chart-plan.md T-02 — it is now a thin wrapper
+// around getTrafficBreakdown with an empty focusIP, which always leaves
+// HostSeries nil (see the TrafficBreakdown.HostSeries comment above).
 func (s *TrafficStatsService) GetTrafficBreakdown(window string) TrafficBreakdown {
+	return s.getTrafficBreakdown(window, "")
+}
+
+// GetTrafficBreakdownForIP is GetTrafficBreakdown's per-IP sibling (plan
+// §2.3/T-02) — same snapshot/RLock as GetTrafficBreakdown (Hosts/Dests/Convs/
+// Observed/Series are identical for a given window regardless of focusIP),
+// PLUS HostSeries populated for the given IP. Deliberately not a second
+// method that re-locks and re-scans the bucket ring: that would read a
+// different snapshot than a plain GetTrafficBreakdown call made moments
+// apart, breaking the sum(HostSeries)==TotalBytes invariant the caller
+// (GetTrafficHostDetail) relies on (plan §2.3 rationale).
+func (s *TrafficStatsService) GetTrafficBreakdownForIP(window, ip string) TrafficBreakdown {
+	return s.getTrafficBreakdown(window, ip)
+}
+
+// getTrafficBreakdown is the shared implementation behind
+// GetTrafficBreakdown/GetTrafficBreakdownForIP. When focusIP is "", HostSeries
+// is left nil and the per-bucket convBytes scan below is skipped entirely
+// (zero added cost for every existing caller — GetTrafficBreakdown itself,
+// GetTrafficTopHosts, GetStatistics).
+func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string) TrafficBreakdown {
 	if window != trafficWindow24h {
 		window = trafficWindow1h
 	}
@@ -1006,6 +1087,32 @@ func (s *TrafficStatsService) GetTrafficBreakdown(window string) TrafficBreakdow
 	series := make([]model.BandwidthPoint, n)
 	for i := range series {
 		series[i].Ts = axisStart.Add(time.Duration(i) * trafficDetailBucketSpan).Format(time.RFC3339)
+	}
+	// hostSeries is allocated (and Ts-filled) whenever focusIP is set, even if
+	// that IP turns out to have no traffic at all — so callers always get a
+	// fixed-length, zero-filled array rather than nil (plan T-02 step 5).
+	var hostSeries []model.BandwidthPoint
+	if focusIP != "" {
+		hostSeries = make([]model.BandwidthPoint, n)
+		for i := range hostSeries {
+			hostSeries[i].Ts = series[i].Ts
+		}
+	}
+
+	// focusIPSrcPrefix/focusIPDstNeedle are the fast-path substring checks the
+	// convBytes scan below uses to skip parseConvKey's SplitN+ParseUint
+	// allocation for the vast majority of keys that plainly can't match
+	// focusIP (plan §5 item 8 — a bucket's convBytes map can hold up to
+	// maxTrackedConversations entries, scanned on every 10s-polled HTTP
+	// request). A convKey is "src|dst|proto|port" (convKey above), so
+	// focusIPSrcPrefix matches the src position and focusIPDstNeedle (with
+	// pipes on both sides) can only match the dst position — IP addresses
+	// never contain '|', so neither check can false-positive against proto/
+	// port.
+	var focusIPSrcPrefix, focusIPDstNeedle string
+	if focusIP != "" {
+		focusIPSrcPrefix = focusIP + "|"
+		focusIPDstNeedle = "|" + focusIP + "|"
 	}
 
 	s.mu.RLock()
@@ -1061,7 +1168,37 @@ func (s *TrafficStatsService) GetTrafficBreakdown(window string) TrafficBreakdow
 		series[idx].BytesDown += b.observed.Reply
 		series[idx].Bytes += b.observed.Total()
 
-		if len(b.hostBytes) >= maxTrackedHosts || len(b.dstBytes) >= maxTrackedDests || len(b.convBytes) >= maxTrackedConversations {
+		// hostSeries (per-IP, flow-relative — plan §2.2 decision 2/T-02 step
+		// 2) is built from the SAME b.convBytes this bucket already merged
+		// into convTotals above, at the SAME idx series uses — never a second
+		// lock/scan, so sum(HostSeries[].Bytes) == sum of this IP's
+		// convTotals rows holds by construction.
+		if focusIP != "" {
+			for k, v := range b.convBytes {
+				if !strings.HasPrefix(k, focusIPSrcPrefix) && !strings.Contains(k, focusIPDstNeedle) {
+					continue // fast path: neither side of this key can be focusIP
+				}
+				src, dst, _, _, ok := parseConvKey(k)
+				if !ok {
+					continue
+				}
+				if src == focusIP {
+					hostSeries[idx].BytesUp += v.Orig
+					hostSeries[idx].BytesDown += v.Reply
+					hostSeries[idx].Bytes += v.Total()
+				}
+				// Not an else-if: a same-IP-both-sides row (e.g. loopback)
+				// must be counted twice, matching how TotalBytes is summed in
+				// GetTrafficHostDetail (plan T-02 step 2).
+				if dst == focusIP {
+					hostSeries[idx].BytesUp += v.Orig
+					hostSeries[idx].BytesDown += v.Reply
+					hostSeries[idx].Bytes += v.Total()
+				}
+			}
+		}
+
+		if len(b.hostBytes) >= s.maxTrackedHosts || len(b.dstBytes) >= s.maxTrackedDests || len(b.convBytes) >= s.maxTrackedConversations {
 			truncated = true
 		}
 	}
@@ -1073,13 +1210,14 @@ func (s *TrafficStatsService) GetTrafficBreakdown(window string) TrafficBreakdow
 	}
 
 	return TrafficBreakdown{
-		Hosts:     hostTotals,
-		Dests:     dstTotals,
-		Convs:     convTotals,
-		Observed:  observed,
-		Truncated: truncated,
-		Accuracy:  accuracy,
-		Series:    series,
+		Hosts:      hostTotals,
+		Dests:      dstTotals,
+		Convs:      convTotals,
+		Observed:   observed,
+		Truncated:  truncated,
+		Accuracy:   accuracy,
+		Series:     series,
+		HostSeries: hostSeries,
 	}
 }
 

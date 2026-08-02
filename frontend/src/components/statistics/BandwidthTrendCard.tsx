@@ -32,10 +32,18 @@ export function BandwidthTrendCard({
   series,
   window: statsWindow,
   className,
+  subtitle,
 }: {
   series: BandwidthPoint[] | undefined
   window: StatsWindow
   className?: string
+  // subtitle, when provided, REPLACES the default LAN-relative subtitle line
+  // below entirely (docs/ref/todo/statistics-traffic-bandwidth-chart-plan.md
+  // T-06) — it does not append to it. Required for any caller whose series is
+  // NOT LAN-relative (e.g. a per-IP drill-down, which is flow-relative): the
+  // default text is simply wrong there. Omit to keep pixel-identical
+  // rendering to before this prop existed (Overview page, Traffic list page).
+  subtitle?: string
 }) {
   const { theme } = useTheme()
   const isDark = theme === "dark"
@@ -70,11 +78,11 @@ export function BandwidthTrendCard({
 
   return (
     <Card className={cn(className)}>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-x-4 gap-y-1 space-y-0">
         <div>
           <CardTitle className="text-base font-semibold">Bandwidth · {windowLabel}</CardTitle>
           <p className="text-[11px] text-muted-foreground">
-            ยอดต่อ 5 นาที (ไม่ใช่ความเร็ว) · Up/Down นับตามทิศทางเข้า-ออกเครือข่าย LAN
+            {subtitle ?? "ยอดต่อ 5 นาที (ไม่ใช่ความเร็ว) · Up/Down นับตามทิศทางเข้า-ออกเครือข่าย LAN"}
           </p>
         </div>
         <div className="flex items-center gap-4 text-xs text-muted-foreground">

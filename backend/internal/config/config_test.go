@@ -276,8 +276,8 @@ func TestWriteParseRoundTripDefaults(t *testing.T) {
 
 func TestKnownKeys(t *testing.T) {
 	keys := KnownKeys()
-	if len(keys) != 14 {
-		t.Fatalf("expected 14 known keys, got %d: %v", len(keys), keys)
+	if len(keys) != 17 {
+		t.Fatalf("expected 17 known keys, got %d: %v", len(keys), keys)
 	}
 	// "config" and "v" must never be treated as config-file keys.
 	for _, k := range keys {
@@ -296,5 +296,19 @@ func TestKnownKeys(t *testing.T) {
 	}
 	if !hasPairs || !hasClients {
 		t.Fatalf("expected dns-stats-max-pairs/dns-stats-max-clients in KnownKeys, got %v", keys)
+	}
+	var hasHosts, hasDests, hasConversations bool
+	for _, k := range keys {
+		switch k {
+		case "traffic-stats-max-hosts":
+			hasHosts = true
+		case "traffic-stats-max-dests":
+			hasDests = true
+		case "traffic-stats-max-conversations":
+			hasConversations = true
+		}
+	}
+	if !hasHosts || !hasDests || !hasConversations {
+		t.Fatalf("expected traffic-stats-max-hosts/-dests/-conversations in KnownKeys, got %v", keys)
 	}
 }

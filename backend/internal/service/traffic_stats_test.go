@@ -83,7 +83,7 @@ func newTestTrafficStatsService(t *testing.T, acct *fakeTrafficAccounting, dhcp 
 	if dhcp == nil {
 		dhcp = &fakeDhcpForTraffic{}
 	}
-	return NewTrafficStatsService(acct, repo, dhcp, kernel.NewMockSystemStats())
+	return NewTrafficStatsService(acct, repo, dhcp, kernel.NewMockSystemStats(), 0, 0, 0)
 }
 
 func TestTrafficStats_SeedThenDelta(t *testing.T) {
@@ -542,7 +542,7 @@ func TestGetTrafficBreakdown_OnFlowEndNoBaselineCreditsDstConvInFull(t *testing.
 func TestGetTrafficBreakdown_CapsConversationsAndReportsTruncated(t *testing.T) {
 	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
 
-	n := maxTrackedConversations + 1000
+	n := s.maxTrackedConversations + 1000
 	flows := make([]model.FlowSample, n)
 	for i := 0; i < n; i++ {
 		flows[i] = model.FlowSample{
@@ -574,8 +574,8 @@ func TestGetTrafficBreakdown_CapsConversationsAndReportsTruncated(t *testing.T) 
 	s.processFlows(flows, hostDeltas, catDeltas, dstDeltas, convDeltas)
 	s.addBucket(time.Now(), hostDeltas, catDeltas, nil, dstDeltas, convDeltas, dirBytes{})
 
-	if len(convDeltas) > maxTrackedConversations {
-		t.Fatalf("expected convDeltas capped at %d, got %d", maxTrackedConversations, len(convDeltas))
+	if len(convDeltas) > s.maxTrackedConversations {
+		t.Fatalf("expected convDeltas capped at %d, got %d", s.maxTrackedConversations, len(convDeltas))
 	}
 
 	bd := s.GetTrafficBreakdown("1h")

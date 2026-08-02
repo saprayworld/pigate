@@ -498,6 +498,83 @@ func (s *Server) HandleGetDNSClientDomains(w http.ResponseWriter, r *http.Reques
 	s.writeJSON(w, http.StatusOK, s.statistics.GetDNSClientDomains(window, client))
 }
 
+// trafficTopHostsDefaultLimit/trafficTopHostsMaxLimit and
+// trafficHostDetailDefaultLimit/trafficHostDetailMaxLimit mirror the same
+// constants in service/statistics_traffic.go — duplicated here (rather than
+// exported from service) because the HTTP layer's job is to decide what an
+// invalid/out-of-range `limit` means for THIS endpoint (silently fall back /
+// clamp, never 400) before the value ever reaches the service, per plan §1.2/
+// Caution 5 ("no client-supplied string ever reaches backend aggregation
+// logic ... only a whitelisted enum + a netip.ParseAddr-validated IP + a
+// clamped integer").
+const (
+	trafficTopHostsDefaultLimit   = 100
+	trafficTopHostsMaxLimit       = 500
+	trafficHostDetailDefaultLimit = 100
+	trafficHostDetailMaxLimit     = 300
+)
+
+// clampQueryLimit parses the `limit` query param: a missing/empty/
+// unparseable value silently falls back to def (never a 400 — plan §1.2), and
+// any value outside [1, max] is CLAMPED into range, never rejected.
+func clampQueryLimit(r *http.Request, def, max int) int {
+	raw := r.URL.Query().Get("limit")
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return def
+	}
+	if n > max {
+		return max
+	}
+	return n
+}
+
+// HandleGetTrafficTopHosts backs the Statistics -> Traffic page's two
+// top-level tables (Top Source Hosts / Top Destinations —
+// docs/ref/todo/statistics-traffic-page-plan.md T-04). Unlike
+// HandleGetStatistics's statsTopN-cut response, this endpoint returns up to
+// `limit` rows (default 100, clamped to 500) so the page can filter/sort
+// beyond the Overview page's top-10 cards. window is whitelisted exactly like
+// dnsStatsWindow/HandleGetStatistics; limit is clamped, never rejected — the
+// only validated client input on this route.
+func (s *Server) HandleGetTrafficTopHosts(w http.ResponseWriter, r *http.Request) {
+	window := dnsStatsWindow(r)
+	limit := clampQueryLimit(r, trafficTopHostsDefaultLimit, trafficTopHostsMaxLimit)
+	s.writeJSON(w, http.StatusOK, s.statistics.GetTrafficTopHosts(window, limit))
+}
+
+// HandleGetTrafficHostDetail backs the Statistics -> Traffic per-IP
+// drill-down page (plan T-04). 🔒 `ip` is the one REQUIRED, security-sensitive
+// input in this whole feature: it MUST parse via netip.ParseAddr, and on
+// failure this returns 400 and never calls the service (plan Caution 5 — no
+// client string reaches backend aggregation logic unvalidated). The parsed
+// address is re-serialized via addr.String() before being passed down so a
+// non-canonical IPv6 literal (e.g. "2001:DB8::1") hits the same bucket keys
+// the conntrack sampler itself uses (matches HandleGetDNSClientDomains's
+// client-normalization rule above). window/limit are handled exactly like
+// HandleGetTrafficTopHosts, with the drill-down's own (lower) limit ceiling.
+func (s *Server) HandleGetTrafficHostDetail(w http.ResponseWriter, r *http.Request) {
+	window := dnsStatsWindow(r)
+	limit := clampQueryLimit(r, trafficHostDetailDefaultLimit, trafficHostDetailMaxLimit)
+
+	raw := r.URL.Query().Get("ip")
+	if raw == "" {
+		s.writeError(w, http.StatusBadRequest, "invalid ip")
+		return
+	}
+	addr, err := netip.ParseAddr(raw)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid ip")
+		return
+	}
+	ip := addr.String()
+
+	s.writeJSON(w, http.StatusOK, s.statistics.GetTrafficHostDetail(window, ip, limit))
+}
+
 // dnsUnknownClientParam is the one non-IP value HandleGetDNSClientDomains
 // accepts for `client` — must match the dnsUnknownClient constant the
 // service's ring uses as its reserved bucket key
