@@ -37,6 +37,8 @@ import { useCapabilities } from "@/hooks/useCapabilities"
 import { useTheme } from "@/hooks/useTheme"
 import { cn } from "@/lib/utils"
 import { ifaceLabel } from "@/lib/ifaceLabel"
+import { fmtBytes } from "@/lib/formatBytes"
+import { CHART_BG_CLASSES } from "@/lib/chartColors"
 import {
   dashboardService,
   type PerformanceMetrics,
@@ -100,13 +102,8 @@ function usePoll<T>(fn: () => Promise<T>, intervalMs: number, refreshKey: number
 /*  Formatting helpers                                                        */
 /* -------------------------------------------------------------------------- */
 
-function fmtBytes(n: number): string {
-  if (!n || n <= 0) return "0 B"
-  const units = ["B", "KB", "MB", "GB", "TB"]
-  const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)))
-  const v = n / 1024 ** i
-  return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`
-}
+// fmtBytes moved to @/lib/formatBytes (docs/ref/todo/
+// statistics-overview-bandwidth-chart-plan.md T-08A) — imported above.
 
 function formatUptime(totalSeconds: number): string {
   const total = Math.max(0, Math.floor(totalSeconds))
@@ -781,9 +778,10 @@ function AlertsCard({ alerts }: { alerts: AlertItem[] }) {
 /*  docs/ref/todo/dashboard-traffic-detail-plan.md                           */
 /* -------------------------------------------------------------------------- */
 
+// CHART_BG_CLASSES moved to @/lib/chartColors (docs/ref/todo/
+// statistics-overview-bandwidth-chart-plan.md T-08A) — imported above.
 // Segment/legend colors cycle through the theme's chart palette (src/index.css
 // --chart-1..5) — never a hardcoded Tailwind color class.
-const CHART_BG_CLASSES = ["bg-chart-1", "bg-chart-2", "bg-chart-3", "bg-chart-4", "bg-chart-5"]
 
 // AccuracyBadge reflects TrafficDetail.accuracy: "estimated" while only the
 // 10s conntrack poll is feeding this card, "near-exact" once the conntrack

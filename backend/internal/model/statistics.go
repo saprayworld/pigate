@@ -92,6 +92,23 @@ type TopDeniedPort struct {
 	Percent float64 `json:"percent"`
 }
 
+// BandwidthPoint is one point of TrafficStatistics.Series — a fixed 5-minute
+// bucket of the same bucket ring backing the rest of this response (plan
+// docs/ref/todo/statistics-overview-bandwidth-chart-plan.md T-01/T-03).
+// Direction here is LAN-relative (Up = leaving the LAN, Down = entering the
+// LAN), NOT flow-relative like TopHost.BytesUp/BytesDown above — see the
+// plan §2.2/§5 item 18 for why the two can disagree on the same page.
+type BandwidthPoint struct {
+	// Ts is the RFC3339 start of this bucket, in device local time (same
+	// clock/format as the internal bucket ring — intentionally not UTC like
+	// GeneratedAt below; the offset in RFC3339 makes both parseable browser-side).
+	Ts string `json:"ts"`
+	// Bytes always equals BytesUp + BytesDown.
+	Bytes     uint64 `json:"bytes"`
+	BytesUp   uint64 `json:"bytesUp"`
+	BytesDown uint64 `json:"bytesDown"`
+}
+
 // TrafficStatistics is the /api/statistics/traffic response.
 type TrafficStatistics struct {
 	Window        string `json:"window"` // "1h" | "24h"
@@ -103,6 +120,14 @@ type TrafficStatistics struct {
 	TopSources       []TopHost         `json:"topSources"`
 	TopDestinations  []TopHost         `json:"topDestinations"`
 	TopConversations []TopConversation `json:"topConversations"`
+
+	// Series is the bandwidth-over-time chart backing the Statistics
+	// Overview page's top row (plan T-01/T-03): one BandwidthPoint per raw
+	// 5-minute bucket, zero-filled and carried to the nearest edge point when
+	// the ring covers a wider span than the window (plan §2.5/§7 item 6), so
+	// Series always has a fixed length (12 for "1h", 288 for "24h"), sorted
+	// oldest -> newest, and sum(Series[].Bytes) == ObservedBytes exactly.
+	Series []BandwidthPoint `json:"series"`
 
 	DeniedSources []TopDeniedSource `json:"deniedSources"`
 	DeniedPorts   []TopDeniedPort   `json:"deniedPorts"`

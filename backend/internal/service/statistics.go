@@ -227,6 +227,7 @@ func (s *StatisticsService) GetStatistics(window string) model.TrafficStatistics
 		DNSQueries:        dnsQueries,
 		DNSLoggingEnabled: dnsLoggingEnabled,
 		DNSTruncated:      dnsTruncated,
+		Series:            breakdown.Series,
 		GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
 }

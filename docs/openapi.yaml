@@ -4200,6 +4200,7 @@ components:
         - dnsQueries
         - dnsLoggingEnabled
         - dnsTruncated
+        - series
         - generatedAt
       description: >-
         The /statistics/traffic response backing the Statistics Overview page
@@ -4280,9 +4281,62 @@ components:
           description: >-
             True when the domain-query ring hit its per-bucket tracking cap
             during this window — topDomains may be missing entries.
+        series:
+          type: array
+          description: >-
+            Bandwidth-over-time chart data backing the Statistics Overview
+            page's top row (docs/ref/todo/
+            statistics-overview-bandwidth-chart-plan.md). Fixed-length,
+            zero-filled 5-minute buckets from the same conntrack-derived
+            bucket ring as observedBytes/topSources/etc: 12 points for
+            window=1h, 288 points for window=24h, sorted oldest -> newest.
+            sum(series[].bytes) always equals observedBytes exactly (buckets
+            outside the array's own time axis, e.g. after a long quiet
+            period, are carried into the nearest edge point rather than
+            dropped, so this invariant always holds). IMPORTANT: direction
+            here is LAN-relative (bytesUp = leaving the LAN, bytesDown =
+            entering the LAN), computed from each flow's source/destination
+            IP — this is a DIFFERENT convention than TopHost.bytesUp/
+            bytesDown and TopConversation.bytesUp/bytesDown above, which stay
+            flow-relative (orig/reply) per their own descriptions. A row that
+            represents an internet-initiated flow can therefore show
+            "opposite" up/down between this array and the Top Hosts cards on
+            the same page — this is expected, not a bug.
+          items:
+            $ref: '#/components/schemas/BandwidthPoint'
         generatedAt:
           type: string
           format: date-time
+
+    BandwidthPoint:
+      type: object
+      required: [ts, bytes, bytesUp, bytesDown]
+      description: >-
+        One point of TrafficStatistics.series — a single 5-minute bucket.
+      properties:
+        ts:
+          type: string
+          format: date-time
+          description: >-
+            RFC3339 start of this bucket, in device local time (same clock as
+            the rest of the bucket ring — not UTC like generatedAt; the
+            offset in RFC3339 makes both parseable browser-side).
+          example: '2026-08-01T14:35:00+07:00'
+        bytes:
+          type: integer
+          format: int64
+          description: Always equals bytesUp + bytesDown.
+          example: 4200000
+        bytesUp:
+          type: integer
+          format: int64
+          description: LAN-relative upload bytes (leaving the LAN) in this bucket — see TrafficStatistics.series.
+          example: 300000
+        bytesDown:
+          type: integer
+          format: int64
+          description: LAN-relative download bytes (entering the LAN) in this bucket — see TrafficStatistics.series.
+          example: 3900000
 
     DNSClientStat:
       type: object

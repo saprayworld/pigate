@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { ArrowDown, ArrowUp, BarChart3, RefreshCw, TriangleAlert } from "lucide-react"
+import { BarChart3, RefreshCw, TriangleAlert } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
 import { getErrorMessage } from "@/lib/errors"
+import { fmtBytes } from "@/lib/formatBytes"
 import {
   statisticsService,
   type TopConversation,
@@ -26,16 +27,11 @@ import {
   type TrafficStatistics,
 } from "@/services/statisticsService"
 import { useStatsWindow, StatsWindowSelect, type StatsWindow } from "@/components/statistics/DnsStatsShared"
+import { UpDownLine, HostLabel } from "@/components/statistics/HostCells"
+import { BandwidthTrendCard } from "@/components/statistics/BandwidthTrendCard"
+import { TopHostsShareCard } from "@/components/statistics/TopHostsShareCard"
 
 const REFRESH_INTERVAL = 10_000
-
-function fmtBytes(n: number): string {
-  if (!n || n <= 0) return "0 B"
-  const units = ["B", "KB", "MB", "GB", "TB"]
-  const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)))
-  const v = n / 1024 ** i
-  return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`
-}
 
 // AccuracyBadge mirrors the Dashboard "Detailed" tab's badge exactly
 // (Dashboard.tsx) — driven by the API's accuracy field, never hardcoded, so
@@ -88,68 +84,8 @@ function HostBar({ percent }: { percent: number }) {
   )
 }
 
-// UpDownLine renders the small "↑ up · ↓ down" byte sub-line shared by
-// TopHostsCard rows and the Conversations table (docs/ref/todo/
-// statistics-split-upload-download-bytes-plan.md T-11). Uses theme-variable
-// colors only (text-primary/text-muted-foreground) — never raw palette
-// classes, per rules_of_work.md.
-function UpDownLine({ up, down }: { up: number; down: number }) {
-  return (
-    <span className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
-      <span className="flex items-center gap-0.5 text-primary">
-        <ArrowDown className="size-2.5" />
-        {fmtBytes(down)}
-      </span>
-      <span className="flex items-center gap-0.5">
-        <ArrowUp className="size-2.5" />
-        {fmtBytes(up)}
-      </span>
-    </span>
-  )
-}
-
-function HostLabel({ host }: { host: TopHost }) {
-  // When the destination has a known domain (docs/ref/todo/
-  // statistics-dns-top-domain-plan.md T-13), show it as the primary line and
-  // demote the IP to a small font-mono label beside it — otherwise the
-  // layout is unchanged from before this feature existed (plan §5 item 12).
-  if (host.domain) {
-    return (
-      <span className="flex min-w-0 items-center gap-2">
-        <span className="min-w-0">
-          <span className="block truncate text-foreground/90">{host.domain}</span>
-          <span className="block truncate font-mono text-[10px] text-muted-foreground">{host.ip}</span>
-        </span>
-        <Badge
-          variant="outline"
-          className={cn(
-            "shrink-0 font-normal text-[10px]",
-            host.private ? "border-primary/30 text-primary" : "border-muted-foreground/30 text-muted-foreground"
-          )}
-        >
-          {host.private ? "LAN" : "Internet"}
-        </Badge>
-      </span>
-    )
-  }
-  return (
-    <span className="flex min-w-0 items-center gap-2">
-      <span className="truncate text-foreground/90">{host.hostname}</span>
-      {host.hostname !== host.ip && (
-        <span className="shrink-0 font-mono text-xs text-muted-foreground">{host.ip}</span>
-      )}
-      <Badge
-        variant="outline"
-        className={cn(
-          "shrink-0 font-normal text-[10px]",
-          host.private ? "border-primary/30 text-primary" : "border-muted-foreground/30 text-muted-foreground"
-        )}
-      >
-        {host.private ? "LAN" : "Internet"}
-      </Badge>
-    </span>
-  )
-}
+// UpDownLine/HostLabel moved to @/components/statistics/HostCells (docs/ref/
+// todo/statistics-overview-bandwidth-chart-plan.md T-08A) — imported above.
 
 function TopHostsCard({
   title,
@@ -449,7 +385,7 @@ export default function StatisticsOverview() {
           <div>
             <h1 className="text-lg font-bold tracking-tight">Overview</h1>
             <p className="text-xs text-muted-foreground">
-              Top Source Hosts, Top Destinations, Top Conversations และ Top Denied ตามช่วงเวลา
+              กราฟ Bandwidth, Top 5 Hosts, Top Source Hosts, Top Destinations, Top Conversations และ Top Denied ตามช่วงเวลา
             </p>
           </div>
         </div>
@@ -476,20 +412,46 @@ export default function StatisticsOverview() {
         </Card>
       )}
 
-      {isLoading && !stats ? (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Card key={i}>
-              <CardHeader>
-                <Skeleton className="h-5 w-40" />
-              </CardHeader>
-              <CardContent>
-                <CardSkeleton />
-              </CardContent>
-            </Card>
-          ))}
+      {isLoading && !stats && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <Card className="lg:col-span-2">
+            <CardHeader>
+              <Skeleton className="h-5 w-40" />
+            </CardHeader>
+            <CardContent>
+              <Skeleton className="h-56 w-full" />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <Skeleton className="h-5 w-40" />
+            </CardHeader>
+            <CardContent>
+              <CardSkeleton />
+            </CardContent>
+          </Card>
         </div>
-      ) : stats && !hasData ? (
+      )}
+
+      {/* Bandwidth trend + Top 5 Hosts (docs/ref/todo/
+          statistics-overview-bandwidth-chart-plan.md T-09) — rendered
+          OUTSIDE the ternary below on purpose: the "stats && !hasData" empty
+          card would otherwise hide this row too, right when a user watching
+          a freshly-booted device most wants to see the graph collecting
+          data. hasData itself is untouched (still drives the older cards
+          only). */}
+      {stats && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <BandwidthTrendCard className="lg:col-span-2" series={stats.series} window={window_} />
+          <TopHostsShareCard
+            className="lg:col-span-1"
+            hosts={stats.topSources.slice(0, 5)}
+            observedBytes={stats.observedBytes}
+          />
+        </div>
+      )}
+
+      {stats && !hasData ? (
         <Card>
           <CardContent>
             <EmptyState label="ยังไม่มีข้อมูล traffic ในช่วงเวลานี้ (ระบบเพิ่งเริ่มทำงาน หรือ conntrack ยังไม่พร้อมใช้งาน)" />

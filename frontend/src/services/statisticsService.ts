@@ -65,6 +65,21 @@ export interface TopDeniedPort {
   percent: number;
 }
 
+// BandwidthPoint is one point of TrafficStatistics.series — a fixed
+// 5-minute bucket (docs/ref/todo/statistics-overview-bandwidth-chart-plan.md
+// T-01/T-06). IMPORTANT: direction here is LAN-relative (bytesUp = leaving
+// the LAN, bytesDown = entering the LAN) — a DIFFERENT convention than
+// TopHost/TopConversation's bytesUp/bytesDown above, which stay flow-relative
+// (orig/reply). A row representing an internet-initiated flow can therefore
+// look "opposite" between this array and the Top Hosts cards on the same
+// page — expected, not a bug (plan §5 item 18).
+export interface BandwidthPoint {
+  ts: string; // RFC3339, device local time
+  bytes: number; // always equals bytesUp + bytesDown
+  bytesUp: number;
+  bytesDown: number;
+}
+
 export interface TrafficStatistics {
   window: "1h" | "24h";
   observedBytes: number;
@@ -92,6 +107,11 @@ export interface TrafficStatistics {
   // True when the domain-query ring hit its per-bucket tracking cap during
   // this window.
   dnsTruncated: boolean;
+  // Bandwidth-over-time chart data (docs/ref/todo/
+  // statistics-overview-bandwidth-chart-plan.md T-01/T-03) — fixed length
+  // (12 for "1h", 288 for "24h"), zero-filled, sorted oldest -> newest;
+  // sum(series[].bytes) always equals observedBytes.
+  series: BandwidthPoint[];
   generatedAt: string;
 }
 
@@ -127,12 +147,27 @@ const mockIpDomains: Record<string, string> = {
   "151.101.1.69": "cdn.jsdelivr.net",
 };
 
-function mockTopHosts(scale: number, source: { ip: string; hostname: string; mac: string; upRatio: number }[]): TopHost[] {
-  const rows = source.map((h, i) => ({
+// percentOf mirrors the backend's service/traffic_stats.go percentOf: one
+// decimal place, 0 when total is 0.
+function percentOf(part: number, total: number): number {
+  if (total === 0) return 0;
+  return Math.round((part / total) * 1000) / 10;
+}
+
+// mockTopHosts's row bytes only (no percent yet — percent needs observedBytes
+// from the generated series, computed separately, see getTrafficStatistics
+// below). This split is what lets mock mode's Top 5 Hosts card show an
+// "Other" segment (plan T-06 item 3): observedBytes is deliberately larger
+// than sum(topSources[].bytes), the same way the real backend's observedBytes
+// covers hosts beyond the top-N cut.
+function mockTopHostsRaw(scale: number, source: { ip: string; hostname: string; mac: string; upRatio: number }[]) {
+  return source.map((h, i) => ({
     ...h,
     bytes: Math.round((3_000_000_000 - i * 900_000_000) * scale),
   }));
-  const total = rows.reduce((sum, r) => sum + r.bytes, 0);
+}
+
+function mockTopHosts(rows: ReturnType<typeof mockTopHostsRaw>, observedBytes: number): TopHost[] {
   return rows.map((r) => {
     const bytesUp = Math.round(r.bytes * r.upRatio);
     return {
@@ -140,13 +175,60 @@ function mockTopHosts(scale: number, source: { ip: string; hostname: string; mac
       hostname: r.hostname,
       mac: r.mac,
       bytes: r.bytes,
-      percent: Math.round((r.bytes / total) * 1000) / 10,
+      percent: percentOf(r.bytes, observedBytes),
       bytesUp,
       bytesDown: r.bytes - bytesUp,
       private: r.ip.startsWith("192.168.") || r.ip.startsWith("10.") || r.ip.startsWith("172."),
       domain: mockIpDomains[r.ip] ?? "",
     };
   });
+}
+
+// mockBandwidthSeries builds a fixed-length (12 for 1h, 288 for 24h),
+// zero-filled, oldest -> newest series with visible shape (sine + a
+// per-index baseline, with a few zero-value gaps to exercise the zero-fill/
+// carry rendering — plan T-06 item 2), scaled so its total is ~12% above
+// targetTotal (so the Top 5 Hosts card in mock mode always has a visible
+// "Other" segment, plan T-06 item 3). Download leads upload (upRatio ~0.15),
+// matching mockHosts.upRatio's asymmetry above.
+function mockBandwidthSeries(window: "1h" | "24h", targetTotal: number): { series: BandwidthPoint[]; total: number } {
+  const n = window === "24h" ? 288 : 12;
+  const spanMs = 5 * 60 * 1000;
+  const now = Date.now();
+
+  const shape: number[] = [];
+  for (let i = 0; i < n; i++) {
+    // A gap every 9 points (2 zero-value buckets) so the empty/zero-fill
+    // rendering path is always visible in mock mode, plus a slow sine
+    // undulation so the line isn't flat.
+    if (i % 9 === 0 || i % 9 === 1) {
+      shape.push(0);
+      continue;
+    }
+    shape.push(0.4 + Math.max(0, Math.sin((i / n) * Math.PI * 6)));
+  }
+  const shapeSum = shape.reduce((a, b) => a + b, 0) || 1;
+  const target = Math.round(targetTotal * 1.12);
+  const bytesPerPoint = shape.map((v) => Math.round((v / shapeSum) * target));
+  const roundedSum = bytesPerPoint.reduce((a, b) => a + b, 0);
+  // Push the rounding remainder onto the last nonzero point so the series
+  // total is exactly `target` (mirrors the backend invariant sum(series) ==
+  // observedBytes, applied here to mock data too).
+  for (let i = n - 1; i >= 0; i--) {
+    if (bytesPerPoint[i] > 0 || i === n - 1) {
+      bytesPerPoint[i] += target - roundedSum;
+      break;
+    }
+  }
+
+  const upRatio = 0.15;
+  const series: BandwidthPoint[] = bytesPerPoint.map((bytes, i) => {
+    const bytesUp = Math.round(bytes * upRatio);
+    const ts = new Date(now - (n - 1 - i) * spanMs).toISOString();
+    return { ts, bytes, bytesUp, bytesDown: bytes - bytesUp };
+  });
+  const total = series.reduce((sum, p) => sum + p.bytes, 0);
+  return { series, total };
 }
 
 function mockTopConversations(scale: number): TopConversation[] {
@@ -204,9 +286,15 @@ export const statisticsService = {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 150));
       const scale = window === "24h" ? 18 : 1;
-      const topSources = mockTopHosts(scale, mockHosts);
-      const topDestinations = mockTopHosts(scale, mockDests.map((d) => ({ ...d, mac: "" })));
-      const observedBytes = topSources.reduce((sum, h) => sum + h.bytes, 0);
+      const topSourcesRaw = mockTopHostsRaw(scale, mockHosts);
+      const topSourcesRawTotal = topSourcesRaw.reduce((sum, h) => sum + h.bytes, 0);
+      // series' total drives observedBytes (plan T-06 item 3), NOT
+      // sum(topSources[].bytes) as before — this keeps the mock invariant the
+      // same as the real backend's (sum(series) == observedBytes) and gives
+      // the Top 5 Hosts card mock data an "Other" segment to render.
+      const { series, total: observedBytes } = mockBandwidthSeries(window, topSourcesRawTotal);
+      const topSources = mockTopHosts(topSourcesRaw, observedBytes);
+      const topDestinations = mockTopHosts(mockTopHostsRaw(scale, mockDests.map((d) => ({ ...d, mac: "" }))), observedBytes);
       const deniedSources = mockDeniedSources(scale);
       const deniedEvents = deniedSources.reduce((sum, d) => sum + d.count, 0);
       const topDomains = mockTopDomains(scale);
@@ -235,6 +323,7 @@ export const statisticsService = {
         // populated card, not the empty-state.
         dnsLoggingEnabled: true,
         dnsTruncated: false,
+        series,
         generatedAt: new Date().toISOString(),
       };
     }

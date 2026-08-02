@@ -559,7 +559,7 @@ func TestGetTrafficBreakdown_CapsConversationsAndReportsTruncated(t *testing.T) 
 	convDeltas := make(map[string]dirBytes)
 	// This must not panic even though every key is brand new (seed poll).
 	s.processFlows(flows, hostDeltas, catDeltas, dstDeltas, convDeltas)
-	s.addBucket(time.Now(), hostDeltas, catDeltas, nil, dstDeltas, convDeltas, 0)
+	s.addBucket(time.Now(), hostDeltas, catDeltas, nil, dstDeltas, convDeltas, dirBytes{})
 
 	// A second pass with nonzero deltas so the caps are exercised on the
 	// live path (seed rounds never populate deltas).
@@ -572,7 +572,7 @@ func TestGetTrafficBreakdown_CapsConversationsAndReportsTruncated(t *testing.T) 
 	dstDeltas = make(map[string]dirBytes)
 	convDeltas = make(map[string]dirBytes)
 	s.processFlows(flows, hostDeltas, catDeltas, dstDeltas, convDeltas)
-	s.addBucket(time.Now(), hostDeltas, catDeltas, nil, dstDeltas, convDeltas, 0)
+	s.addBucket(time.Now(), hostDeltas, catDeltas, nil, dstDeltas, convDeltas, dirBytes{})
 
 	if len(convDeltas) > maxTrackedConversations {
 		t.Fatalf("expected convDeltas capped at %d, got %d", maxTrackedConversations, len(convDeltas))
@@ -581,5 +581,257 @@ func TestGetTrafficBreakdown_CapsConversationsAndReportsTruncated(t *testing.T) 
 	bd := s.GetTrafficBreakdown("1h")
 	if !bd.Truncated {
 		t.Fatalf("expected Truncated=true once a bucket hits the conversation cap")
+	}
+}
+
+// --- Bandwidth series (docs/ref/todo/statistics-overview-bandwidth-chart-plan.md T-04) ---
+
+func seriesSum(series []model.BandwidthPoint) (bytes, up, down uint64) {
+	for _, p := range series {
+		bytes += p.Bytes
+		up += p.BytesUp
+		down += p.BytesDown
+	}
+	return
+}
+
+// TestBandwidthSeries_SumEqualsObserved is plan T-04 case 1: for both windows,
+// sum(Series[].Bytes) must equal Observed exactly — computed in the same
+// RLock/loop by construction (plan §2.5), not coincidentally.
+func TestBandwidthSeries_SumEqualsObserved(t *testing.T) {
+	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+
+	now := time.Now()
+	hostDeltas := map[string]dirBytes{"192.168.1.10": {Orig: 100, Reply: 400}}
+	catDeltas := map[string]uint64{"Other": 500}
+	dstDeltas := map[string]dirBytes{"1.1.1.1": {Orig: 100, Reply: 400}}
+	convDeltas := map[string]dirBytes{"k1": {Orig: 100, Reply: 400}}
+	// addBucket assumes callers append in chronological (oldest -> newest)
+	// order, same as poll()/onFlowEnd in production — insert oldest first.
+	for i := 4; i >= 0; i-- {
+		s.addBucket(now.Add(-time.Duration(i)*trafficDetailBucketSpan), hostDeltas, catDeltas, nil, dstDeltas, convDeltas, dirBytes{Orig: 100, Reply: 400})
+	}
+
+	for _, window := range []string{"1h", "24h"} {
+		bd := s.GetTrafficBreakdown(window)
+		bytes, _, _ := seriesSum(bd.Series)
+		if bytes != bd.Observed {
+			t.Fatalf("window %s: sum(series.bytes)=%d != observed=%d", window, bytes, bd.Observed)
+		}
+	}
+}
+
+// TestBandwidthSeries_UpPlusDownEqualsBytes is plan T-04 case 2.
+func TestBandwidthSeries_UpPlusDownEqualsBytes(t *testing.T) {
+	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+	now := time.Now()
+	s.addBucket(now.Add(-5*trafficDetailBucketSpan), nil, nil, nil, nil, nil, dirBytes{Orig: 33, Reply: 44})
+	s.addBucket(now, nil, nil, nil, nil, nil, dirBytes{Orig: 111, Reply: 222})
+
+	for _, window := range []string{"1h", "24h"} {
+		bd := s.GetTrafficBreakdown(window)
+		for i, p := range bd.Series {
+			if p.BytesUp+p.BytesDown != p.Bytes {
+				t.Fatalf("window %s point %d: bytesUp(%d)+bytesDown(%d) != bytes(%d)", window, i, p.BytesUp, p.BytesDown, p.Bytes)
+			}
+		}
+	}
+}
+
+// TestBandwidthSeries_FixedLengthAndSpacing is plan T-04 case 3: series always
+// has a fixed length (12 for 1h, 288 for 24h), even with an empty ring, sorted
+// oldest -> newest with no duplicate/missing 5-minute steps.
+func TestBandwidthSeries_FixedLengthAndSpacing(t *testing.T) {
+	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+
+	cases := []struct {
+		window string
+		want   int
+	}{{"1h", trafficWindow1hBuckets}, {"24h", trafficDetailBucketMax}}
+	for _, c := range cases {
+		bd := s.GetTrafficBreakdown(c.window)
+		if len(bd.Series) != c.want {
+			t.Fatalf("window %s: expected %d points, got %d", c.window, c.want, len(bd.Series))
+		}
+		seen := make(map[string]bool, len(bd.Series))
+		var prev time.Time
+		for i, p := range bd.Series {
+			ts, err := time.Parse(time.RFC3339, p.Ts)
+			if err != nil {
+				t.Fatalf("window %s point %d: ts %q failed to parse: %v", c.window, i, p.Ts, err)
+			}
+			if seen[p.Ts] {
+				t.Fatalf("window %s: duplicate ts %q", c.window, p.Ts)
+			}
+			seen[p.Ts] = true
+			if i > 0 {
+				if got := ts.Sub(prev); got != trafficDetailBucketSpan {
+					t.Fatalf("window %s point %d: expected 5m spacing, got %s", c.window, i, got)
+				}
+			}
+			prev = ts
+			if p.Bytes != 0 || p.BytesUp != 0 || p.BytesDown != 0 {
+				t.Fatalf("window %s point %d: expected zero-valued point on an empty ring, got %+v", c.window, i, p)
+			}
+		}
+	}
+}
+
+// TestBandwidthSeries_ZeroFillMidGap is plan T-04 case 4: two buckets 20
+// minutes apart must leave the buckets strictly between them at zero, not
+// missing or shifted.
+func TestBandwidthSeries_ZeroFillMidGap(t *testing.T) {
+	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+	now := time.Now().Truncate(trafficDetailBucketSpan)
+	s.addBucket(now.Add(-4*trafficDetailBucketSpan), nil, nil, nil, nil, nil, dirBytes{Orig: 0, Reply: 2000})
+	s.addBucket(now, nil, nil, nil, nil, nil, dirBytes{Orig: 1000, Reply: 0})
+
+	bd := s.GetTrafficBreakdown("1h")
+	n := len(bd.Series)
+	// Newest point (index n-1) corresponds to "now"; index n-5 to "now-4*span".
+	if got := bd.Series[n-1].BytesUp; got != 1000 {
+		t.Fatalf("expected newest point up=1000, got %d", got)
+	}
+	if got := bd.Series[n-5].BytesDown; got != 2000 {
+		t.Fatalf("expected point at now-4*span down=2000, got %d", got)
+	}
+	for i := n - 4; i < n-1; i++ {
+		p := bd.Series[i]
+		if p.Bytes != 0 || p.BytesUp != 0 || p.BytesDown != 0 {
+			t.Fatalf("expected zero-filled gap at index %d, got %+v", i, p)
+		}
+	}
+}
+
+// TestBandwidthSeries_LanRelativeDirection is plan T-04 case 5: a flow from a
+// public source to a private destination must count as "down" (entering the
+// LAN), never "up" — tested through both the poll()/processFlows path (has a
+// flowSampleState baseline) and the onFlowEnd path (no baseline, plan §2.2).
+func TestBandwidthSeries_LanRelativeDirection(t *testing.T) {
+	t.Run("via poll", func(t *testing.T) {
+		acct := &fakeTrafficAccounting{
+			flowResponses: [][]model.FlowSample{
+				{{Key: "f1", SrcIP: "8.8.8.8", DstIP: "192.168.1.50", Proto: 17, DstPort: 53, BytesOrig: 0, BytesReply: 0}},
+				{{Key: "f1", SrcIP: "8.8.8.8", DstIP: "192.168.1.50", Proto: 17, DstPort: 53, BytesOrig: 900, BytesReply: 0}},
+			},
+		}
+		s := newTestTrafficStatsService(t, acct, nil)
+		s.poll() // seed
+		s.poll() // delta: Orig=900 (public -> private)
+
+		bd := s.GetTrafficBreakdown("1h")
+		_, up, down := seriesSum(bd.Series)
+		if up != 0 || down != 900 {
+			t.Fatalf("expected public->private Orig delta to land entirely in down, got up=%d down=%d", up, down)
+		}
+	})
+
+	t.Run("via onFlowEnd no baseline", func(t *testing.T) {
+		s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+		s.onFlowEnd(model.FlowSample{Key: "f2", SrcIP: "8.8.8.8", DstIP: "192.168.1.50", Proto: 17, DstPort: 53, BytesOrig: 700, BytesReply: 0})
+
+		bd := s.GetTrafficBreakdown("1h")
+		_, up, down := seriesSum(bd.Series)
+		if up != 0 || down != 700 {
+			t.Fatalf("expected public->private onFlowEnd delta to land entirely in down, got up=%d down=%d", up, down)
+		}
+	})
+}
+
+// TestBandwidthSeries_TrafficDetailAndBreakdownUnchanged is plan T-04 case 6
+// (regression guard for T-02): GetTrafficDetail/GetTrafficBreakdown's existing
+// fields must be byte-for-byte identical to pre-T-02 behavior for a mixed set
+// of LAN-relative directions — only the new Series field is additive.
+func TestBandwidthSeries_TrafficDetailAndBreakdownUnchanged(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{
+				{Key: "lan-out", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 0, BytesReply: 0},
+				{Key: "wan-in", SrcIP: "8.8.8.8", DstIP: "192.168.1.60", Proto: 17, DstPort: 53, BytesOrig: 0, BytesReply: 0},
+			},
+			{
+				{Key: "lan-out", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 200, BytesReply: 800},
+				{Key: "wan-in", SrcIP: "8.8.8.8", DstIP: "192.168.1.60", Proto: 17, DstPort: 53, BytesOrig: 900, BytesReply: 0},
+			},
+		},
+	}
+	s := newTestTrafficStatsService(t, acct, nil)
+	s.poll() // seed
+	s.poll() // deltas: lan-out 1000, wan-in 900
+
+	detail := s.GetTrafficDetail("1h")
+	if detail.ObservedBytes != 1900 {
+		t.Fatalf("expected ObservedBytes=1900, got %d", detail.ObservedBytes)
+	}
+
+	bd := s.GetTrafficBreakdown("1h")
+	if bd.Observed != 1900 {
+		t.Fatalf("expected Observed=1900, got %d", bd.Observed)
+	}
+	if got := bd.Hosts["192.168.1.50"]; got.Total() != 1000 || got.Orig != 200 || got.Reply != 800 {
+		t.Fatalf("expected lan-out host delta total=1000 orig=200 reply=800 (flow-relative, unaffected by LAN-relative Observed flip), got %+v", got)
+	}
+	if got := bd.Hosts["8.8.8.8"]; got.Total() != 900 || got.Orig != 900 || got.Reply != 0 {
+		t.Fatalf("expected wan-in host delta total=900 orig=900 reply=0 (flow-relative), got %+v", got)
+	}
+}
+
+// TestBandwidthSeries_CarryToEdgeWhenRingWiderThanWindow is plan T-04 case 7
+// (§2.5/§7 item 6 — locked decision): a bucket older than the series axis
+// must still be counted in Observed and carried into series[0], not dropped.
+func TestBandwidthSeries_CarryToEdgeWhenRingWiderThanWindow(t *testing.T) {
+	t.Run("24h", func(t *testing.T) {
+		s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+		now := time.Now()
+		s.addBucket(now.Add(-30*time.Hour), nil, nil, nil, nil, nil, dirBytes{Orig: 555, Reply: 111})
+		s.addBucket(now, nil, nil, nil, nil, nil, dirBytes{Orig: 10, Reply: 20})
+
+		bd := s.GetTrafficBreakdown("24h")
+		bytes, _, _ := seriesSum(bd.Series)
+		if bytes != bd.Observed {
+			t.Fatalf("expected sum(series.bytes)=%d to equal observed=%d even with an out-of-axis bucket", bytes, bd.Observed)
+		}
+		if bd.Series[0].Bytes < 555+111 {
+			t.Fatalf("expected the out-of-axis 30h-old bucket to be carried into series[0], got %+v", bd.Series[0])
+		}
+	})
+
+	t.Run("1h", func(t *testing.T) {
+		s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+		now := time.Now()
+		s.addBucket(now.Add(-3*time.Hour), nil, nil, nil, nil, nil, dirBytes{Orig: 77, Reply: 33})
+		s.addBucket(now, nil, nil, nil, nil, nil, dirBytes{Orig: 5, Reply: 5})
+
+		bd := s.GetTrafficBreakdown("1h")
+		bytes, _, _ := seriesSum(bd.Series)
+		if bytes != bd.Observed {
+			t.Fatalf("expected sum(series.bytes)=%d to equal observed=%d even with an out-of-axis bucket", bytes, bd.Observed)
+		}
+		if bd.Series[0].Bytes < 77+33 {
+			t.Fatalf("expected the out-of-axis 3h-old bucket to be carried into series[0], got %+v", bd.Series[0])
+		}
+	})
+}
+
+// TestBandwidthSeries_1hIsSubsetOf24h is plan T-04 case 8: for the same
+// underlying ring, the 1h window's totals must never exceed the 24h window's
+// (1h buckets are always a trailing subset of the 24h buckets — the ring is
+// append-only, so this holds structurally, not just numerically).
+func TestBandwidthSeries_1hIsSubsetOf24h(t *testing.T) {
+	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+	now := time.Now()
+	for i := 39; i >= 0; i-- {
+		s.addBucket(now.Add(-time.Duration(i)*trafficDetailBucketSpan), nil, nil, nil, nil, nil, dirBytes{Orig: uint64(i + 1), Reply: uint64(i + 1)})
+	}
+
+	bd1h := s.GetTrafficBreakdown("1h")
+	bd24h := s.GetTrafficBreakdown("24h")
+	if bd1h.Observed > bd24h.Observed {
+		t.Fatalf("expected observed(1h)=%d <= observed(24h)=%d", bd1h.Observed, bd24h.Observed)
+	}
+	sum1h, _, _ := seriesSum(bd1h.Series)
+	sum24h, _, _ := seriesSum(bd24h.Series)
+	if sum1h > sum24h {
+		t.Fatalf("expected sum(series(1h))=%d <= sum(series(24h))=%d", sum1h, sum24h)
 	}
 }
