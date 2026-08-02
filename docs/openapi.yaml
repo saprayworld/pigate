@@ -415,6 +415,118 @@ paths:
               schema:
                 $ref: '#/components/schemas/TrafficStatistics'
 
+  /statistics/traffic/hosts:
+    get:
+      tags:
+        - Statistics
+      summary: Get the full Top Source Hosts / Top Destinations lists for the Statistics -> Traffic page
+      description: >
+        Backs the Statistics -> Traffic page (`/statistics/traffic`,
+        docs/ref/todo/statistics-traffic-page-plan.md). Unlike
+        `/statistics/traffic`'s `topSources`/`topDestinations` (always cut to
+        the top 10), this endpoint returns up to `limit` rows each, sourced
+        from the SAME RAM-only conntrack bucket ring — nothing here is ever
+        persisted to SQLite, and a pigate restart resets all counts to zero.
+        Filtering and sorting are done client-side by the page; this endpoint
+        only widens the row count.
+      parameters:
+        - name: window
+          in: query
+          schema:
+            type: string
+            enum: [1h, 24h]
+            default: 1h
+          description: >
+            Aggregation window. Any value outside {1h, 24h} (including
+            omitted) silently falls back to 1h rather than erroring.
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 500
+          description: >
+            Maximum rows returned per list (sources/destinations
+            independently capped at this same value). A missing/unparseable
+            value falls back to the default (100); a value outside [1, 500]
+            is CLAMPED into range, never rejected.
+      responses:
+        '200':
+          description: Full Top Source Hosts / Top Destinations lists retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrafficTopHosts'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /statistics/traffic/host:
+    get:
+      tags:
+        - Statistics
+      summary: Drill down a single IP from the Statistics -> Traffic page into its conversations, in both directions
+      description: >
+        Given an IP, returns two independent conversation lists: `asSource`
+        (conversations where this IP is the flow's source — "this IP went to
+        these destinations") and `asDestination` (conversations where this IP
+        is the flow's destination — "these hosts came to this IP"), so a WAN
+        destination can be drilled into just as easily as a LAN source (plan
+        §1.3). A row is a 4-tuple conversation (src IP, dst IP, proto, dst
+        port) — the same granularity as `TopConversation` — NOT a single TCP
+        connection (model.FlowSample carries no source port, plan §1.1).
+        `percent` on each row is relative to THIS IP's own `totalBytes`
+        (summed across both directions), NOT `observedBytes` — a different
+        denominator than `/statistics/traffic/hosts` and `/statistics/traffic`
+        (plan §1.4); `percentOfObserved` is provided separately for the
+        window-relative figure. Same RAM-only, never-persisted data source as
+        every other Statistics endpoint — resets on restart.
+      parameters:
+        - name: ip
+          in: query
+          required: true
+          schema:
+            type: string
+            example: 192.168.1.101
+          description: >
+            IP address to drill into (LAN or WAN). Must parse via
+            `net/netip`'s address parser; anything else returns 400 with a
+            generic message — the submitted value is never echoed back in the
+            error response. A valid IP is re-normalized (e.g. non-canonical
+            IPv6) before lookup so it matches the ring's stored key.
+        - name: window
+          in: query
+          schema:
+            type: string
+            enum: [1h, 24h]
+            default: 1h
+          description: >
+            Aggregation window. Any value outside {1h, 24h} (including
+            omitted) silently falls back to 1h rather than erroring.
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 300
+          description: >
+            Maximum rows returned per list (asSource/asDestination
+            independently capped at this same value). A missing/unparseable
+            value falls back to the default (100); a value outside [1, 300]
+            is CLAMPED into range, never rejected.
+      responses:
+        '200':
+          description: Both-direction conversation lists for this IP retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrafficHostDetail'
+        '400':
+          description: Missing or invalid `ip`
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /statistics/dns:
     get:
       tags:
@@ -4337,6 +4449,224 @@ components:
           format: int64
           description: LAN-relative download bytes (entering the LAN) in this bucket — see TrafficStatistics.series.
           example: 3900000
+
+    TrafficTopHosts:
+      type: object
+      required: [window, observedBytes, accuracy, truncated, limit, sources, destinations, generatedAt]
+      description: >-
+        The /statistics/traffic/hosts response backing the Statistics ->
+        Traffic page's two top-level tables (docs/ref/todo/
+        statistics-traffic-page-plan.md T-01). sources/destinations reuse
+        TopHost's exact shape (percent relative to observedBytes, same as
+        `/statistics/traffic`) — the only difference from that endpoint's
+        topSources/topDestinations is the row count (up to `limit`, not a
+        fixed top 10). RAM-only, never persisted to SQLite.
+      properties:
+        window:
+          type: string
+          enum: [1h, 24h]
+        observedBytes:
+          type: integer
+          format: int64
+          example: 5400000000
+        accuracy:
+          type: string
+          enum: [estimated, near-exact]
+          description: >-
+            "near-exact" once the conntrack DESTROY-event watcher is
+            augmenting the poll-based accounting; "estimated" while running
+            poll-only (same signal as TrafficStatistics.accuracy).
+          example: near-exact
+        truncated:
+          type: boolean
+          description: >-
+            True when the underlying bucket ring hit one of its per-bucket
+            tracking caps (traffic-stats-max-hosts / -max-dests /
+            -max-conversations) during this window — the ranking below may be
+            incomplete.
+        limit:
+          type: integer
+          description: The effective row cap actually applied to each list below.
+          example: 100
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopHost'
+        destinations:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopHost'
+        generatedAt:
+          type: string
+          format: date-time
+
+    TrafficHostConversation:
+      type: object
+      required: [srcIp, srcHostname, dstIp, dstHostname, proto, dstPort, bytes, percent, bytesUp, bytesDown, dstDomain, direction, peerDomain]
+      description: >-
+        One drill-down row of TrafficHostDetail — TopConversation's fields
+        plus two fields that only make sense once a conversation is viewed
+        "from" a particular IP (docs/ref/todo/statistics-traffic-page-plan.md
+        T-01). bytesUp/bytesDown stay flow-relative (srcIp -> dstIp / dstIp ->
+        srcIp) exactly like TopConversation — direction is the ONLY
+        IP-relative field, never re-derive up/down from it.
+      properties:
+        srcIp:
+          type: string
+          example: 192.168.1.101
+        srcHostname:
+          type: string
+          example: iPhone-13
+        dstIp:
+          type: string
+          example: 142.250.80.46
+        dstHostname:
+          type: string
+          example: 142.250.80.46
+        proto:
+          type: string
+          description: '"TCP"/"UDP"/"ICMP", or "IP:<n>" for anything else.'
+          example: TCP
+        dstPort:
+          type: integer
+          example: 443
+        bytes:
+          type: integer
+          format: int64
+          example: 9000000
+        percent:
+          type: number
+          format: float
+          description: >-
+            Share of TrafficHostDetail.totalBytes (the drilled IP's OWN
+            total across both directions) — NOT observedBytes, a different
+            denominator than TopHost.percent/TopConversation.percent.
+          example: 62.4
+        bytesUp:
+          type: integer
+          format: int64
+          description: >-
+            Bytes sent srcIp -> dstIp (the flow's orig direction). bytesUp +
+            bytesDown always equals bytes.
+          example: 900000
+        bytesDown:
+          type: integer
+          format: int64
+          description: Bytes sent dstIp -> srcIp (the flow's reply direction).
+          example: 8100000
+        dstDomain:
+          type: string
+          description: Same display-only domain enrichment as TopConversation.dstDomain.
+          example: www.youtube.com
+        direction:
+          type: string
+          enum: [outbound, inbound]
+          description: >-
+            "outbound" when the drilled IP is this row's srcIp (it appears in
+            asSource), "inbound" when it is the dstIp (it appears in
+            asDestination). The ONLY field on this row relative to the
+            drilled IP — bytesUp/bytesDown are never flipped based on it.
+          example: outbound
+        peerDomain:
+          type: string
+          description: >-
+            The reverse-DNS-cache domain of the OTHER side of the
+            conversation relative to the drilled IP: equals dstDomain for an
+            outbound row, but for an inbound row it is the srcIp's domain
+            (which dstDomain cannot express). Display only, empty when
+            unknown.
+          example: www.youtube.com
+
+    TrafficHostDetail:
+      type: object
+      required: [ip, hostname, mac, domain, private, window, accuracy, truncated, limit, found, totalBytes, totalBytesUp, totalBytesDown, percentOfObserved, observedBytes, asSource, asDestination, generatedAt]
+      description: >-
+        The /statistics/traffic/host response — a single IP's conversations
+        in BOTH directions (docs/ref/todo/statistics-traffic-page-plan.md
+        T-01/§1.3). RAM-only, never persisted to SQLite, resets on restart —
+        this shows per-device browsing behavior, same privacy sensitivity as
+        the DNS Statistics drill-downs.
+      properties:
+        ip:
+          type: string
+          example: 192.168.1.101
+        hostname:
+          type: string
+          description: DHCP lease/reservation hostname; falls back to the IP itself.
+          example: iPhone-13
+        mac:
+          type: string
+          example: '99:88:77:66:55:44'
+        domain:
+          type: string
+          description: This IP's own reverse-DNS-cache domain (same source as TopHost.domain), display only.
+          example: www.youtube.com
+        private:
+          type: boolean
+          description: True when ip is RFC1918/link-local/loopback/ULA (a LAN address).
+          example: true
+        window:
+          type: string
+          enum: [1h, 24h]
+        accuracy:
+          type: string
+          enum: [estimated, near-exact]
+        truncated:
+          type: boolean
+          description: Same meaning as TrafficTopHosts.truncated.
+        limit:
+          type: integer
+          description: The effective per-list row cap applied to asSource/asDestination independently.
+          example: 100
+        found:
+          type: boolean
+          description: >-
+            False when ip appears nowhere in the window's buckets — the UI
+            should show an explicit "no data" state, not an empty table.
+        totalBytes:
+          type: integer
+          format: int64
+          description: >-
+            This IP's total across BOTH directions (as source PLUS as
+            destination), computed over the FULL conversation set BEFORE the
+            limit cut below — never contradicted by a truncated table.
+          example: 3200000
+        totalBytesUp:
+          type: integer
+          format: int64
+          example: 400000
+        totalBytesDown:
+          type: integer
+          format: int64
+          example: 2800000
+        percentOfObserved:
+          type: number
+          format: float
+          description: >-
+            totalBytes as a percent of observedBytes (the window total) — a
+            DIFFERENT denominator than each row's own percent above.
+          example: 5.9
+        observedBytes:
+          type: integer
+          format: int64
+          example: 5400000000
+        asSource:
+          type: array
+          items:
+            $ref: '#/components/schemas/TrafficHostConversation'
+          description: >-
+            Conversations where ip is the flow's srcIp ("this IP went to
+            these destinations"). Never null — an empty result is `[]`.
+        asDestination:
+          type: array
+          items:
+            $ref: '#/components/schemas/TrafficHostConversation'
+          description: >-
+            Conversations where ip is the flow's dstIp ("these hosts came to
+            this IP"). Never null — an empty result is `[]`.
+        generatedAt:
+          type: string
+          format: date-time
 
     DNSClientStat:
       type: object

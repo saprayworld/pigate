@@ -123,13 +123,17 @@ export interface TrafficStatistics {
 // fraction of a row's bytes sent BY that IP (its "up" direction) — kept
 // asymmetric per traffic type so -mock=true visibly exercises the up/down
 // split rather than an even 50/50.
-const mockHosts = [
+// Exported (not just module-private) so trafficStatisticsService.ts can
+// reuse the same base rows/domains for the Statistics -> Traffic page's mock
+// data rather than duplicating them (docs/ref/todo/
+// statistics-traffic-page-plan.md T-07).
+export const mockHosts = [
   { ip: "192.168.1.102", hostname: "Android-SmartTV", mac: "AA:BB:CC:DD:EE:FF", upRatio: 0.08 }, // HTTPS video: mostly download
   { ip: "192.168.1.101", hostname: "iPhone-13", mac: "99:88:77:66:55:44", upRatio: 0.15 }, // HTTPS streaming: mostly download
   { ip: "192.168.1.105", hostname: "iPad-Pro", mac: "B4:F1:DA:C8:E2:10", upRatio: 0.3 }, // browsing: download-leaning
 ];
 
-const mockDests = [
+export const mockDests = [
   { ip: "173.194.76.94", hostname: "173.194.76.94", upRatio: 0.92 }, // Android-SmartTV: HTTPS video (dest "sends" the reply/download)
   { ip: "142.250.80.46", hostname: "142.250.80.46", upRatio: 0.85 }, // iPhone-13: HTTPS streaming
   { ip: "151.101.1.69", hostname: "151.101.1.69", upRatio: 0.7 }, // iPad-Pro: HTTP/HTTPS browsing
@@ -141,7 +145,7 @@ const mockDests = [
 // mockFlowTemplates map to a domain, and 8.8.8.8/64.233.166.127 are
 // deliberately left unmapped so the "unknown IP" fallback path is visible in
 // dev mode too.
-const mockIpDomains: Record<string, string> = {
+export const mockIpDomains: Record<string, string> = {
   "142.250.80.46": "www.youtube.com",
   "173.194.76.94": "googlevideo.com",
   "151.101.1.69": "cdn.jsdelivr.net",

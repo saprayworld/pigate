@@ -11,6 +11,7 @@ const TITLES: Record<string, string> = {
   "/": "Dashboard",
   "/dashboard": "Dashboard",
   "/statistics/overview": "Statistics Overview",
+  "/statistics/traffic": "Traffic Statistics",
   "/statistics/dns": "DNS Statistics",
   "/network/interfaces": "Network Interfaces",
   "/network/dns": "DNS Settings",
@@ -36,6 +37,7 @@ const TITLES: Record<string, string> = {
 const PREFIX_TITLES: [string, string][] = [
   ["/statistics/dns/domain/", "DNS Statistics — Domain"],
   ["/statistics/dns/client/", "DNS Statistics — Source Host"],
+  ["/statistics/traffic/host/", "Traffic Statistics — Host"],
 ]
 
 export function SiteHeader() {

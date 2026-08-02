@@ -230,3 +230,111 @@ type DNSClientDrilldown struct {
 	Domains      []TopDomain `json:"domains"`
 	GeneratedAt  string      `json:"generatedAt"`
 }
+
+// Statistics -> Traffic page DTOs (docs/ref/todo/statistics-traffic-page-plan.md
+// T-01) — back the new GET /api/statistics/traffic/hosts and GET
+// /api/statistics/traffic/host endpoints. TopHost/TopConversation/
+// TrafficStatistics above are deliberately left untouched (they back the
+// existing /api/statistics/traffic response and the Overview page and must
+// stay byte-for-byte compatible — plan §1.7). Everything below is composed
+// from the same RAM-only conversation ring as TrafficStatistics (plan §0) —
+// nothing here is ever persisted to SQLite.
+
+// TrafficTopHosts is the GET /api/statistics/traffic/hosts response: the
+// FULL (not top-10-cut) Top Source Hosts / Top Destinations lists, up to
+// Limit rows each, so the Traffic page can filter/sort more than the
+// Overview page's statsTopN cards ever expose (plan §1.2).
+type TrafficTopHosts struct {
+	Window        string `json:"window"` // "1h" | "24h"
+	ObservedBytes uint64 `json:"observedBytes"`
+	// Accuracy mirrors TrafficStatistics.Accuracy ("estimated" | "near-exact").
+	Accuracy string `json:"accuracy"`
+	// Truncated is true when the underlying bucket ring hit one of its
+	// per-bucket tracking caps during this window (traffic-stats-max-hosts /
+	// -max-dests / -max-conversations, plan §1.6) — the UI must show a
+	// warning that the ranking below may be incomplete.
+	Truncated bool `json:"truncated"`
+	// Limit is the effective row cap actually applied to each list below
+	// (1..500, clamped server-side — plan §1.2), echoed back so the UI can
+	// tell "fewer than Limit rows exist" apart from "capped at Limit".
+	Limit        int       `json:"limit"`
+	Sources      []TopHost `json:"sources"`
+	Destinations []TopHost `json:"destinations"`
+	GeneratedAt  string    `json:"generatedAt"`
+}
+
+// TrafficHostConversation is one drill-down row of TrafficHostDetail —
+// TopConversation's fields (embedded so the JSON stays flat and identical to
+// TopConversation's own shape) plus two IP-relative fields that only make
+// sense once a conversation is being viewed "from" a particular IP:
+//   - Direction: "outbound" when the drilled IP is this row's SrcIP,
+//     "inbound" when it is the DstIP (plan §1.3/§1.5) — BytesUp/BytesDown
+//     stay flow-relative (Orig/Reply) exactly like TopConversation; Direction
+//     is the ONLY field here that is relative to the drilled IP. Never flip
+//     BytesUp/BytesDown based on Direction (plan Caution 3 — the bug fixed by
+//     commit 10d53ae).
+//   - PeerDomain: the reverse-DNS-cache domain of the OTHER side of the
+//     conversation relative to the drilled IP. For an outbound row (drilled
+//     IP is SrcIP) this equals DstDomain; for an inbound row (drilled IP is
+//     DstIP) it is the SrcIP's domain, which DstDomain cannot express.
+//
+// A row is a 4-tuple conversation (srcIP, dstIP, proto, dstPort), not a
+// single TCP connection (plan §1.1 — model.FlowSample carries no source
+// port). RAM-only, never persisted.
+type TrafficHostConversation struct {
+	TopConversation
+	Direction  string `json:"direction"`
+	PeerDomain string `json:"peerDomain"`
+}
+
+// TrafficHostDetail is the GET /api/statistics/traffic/host response — a
+// single IP's conversations in both directions (plan §1.3).
+//
+// Percent on each row of AsSource/AsDestination is relative to TotalBytes
+// (THIS IP's own total across both directions in the window), NOT
+// ObservedBytes (plan §1.4) — ObservedBytes is included only so the UI can
+// also show PercentOfObserved as a second, clearly-labelled denominator.
+type TrafficHostDetail struct {
+	IP       string `json:"ip"`
+	Hostname string `json:"hostname"`
+	MAC      string `json:"mac"`
+	// Domain is the drilled IP's own reverse-DNS-cache domain (same source as
+	// TopHost.Domain), display only.
+	Domain string `json:"domain"`
+	// Private is true when IP is RFC1918/link-local/loopback/ULA (a LAN
+	// address), same classifier as TopHost.Private.
+	Private bool   `json:"private"`
+	Window  string `json:"window"`
+	// Accuracy mirrors TrafficStatistics.Accuracy.
+	Accuracy string `json:"accuracy"`
+	// Truncated mirrors TrafficTopHosts.Truncated above.
+	Truncated bool `json:"truncated"`
+	// Limit is the effective per-list row cap actually applied to
+	// AsSource/AsDestination independently (1..300, clamped server-side).
+	Limit int `json:"limit"`
+	// Found is false when IP appears nowhere in the window's buckets (neither
+	// as a conversation participant nor in the raw Hosts/Dests maps) — the UI
+	// should show an explicit "no data" state, not an empty table.
+	Found bool `json:"found"`
+	// TotalBytes/TotalBytesUp/TotalBytesDown are this IP's totals across BOTH
+	// directions (as source PLUS as destination), computed over the FULL
+	// (untruncated) conversation set before the Limit cut below is applied —
+	// so the header total never contradicts a truncated table (plan T-03).
+	TotalBytes     uint64 `json:"totalBytes"`
+	TotalBytesUp   uint64 `json:"totalBytesUp"`
+	TotalBytesDown uint64 `json:"totalBytesDown"`
+	// PercentOfObserved is TotalBytes as a percent of ObservedBytes (the
+	// window total) — a DIFFERENT denominator than the per-row Percent above,
+	// included so the UI can show both figures without confusing them (plan
+	// §1.4).
+	PercentOfObserved float64 `json:"percentOfObserved"`
+	ObservedBytes     uint64  `json:"observedBytes"`
+	// AsSource lists conversations where IP is the flow's SrcIP ("this IP
+	// went to these destinations"); AsDestination lists conversations where
+	// IP is the flow's DstIP ("these hosts came to this IP"). Never nil (an
+	// empty result is make([]TrafficHostConversation, 0), so the JSON is
+	// always `[]`, never `null`).
+	AsSource      []TrafficHostConversation `json:"asSource"`
+	AsDestination []TrafficHostConversation `json:"asDestination"`
+	GeneratedAt   string                    `json:"generatedAt"`
+}

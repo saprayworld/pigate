@@ -66,7 +66,7 @@ func buildTestServer(t *testing.T, allowDevCORS bool) (*Server, *db.Repository) 
 
 	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
 	systemServiceSvc := service.NewSystemServiceService(kernel.NewMockSystemServiceManager(), repo)
-	trafficStatsService := service.NewTrafficStatsService(kernel.NewMockTrafficAccounting(nil), repo, dhcp, kernel.NewMockSystemStats())
+	trafficStatsService := service.NewTrafficStatsService(kernel.NewMockTrafficAccounting(nil), repo, dhcp, kernel.NewMockSystemStats(), 0, 0, 0)
 	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, allowDevCORS, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, wifiPresetService, systemServiceSvc, nil, trafficStatsService, service.NewStatisticsService(trafficStatsService, repo, dhcp, 2400, 200)) // dns-stats-max-pairs / dns-stats-max-clients defaults
 
 	return server, repo
@@ -557,7 +557,7 @@ func dnsStatsTestServer(t *testing.T) (http.Handler, *db.Repository, *kernel.Moc
 	wifiPresetService := service.NewWifiPresetService(repo, ifaceService)
 	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
 	systemServiceSvc := service.NewSystemServiceService(kernel.NewMockSystemServiceManager(), repo)
-	trafficStatsService := service.NewTrafficStatsService(kernel.NewMockTrafficAccounting(nil), repo, dhcp, kernel.NewMockSystemStats())
+	trafficStatsService := service.NewTrafficStatsService(kernel.NewMockTrafficAccounting(nil), repo, dhcp, kernel.NewMockSystemStats(), 0, 0, 0)
 	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, wifiPresetService, systemServiceSvc, nil, trafficStatsService, service.NewStatisticsService(trafficStatsService, repo, dhcp, 2400, 200)) // dns-stats-max-pairs / dns-stats-max-clients defaults
 	handler := RegisterRoutes(server)
 	AddSession("mock_session_id_test_token", "pigate")

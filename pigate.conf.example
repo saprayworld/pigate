@@ -107,3 +107,32 @@ dns-stats-max-pairs=2400
 # Maximum number of distinct clients tracked per 5-minute bucket in the DNS
 # Query Statistics ring (enforced independently of dns-stats-max-pairs).
 dns-stats-max-clients=200
+
+# The three keys below are the same kind of file-only RAM-tuning knob, this
+# time bounding the Statistics -> Traffic page's bucket ring (backend/
+# internal/service/traffic_stats.go — docs/ref/todo/
+# statistics-traffic-page-plan.md §1.6). Same 5-minute/288-bucket (24h) ring,
+# same per-bucket cap semantics, same clamp+warn (not fatal) out-of-range
+# validation as dns-stats-max-pairs/dns-stats-max-clients above.
+#
+# Worst-case RAM note: a conversation entry costs ~110 bytes (≈45-char key +
+# 16 B dirBytes + map overhead), and the ring holds 288 five-minute buckets,
+# so traffic-stats-max-conversations=600 (the default) => 600 x 288 x 110B ≈
+# 19 MB worst case (only under a sustained port-scan/P2P flood saturating
+# every bucket for a full day — normal home/office traffic sits far below
+# this). traffic-stats-max-dests follows the same math (~10 MB at its
+# default of 500) and traffic-stats-max-hosts likewise (~12 MB at its default
+# of 500).
+
+# Maximum number of distinct source-host IPs tracked per 5-minute bucket in
+# the Traffic bucket ring (Top Source Hosts / drill-down).
+traffic-stats-max-hosts=500
+
+# Maximum number of distinct destination IPs tracked per 5-minute bucket in
+# the Traffic bucket ring (Top Destinations / drill-down).
+traffic-stats-max-dests=500
+
+# Maximum number of distinct (src, dst, proto, dstPort) conversations tracked
+# per 5-minute bucket in the Traffic bucket ring (Top Conversations /
+# drill-down).
+traffic-stats-max-conversations=600
