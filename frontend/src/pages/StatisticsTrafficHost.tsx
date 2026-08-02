@@ -403,10 +403,11 @@ export default function StatisticsTrafficHost() {
 
           <Card>
             <CardContent className="pt-4">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-2">View As</div>
               <Tabs value={role} onValueChange={(v) => setRole(v as Role)}>
                 <TabsList>
-                  <TabsTrigger value="src">ในฐานะต้นทาง (ออกไปหา) · {data.asSource.length}</TabsTrigger>
-                  <TabsTrigger value="dst">ในฐานะปลายทาง (ใครเข้ามาหา) · {data.asDestination.length}</TabsTrigger>
+                  <TabsTrigger value="src">Source · {data.asSource.length}</TabsTrigger>
+                  <TabsTrigger value="dst">Destination · {data.asDestination.length}</TabsTrigger>
                 </TabsList>
                 <TabsContent value="src" className="pt-3">
                   <ConversationTable rows={data.asSource} ownIsSrc={true} window_={window_} />
