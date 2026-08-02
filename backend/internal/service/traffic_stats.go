@@ -1016,6 +1016,16 @@ type TrafficBreakdown struct {
 	// §2.5). Not itself serialized — StatisticsService.GetStatistics copies it
 	// straight into model.TrafficStatistics.Series.
 	Series []model.BandwidthPoint
+	// HostSeries is nil whenever getTrafficBreakdown is called without a
+	// focus IP (i.e. every call through GetTrafficBreakdown) — only
+	// GetTrafficBreakdownForIP populates it (docs/ref/todo/
+	// statistics-traffic-bandwidth-chart-plan.md §2.3/T-02). Unlike Series
+	// above (network-wide, LAN-relative), HostSeries is the focus IP's own
+	// traffic only, flow-relative (Orig = up, Reply = down), computed from
+	// the SAME b.convBytes map Convs is summed from in the same RLock/loop —
+	// so sum(HostSeries[].Bytes) == sum(Convs[...].Total()) for that IP holds
+	// by construction (plan §2.2 decision 1).
+	HostSeries []model.BandwidthPoint
 }
 
 // GetTrafficBreakdown is GetTrafficDetail's sibling for the Statistics page:
@@ -1025,7 +1035,33 @@ type TrafficBreakdown struct {
 // Truncated reports whether any bucket in the window hit one of its
 // tracking caps (maxTrackedHosts/maxTrackedDests/maxTrackedConversations) —
 // a signal that the ranking below may be missing entries.
+//
+// GetTrafficBreakdown is unchanged behavior-wise from before plan
+// statistics-traffic-bandwidth-chart-plan.md T-02 — it is now a thin wrapper
+// around getTrafficBreakdown with an empty focusIP, which always leaves
+// HostSeries nil (see the TrafficBreakdown.HostSeries comment above).
 func (s *TrafficStatsService) GetTrafficBreakdown(window string) TrafficBreakdown {
+	return s.getTrafficBreakdown(window, "")
+}
+
+// GetTrafficBreakdownForIP is GetTrafficBreakdown's per-IP sibling (plan
+// §2.3/T-02) — same snapshot/RLock as GetTrafficBreakdown (Hosts/Dests/Convs/
+// Observed/Series are identical for a given window regardless of focusIP),
+// PLUS HostSeries populated for the given IP. Deliberately not a second
+// method that re-locks and re-scans the bucket ring: that would read a
+// different snapshot than a plain GetTrafficBreakdown call made moments
+// apart, breaking the sum(HostSeries)==TotalBytes invariant the caller
+// (GetTrafficHostDetail) relies on (plan §2.3 rationale).
+func (s *TrafficStatsService) GetTrafficBreakdownForIP(window, ip string) TrafficBreakdown {
+	return s.getTrafficBreakdown(window, ip)
+}
+
+// getTrafficBreakdown is the shared implementation behind
+// GetTrafficBreakdown/GetTrafficBreakdownForIP. When focusIP is "", HostSeries
+// is left nil and the per-bucket convBytes scan below is skipped entirely
+// (zero added cost for every existing caller — GetTrafficBreakdown itself,
+// GetTrafficTopHosts, GetStatistics).
+func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string) TrafficBreakdown {
 	if window != trafficWindow24h {
 		window = trafficWindow1h
 	}
@@ -1051,6 +1087,32 @@ func (s *TrafficStatsService) GetTrafficBreakdown(window string) TrafficBreakdow
 	series := make([]model.BandwidthPoint, n)
 	for i := range series {
 		series[i].Ts = axisStart.Add(time.Duration(i) * trafficDetailBucketSpan).Format(time.RFC3339)
+	}
+	// hostSeries is allocated (and Ts-filled) whenever focusIP is set, even if
+	// that IP turns out to have no traffic at all — so callers always get a
+	// fixed-length, zero-filled array rather than nil (plan T-02 step 5).
+	var hostSeries []model.BandwidthPoint
+	if focusIP != "" {
+		hostSeries = make([]model.BandwidthPoint, n)
+		for i := range hostSeries {
+			hostSeries[i].Ts = series[i].Ts
+		}
+	}
+
+	// focusIPSrcPrefix/focusIPDstNeedle are the fast-path substring checks the
+	// convBytes scan below uses to skip parseConvKey's SplitN+ParseUint
+	// allocation for the vast majority of keys that plainly can't match
+	// focusIP (plan §5 item 8 — a bucket's convBytes map can hold up to
+	// maxTrackedConversations entries, scanned on every 10s-polled HTTP
+	// request). A convKey is "src|dst|proto|port" (convKey above), so
+	// focusIPSrcPrefix matches the src position and focusIPDstNeedle (with
+	// pipes on both sides) can only match the dst position — IP addresses
+	// never contain '|', so neither check can false-positive against proto/
+	// port.
+	var focusIPSrcPrefix, focusIPDstNeedle string
+	if focusIP != "" {
+		focusIPSrcPrefix = focusIP + "|"
+		focusIPDstNeedle = "|" + focusIP + "|"
 	}
 
 	s.mu.RLock()
@@ -1106,6 +1168,36 @@ func (s *TrafficStatsService) GetTrafficBreakdown(window string) TrafficBreakdow
 		series[idx].BytesDown += b.observed.Reply
 		series[idx].Bytes += b.observed.Total()
 
+		// hostSeries (per-IP, flow-relative — plan §2.2 decision 2/T-02 step
+		// 2) is built from the SAME b.convBytes this bucket already merged
+		// into convTotals above, at the SAME idx series uses — never a second
+		// lock/scan, so sum(HostSeries[].Bytes) == sum of this IP's
+		// convTotals rows holds by construction.
+		if focusIP != "" {
+			for k, v := range b.convBytes {
+				if !strings.HasPrefix(k, focusIPSrcPrefix) && !strings.Contains(k, focusIPDstNeedle) {
+					continue // fast path: neither side of this key can be focusIP
+				}
+				src, dst, _, _, ok := parseConvKey(k)
+				if !ok {
+					continue
+				}
+				if src == focusIP {
+					hostSeries[idx].BytesUp += v.Orig
+					hostSeries[idx].BytesDown += v.Reply
+					hostSeries[idx].Bytes += v.Total()
+				}
+				// Not an else-if: a same-IP-both-sides row (e.g. loopback)
+				// must be counted twice, matching how TotalBytes is summed in
+				// GetTrafficHostDetail (plan T-02 step 2).
+				if dst == focusIP {
+					hostSeries[idx].BytesUp += v.Orig
+					hostSeries[idx].BytesDown += v.Reply
+					hostSeries[idx].Bytes += v.Total()
+				}
+			}
+		}
+
 		if len(b.hostBytes) >= s.maxTrackedHosts || len(b.dstBytes) >= s.maxTrackedDests || len(b.convBytes) >= s.maxTrackedConversations {
 			truncated = true
 		}
@@ -1118,13 +1210,14 @@ func (s *TrafficStatsService) GetTrafficBreakdown(window string) TrafficBreakdow
 	}
 
 	return TrafficBreakdown{
-		Hosts:     hostTotals,
-		Dests:     dstTotals,
-		Convs:     convTotals,
-		Observed:  observed,
-		Truncated: truncated,
-		Accuracy:  accuracy,
-		Series:    series,
+		Hosts:      hostTotals,
+		Dests:      dstTotals,
+		Convs:      convTotals,
+		Observed:   observed,
+		Truncated:  truncated,
+		Accuracy:   accuracy,
+		Series:     series,
+		HostSeries: hostSeries,
 	}
 }
 

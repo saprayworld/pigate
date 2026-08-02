@@ -47,6 +47,27 @@ func clampLimit(limit, def, max int) int {
 	return limit
 }
 
+// parseConvKey splits one TrafficBreakdown.Convs/convBytes key (convKey's
+// output, "src|dst|proto|port") back into its parts. Shared by
+// GetTrafficHostDetail below and getTrafficBreakdown's per-IP series scan in
+// traffic_stats.go (docs/ref/todo/statistics-traffic-bandwidth-chart-plan.md
+// T-02 step 3) so the two can never drift into disagreeing about what counts
+// as a malformed key — a drift there would silently break the
+// sum(HostSeries)==TotalBytes invariant. ok is false for a malformed key
+// (wrong segment count or an unparseable port) — callers skip the entry, the
+// same defensive behavior the old inline code had.
+func parseConvKey(key string) (src, dst, proto string, port uint16, ok bool) {
+	parts := strings.SplitN(key, "|", 4)
+	if len(parts) != 4 {
+		return "", "", "", 0, false
+	}
+	p, err := strconv.ParseUint(parts[3], 10, 16)
+	if err != nil {
+		return "", "", "", 0, false
+	}
+	return parts[0], parts[1], parts[2], uint16(p), true
+}
+
 // GetTrafficTopHosts backs GET /api/statistics/traffic/hosts — the FULL (not
 // statsTopN-cut) Top Source Hosts / Top Destinations lists, up to limit rows
 // each (plan §1.2/T-03). window/limit are re-validated defensively here even
@@ -77,7 +98,11 @@ func (s *StatisticsService) GetTrafficTopHosts(window string, limit int) model.T
 		Limit:         limit,
 		Sources:       buildTopHosts(breakdown.Hosts, breakdown.Observed, leaseByIP, resByIP, ipDomain, limit),
 		Destinations:  buildTopHosts(breakdown.Dests, breakdown.Observed, leaseByIP, resByIP, ipDomain, limit),
-		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+		// Series is network-wide/LAN-relative — the SAME slice
+		// StatisticsService.GetStatistics copies into TrafficStatistics.Series
+		// for the Overview page (plan §2.1: "ของฟรี" — no extra computation).
+		Series:      breakdown.Series,
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 }
 
@@ -93,7 +118,11 @@ func (s *StatisticsService) GetTrafficHostDetail(window, ip string, limit int) m
 	}
 	limit = clampLimit(limit, trafficHostDetailDefaultLimit, trafficHostDetailMaxLimit)
 
-	breakdown := s.traffic.GetTrafficBreakdown(window)
+	// GetTrafficBreakdownForIP (not GetTrafficBreakdown) — Hosts/Dests/Convs/
+	// Observed/Series come back identical to a plain GetTrafficBreakdown
+	// call, PLUS HostSeries computed for ip in the SAME RLock/snapshot (plan
+	// §2.3/T-02 step 4: "ห้ามเรียก breakdown สองรอบ").
+	breakdown := s.traffic.GetTrafficBreakdownForIP(window, ip)
 	leaseByIP, resByIP := s.traffic.hostLookup()
 
 	// asSourceAll/asDestinationAll hold every matching row BEFORE the limit
@@ -112,14 +141,9 @@ func (s *StatisticsService) GetTrafficHostDetail(window, ip string, limit int) m
 		if bytes == 0 {
 			continue
 		}
-		parts := strings.SplitN(key, "|", 4)
-		if len(parts) != 4 {
+		srcIP, dstIP, proto, port, ok := parseConvKey(key)
+		if !ok {
 			continue // malformed key — should never happen, skip defensively
-		}
-		srcIP, dstIP, proto, portStr := parts[0], parts[1], parts[2], parts[3]
-		port, err := strconv.ParseUint(portStr, 10, 16)
-		if err != nil {
-			continue
 		}
 
 		if srcIP == ip {
@@ -129,7 +153,7 @@ func (s *StatisticsService) GetTrafficHostDetail(window, ip string, limit int) m
 			totalDown += v.Reply
 			asSourceAll = append(asSourceAll, model.TrafficHostConversation{
 				TopConversation: model.TopConversation{
-					SrcIP: srcIP, DstIP: dstIP, Proto: proto, DstPort: uint16(port),
+					SrcIP: srcIP, DstIP: dstIP, Proto: proto, DstPort: port,
 					Bytes: bytes, BytesUp: v.Orig, BytesDown: v.Reply,
 				},
 				Direction: "outbound",
@@ -144,7 +168,7 @@ func (s *StatisticsService) GetTrafficHostDetail(window, ip string, limit int) m
 			totalDown += v.Reply
 			asDestinationAll = append(asDestinationAll, model.TrafficHostConversation{
 				TopConversation: model.TopConversation{
-					SrcIP: srcIP, DstIP: dstIP, Proto: proto, DstPort: uint16(port),
+					SrcIP: srcIP, DstIP: dstIP, Proto: proto, DstPort: port,
 					Bytes: bytes, BytesUp: v.Orig, BytesDown: v.Reply,
 				},
 				Direction: "inbound",
@@ -228,6 +252,11 @@ func (s *StatisticsService) GetTrafficHostDetail(window, ip string, limit int) m
 		ObservedBytes:     breakdown.Observed,
 		AsSource:          asSource,
 		AsDestination:     asDestination,
-		GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
+		// Series is breakdown.HostSeries (per-IP, flow-relative), NEVER
+		// breakdown.Series (network-wide, LAN-relative — that field is only
+		// used by GetTrafficTopHosts above) — plan §2.2 decision 1/2, T-02
+		// step 4.
+		Series:      breakdown.HostSeries,
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 }

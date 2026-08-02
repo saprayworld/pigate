@@ -10,6 +10,8 @@ import { fmtBytes } from "@/lib/formatBytes"
 import { trafficStatisticsService, type TopHost, type TrafficTopHosts } from "@/services/trafficStatisticsService"
 import { useStatsWindow, StatsWindowSelect } from "@/components/statistics/DnsStatsShared"
 import { HostLabel } from "@/components/statistics/HostCells"
+import { BandwidthTrendCard } from "@/components/statistics/BandwidthTrendCard"
+import { TopHostsShareCard } from "@/components/statistics/TopHostsShareCard"
 import {
   AccuracyBadge,
   SortableHead,
@@ -201,9 +203,17 @@ export default function StatisticsTraffic() {
       )}
 
       {isLoading && !data && (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          {[0, 1].map((i) => (
-            <Card key={i}>
+        <>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <Card className="lg:col-span-2">
+              <CardHeader>
+                <Skeleton className="h-5 w-40" />
+              </CardHeader>
+              <CardContent>
+                <Skeleton className="h-56 w-full" />
+              </CardContent>
+            </Card>
+            <Card>
               <CardHeader>
                 <Skeleton className="h-5 w-40" />
               </CardHeader>
@@ -211,7 +221,37 @@ export default function StatisticsTraffic() {
                 <CardSkeleton />
               </CardContent>
             </Card>
-          ))}
+          </div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            {[0, 1].map((i) => (
+              <Card key={i}>
+                <CardHeader>
+                  <Skeleton className="h-5 w-40" />
+                </CardHeader>
+                <CardContent>
+                  <CardSkeleton />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Bandwidth trend + Top 5 Hosts (docs/ref/todo/
+          statistics-traffic-bandwidth-chart-plan.md T-07) — same
+          network-wide/LAN-relative data and layout as the Overview page
+          (StatisticsOverview.tsx ~:463-472), so no `subtitle` override is
+          passed here. Rendered outside the `data &&` guard's sibling tables
+          block is unnecessary here (unlike Overview) since this page has no
+          separate "no data" empty state to worry about hiding it behind. */}
+      {data && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <BandwidthTrendCard className="lg:col-span-2" series={data.series} window={window_} />
+          <TopHostsShareCard
+            className="lg:col-span-1"
+            hosts={data.sources.slice(0, 5)}
+            observedBytes={data.observedBytes}
+          />
         </div>
       )}
 

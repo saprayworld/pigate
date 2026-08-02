@@ -4424,7 +4424,13 @@ components:
       type: object
       required: [ts, bytes, bytesUp, bytesDown]
       description: >-
-        One point of TrafficStatistics.series — a single 5-minute bucket.
+        One point of a bandwidth-over-time series (TrafficStatistics.series,
+        TrafficTopHosts.series, or TrafficHostDetail.series) — a single
+        5-minute bucket. IMPORTANT: the meaning of bytesUp/bytesDown depends
+        on WHICH schema's series this point came from — see each schema's
+        own `series` property description for its convention (LAN-relative
+        vs. flow-relative) and denominator; this shape is shared, the
+        direction semantics are not.
       properties:
         ts:
           type: string
@@ -4442,17 +4448,17 @@ components:
         bytesUp:
           type: integer
           format: int64
-          description: LAN-relative upload bytes (leaving the LAN) in this bucket — see TrafficStatistics.series.
+          description: Upload bytes in this bucket — direction convention set by the containing schema's `series` property, see its description.
           example: 300000
         bytesDown:
           type: integer
           format: int64
-          description: LAN-relative download bytes (entering the LAN) in this bucket — see TrafficStatistics.series.
+          description: Download bytes in this bucket — direction convention set by the containing schema's `series` property, see its description.
           example: 3900000
 
     TrafficTopHosts:
       type: object
-      required: [window, observedBytes, accuracy, truncated, limit, sources, destinations, generatedAt]
+      required: [window, observedBytes, accuracy, truncated, limit, sources, destinations, series, generatedAt]
       description: >-
         The /statistics/traffic/hosts response backing the Statistics ->
         Traffic page's two top-level tables (docs/ref/todo/
@@ -4496,6 +4502,21 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TopHost'
+        series:
+          type: array
+          description: >-
+            Bandwidth-over-time chart data for the WHOLE network, in the
+            SAME convention as TrafficStatistics.series above (docs/ref/todo/
+            statistics-traffic-bandwidth-chart-plan.md T-01/T-02): direction
+            is LAN-relative (bytesUp = leaving the LAN, bytesDown = entering
+            the LAN), fixed length (12 for window=1h, 288 for window=24h),
+            sorted oldest -> newest, and sum(series[].bytes) always equals
+            observedBytes exactly. This is the identical series
+            TrafficStatistics.series would show for the same window — reused
+            here so the Traffic page's bandwidth chart never needs a second
+            request.
+          items:
+            $ref: '#/components/schemas/BandwidthPoint'
         generatedAt:
           type: string
           format: date-time
@@ -4579,7 +4600,7 @@ components:
 
     TrafficHostDetail:
       type: object
-      required: [ip, hostname, mac, domain, private, window, accuracy, truncated, limit, found, totalBytes, totalBytesUp, totalBytesDown, percentOfObserved, observedBytes, asSource, asDestination, generatedAt]
+      required: [ip, hostname, mac, domain, private, window, accuracy, truncated, limit, found, totalBytes, totalBytesUp, totalBytesDown, percentOfObserved, observedBytes, asSource, asDestination, series, generatedAt]
       description: >-
         The /statistics/traffic/host response — a single IP's conversations
         in BOTH directions (docs/ref/todo/statistics-traffic-page-plan.md
@@ -4664,6 +4685,24 @@ components:
           description: >-
             Conversations where ip is the flow's dstIp ("these hosts came to
             this IP"). Never null — an empty result is `[]`.
+        series:
+          type: array
+          description: >-
+            Bandwidth-over-time chart data for THIS IP ONLY (docs/ref/todo/
+            statistics-traffic-bandwidth-chart-plan.md T-01/T-02) —
+            DIFFERENT from TrafficTopHosts.series/TrafficStatistics.series
+            above: those are network-wide and LAN-relative, this is per-IP
+            and flow-relative (bytesUp = orig direction, bytesDown = reply
+            direction — the SAME convention as totalBytesUp/totalBytesDown
+            and the asSource/asDestination rows above). Invariants:
+            sum(series[].bytes) == totalBytes, sum(series[].bytesUp) ==
+            totalBytesUp, sum(series[].bytesDown) == totalBytesDown, always
+            exactly (computed from the same conversation data totalBytes is
+            summed from). Fixed length (12 for window=1h, 288 for
+            window=24h) always, even when found=false — a zero-filled array,
+            never null.
+          items:
+            $ref: '#/components/schemas/BandwidthPoint'
         generatedAt:
           type: string
           format: date-time

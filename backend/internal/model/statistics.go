@@ -260,7 +260,14 @@ type TrafficTopHosts struct {
 	Limit        int       `json:"limit"`
 	Sources      []TopHost `json:"sources"`
 	Destinations []TopHost `json:"destinations"`
-	GeneratedAt  string    `json:"generatedAt"`
+	// Series is the bandwidth-over-time chart backing the Traffic page's top
+	// row (docs/ref/todo/statistics-traffic-bandwidth-chart-plan.md T-01/T-02)
+	// — the SAME network-wide, LAN-relative series as TrafficStatistics.Series
+	// above (Up = leaving the LAN, Down = entering it), fed by the identical
+	// bucket computation so sum(Series[].Bytes) == ObservedBytes exactly.
+	// Fixed length (12 for "1h", 288 for "24h"), sorted oldest -> newest.
+	Series      []BandwidthPoint `json:"series"`
+	GeneratedAt string           `json:"generatedAt"`
 }
 
 // TrafficHostConversation is one drill-down row of TrafficHostDetail —
@@ -336,5 +343,19 @@ type TrafficHostDetail struct {
 	// always `[]`, never `null`).
 	AsSource      []TrafficHostConversation `json:"asSource"`
 	AsDestination []TrafficHostConversation `json:"asDestination"`
-	GeneratedAt   string                    `json:"generatedAt"`
+	// Series is the bandwidth-over-time chart backing the drill-down page's
+	// per-IP graph (docs/ref/todo/statistics-traffic-bandwidth-chart-plan.md
+	// T-01/T-02) — unlike TrafficTopHosts.Series/TrafficStatistics.Series
+	// above (both network-wide, LAN-relative), this is THIS IP's traffic
+	// ONLY, and direction is flow-relative (Orig = up, Reply = down) — the
+	// SAME convention as TotalBytesUp/TotalBytesDown and the AsSource/
+	// AsDestination rows above, NOT the LAN-relative convention of
+	// TrafficStatistics.Series. Invariant: sum(Series[].Bytes) == TotalBytes,
+	// sum(Series[].BytesUp) == TotalBytesUp, sum(Series[].BytesDown) ==
+	// TotalBytesDown, by construction (same convBytes map TotalBytes is
+	// summed from — see GetTrafficBreakdownForIP). Fixed length (12 for "1h",
+	// 288 for "24h") always, even when Found is false (a zero-filled array,
+	// never nil).
+	Series      []BandwidthPoint `json:"series"`
+	GeneratedAt string           `json:"generatedAt"`
 }

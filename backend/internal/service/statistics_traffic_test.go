@@ -286,6 +286,221 @@ func TestGetTrafficHostDetail_MalformedKeySkipped(t *testing.T) {
 	}
 }
 
+// --- Per-IP bandwidth series (docs/ref/todo/statistics-traffic-bandwidth-chart-plan.md T-03) ---
+
+// TestGetTrafficHostDetail_SeriesMatchesTotals is plan T-03 case 1 — the most
+// important test of this plan: for both windows, sum(Series[].Bytes) must
+// equal TotalBytes, sum(Series[].BytesUp) must equal TotalBytesUp, and
+// sum(Series[].BytesDown) must equal TotalBytesDown, exactly (plan §0 item
+// 4/§2.2 decision 1 — HostSeries is built from the same convBytes map
+// TotalBytes is summed from, under the same RLock).
+func TestGetTrafficHostDetail_SeriesMatchesTotals(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{
+				{Key: "out", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53},
+				{Key: "in", SrcIP: "1.1.1.1", DstIP: "192.168.1.50", Proto: 6, DstPort: 443},
+				{Key: "other", SrcIP: "192.168.1.60", DstIP: "9.9.9.9", Proto: 6, DstPort: 443},
+			},
+			{
+				{Key: "out", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, BytesOrig: 100, BytesReply: 300},
+				{Key: "in", SrcIP: "1.1.1.1", DstIP: "192.168.1.50", Proto: 6, DstPort: 443, BytesOrig: 250, BytesReply: 750},
+				{Key: "other", SrcIP: "192.168.1.60", DstIP: "9.9.9.9", Proto: 6, DstPort: 443, BytesOrig: 5000, BytesReply: 5000},
+			},
+		},
+	}
+	s := newTestStatisticsService(t, acct)
+	s.traffic.poll()
+	s.traffic.poll()
+
+	for _, window := range []string{"1h", "24h"} {
+		got := s.GetTrafficHostDetail(window, "192.168.1.50", 100)
+		bytes, up, down := seriesSum(got.Series)
+		if bytes != got.TotalBytes {
+			t.Fatalf("window %s: sum(series.bytes)=%d != TotalBytes=%d", window, bytes, got.TotalBytes)
+		}
+		if up != got.TotalBytesUp {
+			t.Fatalf("window %s: sum(series.bytesUp)=%d != TotalBytesUp=%d", window, up, got.TotalBytesUp)
+		}
+		if down != got.TotalBytesDown {
+			t.Fatalf("window %s: sum(series.bytesDown)=%d != TotalBytesDown=%d", window, down, got.TotalBytesDown)
+		}
+	}
+}
+
+// TestGetTrafficHostDetail_SeriesLengthFixed is plan T-03 case 2: Series
+// always has a fixed length (12 for 1h, 288 for 24h) with unique,
+// oldest -> newest timestamps, mirroring TestBandwidthSeries_FixedLengthAndSpacing.
+func TestGetTrafficHostDetail_SeriesLengthFixed(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, BytesOrig: 100, BytesReply: 100}},
+		},
+	}
+	s := newTestStatisticsService(t, acct)
+	s.traffic.poll()
+	s.traffic.poll()
+
+	cases := []struct {
+		window string
+		want   int
+	}{{"1h", trafficWindow1hBuckets}, {"24h", trafficDetailBucketMax}}
+	for _, c := range cases {
+		got := s.GetTrafficHostDetail(c.window, "192.168.1.50", 100)
+		if len(got.Series) != c.want {
+			t.Fatalf("window %s: expected %d points, got %d", c.window, c.want, len(got.Series))
+		}
+		seen := make(map[string]bool, len(got.Series))
+		var prev time.Time
+		for i, p := range got.Series {
+			ts, err := time.Parse(time.RFC3339, p.Ts)
+			if err != nil {
+				t.Fatalf("window %s point %d: ts %q failed to parse: %v", c.window, i, p.Ts, err)
+			}
+			if seen[p.Ts] {
+				t.Fatalf("window %s: duplicate ts %q", c.window, p.Ts)
+			}
+			seen[p.Ts] = true
+			if i > 0 {
+				if got := ts.Sub(prev); got != trafficDetailBucketSpan {
+					t.Fatalf("window %s point %d: expected 5m spacing, got %s", c.window, i, got)
+				}
+			}
+			prev = ts
+		}
+	}
+}
+
+// TestGetTrafficHostDetail_SeriesIsPerIPNotNetworkWide is plan T-03 case 3 —
+// guards against a regression that wires the network-wide breakdown.Series
+// into TrafficHostDetail.Series instead of breakdown.HostSeries (plan §2.2
+// decision 1/2, Caution 2): with another IP carrying far more traffic than
+// the drilled IP, sum(Series) must NOT equal ObservedBytes.
+func TestGetTrafficHostDetail_SeriesIsPerIPNotNetworkWide(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{
+				{Key: "small", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53},
+				{Key: "big", SrcIP: "192.168.1.99", DstIP: "9.9.9.9", Proto: 6, DstPort: 443},
+			},
+			{
+				{Key: "small", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, BytesOrig: 100, BytesReply: 100},
+				{Key: "big", SrcIP: "192.168.1.99", DstIP: "9.9.9.9", Proto: 6, DstPort: 443, BytesOrig: 50000, BytesReply: 50000},
+			},
+		},
+	}
+	s := newTestStatisticsService(t, acct)
+	s.traffic.poll()
+	s.traffic.poll()
+
+	got := s.GetTrafficHostDetail("1h", "192.168.1.50", 100)
+	bytes, _, _ := seriesSum(got.Series)
+	if bytes != got.TotalBytes {
+		t.Fatalf("sanity: sum(series.bytes)=%d should still equal this IP's TotalBytes=%d", bytes, got.TotalBytes)
+	}
+	if bytes == got.ObservedBytes {
+		t.Fatalf("expected per-IP series sum (%d) to differ from network-wide ObservedBytes (%d) — looks like breakdown.Series leaked in instead of HostSeries", bytes, got.ObservedBytes)
+	}
+}
+
+// TestGetTrafficHostDetail_SeriesZeroFilledWhenNotFound is plan T-03 case 4:
+// an IP with no data at all must still get a fixed-length, all-zero,
+// non-nil Series (plan T-01/T-02 step 5).
+func TestGetTrafficHostDetail_SeriesZeroFilledWhenNotFound(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, BytesOrig: 100, BytesReply: 100}},
+		},
+	}
+	s := newTestStatisticsService(t, acct)
+	s.traffic.poll()
+	s.traffic.poll()
+
+	got := s.GetTrafficHostDetail("1h", "192.168.1.200", 100)
+	if got.Found {
+		t.Fatalf("expected Found=false for an IP absent from the window")
+	}
+	if got.Series == nil {
+		t.Fatalf("expected Series to be a non-nil, zero-filled slice, got nil")
+	}
+	if len(got.Series) != trafficWindow1hBuckets {
+		t.Fatalf("expected %d zero-filled points, got %d", trafficWindow1hBuckets, len(got.Series))
+	}
+	bytes, up, down := seriesSum(got.Series)
+	if bytes != 0 || up != 0 || down != 0 {
+		t.Fatalf("expected all-zero series for a not-found IP, got bytes=%d up=%d down=%d", bytes, up, down)
+	}
+}
+
+// TestGetTrafficTopHosts_SeriesIsNetworkWide is plan T-03 case 5: the
+// list-page endpoint's Series must be the network-wide, LAN-relative series
+// (breakdown.Series, "ของฟรี" per plan §2.1) — sum(Series) == ObservedBytes,
+// fixed length.
+func TestGetTrafficTopHosts_SeriesIsNetworkWide(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{
+				{Key: "a", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53},
+				{Key: "b", SrcIP: "8.8.4.4", DstIP: "192.168.1.60", Proto: 6, DstPort: 443},
+			},
+			{
+				{Key: "a", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, BytesOrig: 100, BytesReply: 100},
+				{Key: "b", SrcIP: "8.8.4.4", DstIP: "192.168.1.60", Proto: 6, DstPort: 443, BytesOrig: 300, BytesReply: 300},
+			},
+		},
+	}
+	s := newTestStatisticsService(t, acct)
+	s.traffic.poll()
+	s.traffic.poll()
+
+	for _, c := range []struct {
+		window string
+		want   int
+	}{{"1h", trafficWindow1hBuckets}, {"24h", trafficDetailBucketMax}} {
+		got := s.GetTrafficTopHosts(c.window, 100)
+		if len(got.Series) != c.want {
+			t.Fatalf("window %s: expected %d points, got %d", c.window, c.want, len(got.Series))
+		}
+		bytes, _, _ := seriesSum(got.Series)
+		if bytes != got.ObservedBytes {
+			t.Fatalf("window %s: sum(series.bytes)=%d != ObservedBytes=%d", c.window, bytes, got.ObservedBytes)
+		}
+	}
+}
+
+// TestGetTrafficBreakdown_HostSeriesNilWithoutFocusIP is plan T-03 case 6 —
+// a regression guard for T-02's rename (GetTrafficBreakdown ->
+// getTrafficBreakdown wrapper): calling GetTrafficBreakdown (no focus IP)
+// must leave HostSeries nil, and Series/Observed/Convs must be unaffected by
+// the T-02 change (plan Caution 12).
+func TestGetTrafficBreakdown_HostSeriesNilWithoutFocusIP(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, BytesOrig: 100, BytesReply: 100}},
+		},
+	}
+	s := newTestTrafficStatsService(t, acct, nil)
+	s.poll()
+	s.poll()
+
+	bd := s.GetTrafficBreakdown("1h")
+	if bd.HostSeries != nil {
+		t.Fatalf("expected HostSeries=nil when GetTrafficBreakdown is called without a focus IP, got %+v", bd.HostSeries)
+	}
+	if bd.Observed != 200 {
+		t.Fatalf("expected Observed=200 unchanged, got %d", bd.Observed)
+	}
+	if got := bd.Convs["192.168.1.50|8.8.8.8|UDP|53"]; got.Total() != 200 {
+		t.Fatalf("expected Convs unchanged, got %+v", got)
+	}
+	if len(bd.Series) != trafficWindow1hBuckets {
+		t.Fatalf("expected Series unchanged (len %d), got %d", trafficWindow1hBuckets, len(bd.Series))
+	}
+}
+
 // TestGetStatistics_StillCappedAtStatsTopN is plan T-05 case 3: a regression
 // guard that the buildTopHosts refactor (adding a limit parameter) did not
 // change GetStatistics's existing statsTopN-cut behavior.

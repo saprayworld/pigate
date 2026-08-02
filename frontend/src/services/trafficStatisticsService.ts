@@ -1,5 +1,5 @@
 import { IS_MOCK_MODE, API_BASE_URL } from "./config"
-import { mockHosts, mockDests, mockIpDomains, type TopHost } from "./statisticsService"
+import { mockHosts, mockDests, mockIpDomains, mockBandwidthSeries, type TopHost, type BandwidthPoint } from "./statisticsService"
 
 // Statistics -> Traffic page (docs/ref/todo/statistics-traffic-page-plan.md
 // T-07) — backs the new /statistics/traffic (top-lists) and
@@ -12,7 +12,7 @@ import { mockHosts, mockDests, mockIpDomains, type TopHost } from "./statisticsS
 // RAM-only, never-persisted data source as statisticsService.ts's
 // TrafficStatistics — nothing here survives a pigate restart.
 
-export type { TopHost }
+export type { TopHost, BandwidthPoint }
 
 export interface TrafficTopHosts {
   window: "1h" | "24h"
@@ -22,6 +22,14 @@ export interface TrafficTopHosts {
   limit: number
   sources: TopHost[]
   destinations: TopHost[]
+  // Bandwidth-over-time chart data for the WHOLE network (docs/ref/todo/
+  // statistics-traffic-bandwidth-chart-plan.md T-01/T-05) — the SAME
+  // convention as statisticsService.ts's TrafficStatistics.series
+  // (LAN-relative: bytesUp = leaving the LAN, bytesDown = entering it),
+  // fixed length (12 for "1h", 288 for "24h"), sum(series[].bytes) ==
+  // observedBytes exactly. NOT this IP's own traffic — see
+  // TrafficHostDetail.series below for the per-IP, flow-relative version.
+  series: BandwidthPoint[]
   generatedAt: string
 }
 
@@ -76,6 +84,16 @@ export interface TrafficHostDetail {
   observedBytes: number
   asSource: TrafficHostConversation[]
   asDestination: TrafficHostConversation[]
+  // Bandwidth-over-time chart data for THIS IP ONLY (docs/ref/todo/
+  // statistics-traffic-bandwidth-chart-plan.md T-01/T-05) — DIFFERENT from
+  // TrafficTopHosts.series above: this is per-IP and flow-relative (bytesUp
+  // = orig direction, bytesDown = reply direction — the SAME convention as
+  // totalBytesUp/totalBytesDown and the asSource/asDestination rows above).
+  // Invariants: sum(series[].bytes) == totalBytes, sum(series[].bytesUp) ==
+  // totalBytesUp, sum(series[].bytesDown) == totalBytesDown. Fixed length
+  // (12 for "1h", 288 for "24h") always, even when found is false (a
+  // zero-filled array, never empty/undefined).
+  series: BandwidthPoint[]
   generatedAt: string
 }
 
@@ -233,6 +251,9 @@ export const trafficStatisticsService = {
       const observedBytes = rows.reduce((sum, r) => sum + r.bytes, 0)
       const sources = mockBuildTopHosts(rows, "srcIp", observedBytes).slice(0, limit)
       const destinations = mockBuildTopHosts(rows, "dstIp", observedBytes).slice(0, limit)
+      // Network-wide series (plan T-05 item 3): sum(series[].bytes) ==
+      // observedBytes exactly, same invariant as the real backend.
+      const series = mockBandwidthSeries(window, observedBytes).series
 
       return {
         window,
@@ -242,6 +263,7 @@ export const trafficStatisticsService = {
         limit,
         sources,
         destinations,
+        series,
         generatedAt: new Date().toISOString(),
       }
     }
@@ -327,6 +349,16 @@ export const trafficStatisticsService = {
       const asDestination = finish(asDestinationAll)
       const found = asSourceAll.length > 0 || asDestinationAll.length > 0
       const { hostname, mac } = mockHostnameFor(ip)
+      // Per-IP series (plan T-05 item 4): sum(series[].bytes) == totalBytes
+      // exactly (by construction, same mechanism as the real backend). up/
+      // down are split by this IP's own real ratio (totalUp/totalBytes)
+      // rather than the page-wide default upRatio, so the series' up/down
+      // shape is consistent with the totals shown above it — this is only
+      // exact on `bytes` in mock mode; bytesUp/bytesDown can be off by a few
+      // bytes from totalBytesUp/totalBytesDown due to independent per-point
+      // rounding (the real backend is exact on all three, see
+      // getTrafficBreakdown's convBytes-based computation).
+      const series = mockBandwidthSeries(window, totalBytes, totalBytes > 0 ? totalUp / totalBytes : 0.15).series
 
       return {
         ip,
@@ -346,6 +378,7 @@ export const trafficStatisticsService = {
         observedBytes,
         asSource,
         asDestination,
+        series,
         generatedAt: new Date().toISOString(),
       }
     }
