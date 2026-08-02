@@ -74,21 +74,23 @@ export function HostLabel({ host, onClick }: { host: TopHost; onClick?: () => vo
   }
   return (
     <span className="flex min-w-0 items-center gap-2">
-      {onClick ? (
-        <button
-          type="button"
-          onClick={onClick}
-          title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
-          className="max-w-full cursor-pointer truncate text-left text-foreground/90 hover:text-primary hover:underline"
-        >
-          {host.hostname}
-        </button>
-      ) : (
-        <span className="truncate text-foreground/90">{host.hostname}</span>
-      )}
-      {host.hostname !== host.ip && (
-        <span className="shrink-0 font-mono text-xs text-muted-foreground">{host.ip}</span>
-      )}
+      <span className="min-w-0">
+        {onClick ? (
+          <button
+            type="button"
+            onClick={onClick}
+            title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
+            className="block max-w-full cursor-pointer truncate text-left text-foreground/90 hover:text-primary hover:underline"
+          >
+            {host.hostname}
+          </button>
+        ) : (
+          <span className="block truncate text-foreground/90">{host.hostname}</span>
+        )}
+        {host.hostname !== host.ip && (
+          <span className="block truncate font-mono text-[10px] text-muted-foreground">{host.ip}</span>
+        )}
+      </span>
       <Badge
         variant="outline"
         className={cn(

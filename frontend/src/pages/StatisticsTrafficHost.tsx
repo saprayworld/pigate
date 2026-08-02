@@ -131,10 +131,14 @@ function ConversationTable({
             {topPeers.map((p) => (
               <div key={p.ip} className="space-y-1">
                 <div className="flex items-center justify-between gap-3 text-xs">
-                  <span className="min-w-0 truncate">
-                    {p.domain || p.hostname || p.ip}
-                    {(p.domain || p.hostname) && p.hostname !== p.ip && (
-                      <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">{p.ip}</span>
+                  <span className="min-w-0">
+                    {p.domain || (p.hostname && p.hostname !== p.ip) ? (
+                      <>
+                        <span className="block truncate">{p.domain || p.hostname}</span>
+                        <span className="block truncate font-mono text-[10px] text-muted-foreground">{p.ip}</span>
+                      </>
+                    ) : (
+                      <span className="block truncate">{p.ip}</span>
                     )}
                   </span>
                   <span className="shrink-0 font-mono text-muted-foreground">
