@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { ArrowLeftRight, RefreshCw } from "lucide-react"
+import { ArrowDown, ArrowLeftRight, ArrowUp, ChevronsUpDown, RefreshCw } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -32,6 +32,8 @@ const REFRESH_INTERVAL = 10_000
 const ROWS_LIMIT = 100
 const DISPLAY_LIMIT = 50
 
+type HostRow = TopHost & { rateTotal: number }
+
 function HostsTable({
   title,
   hosts,
@@ -47,12 +49,13 @@ function HostsTable({
 }) {
   const navigate = useNavigate()
   const [query, setQuery] = useState("")
-  const filtered = useTextFilter(hosts, query, [
+  const withRateTotal = hosts.map((h) => ({ ...h, rateTotal: (h.rateBpsDown ?? 0) + (h.rateBpsUp ?? 0) }))
+  const filtered = useTextFilter(withRateTotal, query, [
     (h) => h.ip,
     (h) => h.hostname,
     (h) => h.domain,
   ])
-  const { rows, sort, toggle } = useSortableRows<TopHost>(filtered, { key: "bytes", dir: "desc" })
+  const { rows, sort, toggle } = useSortableRows(filtered, { key: "bytes", dir: "desc" })
   const shown = rows.slice(0, DISPLAY_LIMIT)
 
   const goToHost = (ip: string) => {
@@ -74,18 +77,33 @@ function HostsTable({
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
-                    <SortableHead<TopHost> label="Host" sortKey="hostname" sort={sort} onToggle={toggle} />
-                    <SortableHead<TopHost> label="Down" sortKey="bytesDown" sort={sort} onToggle={toggle} align="right" className="w-24" />
-                    <SortableHead<TopHost> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
-                    <SortableHead<TopHost> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
-                    <SortableHead<TopHost> label="%" sortKey="percent" sort={sort} onToggle={toggle} align="right" className="w-16" />
-                    <TableHead className="hidden w-28 text-right text-xs font-medium text-muted-foreground md:table-cell">
+                    <SortableHead<HostRow> label="Host" sortKey="hostname" sort={sort} onToggle={toggle} />
+                    <SortableHead<HostRow> label="Down" sortKey="bytesDown" sort={sort} onToggle={toggle} align="right" className="w-24" />
+                    <SortableHead<HostRow> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
+                    <SortableHead<HostRow> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
+                    <SortableHead<HostRow> label="%" sortKey="percent" sort={sort} onToggle={toggle} align="right" className="w-16" />
+                    <TableHead className="hidden w-28 md:table-cell">
                       <Tooltip>
-                        <TooltipTrigger className="inline-flex cursor-default items-center gap-1">
-                          Speed
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => toggle("rateTotal")}
+                            className="inline-flex w-full cursor-pointer items-center justify-end gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                          >
+                            Speed
+                            {sort.key === "rateTotal" ? (
+                              sort.dir === "asc" ? (
+                                <ArrowUp className="size-3 text-primary" />
+                              ) : (
+                                <ArrowDown className="size-3 text-primary" />
+                              )
+                            ) : (
+                              <ChevronsUpDown className="size-3 text-muted-foreground/60" />
+                            )}
+                          </button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          ความเร็วเฉลี่ยประมาณ 10 วินาทีล่าสุด (ค่าประมาณจาก conntrack)
+                          ความเร็วเฉลี่ยประมาณ 10 วินาทีล่าสุด (ค่าประมาณจาก conntrack) · เรียงจาก Down+Up
                         </TooltipContent>
                       </Tooltip>
                     </TableHead>
