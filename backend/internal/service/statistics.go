@@ -145,9 +145,9 @@ func (s *StatisticsService) RecordFirewallLog(entry model.FirewallLog) {
 }
 
 // denySnapshot aggregates the deny ring's src/port counts over the requested
-// window, mirroring GetTrafficBreakdown's bucket-selection logic
-// (trafficWindow1hBuckets trailing buckets for "1h", the whole ring for
-// "24h").
+// window, mirroring GetTrafficBreakdown's bucket-selection logic (the
+// statsWindowBucketCount trailing buckets for window — see traffic_stats.go's
+// statsWindowBuckets table).
 func (s *StatisticsService) denySnapshot(window string) (srcTotals, portTotals map[string]uint64, totalEvents uint64, truncated bool) {
 	srcTotals = make(map[string]uint64)
 	portTotals = make(map[string]uint64)
@@ -155,16 +155,7 @@ func (s *StatisticsService) denySnapshot(window string) (srcTotals, portTotals m
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var windowBuckets []deniedBucket
-	if window == trafficWindow1h {
-		n := trafficWindow1hBuckets
-		if len(s.denyBuckets) < n {
-			n = len(s.denyBuckets)
-		}
-		windowBuckets = s.denyBuckets[len(s.denyBuckets)-n:]
-	} else {
-		windowBuckets = s.denyBuckets
-	}
+	windowBuckets := lastNBuckets(s.denyBuckets, statsWindowBucketCount(window))
 
 	for _, b := range windowBuckets {
 		for k, v := range b.srcCount {
@@ -185,9 +176,7 @@ func (s *StatisticsService) denySnapshot(window string) (srcTotals, portTotals m
 // window ("1h" default, or "24h"). window must already be whitelisted by the
 // caller (the API handler) — this method only re-validates defensively.
 func (s *StatisticsService) GetStatistics(window string) model.TrafficStatistics {
-	if window != trafficWindow24h {
-		window = trafficWindow1h
-	}
+	window = normalizeStatsWindow(window)
 
 	breakdown := s.traffic.GetTrafficBreakdown(window)
 	leaseByIP, resByIP := s.traffic.hostLookup()

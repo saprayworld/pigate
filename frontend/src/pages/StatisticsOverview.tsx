@@ -25,10 +25,10 @@ import {
   type TopHost,
   type TrafficStatistics,
 } from "@/services/statisticsService"
-import { useStatsWindow, StatsWindowSelect, type StatsWindow } from "@/components/statistics/DnsStatsShared"
+import { useStatsWindow, StatsWindowTabs, type StatsWindow } from "@/components/statistics/DnsStatsShared"
 import { UpDownLine, HostLabel } from "@/components/statistics/HostCells"
 import { AccuracyBadge, HostBar } from "@/components/statistics/TrafficStatsShared"
-import { BandwidthTrendCard } from "@/components/statistics/BandwidthTrendCard"
+import { TrafficTrendCard } from "@/components/statistics/TrafficTrendCard"
 import { TopHostsShareCard } from "@/components/statistics/TopHostsShareCard"
 
 const REFRESH_INTERVAL = 10_000
@@ -357,7 +357,7 @@ export default function StatisticsOverview() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async (win: "1h" | "24h", showLoading: boolean) => {
+  const load = useCallback(async (win: StatsWindow, showLoading: boolean) => {
     if (showLoading) setIsLoading(true)
     try {
       const data = await statisticsService.getTrafficStatistics(win)
@@ -409,12 +409,19 @@ export default function StatisticsOverview() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <StatsWindowSelect value={window_} onChange={setWindow} />
+        <div className="flex flex-wrap items-center gap-2">
           {stats && <AccuracyBadge accuracy={stats.accuracy} />}
-          <Button variant="outline" size="sm" onClick={() => load(window_, true)} disabled={isLoading}>
+          <StatsWindowTabs value={window_} onChange={setWindow} />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => load(window_, true)}
+            disabled={isLoading}
+            title="Refresh"
+            aria-label="Refresh"
+          >
             <RefreshCw className={isLoading ? "size-4 animate-spin" : "size-4"} />
-            Refresh
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
         </div>
       </div>
@@ -462,7 +469,7 @@ export default function StatisticsOverview() {
           only). */}
       {stats && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <BandwidthTrendCard className="lg:col-span-2" series={stats.series} window={window_} />
+          <TrafficTrendCard className="lg:col-span-2" series={stats.series} window={window_} />
           <TopHostsShareCard
             className="lg:col-span-1"
             hosts={stats.topSources.slice(0, 5)}

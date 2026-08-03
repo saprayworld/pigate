@@ -220,19 +220,13 @@ func (s *StatisticsService) SetReverseCacheLimits(ttlMinutes, maxEntries int) {
 	s.dns.reverseCache.SetLimits(ttlMinutes, maxEntries)
 }
 
-// dnsWindowBuckets selects the trailing buckets for window ("1h" -> last
-// trafficWindow1hBuckets buckets, anything else -> the whole ring), mirroring
-// denySnapshot/domainSnapshot's bucket-selection logic. Callers must hold at
-// least s.dns.mu.RLock().
+// dnsWindowBuckets selects the trailing statsWindowBucketCount(window)
+// buckets, mirroring denySnapshot/domainSnapshot's bucket-selection logic.
+// Callers must hold at least s.dns.mu.RLock(). window is normalized here too
+// (defense-in-depth, same as GetTrafficDetail/getTrafficBreakdown), so a
+// caller that forgot to normalize still gets a safe bucket count.
 func (s *StatisticsService) dnsWindowBuckets(window string) []domainBucket {
-	if window == trafficWindow1h {
-		n := trafficWindow1hBuckets
-		if len(s.dns.buckets) < n {
-			n = len(s.dns.buckets)
-		}
-		return s.dns.buckets[len(s.dns.buckets)-n:]
-	}
-	return s.dns.buckets
+	return lastNBuckets(s.dns.buckets, statsWindowBucketCount(window))
 }
 
 // domainSnapshot aggregates the domain ring's per-domain query counts over
@@ -301,9 +295,7 @@ func buildTopDomains(totals map[string]uint64, typeByDomain map[string]string, t
 // tab (drilldown plan T-02). window must already be whitelisted by the
 // caller (the API handler) — this method only re-validates defensively.
 func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryStatistics {
-	if window != trafficWindow24h {
-		window = trafficWindow1h
-	}
+	window = normalizeStatsWindow(window)
 
 	s.dns.mu.RLock()
 	enabled := s.dns.enabled
@@ -370,9 +362,7 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 // GetDNSQueryStatistics.TopClients — plan §2 item 6). domain must already be
 // validated/normalized by the caller (the API handler).
 func (s *StatisticsService) GetDNSDomainClients(window, domain string) model.DNSDomainDrilldown {
-	if window != trafficWindow24h {
-		window = trafficWindow1h
-	}
+	window = normalizeStatsWindow(window)
 
 	s.dns.mu.RLock()
 	enabled := s.dns.enabled
@@ -429,9 +419,7 @@ func (s *StatisticsService) GetDNSDomainClients(window, domain string) model.DNS
 // string or dnsUnknownClient exactly, matching the key recordDomainQuery
 // stores.
 func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNSClientDrilldown {
-	if window != trafficWindow24h {
-		window = trafficWindow1h
-	}
+	window = normalizeStatsWindow(window)
 
 	s.dns.mu.RLock()
 	enabled := s.dns.enabled

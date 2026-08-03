@@ -29,6 +29,20 @@ type TopHost struct {
 	// (conntrack Forward tuple, plan Caution 7) — the UI uses this flag to
 	// tell those rows apart from genuine LAN hosts.
 	Private bool `json:"private"`
+	// RateBpsUp/RateBpsDown are this row's real-time throughput in bits/second
+	// (docs/ref/todo/statistics-traffic-speed-plan.md T-04) — an AVERAGE over
+	// the most recent conntrack poll window (~10s, TrafficStatsService's
+	// flowPollInterval), not an instantaneous value, and only as accurate as
+	// the Accuracy field of the response this row belongs to (same
+	// conntrack-derived estimate). Direction is flow-relative (Up = Orig i.e.
+	// srcIP->dstIP, Down = Reply), the SAME convention as BytesUp/BytesDown
+	// above — NOT the LAN-relative convention BandwidthPoint uses. Both are
+	// `omitempty` and left unset by the /api/statistics/traffic (Overview)
+	// response, which reuses this same TopHost struct but never populates
+	// these two fields, so that response's JSON shape is byte-for-byte
+	// unchanged (plan §1.7 of statistics-traffic-page-plan.md).
+	RateBpsUp   uint64 `json:"rateBpsUp,omitempty"`
+	RateBpsDown uint64 `json:"rateBpsDown,omitempty"`
 	// Domain is the domain name dnsmasq most recently answered for this IP
 	// (docs/ref/todo/statistics-dns-top-domain-plan.md T-01/T-08) — display
 	// only, empty when unknown/expired. NEVER used for firewall rule
@@ -111,7 +125,11 @@ type BandwidthPoint struct {
 
 // TrafficStatistics is the /api/statistics/traffic response.
 type TrafficStatistics struct {
-	Window        string `json:"window"` // "1h" | "24h"
+	// Window is one of "15m", "30m", "1h", "3h", "6h", "12h", "24h". An
+	// unrecognized value sent to the API (including empty) is never returned
+	// here — it falls back to "1h" server-side (docs/ref/todo/
+	// statistics-window-granularity-plan.md §0 D-3) before this DTO is built.
+	Window        string `json:"window"` // "15m" | "30m" | "1h" | "3h" | "6h" | "12h" | "24h"
 	ObservedBytes uint64 `json:"observedBytes"`
 	// Accuracy mirrors TrafficDetail.Accuracy ("estimated" | "near-exact") —
 	// same conntrack-poll-vs-DESTROY-event signal, computed the same way.
@@ -125,8 +143,10 @@ type TrafficStatistics struct {
 	// Overview page's top row (plan T-01/T-03): one BandwidthPoint per raw
 	// 5-minute bucket, zero-filled and carried to the nearest edge point when
 	// the ring covers a wider span than the window (plan §2.5/§7 item 6), so
-	// Series always has a fixed length (12 for "1h", 288 for "24h"), sorted
-	// oldest -> newest, and sum(Series[].Bytes) == ObservedBytes exactly.
+	// Series always has a fixed length equal to the number of 5-minute
+	// buckets the window covers (3/6/12/36/72/144/288 for
+	// 15m/30m/1h/3h/6h/12h/24h respectively), sorted oldest -> newest, and
+	// sum(Series[].Bytes) == ObservedBytes exactly.
 	Series []BandwidthPoint `json:"series"`
 
 	DeniedSources []TopDeniedSource `json:"deniedSources"`
@@ -183,7 +203,10 @@ type DNSClientStat struct {
 // — same source ring as TrafficStatistics.TopDomains, but with the client
 // dimension added (plan T-02).
 type DNSQueryStatistics struct {
-	Window       string `json:"window"` // "1h" | "24h"
+	// Window is one of "15m", "30m", "1h", "3h", "6h", "12h", "24h" — see the
+	// TrafficStatistics.Window comment above for the unknown-value fallback
+	// rule (identical here).
+	Window string `json:"window"` // "15m" | "30m" | "1h" | "3h" | "6h" | "12h" | "24h"
 	Enabled      bool   `json:"enabled"`
 	TotalQueries uint64 `json:"totalQueries"`
 	// Truncated is true when the domain×client pair ring or the client ring
@@ -245,7 +268,9 @@ type DNSClientDrilldown struct {
 // Limit rows each, so the Traffic page can filter/sort more than the
 // Overview page's statsTopN cards ever expose (plan §1.2).
 type TrafficTopHosts struct {
-	Window        string `json:"window"` // "1h" | "24h"
+	// Window is one of "15m", "30m", "1h", "3h", "6h", "12h", "24h" — see
+	// TrafficStatistics.Window for the unknown-value fallback rule.
+	Window        string `json:"window"` // "15m" | "30m" | "1h" | "3h" | "6h" | "12h" | "24h"
 	ObservedBytes uint64 `json:"observedBytes"`
 	// Accuracy mirrors TrafficStatistics.Accuracy ("estimated" | "near-exact").
 	Accuracy string `json:"accuracy"`
@@ -265,9 +290,18 @@ type TrafficTopHosts struct {
 	// — the SAME network-wide, LAN-relative series as TrafficStatistics.Series
 	// above (Up = leaving the LAN, Down = entering it), fed by the identical
 	// bucket computation so sum(Series[].Bytes) == ObservedBytes exactly.
-	// Fixed length (12 for "1h", 288 for "24h"), sorted oldest -> newest.
+	// Fixed length equal to the window's 5-minute bucket count
+	// (3/6/12/36/72/144/288 for 15m/30m/1h/3h/6h/12h/24h), sorted oldest ->
+	// newest.
 	Series      []BandwidthPoint `json:"series"`
 	GeneratedAt string           `json:"generatedAt"`
+	// RateSampledAt is the RFC3339 UTC timestamp the RateBpsUp/RateBpsDown
+	// values on Sources/Destinations above were sampled at (docs/ref/todo/
+	// statistics-traffic-speed-plan.md T-04) — empty when no rate sample
+	// exists yet (e.g. right after backend startup, before the first poll
+	// tick has rotated). `omitempty` for the same byte-compatibility reason as
+	// TopHost.RateBpsUp/RateBpsDown.
+	RateSampledAt string `json:"rateSampledAt,omitempty"`
 }
 
 // TrafficHostConversation is one drill-down row of TrafficHostDetail —
@@ -292,6 +326,13 @@ type TrafficHostConversation struct {
 	TopConversation
 	Direction  string `json:"direction"`
 	PeerDomain string `json:"peerDomain"`
+	// RateBpsUp/RateBpsDown are this conversation's real-time throughput in
+	// bits/second (same convention/accuracy caveats as TopHost.RateBpsUp/
+	// RateBpsDown above), sourced from TrafficStatsService.CurrentRates().Convs
+	// keyed by the same convKey as TopConversation. Omitempty, absent when no
+	// rate sample exists yet for this conversation.
+	RateBpsUp   uint64 `json:"rateBpsUp,omitempty"`
+	RateBpsDown uint64 `json:"rateBpsDown,omitempty"`
 }
 
 // TrafficHostDetail is the GET /api/statistics/traffic/host response — a
@@ -353,9 +394,23 @@ type TrafficHostDetail struct {
 	// TrafficStatistics.Series. Invariant: sum(Series[].Bytes) == TotalBytes,
 	// sum(Series[].BytesUp) == TotalBytesUp, sum(Series[].BytesDown) ==
 	// TotalBytesDown, by construction (same convBytes map TotalBytes is
-	// summed from — see GetTrafficBreakdownForIP). Fixed length (12 for "1h",
-	// 288 for "24h") always, even when Found is false (a zero-filled array,
-	// never nil).
+	// summed from — see GetTrafficBreakdownForIP). Fixed length equal to the
+	// window's 5-minute bucket count (3/6/12/36/72/144/288 for
+	// 15m/30m/1h/3h/6h/12h/24h) always, even when Found is false (a
+	// zero-filled array, never nil).
 	Series      []BandwidthPoint `json:"series"`
 	GeneratedAt string           `json:"generatedAt"`
+	// CurrentRateBpsUp/CurrentRateBpsDown are this IP's real-time throughput
+	// in bits/second (docs/ref/todo/statistics-traffic-speed-plan.md T-04) —
+	// an AVERAGE over the most recent conntrack poll window (~10s), not an
+	// instantaneous value, and only as accurate as Accuracy above. Direction
+	// is flow-relative (Up = Orig, Down = Reply), the same convention as
+	// TotalBytesUp/TotalBytesDown. `omitempty`, empty/zero when Found is
+	// false or no rate sample exists yet.
+	CurrentRateBpsUp   uint64 `json:"currentRateBpsUp,omitempty"`
+	CurrentRateBpsDown uint64 `json:"currentRateBpsDown,omitempty"`
+	// RateSampledAt mirrors TrafficTopHosts.RateSampledAt — the RFC3339 UTC
+	// timestamp the two rate fields above were sampled at, empty when no
+	// sample exists yet.
+	RateSampledAt string `json:"rateSampledAt,omitempty"`
 }

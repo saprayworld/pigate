@@ -10,9 +10,10 @@ import {
 } from "@/services/dnsStatisticsService"
 import {
   useStatsWindow,
-  StatsWindowSelect,
+  StatsWindowTabs,
   DomainStatsTable,
   DnsStatsPrivacyNote,
+  type StatsWindow,
 } from "@/components/statistics/DnsStatsShared"
 
 // Client drill-down page (docs/ref/todo/statistics-nav-restructure-plan.md
@@ -34,7 +35,7 @@ export default function StatisticsDnsClient() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async (c: string, win: "1h" | "24h", showLoading: boolean, isStale: () => boolean, isNewTarget: boolean) => {
+  const load = useCallback(async (c: string, win: StatsWindow, showLoading: boolean, isStale: () => boolean, isNewTarget: boolean) => {
     if (showLoading) setIsLoading(true)
     // A fresh client/window means the previous drill-down's data is no
     // longer relevant — drop it before fetching so the table never briefly
@@ -98,17 +99,19 @@ export default function StatisticsDnsClient() {
             โดเมนที่ {title} ค้นหา
           </h1>
         </div>
-        <div className="flex items-center gap-2">
-          <StatsWindowSelect value={window_} onChange={setWindow} />
+        <div className="flex flex-wrap items-center gap-2">
+          <StatsWindowTabs value={window_} onChange={setWindow} />
           <Button
             variant="outline"
             size="sm"
             onClick={() => load(client, window_, true, () => false, false)}
             disabled={isLoading}
             className="cursor-pointer gap-1.5"
+            title="Refresh"
+            aria-label="Refresh"
           >
             <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
-            Refresh
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
         </div>
       </div>

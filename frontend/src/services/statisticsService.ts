@@ -1,4 +1,5 @@
 import { IS_MOCK_MODE, API_BASE_URL } from "./config";
+import { STATS_WINDOWS, mockWindowScale, type StatsWindow } from "@/lib/statsWindow";
 
 // Statistics page DTOs (docs/ref/todo/statistics-page-plan.md) — backs the
 // standalone /logs/statistics page. Types mirror backend/internal/model/statistics.go
@@ -24,6 +25,16 @@ export interface TopHost {
   // statistics-dns-top-domain-plan.md) — empty when unknown/expired/DNS
   // Statistics disabled. Display only: what DNS answered, not verified fact.
   domain: string;
+  // rateBpsUp/rateBpsDown are this row's real-time throughput in bits/second
+  // (docs/ref/todo/statistics-traffic-speed-plan.md T-08) — optional because
+  // the backend uses `omitempty` and never populates them on the Overview
+  // page's GET /api/statistics/traffic response (TopHost is shared verbatim
+  // between that endpoint and GET /api/statistics/traffic/hosts, which does
+  // populate them). Average over the most recent ~10s conntrack poll, not an
+  // instantaneous value; same flow-relative up/down convention as
+  // bytesUp/bytesDown above.
+  rateBpsUp?: number;
+  rateBpsDown?: number;
 }
 
 export interface TopConversation {
@@ -81,7 +92,7 @@ export interface BandwidthPoint {
 }
 
 export interface TrafficStatistics {
-  window: "1h" | "24h";
+  window: StatsWindow;
   observedBytes: number;
   accuracy: "estimated" | "near-exact";
   topSources: TopHost[];
@@ -205,8 +216,8 @@ function mockTopHosts(rows: ReturnType<typeof mockTopHostsRaw>, observedBytes: n
 // caller drilling into a specific IP passes that IP's own real up/down
 // split instead, so the mock series' up/down proportions are consistent
 // with the mock totals shown next to it.
-export function mockBandwidthSeries(window: "1h" | "24h", exactTotal: number, upRatio = 0.15): { series: BandwidthPoint[]; total: number } {
-  const n = window === "24h" ? 288 : 12;
+export function mockBandwidthSeries(window: StatsWindow, exactTotal: number, upRatio = 0.15): { series: BandwidthPoint[]; total: number } {
+  const n = STATS_WINDOWS.find((w) => w.value === window)?.points ?? 12;
   const spanMs = 5 * 60 * 1000;
   const now = Date.now();
 
@@ -294,10 +305,13 @@ function mockDeniedPorts(scale: number): TopDeniedPort[] {
 export const statisticsService = {
   // Get the Statistics page cards (Top Source Hosts / Top Destinations / Top
   // Conversations / Top Denied). window defaults to "1h".
-  getTrafficStatistics: async (window: "1h" | "24h" = "1h"): Promise<TrafficStatistics> => {
+  getTrafficStatistics: async (window: StatsWindow = "1h"): Promise<TrafficStatistics> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 150));
-      const scale = window === "24h" ? 18 : 1;
+      // Math.max(1, Math.round(...)) — mockWindowScale can be < 1 for the new
+      // short windows (e.g. 15m -> 0.3); a raw fractional scale would zero out
+      // every row's Math.round(...*scale) below (plan §6 item 4).
+      const scale = Math.max(1, Math.round(mockWindowScale(window)));
       const topSourcesRaw = mockTopHostsRaw(scale, mockHosts);
       const topSourcesRawTotal = topSourcesRaw.reduce((sum, h) => sum + h.bytes, 0);
       // series' total drives observedBytes (plan T-06 item 3), NOT

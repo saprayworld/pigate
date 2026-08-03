@@ -1,28 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { NavLink, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom"
-import { ArrowLeft, RefreshCw } from "lucide-react"
+import { ArrowDown, ArrowLeft, ArrowUp, ChevronsUpDown, RefreshCw } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Table, TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { getErrorMessage } from "@/lib/errors"
-import { fmtBytes } from "@/lib/formatBytes"
+import { fmtBytes, fmtRate } from "@/lib/formatBytes"
 import {
   trafficStatisticsService,
   type BandwidthPoint,
   type TrafficHostConversation,
   type TrafficHostDetail,
 } from "@/services/trafficStatisticsService"
-import { useStatsWindow, StatsWindowSelect, type StatsWindow } from "@/components/statistics/DnsStatsShared"
-import { BandwidthTrendCard } from "@/components/statistics/BandwidthTrendCard"
+import { useStatsWindow, StatsWindowTabs, type StatsWindow } from "@/components/statistics/DnsStatsShared"
+import { TrafficTrendCard } from "@/components/statistics/TrafficTrendCard"
 import {
   AccuracyBadge,
   HostBar,
   SortableHead,
   TrafficEmptyState,
   TrafficFilterInput,
+  TrafficStatCard,
   TruncatedWarning,
   useSortableRows,
   useTextFilter,
@@ -37,6 +39,8 @@ const REFRESH_INTERVAL_MS = 10_000
 const ROWS_LIMIT = 100
 
 type Role = "src" | "dst"
+
+type ConversationRow = TrafficHostConversation & { rateTotal: number }
 
 function roleFromParam(v: string | null): Role | null {
   return v === "src" || v === "dst" ? v : null
@@ -72,14 +76,15 @@ function ConversationTable({
 }) {
   const navigate = useNavigate()
   const [query, setQuery] = useState("")
-  const filtered = useTextFilter(rows, query, [
+  const withRateTotal = rows.map((r) => ({ ...r, rateTotal: (r.rateBpsDown ?? 0) + (r.rateBpsUp ?? 0) }))
+  const filtered = useTextFilter(withRateTotal, query, [
     (r) => peerIp(r, ownIsSrc),
     (r) => peerHostname(r, ownIsSrc),
     (r) => r.peerDomain,
     (r) => r.proto,
     (r) => r.dstPort,
   ])
-  const { rows: sorted, sort, toggle } = useSortableRows<TrafficHostConversation>(filtered, {
+  const { rows: sorted, sort, toggle } = useSortableRows(filtered, {
     key: "bytes",
     dir: "desc",
   })
@@ -119,7 +124,7 @@ function ConversationTable({
           (computed from `filtered` above, not lifted out of this
           component). */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <BandwidthTrendCard
+        <TrafficTrendCard
           className={topPeers.length > 0 ? "xl:col-span-2" : "xl:col-span-3"}
           series={series}
           window={window_}
@@ -161,19 +166,44 @@ function ConversationTable({
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <SortableHead<TrafficHostConversation> label="Peer" sortKey={ownIsSrc ? "dstIp" : "srcIp"} sort={sort} onToggle={toggle} />
-                <SortableHead<TrafficHostConversation> label="Proto" sortKey="proto" sort={sort} onToggle={toggle} className="w-20" />
-                <SortableHead<TrafficHostConversation> label="Port" sortKey="dstPort" sort={sort} onToggle={toggle} align="right" className="w-20" />
-                <SortableHead<TrafficHostConversation> label="Down" sortKey="bytesDown" sort={sort} onToggle={toggle} align="right" className="w-24" />
-                <SortableHead<TrafficHostConversation> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
-                <SortableHead<TrafficHostConversation> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
-                <SortableHead<TrafficHostConversation> label="%" sortKey="percent" sort={sort} onToggle={toggle} align="right" className="w-16" />
+                <SortableHead<ConversationRow> label="Peer" sortKey={ownIsSrc ? "dstIp" : "srcIp"} sort={sort} onToggle={toggle} />
+                <SortableHead<ConversationRow> label="Proto" sortKey="proto" sort={sort} onToggle={toggle} className="w-20" />
+                <SortableHead<ConversationRow> label="Port" sortKey="dstPort" sort={sort} onToggle={toggle} align="right" className="w-20" />
+                <SortableHead<ConversationRow> label="Down" sortKey="bytesDown" sort={sort} onToggle={toggle} align="right" className="w-24" />
+                <SortableHead<ConversationRow> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
+                <SortableHead<ConversationRow> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
+                <SortableHead<ConversationRow> label="%" sortKey="percent" sort={sort} onToggle={toggle} align="right" className="w-16" />
+                <TableHead className="w-28">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => toggle("rateTotal")}
+                        className="inline-flex w-full cursor-pointer items-center justify-end gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                      >
+                        Speed
+                        {sort.key === "rateTotal" ? (
+                          sort.dir === "asc" ? (
+                            <ArrowUp className="size-3 text-primary" />
+                          ) : (
+                            <ArrowDown className="size-3 text-primary" />
+                          )
+                        ) : (
+                          <ChevronsUpDown className="size-3 text-muted-foreground/60" />
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      ความเร็วเฉลี่ยประมาณ 10 วินาทีล่าสุด (ค่าประมาณจาก conntrack) · เรียงจาก Down+Up
+                    </TooltipContent>
+                  </Tooltip>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {sorted.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="py-8 text-center text-xs text-muted-foreground">
+                  <TableCell colSpan={8} className="py-8 text-center text-xs text-muted-foreground">
                     ไม่พบรายการที่ตรงกับคำค้นหา
                   </TableCell>
                 </TableRow>
@@ -215,6 +245,10 @@ function ConversationTable({
                       <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{fmtBytes(r.bytesUp)}</TableCell>
                       <TableCell className="py-3 text-right font-mono text-xs text-foreground">{fmtBytes(r.bytes)}</TableCell>
                       <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{r.percent}%</TableCell>
+                      <TableCell className="py-3 text-right font-mono text-[11px] leading-tight text-muted-foreground">
+                        <div className="text-primary">{r.rateBpsDown !== undefined ? fmtRate(r.rateBpsDown) : "—"}</div>
+                        <div>{r.rateBpsUp !== undefined ? fmtRate(r.rateBpsUp) : "—"}</div>
+                      </TableCell>
                     </TableRow>
                   )
                 })
@@ -241,7 +275,7 @@ export default function StatisticsTrafficHost() {
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(
-    async (targetIp: string, win: "1h" | "24h", showLoading: boolean, isStale: () => boolean, isNewTarget: boolean) => {
+    async (targetIp: string, win: StatsWindow, showLoading: boolean, isStale: () => boolean, isNewTarget: boolean) => {
       if (showLoading) setIsLoading(true)
       if (isNewTarget) {
         setData(null)
@@ -353,18 +387,20 @@ export default function StatisticsTrafficHost() {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <StatsWindowSelect value={window_} onChange={setWindow} />
+        <div className="flex flex-wrap items-center gap-2">
           {data && <AccuracyBadge accuracy={data.accuracy} />}
+          <StatsWindowTabs value={window_} onChange={setWindow} />
           <Button
             variant="outline"
             size="sm"
             onClick={() => load(ip, window_, true, () => false, false)}
             disabled={isLoading}
             className="cursor-pointer gap-1.5"
+            title="Refresh"
+            aria-label="Refresh"
           >
             <RefreshCw className={isLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-            Refresh
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
         </div>
       </div>
@@ -402,34 +438,26 @@ export default function StatisticsTrafficHost() {
       {data && data.found && (
         <>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Card>
-              <CardHeader className="space-y-0 pb-2">
-                <CardTitle className="text-xs font-medium text-muted-foreground">Total</CardTitle>
-              </CardHeader>
-              <CardContent className="text-lg font-semibold">{fmtBytes(data.totalBytes)}</CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="space-y-0 pb-2">
-                <CardTitle className="text-xs font-medium text-muted-foreground">Down</CardTitle>
-              </CardHeader>
-              <CardContent className="text-lg font-semibold text-primary">{fmtBytes(data.totalBytesDown)}</CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="space-y-0 pb-2">
-                <CardTitle className="text-xs font-medium text-muted-foreground">Up</CardTitle>
-              </CardHeader>
-              <CardContent className="text-lg font-semibold">{fmtBytes(data.totalBytesUp)}</CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="space-y-0 pb-2">
-                <CardTitle className="text-xs font-medium text-muted-foreground">% ของทราฟฟิกทั้งหมด</CardTitle>
-              </CardHeader>
-              <CardContent className="text-lg font-semibold">{data.percentOfObserved}%</CardContent>
-            </Card>
+            <TrafficStatCard
+              label={`Total Traffic (${window_})`}
+              value={fmtBytes(data.totalBytes)}
+              breakdown={{ down: fmtBytes(data.totalBytesDown), up: fmtBytes(data.totalBytesUp) }}
+            />
+            <TrafficStatCard
+              label="Current Speed"
+              value={fmtRate((data.currentRateBpsDown ?? 0) + (data.currentRateBpsUp ?? 0))}
+              breakdown={{
+                down: data.currentRateBpsDown !== undefined ? fmtRate(data.currentRateBpsDown) : "—",
+                up: data.currentRateBpsUp !== undefined ? fmtRate(data.currentRateBpsUp) : "—",
+              }}
+            />
+            <TrafficStatCard label="Ratio" value={`${data.percentOfObserved}%`} />
+            <Card size="sm" className="border-dashed" />
           </div>
           <p className="text-[11px] text-muted-foreground">
             หมายเหตุ: % ในตารางด้านล่างคือสัดส่วนเทียบกับทราฟฟิกรวมของ {title} เองเท่านั้น ไม่ใช่ % ของทราฟฟิกทั้งเครือข่าย
-            (ซึ่งคือค่า "% ของทราฟฟิกทั้งหมด" ด้านบน)
+            (ซึ่งคือค่า "% ของทราฟฟิกทั้งหมด" ด้านบน) · ความเร็ว Down/Up คือค่าเฉลี่ยประมาณ 10 วินาทีล่าสุด (ค่าประมาณจาก
+            conntrack) แตกต่างจากยอดสะสม Total/Down/Up ด้านบนซึ่งเป็นผลรวมทั้งช่วงเวลา
           </p>
 
           <Card>

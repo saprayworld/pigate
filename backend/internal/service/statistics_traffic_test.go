@@ -372,6 +372,39 @@ func TestGetTrafficHostDetail_SeriesLengthFixed(t *testing.T) {
 	}
 }
 
+// TestGetTrafficHostDetail_AllSevenWindows_SeriesLengthFixed is docs/ref/todo/
+// statistics-window-granularity-plan.md T-07 item 1: HostSeries length across
+// all 7 supported windows must match statsWindowBuckets exactly.
+func TestGetTrafficHostDetail_AllSevenWindows_SeriesLengthFixed(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, BytesOrig: 100, BytesReply: 100}},
+		},
+	}
+	s := newTestStatisticsService(t, acct)
+	s.traffic.poll()
+	s.traffic.poll()
+
+	cases := []struct {
+		window string
+		want   int
+	}{
+		{"15m", 3}, {"30m", 6}, {"1h", 12}, {"3h", 36}, {"6h", 72}, {"12h", 144}, {"24h", 288},
+	}
+	for _, c := range cases {
+		got := s.GetTrafficHostDetail(c.window, "192.168.1.50", 100)
+		if len(got.Series) != c.want {
+			t.Fatalf("window %s: expected %d points, got %d", c.window, c.want, len(got.Series))
+		}
+		bytes, up, down := seriesSum(got.Series)
+		if bytes != got.TotalBytes || up != got.TotalBytesUp || down != got.TotalBytesDown {
+			t.Fatalf("window %s: series sum (bytes=%d up=%d down=%d) != totals (bytes=%d up=%d down=%d)",
+				c.window, bytes, up, down, got.TotalBytes, got.TotalBytesUp, got.TotalBytesDown)
+		}
+	}
+}
+
 // TestGetTrafficHostDetail_SeriesIsPerIPNotNetworkWide is plan T-03 case 3 —
 // guards against a regression that wires the network-wide breakdown.Series
 // into TrafficHostDetail.Series instead of breakdown.HostSeries (plan §2.2
@@ -529,5 +562,86 @@ func TestGetStatistics_StillCappedAtStatsTopN(t *testing.T) {
 	stats := s.GetStatistics("1h")
 	if len(stats.TopSources) != statsTopN {
 		t.Fatalf("expected GetStatistics to stay capped at statsTopN=%d, got %d", statsTopN, len(stats.TopSources))
+	}
+}
+
+// TestGetTrafficHostDetail_CurrentRateSameRuleAsTotalBytes is plan T-06 item
+// 4: CurrentRateBpsUp/CurrentRateBpsDown must use the exact same
+// src==ip-then-dst==ip counting rule (not else-if) that TotalBytes already
+// uses, so a same-IP-both-sides conversation (e.g. loopback) counts its rate
+// twice too — otherwise the drill-down page's "current speed" figure would
+// disagree with its own TotalBytes for the identical reason.
+func TestGetTrafficHostDetail_CurrentRateSameRuleAsTotalBytes(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "loop", SrcIP: "192.168.1.50", DstIP: "192.168.1.50", Proto: 6, DstPort: 8080}},
+			{{Key: "loop", SrcIP: "192.168.1.50", DstIP: "192.168.1.50", Proto: 6, DstPort: 8080, BytesOrig: 100, BytesReply: 400}},
+		},
+	}
+	s := newTestStatisticsService(t, acct)
+	s.traffic.poll() // seed
+	s.traffic.poll() // delta
+
+	elapsed := s.traffic.lastRateElapsed.Seconds()
+	if elapsed <= 0 {
+		t.Fatalf("expected positive elapsed after poll, got %v", s.traffic.lastRateElapsed)
+	}
+
+	got := s.GetTrafficHostDetail("1h", "192.168.1.50", 100)
+	wantUp := uint64(float64(100)*8/elapsed) * 2
+	wantDown := uint64(float64(400)*8/elapsed) * 2
+	if got.CurrentRateBpsUp != wantUp || got.CurrentRateBpsDown != wantDown {
+		t.Fatalf("expected src==dst row to count rate twice like TotalBytes: got up=%d down=%d want up=%d down=%d",
+			got.CurrentRateBpsUp, got.CurrentRateBpsDown, wantUp, wantDown)
+	}
+	if got.RateSampledAt == "" {
+		t.Fatalf("expected RateSampledAt to be set once a rate sample exists")
+	}
+}
+
+// TestGetTrafficHostDetail_ConversationRateMatchesHostTotal checks the
+// per-row RateBpsUp/RateBpsDown (asSource/asDestination) sum to the exact
+// same host-level CurrentRateBpsUp/CurrentRateBpsDown figure, for a
+// same-IP-both-sides conversation that appears in both lists at once (the
+// same fixture as TestGetTrafficHostDetail_CurrentRateSameRuleAsTotalBytes
+// above) — the per-row rate must not silently diverge from what it sums to.
+func TestGetTrafficHostDetail_ConversationRateMatchesHostTotal(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "loop", SrcIP: "192.168.1.50", DstIP: "192.168.1.50", Proto: 6, DstPort: 8080}},
+			{{Key: "loop", SrcIP: "192.168.1.50", DstIP: "192.168.1.50", Proto: 6, DstPort: 8080, BytesOrig: 100, BytesReply: 400}},
+		},
+	}
+	s := newTestStatisticsService(t, acct)
+	s.traffic.poll() // seed
+	s.traffic.poll() // delta
+
+	got := s.GetTrafficHostDetail("1h", "192.168.1.50", 100)
+	if len(got.AsSource) != 1 || len(got.AsDestination) != 1 {
+		t.Fatalf("expected the loopback conversation in both lists, got asSource=%d asDestination=%d", len(got.AsSource), len(got.AsDestination))
+	}
+	sumUp := got.AsSource[0].RateBpsUp + got.AsDestination[0].RateBpsUp
+	sumDown := got.AsSource[0].RateBpsDown + got.AsDestination[0].RateBpsDown
+	if sumUp != got.CurrentRateBpsUp || sumDown != got.CurrentRateBpsDown {
+		t.Fatalf("expected per-row rates to sum to the host total: sumUp=%d sumDown=%d hostUp=%d hostDown=%d",
+			sumUp, sumDown, got.CurrentRateBpsUp, got.CurrentRateBpsDown)
+	}
+	if got.AsSource[0].RateBpsUp == 0 && got.AsSource[0].RateBpsDown == 0 {
+		t.Fatalf("expected a non-zero per-conversation rate once a sample exists")
+	}
+}
+
+// TestGetTrafficHostDetail_RateZeroBeforeFirstSample is plan T-05 case 3: a
+// fresh service that has never rotated a rate accumulator must report a zero
+// rate and an empty RateSampledAt, never a stale/undefined value.
+func TestGetTrafficHostDetail_RateZeroBeforeFirstSample(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+
+	got := s.GetTrafficHostDetail("1h", "192.168.1.50", 100)
+	if got.CurrentRateBpsUp != 0 || got.CurrentRateBpsDown != 0 {
+		t.Fatalf("expected zero rate before any poll tick, got up=%d down=%d", got.CurrentRateBpsUp, got.CurrentRateBpsDown)
+	}
+	if got.RateSampledAt != "" {
+		t.Fatalf("expected empty RateSampledAt before any poll tick, got %q", got.RateSampledAt)
 	}
 }

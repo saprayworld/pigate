@@ -1,5 +1,6 @@
 import { IS_MOCK_MODE, API_BASE_URL } from "./config"
 import { type TopDomain } from "./statisticsService"
+import { mockWindowScale, type StatsWindow } from "@/lib/statsWindow"
 
 // DNS Query Statistics tab (docs/ref/todo/dns-query-statistics-drilldown-plan.md
 // T-07) — backs the "สถิติ" tab on the DNS Server page. Types mirror
@@ -20,7 +21,7 @@ export interface DNSClientStat {
 }
 
 export interface DNSQueryStatistics {
-  window: "1h" | "24h"
+  window: StatsWindow
   enabled: boolean
   totalQueries: number
   truncated: boolean
@@ -31,7 +32,7 @@ export interface DNSQueryStatistics {
 
 export interface DNSDomainDrilldown {
   domain: string
-  window: "1h" | "24h"
+  window: StatsWindow
   enabled: boolean
   totalQueries: number
   truncated: boolean
@@ -42,7 +43,7 @@ export interface DNSDomainDrilldown {
 export interface DNSClientDrilldown {
   client: string
   hostname: string
-  window: "1h" | "24h"
+  window: StatsWindow
   enabled: boolean
   totalQueries: number
   truncated: boolean
@@ -88,10 +89,13 @@ function normalizeClient(client: string): string {
 
 export const dnsStatisticsService = {
   // GET /api/statistics/dns — Top Domains / Top Clients tables.
-  getDNSStatistics: async (window: "1h" | "24h" = "1h"): Promise<DNSQueryStatistics> => {
+  getDNSStatistics: async (window: StatsWindow = "1h"): Promise<DNSQueryStatistics> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 150))
-      const scale = window === "24h" ? 18 : 1
+      // mockCount below already Math.max(1, Math.round(...))s its own
+      // weight*10*scale product, so a fractional scale (e.g. 15m -> 0.3) is
+      // safe to pass through unrounded here (plan §6 item 4).
+      const scale = mockWindowScale(window)
 
       const domainTotals = new Map<string, { count: number; queryType: string }>()
       const clientTotals = new Map<string, number>()
@@ -145,10 +149,13 @@ export const dnsStatisticsService = {
   },
 
   // GET /api/statistics/dns/domain — clients that queried a given domain.
-  getDomainClients: async (domain: string, window: "1h" | "24h" = "1h"): Promise<DNSDomainDrilldown> => {
+  getDomainClients: async (domain: string, window: StatsWindow = "1h"): Promise<DNSDomainDrilldown> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 150))
-      const scale = window === "24h" ? 18 : 1
+      // mockCount below already Math.max(1, Math.round(...))s its own
+      // weight*10*scale product, so a fractional scale (e.g. 15m -> 0.3) is
+      // safe to pass through unrounded here (plan §6 item 4).
+      const scale = mockWindowScale(window)
       const target = normalizeDomain(domain)
 
       const clientTotals = new Map<string, number>()
@@ -190,10 +197,13 @@ export const dnsStatisticsService = {
   },
 
   // GET /api/statistics/dns/client — domains a given client queried.
-  getClientDomains: async (client: string, window: "1h" | "24h" = "1h"): Promise<DNSClientDrilldown> => {
+  getClientDomains: async (client: string, window: StatsWindow = "1h"): Promise<DNSClientDrilldown> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 150))
-      const scale = window === "24h" ? 18 : 1
+      // mockCount below already Math.max(1, Math.round(...))s its own
+      // weight*10*scale product, so a fractional scale (e.g. 15m -> 0.3) is
+      // safe to pass through unrounded here (plan §6 item 4).
+      const scale = mockWindowScale(window)
       const target = normalizeClient(client)
 
       const domainTotals = new Map<string, { count: number; queryType: string }>()

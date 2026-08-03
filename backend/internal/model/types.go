@@ -680,7 +680,11 @@ type TopRule struct {
 // once the conntrack DESTROY event listener (kernel.WatchFlowEnd) is also
 // active — see docs/ref/todo/traffic-accounting-accuracy-phase2-plan.md.
 type TrafficDetail struct {
-	Window         string                 `json:"window"` // "1h" or "24h"
+	// Window is one of "15m", "30m", "1h", "3h", "6h", "12h", "24h" (docs/ref/
+	// todo/statistics-window-granularity-plan.md §0 D-2). An unrecognized
+	// value sent to the API (including empty) falls back to "1h" server-side
+	// and is never returned here.
+	Window         string                 `json:"window"` // "15m" | "30m" | "1h" | "3h" | "6h" | "12h" | "24h"
 	ObservedBytes  uint64                 `json:"observedBytes"`
 	Estimated      bool                   `json:"estimated"`
 	Accuracy       string                 `json:"accuracy"` // "estimated" | "near-exact"

@@ -72,7 +72,9 @@ const (
 	trafficWindow1h  = "1h"
 	trafficWindow24h = "24h"
 	// trafficWindow1hBuckets is how many trailing 5-minute buckets make up
-	// the "1h" window (12 x 5min = 1h).
+	// the "1h" window (12 x 5min = 1h) — kept as its own const because many
+	// existing tests reference it by name, but its value is always in sync
+	// with statsWindowBuckets[trafficWindow1h] below (see the init() check).
 	trafficWindow1hBuckets = 12
 
 	// sessionSampleInterval is the cadence of the Active Sessions sampler
@@ -84,6 +86,62 @@ const (
 	// minutes (5s x 360 points); never persisted to SQLite.
 	sessionRingMax = 360
 )
+
+// statsWindowBuckets is the single source of truth for how many trailing
+// trafficDetailBucketSpan (5-minute) buckets make up each supported
+// statistics window (docs/ref/todo/statistics-window-granularity-plan.md
+// §2.1). Every ring in the project that windows over time — the traffic
+// bucket ring here, the deny/NFLOG ring in statistics.go, and the DNS ring in
+// dns_query_stats.go — stores exactly trafficDetailBucketMax (288) buckets of
+// trafficDetailBucketSpan (5 minutes) each, i.e. 24h of history, so every
+// window below is simply "the last N of those buckets" (N = window minutes /
+// 5) — no extra storage, polling, or migration is needed to add a window
+// here. Do not add a second map/switch anywhere else in the codebase; call
+// normalizeStatsWindow/statsWindowBucketCount instead.
+var statsWindowBuckets = map[string]int{
+	"15m": 3,
+	"30m": 6,
+	"1h":  12,
+	"3h":  36,
+	"6h":  72,
+	"12h": 144,
+	"24h": 288,
+}
+
+func init() {
+	if statsWindowBuckets[trafficWindow1h] != trafficWindow1hBuckets {
+		panic("traffic_stats.go: trafficWindow1hBuckets out of sync with statsWindowBuckets")
+	}
+}
+
+// normalizeStatsWindow returns w unchanged when it is one of the 7 supported
+// statistics windows, or trafficWindow1h ("1h") for anything else — including
+// empty string, unknown values, and label-cased values like "1H" (plan §0
+// D-3/D-4: unknown values fall back silently, never an error; the fallback is
+// deliberately NOT case-insensitive so a frontend bug that sends the button
+// label instead of its value is caught by tests instead of silently masked).
+func normalizeStatsWindow(w string) string {
+	if _, ok := statsWindowBuckets[w]; ok {
+		return w
+	}
+	return trafficWindow1h
+}
+
+// statsWindowBucketCount returns how many trailing 5-minute buckets the given
+// window covers, normalizing w first (see normalizeStatsWindow).
+func statsWindowBucketCount(w string) int {
+	return statsWindowBuckets[normalizeStatsWindow(w)]
+}
+
+// lastNBuckets returns the trailing n elements of ring (oldest-to-newest,
+// same order as ring itself), or the whole ring when it holds fewer than n
+// elements — never panics on n > len(ring).
+func lastNBuckets[T any](ring []T, n int) []T {
+	if n > len(ring) {
+		n = len(ring)
+	}
+	return ring[len(ring)-n:]
+}
 
 // flowSampleState is the per-flow-key baseline the poller keeps between
 // ticks: the last-seen cumulative byte count (for delta computation) and a
@@ -239,6 +297,62 @@ type TrafficStatsService struct {
 	// events are augmenting the poll, "estimated" while running poll-only —
 	// see docs/ref/todo/traffic-accounting-accuracy-phase2-plan.md T-06).
 	eventsActive atomic.Bool
+
+	// Rate accumulator (docs/ref/todo/statistics-traffic-speed-plan.md §2.2) —
+	// RAM-only, never written to SQLite, and entirely separate from the
+	// bucket ring above. rateAcc collects the SAME per-poll/per-flow-end
+	// deltas the bucket ring already receives (never a second delta
+	// computation — plan Caution 1/2); every poll() tick rotates rateAcc into
+	// lastRate (recording the real elapsed time since the previous rotation)
+	// and clears rateAcc, so a quiet tick correctly rotates the rate back down
+	// to 0 instead of leaving lastRate stuck at its previous value (plan
+	// Caution 3 — the rotation MUST happen before poll()'s early-return for a
+	// silent tick). CurrentRates() is the only reader and returns bits/second,
+	// averaged over the most recent ~flowPollInterval window, not an
+	// instantaneous value.
+	rateMu          sync.RWMutex
+	rateAcc         rateAccumulator
+	lastRate        rateAccumulator
+	lastRateElapsed time.Duration
+	lastRateAt      time.Time
+	lastRotateAt    time.Time
+}
+
+// rateAccumulator holds the three per-key delta maps the rate accumulator
+// tracks, keyed identically to the corresponding bucket maps (byHost ~
+// trafficDetailBucket.hostBytes, byDst ~ dstBytes, byConv ~ convBytes via
+// convKey) — see TrafficStatsService.rateMu comment.
+type rateAccumulator struct {
+	byHost map[string]dirBytes
+	byDst  map[string]dirBytes
+	byConv map[string]dirBytes
+}
+
+func newRateAccumulator() rateAccumulator {
+	return rateAccumulator{
+		byHost: make(map[string]dirBytes),
+		byDst:  make(map[string]dirBytes),
+		byConv: make(map[string]dirBytes),
+	}
+}
+
+// RatePair is one key's current throughput in bits/second, flow-relative
+// (UpBps = Orig direction i.e. srcIP->dstIP, DownBps = Reply direction) —
+// same convention as dirBytes/BytesUp/BytesDown on TopHost and
+// TrafficHostDetail (docs/ref/todo/statistics-traffic-speed-plan.md §2.2).
+type RatePair struct {
+	UpBps   uint64
+	DownBps uint64
+}
+
+// TrafficRates is the snapshot CurrentRates() returns: fresh copies of the
+// last-rotated rate maps (never the internal maps themselves — those are
+// mutated by the poller goroutine on every tick) plus the wall-clock time the
+// snapshot was taken. At is the zero time when no rotation has happened yet
+// (service just started), in which case all three maps are empty.
+type TrafficRates struct {
+	Hosts, Dests, Convs map[string]RatePair
+	At                  time.Time
 }
 
 // NewTrafficStatsService constructs the service. acct/dhcp/stats may be either
@@ -277,6 +391,8 @@ func NewTrafficStatsService(acct kernel.TrafficAccountingManager, repo *db.Repos
 		maxTrackedConversations: maxConversations,
 		flowState:               make(map[string]*flowSampleState),
 		ruleBaseline:            make(map[string]model.RuleCounter),
+		rateAcc:                 newRateAccumulator(),
+		lastRate:                newRateAccumulator(),
 	}
 }
 
@@ -471,6 +587,11 @@ func (s *TrafficStatsService) onFlowEnd(f model.FlowSample) {
 	} else {
 		observed = dirBytes{Orig: dOrig, Reply: dReply}
 	}
+	// Same delta feeds the rate accumulator (plan §2.2 item 2) — without this,
+	// a flow that is born and dies entirely between two poll ticks would be
+	// invisible in the "current speed" view even though it already counts
+	// toward the bucket-ring byte totals above.
+	s.addRateDeltas(hostDeltas, dstDeltas, convDeltas)
 	s.addBucket(time.Now(), hostDeltas, catDeltas, nil, dstDeltas, convDeltas, observed)
 }
 
@@ -499,12 +620,102 @@ func (s *TrafficStatsService) poll() {
 		s.processRuleCounters(counters, ruleDeltas)
 	}
 
+	// Rate accumulator: merge this tick's deltas (a no-op when the deltas maps
+	// are empty) and rotate rateAcc -> lastRate every tick, BEFORE the
+	// early-return below (docs/ref/todo/statistics-traffic-speed-plan.md
+	// Caution 3 — the single easiest way to get this feature wrong). If this
+	// ran after the early-return, a genuinely quiet tick would never rotate
+	// and CurrentRates() would keep reporting the previous tick's speed
+	// forever instead of decaying back to 0.
+	s.addRateDeltas(hostDeltas, dstDeltas, convDeltas)
+	s.rotateRates(now)
+
 	if observed.Total() == 0 && len(hostDeltas) == 0 && len(catDeltas) == 0 && len(ruleDeltas) == 0 {
 		// Either a seed-only first poll (plan Caution 4) or a genuinely quiet
 		// tick — nothing to add to the bucket ring.
 		return
 	}
 	s.addBucket(now, hostDeltas, catDeltas, ruleDeltas, dstDeltas, convDeltas, observed)
+}
+
+// addRateDeltas merges hostDeltas/dstDeltas/convDeltas into the rate
+// accumulator under rateMu, using the same per-map tracking caps as the
+// bucket ring (mergeDirMap — s.maxTrackedHosts/-Dests/-Conversations). Called
+// from both poll() and onFlowEnd() with the SAME delta maps those two callers
+// already computed for addBucket — never a second delta computation (plan
+// Caution 1/2).
+func (s *TrafficStatsService) addRateDeltas(hostDeltas, dstDeltas, convDeltas map[string]dirBytes) {
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
+	mergeDirMap(s.rateAcc.byHost, hostDeltas, s.maxTrackedHosts)
+	mergeDirMap(s.rateAcc.byDst, dstDeltas, s.maxTrackedDests)
+	mergeDirMap(s.rateAcc.byConv, convDeltas, s.maxTrackedConversations)
+}
+
+// rotateRates moves the current rate accumulator into lastRate, records the
+// real elapsed wall-clock time since the previous rotation (never a hardcoded
+// flowPollInterval — a GC pause, slow DumpFlows, or the very first tick after
+// startup can all make the actual gap longer or shorter than the nominal
+// interval), and starts a fresh empty accumulator. Called once per poll()
+// tick, unconditionally (see the poll() comment for why this must run before
+// its early-return).
+func (s *TrafficStatsService) rotateRates(now time.Time) {
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
+	var elapsed time.Duration
+	if !s.lastRotateAt.IsZero() {
+		elapsed = now.Sub(s.lastRotateAt)
+	}
+	s.lastRate = s.rateAcc
+	s.lastRateElapsed = elapsed
+	s.lastRateAt = now
+	s.lastRotateAt = now
+	s.rateAcc = newRateAccumulator()
+}
+
+// CurrentRates returns a snapshot of the most recently rotated rate
+// accumulator, converted to bits/second (docs/ref/todo/
+// statistics-traffic-speed-plan.md §2.2/Caution 1: the conversion to bits
+// happens exactly once, here). RAM-only, never persisted to SQLite, and — like
+// the rest of this file's rate accounting — an average over the last
+// ~flowPollInterval poll window, not an instantaneous value. Always returns
+// freshly copied maps, never the internal rateAcc/lastRate maps themselves,
+// because those are mutated by the poller goroutine on every tick (the same
+// class of bug the long comment above GetTrafficDetail warns about for the
+// bucket ring). When no rotation has happened yet (elapsed <= 0, e.g. right
+// after startup), returns all-zero/empty maps and a zero At.
+func (s *TrafficStatsService) CurrentRates() TrafficRates {
+	s.rateMu.RLock()
+	defer s.rateMu.RUnlock()
+
+	elapsedSec := s.lastRateElapsed.Seconds()
+	if elapsedSec <= 0 {
+		return TrafficRates{
+			Hosts: map[string]RatePair{},
+			Dests: map[string]RatePair{},
+			Convs: map[string]RatePair{},
+		}
+	}
+	return TrafficRates{
+		Hosts: toRateMap(s.lastRate.byHost, elapsedSec),
+		Dests: toRateMap(s.lastRate.byDst, elapsedSec),
+		Convs: toRateMap(s.lastRate.byConv, elapsedSec),
+		At:    s.lastRateAt,
+	}
+}
+
+// toRateMap converts one dirBytes delta map into a freshly allocated
+// map[string]RatePair of bits/second (bytes*8/elapsedSec), used by
+// CurrentRates for each of Hosts/Dests/Convs.
+func toRateMap(src map[string]dirBytes, elapsedSec float64) map[string]RatePair {
+	out := make(map[string]RatePair, len(src))
+	for k, v := range src {
+		out[k] = RatePair{
+			UpBps:   uint64(float64(v.Orig) * 8 / elapsedSec),
+			DownBps: uint64(float64(v.Reply) * 8 / elapsedSec),
+		}
+	}
+	return out
 }
 
 // processFlows folds one DumpFlows snapshot into per-host/per-category
@@ -936,9 +1147,7 @@ func mergeRuleMap(dst, src map[string]model.RuleCounter) {
 // whole read+aggregate under one RLock instead (see traffic_stats_test.go
 // TestTrafficStats_GetTrafficDetailNoRaceWithPoll, run with `go test -race`).
 func (s *TrafficStatsService) GetTrafficDetail(window string) model.TrafficDetail {
-	if window != trafficWindow24h {
-		window = trafficWindow1h
-	}
+	window = normalizeStatsWindow(window)
 
 	hostTotals := make(map[string]uint64)
 	catTotals := make(map[string]uint64)
@@ -946,16 +1155,12 @@ func (s *TrafficStatsService) GetTrafficDetail(window string) model.TrafficDetai
 	var observed uint64
 
 	s.mu.RLock()
-	var windowBuckets []trafficDetailBucket
-	if window == trafficWindow1h {
-		n := trafficWindow1hBuckets
-		if len(s.buckets) < n {
-			n = len(s.buckets)
-		}
-		windowBuckets = s.buckets[len(s.buckets)-n:]
-	} else {
-		windowBuckets = s.buckets
-	}
+	// For window == trafficWindow24h this is a no-op versus the old "use the
+	// whole ring" branch: the ring is already capped at trafficDetailBucketMax
+	// (288) by addBucket above, and statsWindowBuckets["24h"] == 288 too, so
+	// lastNBuckets(s.buckets, 288) always returns the entire ring unchanged
+	// (plan §2.1 item 6 / §6 item 5).
+	windowBuckets := lastNBuckets(s.buckets, statsWindowBucketCount(window))
 	for _, b := range windowBuckets {
 		// Summed via .Total() — GetTrafficDetail's response (Dashboard
 		// "Detailed" tab) MUST NOT change out of this plan (plan §5 Caution
@@ -1062,9 +1267,7 @@ func (s *TrafficStatsService) GetTrafficBreakdownForIP(window, ip string) Traffi
 // (zero added cost for every existing caller — GetTrafficBreakdown itself,
 // GetTrafficTopHosts, GetStatistics).
 func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string) TrafficBreakdown {
-	if window != trafficWindow24h {
-		window = trafficWindow1h
-	}
+	window = normalizeStatsWindow(window)
 
 	hostTotals := make(map[string]dirBytes)
 	dstTotals := make(map[string]dirBytes)
@@ -1078,10 +1281,11 @@ func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string) Traffi
 	// in windowBuckets is aggregated into both Observed and Series under the
 	// exact same lock acquisition — the race the plan's revision 2 fixed
 	// (§2.5 item 1) is structurally impossible here.
-	n := trafficWindow1hBuckets
-	if window == trafficWindow24h {
-		n = trafficDetailBucketMax
-	}
+	// n is computed ONCE here via statsWindowBucketCount and reused unchanged
+	// for both the series axis above and the bucket selection below (plan §6
+	// item 1 — the single most important invariant of this file: if these two
+	// uses of n ever diverge, sum(Series[].Bytes) == Observed breaks silently).
+	n := statsWindowBucketCount(window)
 	axisEnd := time.Now().Truncate(trafficDetailBucketSpan)
 	axisStart := axisEnd.Add(-time.Duration(n-1) * trafficDetailBucketSpan)
 	series := make([]model.BandwidthPoint, n)
@@ -1116,16 +1320,10 @@ func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string) Traffi
 	}
 
 	s.mu.RLock()
-	var windowBuckets []trafficDetailBucket
-	if window == trafficWindow1h {
-		n := trafficWindow1hBuckets
-		if len(s.buckets) < n {
-			n = len(s.buckets)
-		}
-		windowBuckets = s.buckets[len(s.buckets)-n:]
-	} else {
-		windowBuckets = s.buckets
-	}
+	// Same n as the series axis above (see the comment there) — for
+	// window == trafficWindow24h this is a no-op versus the old "use the
+	// whole ring" branch (plan §2.1 item 6 / §6 item 5).
+	windowBuckets := lastNBuckets(s.buckets, n)
 	for _, b := range windowBuckets {
 		for k, v := range b.hostBytes {
 			cur := hostTotals[k]

@@ -1,5 +1,6 @@
 import { IS_MOCK_MODE, API_BASE_URL } from "./config"
 import { mockHosts, mockDests, mockIpDomains, mockBandwidthSeries, type TopHost, type BandwidthPoint } from "./statisticsService"
+import { mockWindowScale, statsWindowSeconds, type StatsWindow } from "@/lib/statsWindow"
 
 // Statistics -> Traffic page (docs/ref/todo/statistics-traffic-page-plan.md
 // T-07) — backs the new /statistics/traffic (top-lists) and
@@ -15,7 +16,7 @@ import { mockHosts, mockDests, mockIpDomains, mockBandwidthSeries, type TopHost,
 export type { TopHost, BandwidthPoint }
 
 export interface TrafficTopHosts {
-  window: "1h" | "24h"
+  window: StatsWindow
   observedBytes: number
   accuracy: "estimated" | "near-exact"
   truncated: boolean
@@ -31,6 +32,11 @@ export interface TrafficTopHosts {
   // TrafficHostDetail.series below for the per-IP, flow-relative version.
   series: BandwidthPoint[]
   generatedAt: string
+  // RFC3339 UTC timestamp the rateBpsUp/rateBpsDown values on sources/
+  // destinations were sampled at (docs/ref/todo/
+  // statistics-traffic-speed-plan.md T-08) — optional/absent when no rate
+  // sample exists yet (e.g. right after backend startup).
+  rateSampledAt?: string
 }
 
 export interface TrafficHostConversation {
@@ -59,6 +65,12 @@ export interface TrafficHostConversation {
   // relative to the drilled IP: equals dstDomain for an outbound row, but for
   // an inbound row it is the srcIp's domain (which dstDomain cannot express).
   peerDomain: string
+  // This conversation's real-time throughput in bits/second (docs/ref/todo/
+  // statistics-traffic-speed-plan.md), same convention/caveats as
+  // TopHost.rateBpsUp/rateBpsDown — optional/absent when no rate sample
+  // exists yet.
+  rateBpsUp?: number
+  rateBpsDown?: number
 }
 
 export interface TrafficHostDetail {
@@ -67,7 +79,7 @@ export interface TrafficHostDetail {
   mac: string
   domain: string
   private: boolean
-  window: "1h" | "24h"
+  window: StatsWindow
   accuracy: "estimated" | "near-exact"
   truncated: boolean
   limit: number
@@ -95,6 +107,16 @@ export interface TrafficHostDetail {
   // zero-filled array, never empty/undefined).
   series: BandwidthPoint[]
   generatedAt: string
+  // currentRateBpsUp/currentRateBpsDown are this IP's real-time throughput in
+  // bits/second (docs/ref/todo/statistics-traffic-speed-plan.md T-08) —
+  // average over the most recent ~10s conntrack poll, not instantaneous;
+  // flow-relative (up = orig direction), same convention as totalBytesUp/
+  // totalBytesDown. Optional/absent when found is false or no rate sample
+  // exists yet.
+  currentRateBpsUp?: number
+  currentRateBpsDown?: number
+  // RFC3339 UTC timestamp the two rate fields above were sampled at.
+  rateSampledAt?: string
 }
 
 // percentOf mirrors the backend's service/statistics_traffic.go percentOf
@@ -208,10 +230,23 @@ function mockScaledConversations(scale: number) {
   })
 }
 
+// mockWindowSeconds converts window into the seconds it actually spans —
+// used below to derive a plausible mock "current speed" from the window's
+// accumulated bytesUp/bytesDown (docs/ref/todo/statistics-traffic-speed-plan.md
+// T-08: "คิดจาก bytes ของแถวนั้นหารด้วย ช่วงเวลา" — a rough average, not a real
+// 10s sample, but enough for the mock UI to show non-zero,
+// order-of-magnitude-plausible Speed values). Delegates to
+// @/lib/statsWindow's statsWindowSeconds (docs/ref/todo/
+// statistics-window-granularity-plan.md T-11) — 1h/24h values unchanged.
+function mockWindowSeconds(window: StatsWindow): number {
+  return statsWindowSeconds(window)
+}
+
 function mockBuildTopHosts(
   rows: ReturnType<typeof mockScaledConversations>,
   key: "srcIp" | "dstIp",
-  observedBytes: number
+  observedBytes: number,
+  windowSeconds: number
 ): TopHost[] {
   const totals = new Map<string, { bytes: number; bytesUp: number; bytesDown: number }>()
   for (const r of rows) {
@@ -232,6 +267,8 @@ function mockBuildTopHosts(
       percent: percentOf(v.bytes, observedBytes),
       bytesUp: v.bytesUp,
       bytesDown: v.bytesDown,
+      rateBpsUp: Math.round((v.bytesUp / windowSeconds) * 8),
+      rateBpsDown: Math.round((v.bytesDown / windowSeconds) * 8),
       private: mockIsPrivate(ip),
       domain: mockIpDomains[ip] ?? "",
     }
@@ -243,14 +280,17 @@ function mockBuildTopHosts(
 export const trafficStatisticsService = {
   // GET /api/statistics/traffic/hosts — full Top Source Hosts / Top
   // Destinations lists (up to `limit` rows each).
-  getTopHosts: async (window: "1h" | "24h" = "1h", limit = 100): Promise<TrafficTopHosts> => {
+  getTopHosts: async (window: StatsWindow = "1h", limit = 100): Promise<TrafficTopHosts> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 150))
-      const scale = window === "24h" ? 18 : 1
+      // Math.max(1, Math.round(...)) — mockWindowScale can be < 1 for the
+      // new short windows (plan §6 item 4).
+      const scale = Math.max(1, Math.round(mockWindowScale(window)))
       const rows = mockScaledConversations(scale)
       const observedBytes = rows.reduce((sum, r) => sum + r.bytes, 0)
-      const sources = mockBuildTopHosts(rows, "srcIp", observedBytes).slice(0, limit)
-      const destinations = mockBuildTopHosts(rows, "dstIp", observedBytes).slice(0, limit)
+      const windowSeconds = mockWindowSeconds(window)
+      const sources = mockBuildTopHosts(rows, "srcIp", observedBytes, windowSeconds).slice(0, limit)
+      const destinations = mockBuildTopHosts(rows, "dstIp", observedBytes, windowSeconds).slice(0, limit)
       // Network-wide series (plan T-05 item 3): sum(series[].bytes) ==
       // observedBytes exactly, same invariant as the real backend.
       const series = mockBandwidthSeries(window, observedBytes).series
@@ -265,6 +305,7 @@ export const trafficStatisticsService = {
         destinations,
         series,
         generatedAt: new Date().toISOString(),
+        rateSampledAt: new Date().toISOString(),
       }
     }
 
@@ -279,10 +320,12 @@ export const trafficStatisticsService = {
   // GET /api/statistics/traffic/host?ip=… — per-IP drill-down, both
   // directions. `ip` is passed RAW (decoded) — encoding happens here, the
   // only place it should (plan T-07/§5 Caution 6: never double-encode).
-  getHostDetail: async (ip: string, window: "1h" | "24h" = "1h", limit = 100): Promise<TrafficHostDetail> => {
+  getHostDetail: async (ip: string, window: StatsWindow = "1h", limit = 100): Promise<TrafficHostDetail> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 150))
-      const scale = window === "24h" ? 18 : 1
+      // Math.max(1, Math.round(...)) — mockWindowScale can be < 1 for the
+      // new short windows (plan §6 item 4).
+      const scale = Math.max(1, Math.round(mockWindowScale(window)))
       const rows = mockScaledConversations(scale)
       const observedBytes = rows.reduce((sum, r) => sum + r.bytes, 0)
 
@@ -313,6 +356,8 @@ export const trafficStatisticsService = {
             dstDomain: mockIpDomains[r.dstIp] ?? "",
             direction: "outbound",
             peerDomain: mockIpDomains[r.dstIp] ?? "",
+            rateBpsUp: Math.round((r.bytesUp / mockWindowSeconds(window)) * 8),
+            rateBpsDown: Math.round((r.bytesDown / mockWindowSeconds(window)) * 8),
           })
         }
         if (r.dstIp === ip) {
@@ -335,6 +380,8 @@ export const trafficStatisticsService = {
             dstDomain: mockIpDomains[r.dstIp] ?? "",
             direction: "inbound",
             peerDomain: mockIpDomains[r.srcIp] ?? "",
+            rateBpsUp: Math.round((r.bytesUp / mockWindowSeconds(window)) * 8),
+            rateBpsDown: Math.round((r.bytesDown / mockWindowSeconds(window)) * 8),
           })
         }
       }
@@ -380,6 +427,9 @@ export const trafficStatisticsService = {
         asDestination,
         series,
         generatedAt: new Date().toISOString(),
+        currentRateBpsUp: found ? Math.round((totalUp / mockWindowSeconds(window)) * 8) : undefined,
+        currentRateBpsDown: found ? Math.round((totalDown / mockWindowSeconds(window)) * 8) : undefined,
+        rateSampledAt: found ? new Date().toISOString() : "",
       }
     }
 

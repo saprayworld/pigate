@@ -3,13 +3,6 @@ import { useSearchParams } from "react-router-dom"
 import { TriangleAlert } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
   Table,
   TableBody,
   TableCell,
@@ -18,6 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { type TopDomain, type DNSClientStat } from "@/services/dnsStatisticsService"
+import { STATS_WINDOWS, parseStatsWindow, type StatsWindow } from "@/lib/statsWindow"
 
 // Shared presentation pieces for the three DNS statistics pages
 // (docs/ref/todo/statistics-nav-restructure-plan.md §2.6 / T-01) — extracted
@@ -26,15 +20,19 @@ import { type TopDomain, type DNSClientStat } from "@/services/dnsStatisticsServ
 // StatisticsDnsClient) stay visually identical. No data fetching, no router
 // navigation here — callbacks only.
 
-export type StatsWindow = "1h" | "24h"
+// Re-exported so every existing `import { type StatsWindow } from
+// "@/components/statistics/DnsStatsShared"` keeps working — the type itself
+// now lives in @/lib/statsWindow (docs/ref/todo/
+// statistics-window-granularity-plan.md §2.3/T-10), the single source of
+// truth shared with the service layer.
+export type { StatsWindow }
 
-// Time window lives in the URL (`?window=1h|24h`, plan §2.2) so a row click
-// that navigates to a drill-down page — and the Back link from it — always
-// carries the same window the user was looking at.
+// Time window lives in the URL (`?window=15m|30m|1h|3h|6h|12h|24h`, plan
+// §2.2) so a row click that navigates to a drill-down page — and the Back
+// link from it — always carries the same window the user was looking at.
 export function useStatsWindow(): [StatsWindow, (w: StatsWindow) => void] {
   const [searchParams, setSearchParams] = useSearchParams()
-  const raw = searchParams.get("window")
-  const window_: StatsWindow = raw === "24h" ? "24h" : "1h"
+  const window_ = parseStatsWindow(searchParams.get("window"))
 
   const setWindow = useCallback(
     (w: StatsWindow) => {
@@ -44,6 +42,9 @@ export function useStatsWindow(): [StatsWindow, (w: StatsWindow) => void] {
           next.set("window", w)
           return next
         },
+        // replace: true keeps clicking through the 7 window buttons from
+        // flooding browser history (plan §6 item 8) — Back must leave the
+        // page entirely, not just step back one window.
         { replace: true }
       )
     },
@@ -53,7 +54,11 @@ export function useStatsWindow(): [StatsWindow, (w: StatsWindow) => void] {
   return [window_, setWindow]
 }
 
-export function StatsWindowSelect({
+// StatsWindowTabs is the segmented control that replaces the old <Select>
+// (docs/ref/todo/statistics-window-granularity-plan.md §2.4/T-10) — same
+// visual pattern as the Addressing Mode control (pages/Interfaces.tsx
+// ~1635-1656), sized down for 7 buttons instead of 2.
+export function StatsWindowTabs({
   value,
   onChange,
 }: {
@@ -61,15 +66,31 @@ export function StatsWindowSelect({
   onChange: (w: StatsWindow) => void
 }) {
   return (
-    <Select value={value} onValueChange={(v) => onChange(v as StatsWindow)}>
-      <SelectTrigger className="h-9 w-28 text-xs bg-background">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="1h" className="text-xs">1 ชั่วโมง</SelectItem>
-        <SelectItem value="24h" className="text-xs">24 ชั่วโมง</SelectItem>
-      </SelectContent>
-    </Select>
+    <div className="max-w-full overflow-x-auto">
+      <div
+        role="group"
+        aria-label="ช่วงเวลา"
+        className="flex w-fit gap-0.5 rounded-lg border border-border bg-muted p-0.5"
+      >
+        {STATS_WINDOWS.map((w) => {
+          const active = w.value === value
+          return (
+            <button
+              key={w.value}
+              type="button"
+              aria-pressed={active}
+              onClick={() => onChange(w.value)}
+              className={`cursor-pointer rounded-md px-2 py-1 text-[11px] font-medium transition ${active
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                }`}
+            >
+              {w.label}
+            </button>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 

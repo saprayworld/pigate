@@ -10,11 +10,12 @@ import {
 } from "@/services/dnsStatisticsService"
 import {
   useStatsWindow,
-  StatsWindowSelect,
+  StatsWindowTabs,
   DomainStatsTable,
   ClientStatsTable,
   DnsStatsPrivacyNote,
   DnsStatsTruncatedWarning,
+  type StatsWindow,
 } from "@/components/statistics/DnsStatsShared"
 
 // DNS Statistics page (docs/ref/todo/statistics-nav-restructure-plan.md T-02)
@@ -31,7 +32,7 @@ export default function StatisticsDns() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async (win: "1h" | "24h", showLoading: boolean) => {
+  const load = useCallback(async (win: StatsWindow, showLoading: boolean) => {
     if (showLoading) setIsLoading(true)
     try {
       const data = await dnsStatisticsService.getDNSStatistics(win)
@@ -78,17 +79,19 @@ export default function StatisticsDns() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <StatsWindowSelect value={window_} onChange={setWindow} />
+        <div className="flex flex-wrap items-center gap-2">
+          <StatsWindowTabs value={window_} onChange={setWindow} />
           <Button
             variant="outline"
             size="sm"
             onClick={() => load(window_, true)}
             disabled={isLoading}
             className="cursor-pointer gap-1.5"
+            title="Refresh"
+            aria-label="Refresh"
           >
             <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
-            Refresh
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
         </div>
       </div>

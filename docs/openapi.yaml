@@ -364,11 +364,12 @@ paths:
           in: query
           schema:
             type: string
-            enum: [1h, 24h]
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
             default: 1h
           description: >
-            Aggregation window. Any value outside {1h, 24h} (including
-            omitted) silently falls back to 1h rather than erroring.
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
       responses:
         '200':
           description: Traffic detail retrieved
@@ -402,11 +403,12 @@ paths:
           in: query
           schema:
             type: string
-            enum: [1h, 24h]
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
             default: 1h
           description: >
-            Aggregation window. Any value outside {1h, 24h} (including
-            omitted) silently falls back to 1h rather than erroring.
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
       responses:
         '200':
           description: Traffic statistics retrieved
@@ -434,11 +436,12 @@ paths:
           in: query
           schema:
             type: string
-            enum: [1h, 24h]
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
             default: 1h
           description: >
-            Aggregation window. Any value outside {1h, 24h} (including
-            omitted) silently falls back to 1h rather than erroring.
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
         - name: limit
           in: query
           schema:
@@ -498,11 +501,12 @@ paths:
           in: query
           schema:
             type: string
-            enum: [1h, 24h]
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
             default: 1h
           description: >
-            Aggregation window. Any value outside {1h, 24h} (including
-            omitted) silently falls back to 1h rather than erroring.
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
         - name: limit
           in: query
           schema:
@@ -550,11 +554,12 @@ paths:
           in: query
           schema:
             type: string
-            enum: [1h, 24h]
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
             default: 1h
           description: >
-            Aggregation window. Any value outside {1h, 24h} (including
-            omitted) silently falls back to 1h rather than erroring.
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
       responses:
         '200':
           description: DNS query statistics retrieved
@@ -599,11 +604,12 @@ paths:
           in: query
           schema:
             type: string
-            enum: [1h, 24h]
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
             default: 1h
           description: >
-            Aggregation window. Any value outside {1h, 24h} (including
-            omitted) silently falls back to 1h rather than erroring.
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
       responses:
         '200':
           description: Clients that queried this domain in the window
@@ -649,11 +655,12 @@ paths:
           in: query
           schema:
             type: string
-            enum: [1h, 24h]
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
             default: 1h
           description: >
-            Aggregation window. Any value outside {1h, 24h} (including
-            omitted) silently falls back to 1h rather than erroring.
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
       responses:
         '200':
           description: Domains this client queried in the window
@@ -4052,7 +4059,7 @@ components:
       properties:
         window:
           type: string
-          enum: [1h, 24h]
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
         observedBytes:
           type: integer
           format: int64
@@ -4162,6 +4169,30 @@ components:
             stale (the IP could since be reused for another domain, e.g.
             CDN/cloud load balancers).
           example: www.youtube.com
+        rateBpsUp:
+          type: integer
+          format: int64
+          description: >-
+            Real-time throughput in bits/second (docs/ref/todo/
+            statistics-traffic-speed-plan.md), flow-relative in the SAME
+            direction convention as bytesUp (Orig, i.e. src -> dst) — not the
+            LAN-relative convention BandwidthPoint uses. This is an AVERAGE
+            over the most recent conntrack poll window (~10 seconds), not an
+            instantaneous value, and only as accurate as the response's own
+            accuracy field. Only present on GET /api/statistics/traffic/hosts
+            (the Traffic page) — the Overview page's GET
+            /api/statistics/traffic reuses this same schema but never
+            populates this field, so it is entirely absent from that
+            response's JSON.
+          example: 512000
+        rateBpsDown:
+          type: integer
+          format: int64
+          description: >-
+            Real-time throughput in bits/second in the reply direction (see
+            rateBpsUp for the shared caveats: average over ~10s, conntrack
+            accuracy, absent on the Overview page's response).
+          example: 4300000
 
     TopConversation:
       type: object
@@ -4320,7 +4351,7 @@ components:
       properties:
         window:
           type: string
-          enum: [1h, 24h]
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
         observedBytes:
           type: integer
           format: int64
@@ -4400,8 +4431,10 @@ components:
             page's top row (docs/ref/todo/
             statistics-overview-bandwidth-chart-plan.md). Fixed-length,
             zero-filled 5-minute buckets from the same conntrack-derived
-            bucket ring as observedBytes/topSources/etc: 12 points for
-            window=1h, 288 points for window=24h, sorted oldest -> newest.
+            bucket ring as observedBytes/topSources/etc: the number of points
+            equals the window's 5-minute bucket count (3/6/12/36/72/144/288
+            for window=15m/30m/1h/3h/6h/12h/24h respectively), sorted oldest
+            -> newest.
             sum(series[].bytes) always equals observedBytes exactly (buckets
             outside the array's own time axis, e.g. after a long quiet
             period, are carried into the nearest edge point rather than
@@ -4470,7 +4503,7 @@ components:
       properties:
         window:
           type: string
-          enum: [1h, 24h]
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
         observedBytes:
           type: integer
           format: int64
@@ -4509,7 +4542,8 @@ components:
             SAME convention as TrafficStatistics.series above (docs/ref/todo/
             statistics-traffic-bandwidth-chart-plan.md T-01/T-02): direction
             is LAN-relative (bytesUp = leaving the LAN, bytesDown = entering
-            the LAN), fixed length (12 for window=1h, 288 for window=24h),
+            the LAN), fixed length equal to the window's 5-minute bucket count
+            (3/6/12/36/72/144/288 for window=15m/30m/1h/3h/6h/12h/24h),
             sorted oldest -> newest, and sum(series[].bytes) always equals
             observedBytes exactly. This is the identical series
             TrafficStatistics.series would show for the same window — reused
@@ -4520,6 +4554,15 @@ components:
         generatedAt:
           type: string
           format: date-time
+        rateSampledAt:
+          type: string
+          format: date-time
+          description: >-
+            RFC3339 UTC timestamp the rateBpsUp/rateBpsDown values on
+            sources/destinations above were sampled at (docs/ref/todo/
+            statistics-traffic-speed-plan.md) — absent/empty when no rate
+            sample exists yet (e.g. right after backend startup, before the
+            first poll tick has rotated).
 
     TrafficHostConversation:
       type: object
@@ -4597,6 +4640,24 @@ components:
             (which dstDomain cannot express). Display only, empty when
             unknown.
           example: www.youtube.com
+        rateBpsUp:
+          type: integer
+          format: int64
+          description: >-
+            This conversation's real-time throughput in bits/second (docs/
+            ref/todo/statistics-traffic-speed-plan.md), flow-relative in the
+            SAME direction convention as bytesUp (srcIp -> dstIp) — same
+            averaging/accuracy caveats as TopHost.rateBpsUp. Omitempty,
+            absent when no rate sample exists yet for this conversation.
+          example: 256000
+        rateBpsDown:
+          type: integer
+          format: int64
+          description: >-
+            This conversation's real-time throughput in bits/second in the
+            reply direction (dstIp -> srcIp) — see rateBpsUp for the shared
+            caveats.
+          example: 2100000
 
     TrafficHostDetail:
       type: object
@@ -4628,7 +4689,7 @@ components:
           example: true
         window:
           type: string
-          enum: [1h, 24h]
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
         accuracy:
           type: string
           enum: [estimated, near-exact]
@@ -4698,14 +4759,40 @@ components:
             sum(series[].bytes) == totalBytes, sum(series[].bytesUp) ==
             totalBytesUp, sum(series[].bytesDown) == totalBytesDown, always
             exactly (computed from the same conversation data totalBytes is
-            summed from). Fixed length (12 for window=1h, 288 for
-            window=24h) always, even when found=false — a zero-filled array,
-            never null.
+            summed from). Fixed length equal to the window's 5-minute bucket
+            count (3/6/12/36/72/144/288 for window=15m/30m/1h/3h/6h/12h/24h)
+            always, even when found=false — a zero-filled array, never null.
           items:
             $ref: '#/components/schemas/BandwidthPoint'
         generatedAt:
           type: string
           format: date-time
+        currentRateBpsUp:
+          type: integer
+          format: int64
+          description: >-
+            This IP's real-time throughput in bits/second (docs/ref/todo/
+            statistics-traffic-speed-plan.md), an AVERAGE over the most
+            recent conntrack poll window (~10 seconds), not an instantaneous
+            value, and only as accurate as accuracy above. Direction is
+            flow-relative (up = orig direction), the same convention as
+            totalBytesUp/totalBytesDown. Absent/zero when found is false or
+            no rate sample exists yet.
+          example: 512000
+        currentRateBpsDown:
+          type: integer
+          format: int64
+          description: >-
+            This IP's real-time throughput in bits/second in the reply
+            direction — see currentRateBpsUp for the shared caveats.
+          example: 4300000
+        rateSampledAt:
+          type: string
+          format: date-time
+          description: >-
+            RFC3339 UTC timestamp currentRateBpsUp/currentRateBpsDown above
+            were sampled at — same field as TrafficTopHosts.rateSampledAt,
+            absent/empty when no rate sample exists yet.
 
     DNSClientStat:
       type: object
@@ -4759,7 +4846,7 @@ components:
       properties:
         window:
           type: string
-          enum: [1h, 24h]
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
         enabled:
           type: boolean
           description: Mirrors DNSServerSettings.queryLogging.
@@ -4810,7 +4897,7 @@ components:
           example: www.youtube.com
         window:
           type: string
-          enum: [1h, 24h]
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
         enabled:
           type: boolean
           description: Mirrors DNSServerSettings.queryLogging.
@@ -4863,7 +4950,7 @@ components:
           example: laptop-living-room
         window:
           type: string
-          enum: [1h, 24h]
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
         enabled:
           type: boolean
           description: Mirrors DNSServerSettings.queryLogging.

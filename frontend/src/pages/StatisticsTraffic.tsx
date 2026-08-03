@@ -1,23 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { ArrowLeftRight, RefreshCw } from "lucide-react"
+import { ArrowDown, ArrowLeftRight, ArrowUp, ChevronsUpDown, RefreshCw } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { getErrorMessage } from "@/lib/errors"
-import { fmtBytes } from "@/lib/formatBytes"
+import { fmtBytes, fmtRate } from "@/lib/formatBytes"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { trafficStatisticsService, type TopHost, type TrafficTopHosts } from "@/services/trafficStatisticsService"
-import { useStatsWindow, StatsWindowSelect } from "@/components/statistics/DnsStatsShared"
+import { useStatsWindow, StatsWindowTabs, type StatsWindow } from "@/components/statistics/DnsStatsShared"
 import { HostLabel } from "@/components/statistics/HostCells"
-import { BandwidthTrendCard } from "@/components/statistics/BandwidthTrendCard"
+import { TrafficTrendCard } from "@/components/statistics/TrafficTrendCard"
 import { TopHostsShareCard } from "@/components/statistics/TopHostsShareCard"
 import {
   AccuracyBadge,
   SortableHead,
   TrafficEmptyState,
   TrafficFilterInput,
+  TrafficStatCard,
   TruncatedWarning,
+  lastBucketSpanSeconds,
   useSortableRows,
   useTextFilter,
 } from "@/components/statistics/TrafficStatsShared"
@@ -31,6 +34,8 @@ const REFRESH_INTERVAL = 10_000
 const ROWS_LIMIT = 100
 const DISPLAY_LIMIT = 50
 
+type HostRow = TopHost & { rateTotal: number }
+
 function HostsTable({
   title,
   hosts,
@@ -41,17 +46,18 @@ function HostsTable({
   title: string
   hosts: TopHost[]
   role: "src" | "dst"
-  window_: "1h" | "24h"
+  window_: StatsWindow
   emptyLabel: string
 }) {
   const navigate = useNavigate()
   const [query, setQuery] = useState("")
-  const filtered = useTextFilter(hosts, query, [
+  const withRateTotal = hosts.map((h) => ({ ...h, rateTotal: (h.rateBpsDown ?? 0) + (h.rateBpsUp ?? 0) }))
+  const filtered = useTextFilter(withRateTotal, query, [
     (h) => h.ip,
     (h) => h.hostname,
     (h) => h.domain,
   ])
-  const { rows, sort, toggle } = useSortableRows<TopHost>(filtered, { key: "bytes", dir: "desc" })
+  const { rows, sort, toggle } = useSortableRows(filtered, { key: "bytes", dir: "desc" })
   const shown = rows.slice(0, DISPLAY_LIMIT)
 
   const goToHost = (ip: string) => {
@@ -73,17 +79,42 @@ function HostsTable({
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
-                    <SortableHead<TopHost> label="Host" sortKey="hostname" sort={sort} onToggle={toggle} />
-                    <SortableHead<TopHost> label="Down" sortKey="bytesDown" sort={sort} onToggle={toggle} align="right" className="w-24" />
-                    <SortableHead<TopHost> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
-                    <SortableHead<TopHost> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
-                    <SortableHead<TopHost> label="%" sortKey="percent" sort={sort} onToggle={toggle} align="right" className="w-16" />
+                    <SortableHead<HostRow> label="Host" sortKey="hostname" sort={sort} onToggle={toggle} />
+                    <SortableHead<HostRow> label="Down" sortKey="bytesDown" sort={sort} onToggle={toggle} align="right" className="w-24" />
+                    <SortableHead<HostRow> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
+                    <SortableHead<HostRow> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
+                    <SortableHead<HostRow> label="%" sortKey="percent" sort={sort} onToggle={toggle} align="right" className="w-16" />
+                    <TableHead className="w-28">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => toggle("rateTotal")}
+                            className="inline-flex w-full cursor-pointer items-center justify-end gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                          >
+                            Speed
+                            {sort.key === "rateTotal" ? (
+                              sort.dir === "asc" ? (
+                                <ArrowUp className="size-3 text-primary" />
+                              ) : (
+                                <ArrowDown className="size-3 text-primary" />
+                              )
+                            ) : (
+                              <ChevronsUpDown className="size-3 text-muted-foreground/60" />
+                            )}
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          ความเร็วเฉลี่ยประมาณ 10 วินาทีล่าสุด (ค่าประมาณจาก conntrack) · เรียงจาก Down+Up
+                        </TooltipContent>
+                      </Tooltip>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {shown.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="py-8 text-center text-xs text-muted-foreground">
+                      <TableCell colSpan={6} className="py-8 text-center text-xs text-muted-foreground">
                         ไม่พบรายการที่ตรงกับคำค้นหา
                       </TableCell>
                     </TableRow>
@@ -110,6 +141,10 @@ function HostsTable({
                         <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{fmtBytes(h.bytesUp)}</TableCell>
                         <TableCell className="py-3 text-right font-mono text-xs text-foreground">{fmtBytes(h.bytes)}</TableCell>
                         <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{h.percent}%</TableCell>
+                        <TableCell className="py-3 text-right font-mono text-[11px] leading-tight text-muted-foreground">
+                          <div className="text-primary">{h.rateBpsDown !== undefined ? fmtRate(h.rateBpsDown) : "—"}</div>
+                          <div>{h.rateBpsUp !== undefined ? fmtRate(h.rateBpsUp) : "—"}</div>
+                        </TableCell>
                       </TableRow>
                     ))
                   )}
@@ -142,7 +177,7 @@ export default function StatisticsTraffic() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async (win: "1h" | "24h", showLoading: boolean) => {
+  const load = useCallback(async (win: StatsWindow, showLoading: boolean) => {
     if (showLoading) setIsLoading(true)
     try {
       const result = await trafficStatisticsService.getTopHosts(win, ROWS_LIMIT)
@@ -170,6 +205,24 @@ export default function StatisticsTraffic() {
     return () => clearInterval(id)
   }, [window_])
 
+  // nowMs drives the Current Speed card's last-bucket clamp (see
+  // lastBucketSpanSeconds) — read via state, refreshed every 10s, rather
+  // than calling Date.now() directly at render time (React Compiler purity
+  // rule), same pattern as TrafficTrendCard's own nowMs ticker.
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 10_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const series = data?.series ?? []
+  const totalBytesUp = series.reduce((sum, p) => sum + p.bytesUp, 0)
+  const totalBytesDown = series.reduce((sum, p) => sum + p.bytesDown, 0)
+  const lastPoint = series[series.length - 1]
+  const lastSpan = lastPoint ? lastBucketSpanSeconds(lastPoint.ts, nowMs) : 300
+  const currentRateBpsUp = lastPoint ? Math.round((lastPoint.bytesUp * 8) / lastSpan) : 0
+  const currentRateBpsDown = lastPoint ? Math.round((lastPoint.bytesDown * 8) / lastSpan) : 0
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -184,15 +237,39 @@ export default function StatisticsTraffic() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <StatsWindowSelect value={window_} onChange={setWindow} />
+        <div className="flex flex-wrap items-center gap-2">
           {data && <AccuracyBadge accuracy={data.accuracy} />}
-          <Button variant="outline" size="sm" onClick={() => load(window_, true)} disabled={isLoading}>
+          <StatsWindowTabs value={window_} onChange={setWindow} />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => load(window_, true)}
+            disabled={isLoading}
+            title="Refresh"
+            aria-label="Refresh"
+          >
             <RefreshCw className={isLoading ? "size-4 animate-spin" : "size-4"} />
-            Refresh
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
         </div>
       </div>
+
+      {data && (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <TrafficStatCard
+            label={`Total Traffic (${window_})`}
+            value={fmtBytes(data.observedBytes)}
+            breakdown={{ down: fmtBytes(totalBytesDown), up: fmtBytes(totalBytesUp) }}
+          />
+          <TrafficStatCard
+            label="Current Speed"
+            value={fmtRate(currentRateBpsDown + currentRateBpsUp)}
+            breakdown={{ down: fmtRate(currentRateBpsDown), up: fmtRate(currentRateBpsUp) }}
+          />
+          <Card size="sm" className="border-dashed" />
+          <Card size="sm" className="border-dashed" />
+        </div>
+      )}
 
       {data?.truncated && <TruncatedWarning />}
 
@@ -246,7 +323,7 @@ export default function StatisticsTraffic() {
           separate "no data" empty state to worry about hiding it behind. */}
       {data && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <BandwidthTrendCard className="lg:col-span-2" series={data.series} window={window_} />
+          <TrafficTrendCard className="lg:col-span-2" series={data.series} window={window_} />
           <TopHostsShareCard
             className="lg:col-span-1"
             hosts={data.sources.slice(0, 5)}

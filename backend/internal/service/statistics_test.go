@@ -1,6 +1,8 @@
 package service
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -114,6 +116,35 @@ func TestStatisticsService_GetStatistics_ComposesFromBreakdown(t *testing.T) {
 	for _, c := range stats.TopConversations {
 		if c.BytesUp+c.BytesDown != c.Bytes {
 			t.Fatalf("expected bytesUp+bytesDown == bytes for every TopConversations row, got %+v", c)
+		}
+	}
+}
+
+// TestStatisticsService_GetStatistics_OmitsRateFields is plan T-06 item 6:
+// TopHost is shared verbatim between GetTrafficTopHosts (Traffic list page,
+// rate-populated) and GetStatistics (Overview page, which must never gain
+// these fields — plan §1.7). Marshals the actual Overview response and
+// asserts the new rate JSON keys never appear, proving `omitempty` is doing
+// its job rather than just trusting the zero-value convention.
+func TestStatisticsService_GetStatistics_OmitsRateFields(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 6, DstPort: 443}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 6, DstPort: 443, BytesOrig: 100, BytesReply: 400}},
+		},
+	}
+	s := newTestStatisticsService(t, acct)
+	s.traffic.poll()
+	s.traffic.poll()
+
+	stats := s.GetStatistics("1h")
+	raw, err := json.Marshal(stats)
+	if err != nil {
+		t.Fatalf("marshal TrafficStatistics: %v", err)
+	}
+	for _, key := range []string{`"rateBpsUp"`, `"rateBpsDown"`, `"rateSampledAt"`} {
+		if bytes.Contains(raw, []byte(key)) {
+			t.Fatalf("expected Overview response JSON to omit %s entirely (unpopulated + omitempty), got: %s", key, raw)
 		}
 	}
 }
