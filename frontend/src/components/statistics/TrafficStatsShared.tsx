@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react"
 import { ArrowDown, ArrowUp, ChevronsUpDown, Search, TriangleAlert, X } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
+import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { TableHead } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
@@ -188,5 +189,55 @@ export function HostBar({ percent }: { percent: number }) {
         style={{ width: `${Math.min(100, Math.max(percent, 0))}%` }}
       />
     </div>
+  )
+}
+
+// lastBucketSpanSeconds is the SAME span_last clamp BandwidthTrendCard uses
+// for its newest bucket in speed mode (docs/ref/todo/
+// statistics-traffic-speed-plan.md §2.1): the newest 5-minute bucket hasn't
+// finished accumulating yet, so dividing its bytes by 300 would make the
+// rate droop on every refresh — use elapsed real time clamped to [30, 300]
+// instead. `nowMs` is passed in (not read via Date.now() here) so callers
+// stay in control of when it's sampled (React Compiler purity — see
+// BandwidthTrendCard's nowMs state comment).
+export function lastBucketSpanSeconds(tsIso: string, nowMs: number): number {
+  const tsSec = new Date(tsIso).getTime() / 1000
+  const nowSec = nowMs / 1000
+  return Number.isNaN(tsSec) ? 300 : Math.min(300, Math.max(30, nowSec - tsSec))
+}
+
+// TrafficStatCard is the 3-line stat card shared across the Traffic pages
+// (docs/ref/todo/statistics-traffic-speed-plan.md): a muted label, a bold
+// headline value, and an optional Down/Up breakdown line. `breakdown` is
+// omitted entirely for cards that don't have one yet (Ratio, the empty
+// placeholders).
+export function TrafficStatCard({
+  label,
+  value,
+  breakdown,
+}: {
+  label: string
+  value: string
+  breakdown?: { down: string; up: string }
+}) {
+  return (
+    <Card size="sm">
+      <CardContent className="space-y-1.5 pt-4">
+        <p className="text-xs text-muted-foreground">{label}</p>
+        <p className="text-xl font-bold tracking-tight text-foreground">{value}</p>
+        {breakdown && (
+          <div className="flex items-center gap-3 text-xs font-mono">
+            <span className="flex items-center gap-1 text-primary">
+              <ArrowDown className="size-3" />
+              {breakdown.down}
+            </span>
+            <span className="flex items-center gap-1 text-muted-foreground">
+              <ArrowUp className="size-3" />
+              {breakdown.up}
+            </span>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }

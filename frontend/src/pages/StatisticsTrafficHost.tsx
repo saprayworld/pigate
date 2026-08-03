@@ -24,6 +24,7 @@ import {
   SortableHead,
   TrafficEmptyState,
   TrafficFilterInput,
+  TrafficStatCard,
   TruncatedWarning,
   useSortableRows,
   useTextFilter,
@@ -53,41 +54,6 @@ function peerIp(row: TrafficHostConversation, ownIsSrc: boolean): string {
 }
 function peerHostname(row: TrafficHostConversation, ownIsSrc: boolean): string {
   return ownIsSrc ? row.dstHostname : row.srcHostname
-}
-
-// TrafficStatCard is the 3-line stat card shared by the Total Traffic /
-// Current Speed / Ratio cards below: a muted label, a bold headline value,
-// and an optional Down/Up breakdown line. `breakdown` is omitted entirely
-// for cards that don't have one yet (e.g. Ratio, the empty placeholder).
-function TrafficStatCard({
-  label,
-  value,
-  breakdown,
-}: {
-  label: string
-  value: string
-  breakdown?: { down: string; up: string }
-}) {
-  return (
-    <Card size="sm">
-      <CardContent className="space-y-1.5 pt-4">
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <p className="text-xl font-bold tracking-tight text-foreground">{value}</p>
-        {breakdown && (
-          <div className="flex items-center gap-3 text-xs font-mono">
-            <span className="flex items-center gap-1 text-primary">
-              <ArrowDown className="size-3" />
-              {breakdown.down}
-            </span>
-            <span className="flex items-center gap-1 text-muted-foreground">
-              <ArrowUp className="size-3" />
-              {breakdown.up}
-            </span>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  )
 }
 
 function ConversationTable({

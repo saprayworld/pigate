@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { cn } from "@/lib/utils"
 import { fmtBytes, fmtRate } from "@/lib/formatBytes"
+import { lastBucketSpanSeconds } from "@/components/statistics/TrafficStatsShared"
 import { useTheme } from "@/hooks/useTheme"
 import type { BandwidthPoint } from "@/services/statisticsService"
 import type { StatsWindow } from "@/components/statistics/DnsStatsShared"
@@ -87,14 +88,11 @@ export function BandwidthTrendCard({
         // span_last: the newest bucket hasn't finished accumulating a full 5
         // minutes yet — dividing it by 300 would make the last point of the
         // speed chart droop on every refresh, so use elapsed real time
-        // clamped to [30, 300] instead (plan §2.1).
+        // clamped to [30, 300] instead (plan §2.1). Shared with the Traffic
+        // pages' Current Speed stat card (lastBucketSpanSeconds) so both
+        // "current speed" figures use the exact same formula.
         const isLast = idx === points.length - 1
-        let span = 300
-        if (isLast) {
-          const tsSec = Number.isNaN(d.getTime()) ? NaN : d.getTime() / 1000
-          const nowSec = nowMs / 1000
-          span = Number.isNaN(tsSec) ? 300 : Math.min(300, Math.max(30, nowSec - tsSec))
-        }
+        const span = isLast ? lastBucketSpanSeconds(p.ts, nowMs) : 300
         return {
           time: label,
           download: (p.bytesDown * 8) / span,

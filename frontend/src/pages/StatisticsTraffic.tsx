@@ -18,7 +18,9 @@ import {
   SortableHead,
   TrafficEmptyState,
   TrafficFilterInput,
+  TrafficStatCard,
   TruncatedWarning,
+  lastBucketSpanSeconds,
   useSortableRows,
   useTextFilter,
 } from "@/components/statistics/TrafficStatsShared"
@@ -203,6 +205,24 @@ export default function StatisticsTraffic() {
     return () => clearInterval(id)
   }, [window_])
 
+  // nowMs drives the Current Speed card's last-bucket clamp (see
+  // lastBucketSpanSeconds) — read via state, refreshed every 10s, rather
+  // than calling Date.now() directly at render time (React Compiler purity
+  // rule), same pattern as BandwidthTrendCard's own nowMs ticker.
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 10_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const series = data?.series ?? []
+  const totalBytesUp = series.reduce((sum, p) => sum + p.bytesUp, 0)
+  const totalBytesDown = series.reduce((sum, p) => sum + p.bytesDown, 0)
+  const lastPoint = series[series.length - 1]
+  const lastSpan = lastPoint ? lastBucketSpanSeconds(lastPoint.ts, nowMs) : 300
+  const currentRateBpsUp = lastPoint ? Math.round((lastPoint.bytesUp * 8) / lastSpan) : 0
+  const currentRateBpsDown = lastPoint ? Math.round((lastPoint.bytesDown * 8) / lastSpan) : 0
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -226,6 +246,23 @@ export default function StatisticsTraffic() {
           </Button>
         </div>
       </div>
+
+      {data && (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <TrafficStatCard
+            label={`Total Traffic (${window_})`}
+            value={fmtBytes(data.observedBytes)}
+            breakdown={{ down: fmtBytes(totalBytesDown), up: fmtBytes(totalBytesUp) }}
+          />
+          <TrafficStatCard
+            label="Current Speed"
+            value={fmtRate(currentRateBpsDown + currentRateBpsUp)}
+            breakdown={{ down: fmtRate(currentRateBpsDown), up: fmtRate(currentRateBpsUp) }}
+          />
+          <Card size="sm" className="border-dashed" />
+          <Card size="sm" className="border-dashed" />
+        </div>
+      )}
 
       {data?.truncated && <TruncatedWarning />}
 
