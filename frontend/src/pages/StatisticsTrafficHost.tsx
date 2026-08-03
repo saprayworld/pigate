@@ -173,7 +173,7 @@ function ConversationTable({
                 <SortableHead<ConversationRow> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
                 <SortableHead<ConversationRow> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
                 <SortableHead<ConversationRow> label="%" sortKey="percent" sort={sort} onToggle={toggle} align="right" className="w-16" />
-                <TableHead className="hidden w-28 md:table-cell">
+                <TableHead className="w-28">
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <button
@@ -245,7 +245,7 @@ function ConversationTable({
                       <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{fmtBytes(r.bytesUp)}</TableCell>
                       <TableCell className="py-3 text-right font-mono text-xs text-foreground">{fmtBytes(r.bytes)}</TableCell>
                       <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{r.percent}%</TableCell>
-                      <TableCell className="hidden py-3 text-right font-mono text-[11px] leading-tight text-muted-foreground md:table-cell">
+                      <TableCell className="py-3 text-right font-mono text-[11px] leading-tight text-muted-foreground">
                         <div className="text-primary">{r.rateBpsDown !== undefined ? fmtRate(r.rateBpsDown) : "—"}</div>
                         <div>{r.rateBpsUp !== undefined ? fmtRate(r.rateBpsUp) : "—"}</div>
                       </TableCell>

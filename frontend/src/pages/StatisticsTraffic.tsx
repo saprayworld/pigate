@@ -84,7 +84,7 @@ function HostsTable({
                     <SortableHead<HostRow> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
                     <SortableHead<HostRow> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
                     <SortableHead<HostRow> label="%" sortKey="percent" sort={sort} onToggle={toggle} align="right" className="w-16" />
-                    <TableHead className="hidden w-28 md:table-cell">
+                    <TableHead className="w-28">
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <button
@@ -141,7 +141,7 @@ function HostsTable({
                         <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{fmtBytes(h.bytesUp)}</TableCell>
                         <TableCell className="py-3 text-right font-mono text-xs text-foreground">{fmtBytes(h.bytes)}</TableCell>
                         <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{h.percent}%</TableCell>
-                        <TableCell className="hidden py-3 text-right font-mono text-[11px] leading-tight text-muted-foreground md:table-cell">
+                        <TableCell className="py-3 text-right font-mono text-[11px] leading-tight text-muted-foreground">
                           <div className="text-primary">{h.rateBpsDown !== undefined ? fmtRate(h.rateBpsDown) : "—"}</div>
                           <div>{h.rateBpsUp !== undefined ? fmtRate(h.rateBpsUp) : "—"}</div>
                         </TableCell>
