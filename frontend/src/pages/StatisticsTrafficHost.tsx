@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { NavLink, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom"
-import { ArrowLeft, RefreshCw } from "lucide-react"
+import { ArrowDown, ArrowLeft, ArrowUp, ChevronsUpDown, RefreshCw } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Table, TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { getErrorMessage } from "@/lib/errors"
 import { fmtBytes, fmtRate } from "@/lib/formatBytes"
 import {
@@ -37,6 +38,8 @@ const REFRESH_INTERVAL_MS = 10_000
 const ROWS_LIMIT = 100
 
 type Role = "src" | "dst"
+
+type ConversationRow = TrafficHostConversation & { rateTotal: number }
 
 function roleFromParam(v: string | null): Role | null {
   return v === "src" || v === "dst" ? v : null
@@ -72,14 +75,15 @@ function ConversationTable({
 }) {
   const navigate = useNavigate()
   const [query, setQuery] = useState("")
-  const filtered = useTextFilter(rows, query, [
+  const withRateTotal = rows.map((r) => ({ ...r, rateTotal: (r.rateBpsDown ?? 0) + (r.rateBpsUp ?? 0) }))
+  const filtered = useTextFilter(withRateTotal, query, [
     (r) => peerIp(r, ownIsSrc),
     (r) => peerHostname(r, ownIsSrc),
     (r) => r.peerDomain,
     (r) => r.proto,
     (r) => r.dstPort,
   ])
-  const { rows: sorted, sort, toggle } = useSortableRows<TrafficHostConversation>(filtered, {
+  const { rows: sorted, sort, toggle } = useSortableRows(filtered, {
     key: "bytes",
     dir: "desc",
   })
@@ -161,19 +165,44 @@ function ConversationTable({
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <SortableHead<TrafficHostConversation> label="Peer" sortKey={ownIsSrc ? "dstIp" : "srcIp"} sort={sort} onToggle={toggle} />
-                <SortableHead<TrafficHostConversation> label="Proto" sortKey="proto" sort={sort} onToggle={toggle} className="w-20" />
-                <SortableHead<TrafficHostConversation> label="Port" sortKey="dstPort" sort={sort} onToggle={toggle} align="right" className="w-20" />
-                <SortableHead<TrafficHostConversation> label="Down" sortKey="bytesDown" sort={sort} onToggle={toggle} align="right" className="w-24" />
-                <SortableHead<TrafficHostConversation> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
-                <SortableHead<TrafficHostConversation> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
-                <SortableHead<TrafficHostConversation> label="%" sortKey="percent" sort={sort} onToggle={toggle} align="right" className="w-16" />
+                <SortableHead<ConversationRow> label="Peer" sortKey={ownIsSrc ? "dstIp" : "srcIp"} sort={sort} onToggle={toggle} />
+                <SortableHead<ConversationRow> label="Proto" sortKey="proto" sort={sort} onToggle={toggle} className="w-20" />
+                <SortableHead<ConversationRow> label="Port" sortKey="dstPort" sort={sort} onToggle={toggle} align="right" className="w-20" />
+                <SortableHead<ConversationRow> label="Down" sortKey="bytesDown" sort={sort} onToggle={toggle} align="right" className="w-24" />
+                <SortableHead<ConversationRow> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
+                <SortableHead<ConversationRow> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
+                <SortableHead<ConversationRow> label="%" sortKey="percent" sort={sort} onToggle={toggle} align="right" className="w-16" />
+                <TableHead className="hidden w-28 md:table-cell">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => toggle("rateTotal")}
+                        className="inline-flex w-full cursor-pointer items-center justify-end gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                      >
+                        Speed
+                        {sort.key === "rateTotal" ? (
+                          sort.dir === "asc" ? (
+                            <ArrowUp className="size-3 text-primary" />
+                          ) : (
+                            <ArrowDown className="size-3 text-primary" />
+                          )
+                        ) : (
+                          <ChevronsUpDown className="size-3 text-muted-foreground/60" />
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      ความเร็วเฉลี่ยประมาณ 10 วินาทีล่าสุด (ค่าประมาณจาก conntrack) · เรียงจาก Down+Up
+                    </TooltipContent>
+                  </Tooltip>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {sorted.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="py-8 text-center text-xs text-muted-foreground">
+                  <TableCell colSpan={8} className="py-8 text-center text-xs text-muted-foreground">
                     ไม่พบรายการที่ตรงกับคำค้นหา
                   </TableCell>
                 </TableRow>
@@ -215,6 +244,10 @@ function ConversationTable({
                       <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{fmtBytes(r.bytesUp)}</TableCell>
                       <TableCell className="py-3 text-right font-mono text-xs text-foreground">{fmtBytes(r.bytes)}</TableCell>
                       <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{r.percent}%</TableCell>
+                      <TableCell className="hidden py-3 text-right font-mono text-[11px] leading-tight text-muted-foreground md:table-cell">
+                        <div className="text-primary">{r.rateBpsDown !== undefined ? fmtRate(r.rateBpsDown) : "—"}</div>
+                        <div>{r.rateBpsUp !== undefined ? fmtRate(r.rateBpsUp) : "—"}</div>
+                      </TableCell>
                     </TableRow>
                   )
                 })

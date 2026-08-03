@@ -566,6 +566,38 @@ func TestGetTrafficHostDetail_CurrentRateSameRuleAsTotalBytes(t *testing.T) {
 	}
 }
 
+// TestGetTrafficHostDetail_ConversationRateMatchesHostTotal checks the
+// per-row RateBpsUp/RateBpsDown (asSource/asDestination) sum to the exact
+// same host-level CurrentRateBpsUp/CurrentRateBpsDown figure, for a
+// same-IP-both-sides conversation that appears in both lists at once (the
+// same fixture as TestGetTrafficHostDetail_CurrentRateSameRuleAsTotalBytes
+// above) — the per-row rate must not silently diverge from what it sums to.
+func TestGetTrafficHostDetail_ConversationRateMatchesHostTotal(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "loop", SrcIP: "192.168.1.50", DstIP: "192.168.1.50", Proto: 6, DstPort: 8080}},
+			{{Key: "loop", SrcIP: "192.168.1.50", DstIP: "192.168.1.50", Proto: 6, DstPort: 8080, BytesOrig: 100, BytesReply: 400}},
+		},
+	}
+	s := newTestStatisticsService(t, acct)
+	s.traffic.poll() // seed
+	s.traffic.poll() // delta
+
+	got := s.GetTrafficHostDetail("1h", "192.168.1.50", 100)
+	if len(got.AsSource) != 1 || len(got.AsDestination) != 1 {
+		t.Fatalf("expected the loopback conversation in both lists, got asSource=%d asDestination=%d", len(got.AsSource), len(got.AsDestination))
+	}
+	sumUp := got.AsSource[0].RateBpsUp + got.AsDestination[0].RateBpsUp
+	sumDown := got.AsSource[0].RateBpsDown + got.AsDestination[0].RateBpsDown
+	if sumUp != got.CurrentRateBpsUp || sumDown != got.CurrentRateBpsDown {
+		t.Fatalf("expected per-row rates to sum to the host total: sumUp=%d sumDown=%d hostUp=%d hostDown=%d",
+			sumUp, sumDown, got.CurrentRateBpsUp, got.CurrentRateBpsDown)
+	}
+	if got.AsSource[0].RateBpsUp == 0 && got.AsSource[0].RateBpsDown == 0 {
+		t.Fatalf("expected a non-zero per-conversation rate once a sample exists")
+	}
+}
+
 // TestGetTrafficHostDetail_RateZeroBeforeFirstSample is plan T-05 case 3: a
 // fresh service that has never rotated a rate accumulator must report a zero
 // rate and an empty RateSampledAt, never a stale/undefined value.

@@ -64,6 +64,12 @@ export interface TrafficHostConversation {
   // relative to the drilled IP: equals dstDomain for an outbound row, but for
   // an inbound row it is the srcIp's domain (which dstDomain cannot express).
   peerDomain: string
+  // This conversation's real-time throughput in bits/second (docs/ref/todo/
+  // statistics-traffic-speed-plan.md), same convention/caveats as
+  // TopHost.rateBpsUp/rateBpsDown — optional/absent when no rate sample
+  // exists yet.
+  rateBpsUp?: number
+  rateBpsDown?: number
 }
 
 export interface TrafficHostDetail {
@@ -343,6 +349,8 @@ export const trafficStatisticsService = {
             dstDomain: mockIpDomains[r.dstIp] ?? "",
             direction: "outbound",
             peerDomain: mockIpDomains[r.dstIp] ?? "",
+            rateBpsUp: Math.round((r.bytesUp / mockWindowSeconds(window)) * 8),
+            rateBpsDown: Math.round((r.bytesDown / mockWindowSeconds(window)) * 8),
           })
         }
         if (r.dstIp === ip) {
@@ -365,6 +373,8 @@ export const trafficStatisticsService = {
             dstDomain: mockIpDomains[r.dstIp] ?? "",
             direction: "inbound",
             peerDomain: mockIpDomains[r.srcIp] ?? "",
+            rateBpsUp: Math.round((r.bytesUp / mockWindowSeconds(window)) * 8),
+            rateBpsDown: Math.round((r.bytesDown / mockWindowSeconds(window)) * 8),
           })
         }
       }

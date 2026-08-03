@@ -170,6 +170,18 @@ func (s *StatisticsService) GetTrafficHostDetail(window, ip string, limit int) m
 	// the response needs, same pattern as GetStatistics/GetTrafficTopHosts.
 	ipsInvolved := make(map[string]struct{})
 
+	// rates is fetched once, up front, and its Convs map (keyed identically to
+	// breakdown.Convs — see traffic_stats.go's rateAccumulator comment) is
+	// looked up inline below per conversation, rather than walked a second
+	// time afterwards — same "call CurrentRates() exactly once" rule as
+	// GetTrafficTopHosts (docs/ref/todo/statistics-traffic-speed-plan.md T-05).
+	rates := s.traffic.CurrentRates()
+	rateSampledAt := ""
+	if !rates.At.IsZero() {
+		rateSampledAt = rates.At.UTC().Format(time.RFC3339)
+	}
+	var currentRateUp, currentRateDown uint64
+
 	for key, v := range breakdown.Convs {
 		bytes := v.Total()
 		if bytes == 0 {
@@ -179,18 +191,23 @@ func (s *StatisticsService) GetTrafficHostDetail(window, ip string, limit int) m
 		if !ok {
 			continue // malformed key — should never happen, skip defensively
 		}
+		rate := rates.Convs[key]
 
 		if srcIP == ip {
 			ipsInvolved[dstIP] = struct{}{}
 			totalBytes += bytes
 			totalUp += v.Orig
 			totalDown += v.Reply
+			currentRateUp += rate.UpBps
+			currentRateDown += rate.DownBps
 			asSourceAll = append(asSourceAll, model.TrafficHostConversation{
 				TopConversation: model.TopConversation{
 					SrcIP: srcIP, DstIP: dstIP, Proto: proto, DstPort: port,
 					Bytes: bytes, BytesUp: v.Orig, BytesDown: v.Reply,
 				},
-				Direction: "outbound",
+				Direction:   "outbound",
+				RateBpsUp:   rate.UpBps,
+				RateBpsDown: rate.DownBps,
 			})
 		}
 		// A same-IP-both-sides row (e.g. loopback) deliberately lands in BOTH
@@ -200,12 +217,16 @@ func (s *StatisticsService) GetTrafficHostDetail(window, ip string, limit int) m
 			totalBytes += bytes
 			totalUp += v.Orig
 			totalDown += v.Reply
+			currentRateUp += rate.UpBps
+			currentRateDown += rate.DownBps
 			asDestinationAll = append(asDestinationAll, model.TrafficHostConversation{
 				TopConversation: model.TopConversation{
 					SrcIP: srcIP, DstIP: dstIP, Proto: proto, DstPort: port,
 					Bytes: bytes, BytesUp: v.Orig, BytesDown: v.Reply,
 				},
-				Direction: "inbound",
+				Direction:   "inbound",
+				RateBpsUp:   rate.UpBps,
+				RateBpsDown: rate.DownBps,
 			})
 		}
 	}
@@ -268,33 +289,12 @@ func (s *StatisticsService) GetTrafficHostDetail(window, ip string, limit int) m
 
 	hostname, mac := hostnameFor(ip, leaseByIP, resByIP)
 
-	// Real-time throughput for this IP (docs/ref/todo/
-	// statistics-traffic-speed-plan.md T-05) — CurrentRates() is called
-	// exactly once here (not per-conversation, not a second breakdown call),
-	// and its by-conv map is walked with the SAME rule TotalBytes above uses:
-	// add when srcIP == ip, add AGAIN (never else-if) when dstIP == ip, so a
-	// same-IP-both-sides row counts twice in both figures identically (plan
-	// §2.2 "by construction, not by luck").
-	var currentRateUp, currentRateDown uint64
-	rateSampledAt := ""
-	rates := s.traffic.CurrentRates()
-	if !rates.At.IsZero() {
-		rateSampledAt = rates.At.UTC().Format(time.RFC3339)
-		for key, r := range rates.Convs {
-			srcIP, dstIP, _, _, ok := parseConvKey(key)
-			if !ok {
-				continue
-			}
-			if srcIP == ip {
-				currentRateUp += r.UpBps
-				currentRateDown += r.DownBps
-			}
-			if dstIP == ip {
-				currentRateUp += r.UpBps
-				currentRateDown += r.DownBps
-			}
-		}
-	}
+	// currentRateUp/currentRateDown were accumulated in the breakdown.Convs
+	// loop above using the SAME rule TotalBytes uses: add when srcIP == ip,
+	// add AGAIN (never else-if) when dstIP == ip, so a same-IP-both-sides row
+	// counts twice in both figures identically (plan §2.2 "by construction,
+	// not by luck") — this is the per-row RateBpsUp/RateBpsDown summed, so it
+	// stays consistent with asSource/asDestination by construction too.
 
 	return model.TrafficHostDetail{
 		IP:                ip,

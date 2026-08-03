@@ -4630,6 +4630,24 @@ components:
             (which dstDomain cannot express). Display only, empty when
             unknown.
           example: www.youtube.com
+        rateBpsUp:
+          type: integer
+          format: int64
+          description: >-
+            This conversation's real-time throughput in bits/second (docs/
+            ref/todo/statistics-traffic-speed-plan.md), flow-relative in the
+            SAME direction convention as bytesUp (srcIp -> dstIp) — same
+            averaging/accuracy caveats as TopHost.rateBpsUp. Omitempty,
+            absent when no rate sample exists yet for this conversation.
+          example: 256000
+        rateBpsDown:
+          type: integer
+          format: int64
+          description: >-
+            This conversation's real-time throughput in bits/second in the
+            reply direction (dstIp -> srcIp) — see rateBpsUp for the shared
+            caveats.
+          example: 2100000
 
     TrafficHostDetail:
       type: object

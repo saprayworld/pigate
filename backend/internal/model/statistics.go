@@ -313,6 +313,13 @@ type TrafficHostConversation struct {
 	TopConversation
 	Direction  string `json:"direction"`
 	PeerDomain string `json:"peerDomain"`
+	// RateBpsUp/RateBpsDown are this conversation's real-time throughput in
+	// bits/second (same convention/accuracy caveats as TopHost.RateBpsUp/
+	// RateBpsDown above), sourced from TrafficStatsService.CurrentRates().Convs
+	// keyed by the same convKey as TopConversation. Omitempty, absent when no
+	// rate sample exists yet for this conversation.
+	RateBpsUp   uint64 `json:"rateBpsUp,omitempty"`
+	RateBpsDown uint64 `json:"rateBpsDown,omitempty"`
 }
 
 // TrafficHostDetail is the GET /api/statistics/traffic/host response — a
