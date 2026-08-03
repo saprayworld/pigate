@@ -192,14 +192,14 @@ export function HostBar({ percent }: { percent: number }) {
   )
 }
 
-// lastBucketSpanSeconds is the SAME span_last clamp BandwidthTrendCard uses
+// lastBucketSpanSeconds is the SAME span_last clamp TrafficTrendCard uses
 // for its newest bucket in speed mode (docs/ref/todo/
 // statistics-traffic-speed-plan.md §2.1): the newest 5-minute bucket hasn't
 // finished accumulating yet, so dividing its bytes by 300 would make the
 // rate droop on every refresh — use elapsed real time clamped to [30, 300]
 // instead. `nowMs` is passed in (not read via Date.now() here) so callers
 // stay in control of when it's sampled (React Compiler purity — see
-// BandwidthTrendCard's nowMs state comment).
+// TrafficTrendCard's nowMs state comment).
 export function lastBucketSpanSeconds(tsIso: string, nowMs: number): number {
   const tsSec = new Date(tsIso).getTime() / 1000
   const nowSec = nowMs / 1000

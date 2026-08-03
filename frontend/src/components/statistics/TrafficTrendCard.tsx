@@ -17,20 +17,21 @@ import { useTheme } from "@/hooks/useTheme"
 import type { BandwidthPoint } from "@/services/statisticsService"
 import type { StatsWindow } from "@/components/statistics/DnsStatsShared"
 
-// BandwidthTrendCard is the Statistics Overview page's bandwidth-over-time
-// chart (docs/ref/todo/statistics-overview-bandwidth-chart-plan.md T-07) —
-// same recharts setup as Dashboard.tsx's BandwidthCard (grid/axis colors via
-// useTheme, dot={false}/isAnimationActive={false} for perf at up to 288
-// points), but reading TrafficStatistics.series directly instead of the
-// Dashboard's own hourly-aggregated ring, and using fmtBytes (auto KB/MB/GB)
-// instead of a hardcoded "G" unit — a 5-minute bucket on a home network is
-// often well under 1 GB.
+// TrafficTrendCard (formerly TrafficTrendCard) is the Statistics Overview
+// page's traffic-over-time chart (docs/ref/todo/
+// statistics-overview-bandwidth-chart-plan.md T-07) — same recharts setup as
+// Dashboard.tsx's BandwidthCard (grid/axis colors via useTheme,
+// dot={false}/isAnimationActive={false} for perf at up to 288 points), but
+// reading TrafficStatistics.series directly instead of the Dashboard's own
+// hourly-aggregated ring, and using fmtBytes (auto KB/MB/GB) instead of a
+// hardcoded "G" unit — a 5-minute bucket on a home network is often well
+// under 1 GB.
 //
 // IMPORTANT: series direction is LAN-relative (Up = leaving the LAN, Down =
 // entering it) — a different convention from the Top Hosts cards' bytesUp/
 // bytesDown (flow-relative). The subtitle below says so explicitly (plan §5
 // item 18 / §8 item 7).
-export function BandwidthTrendCard({
+export function TrafficTrendCard({
   series,
   window: statsWindow,
   className,
@@ -116,7 +117,7 @@ export function BandwidthTrendCard({
     <Card className={cn(className)}>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-x-4 gap-y-1 space-y-0">
         <div>
-          <CardTitle className="text-base font-semibold">Bandwidth · {windowLabel}</CardTitle>
+          <CardTitle className="text-base font-semibold">Traffic · {windowLabel}</CardTitle>
           <p className="text-[11px] text-muted-foreground">
             {mode === "bytes"
               ? (subtitle ?? "ยอดต่อ 5 นาที (ไม่ใช่ความเร็ว) · Up/Down นับตามทิศทางเข้า-ออกเครือข่าย LAN")

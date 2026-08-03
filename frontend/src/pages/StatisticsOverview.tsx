@@ -28,7 +28,7 @@ import {
 import { useStatsWindow, StatsWindowSelect, type StatsWindow } from "@/components/statistics/DnsStatsShared"
 import { UpDownLine, HostLabel } from "@/components/statistics/HostCells"
 import { AccuracyBadge, HostBar } from "@/components/statistics/TrafficStatsShared"
-import { BandwidthTrendCard } from "@/components/statistics/BandwidthTrendCard"
+import { TrafficTrendCard } from "@/components/statistics/TrafficTrendCard"
 import { TopHostsShareCard } from "@/components/statistics/TopHostsShareCard"
 
 const REFRESH_INTERVAL = 10_000
@@ -462,7 +462,7 @@ export default function StatisticsOverview() {
           only). */}
       {stats && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <BandwidthTrendCard className="lg:col-span-2" series={stats.series} window={window_} />
+          <TrafficTrendCard className="lg:col-span-2" series={stats.series} window={window_} />
           <TopHostsShareCard
             className="lg:col-span-1"
             hosts={stats.topSources.slice(0, 5)}

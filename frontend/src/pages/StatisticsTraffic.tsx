@@ -11,7 +11,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { trafficStatisticsService, type TopHost, type TrafficTopHosts } from "@/services/trafficStatisticsService"
 import { useStatsWindow, StatsWindowSelect } from "@/components/statistics/DnsStatsShared"
 import { HostLabel } from "@/components/statistics/HostCells"
-import { BandwidthTrendCard } from "@/components/statistics/BandwidthTrendCard"
+import { TrafficTrendCard } from "@/components/statistics/TrafficTrendCard"
 import { TopHostsShareCard } from "@/components/statistics/TopHostsShareCard"
 import {
   AccuracyBadge,
@@ -208,7 +208,7 @@ export default function StatisticsTraffic() {
   // nowMs drives the Current Speed card's last-bucket clamp (see
   // lastBucketSpanSeconds) — read via state, refreshed every 10s, rather
   // than calling Date.now() directly at render time (React Compiler purity
-  // rule), same pattern as BandwidthTrendCard's own nowMs ticker.
+  // rule), same pattern as TrafficTrendCard's own nowMs ticker.
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 10_000)
@@ -316,7 +316,7 @@ export default function StatisticsTraffic() {
           separate "no data" empty state to worry about hiding it behind. */}
       {data && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <BandwidthTrendCard className="lg:col-span-2" series={data.series} window={window_} />
+          <TrafficTrendCard className="lg:col-span-2" series={data.series} window={window_} />
           <TopHostsShareCard
             className="lg:col-span-1"
             hosts={data.sources.slice(0, 5)}

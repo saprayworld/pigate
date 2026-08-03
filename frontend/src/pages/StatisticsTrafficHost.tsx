@@ -17,7 +17,7 @@ import {
   type TrafficHostDetail,
 } from "@/services/trafficStatisticsService"
 import { useStatsWindow, StatsWindowSelect, type StatsWindow } from "@/components/statistics/DnsStatsShared"
-import { BandwidthTrendCard } from "@/components/statistics/BandwidthTrendCard"
+import { TrafficTrendCard } from "@/components/statistics/TrafficTrendCard"
 import {
   AccuracyBadge,
   HostBar,
@@ -124,7 +124,7 @@ function ConversationTable({
           (computed from `filtered` above, not lifted out of this
           component). */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <BandwidthTrendCard
+        <TrafficTrendCard
           className={topPeers.length > 0 ? "xl:col-span-2" : "xl:col-span-3"}
           series={series}
           window={window_}
