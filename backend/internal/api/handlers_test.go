@@ -943,10 +943,23 @@ func TestHandleGetTrafficDetail_WindowWhitelist(t *testing.T) {
 		expectWindow string
 	}{
 		{"", "1h"},
+		{"?window=15m", "15m"},
+		{"?window=30m", "30m"},
 		{"?window=1h", "1h"},
+		{"?window=3h", "3h"},
+		{"?window=6h", "6h"},
+		{"?window=12h", "12h"},
 		{"?window=24h", "24h"},
 		{"?window=evil", "1h"},
 		{"?window=99h", "1h"},
+		{"?window=2h", "1h"},
+		// Uppercase button labels (plan §0 D-4/§6 item 3): must NOT be
+		// normalized to their lowercase equivalent — they are unrecognized
+		// values, same as any other garbage.
+		{"?window=1H", "1h"},
+		{"?window=24H", "1h"},
+		{"?window=15M", "1h"},
+		{"?window=%201h", "1h"}, // " 1h" (leading space)
 	}
 	for _, c := range cases {
 		rec := get("/api/dashboard/traffic-detail" + c.query)
@@ -1850,6 +1863,80 @@ func TestHandleGetDNSQueryStatistics_WindowWhitelistAndDisabledState(t *testing.
 		}
 		if stats.TopDomains == nil || stats.TopClients == nil {
 			t.Errorf("query=%q: expected non-nil (possibly empty) slices, got topDomains=%v topClients=%v", c.query, stats.TopDomains, stats.TopClients)
+		}
+	}
+}
+
+// TestStatsWindowParam_AllEndpoints_SevenValuesAndFallback is docs/ref/todo/
+// statistics-window-granularity-plan.md T-07 item 6 (§0 D-4 — the test the
+// owner explicitly required): every endpoint that accepts ?window= must
+// return exactly the 7 canonical (lowercase) values unchanged, and every
+// unrecognized value — INCLUDING the uppercase button labels "1H"/"24H"/
+// "15M", which must NOT be silently lowercased — falls back to "1h", never a
+// 400/500/panic.
+func TestStatsWindowParam_AllEndpoints_SevenValuesAndFallback(t *testing.T) {
+	handler, _ := setupTestServer(t)
+	token := "mock_session_id_test_token"
+
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		addSessionCookie(req, token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	longString := strings.Repeat("a", 10*1024)
+	fallbackValues := []string{
+		"", "evil", "99h", "2h", "1H", "24H", "15M", " 1h", "../etc/passwd", longString,
+	}
+	canonical := []string{"15m", "30m", "1h", "3h", "6h", "12h", "24h"}
+
+	endpoints := []struct {
+		name string
+		path func(window string) string
+	}{
+		{"dashboard/traffic-detail", func(w string) string { return "/api/dashboard/traffic-detail?window=" + url.QueryEscape(w) }},
+		{"statistics/traffic", func(w string) string { return "/api/statistics/traffic?window=" + url.QueryEscape(w) }},
+		{"statistics/traffic/hosts", func(w string) string { return "/api/statistics/traffic/hosts?window=" + url.QueryEscape(w) }},
+		{"statistics/traffic/host", func(w string) string {
+			return "/api/statistics/traffic/host?ip=192.168.1.50&window=" + url.QueryEscape(w)
+		}},
+		{"statistics/dns", func(w string) string { return "/api/statistics/dns?window=" + url.QueryEscape(w) }},
+		{"statistics/dns/domain", func(w string) string {
+			return "/api/statistics/dns/domain?domain=example.com&window=" + url.QueryEscape(w)
+		}},
+		{"statistics/dns/client", func(w string) string {
+			return "/api/statistics/dns/client?client=unknown&window=" + url.QueryEscape(w)
+		}},
+	}
+
+	for _, ep := range endpoints {
+		for _, w := range canonical {
+			rec := get(ep.path(w))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s window=%q: expected 200, got %d. Body: %s", ep.name, w, rec.Code, rec.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("%s window=%q: decode failed: %v", ep.name, w, err)
+			}
+			if got, _ := body["window"].(string); got != w {
+				t.Errorf("%s window=%q: expected response window=%q, got %q", ep.name, w, w, got)
+			}
+		}
+		for _, w := range fallbackValues {
+			rec := get(ep.path(w))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s window=%q: expected 200 (fallback, not error), got %d. Body: %s", ep.name, w, rec.Code, rec.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("%s window=%q: decode failed: %v", ep.name, w, err)
+			}
+			if got, _ := body["window"].(string); got != "1h" {
+				t.Errorf("%s window=%q: expected fallback window=\"1h\", got %q", ep.name, w, got)
+			}
 		}
 	}
 }

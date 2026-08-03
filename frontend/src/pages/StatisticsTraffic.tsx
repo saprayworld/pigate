@@ -9,7 +9,7 @@ import { getErrorMessage } from "@/lib/errors"
 import { fmtBytes, fmtRate } from "@/lib/formatBytes"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { trafficStatisticsService, type TopHost, type TrafficTopHosts } from "@/services/trafficStatisticsService"
-import { useStatsWindow, StatsWindowSelect } from "@/components/statistics/DnsStatsShared"
+import { useStatsWindow, StatsWindowTabs, type StatsWindow } from "@/components/statistics/DnsStatsShared"
 import { HostLabel } from "@/components/statistics/HostCells"
 import { TrafficTrendCard } from "@/components/statistics/TrafficTrendCard"
 import { TopHostsShareCard } from "@/components/statistics/TopHostsShareCard"
@@ -46,7 +46,7 @@ function HostsTable({
   title: string
   hosts: TopHost[]
   role: "src" | "dst"
-  window_: "1h" | "24h"
+  window_: StatsWindow
   emptyLabel: string
 }) {
   const navigate = useNavigate()
@@ -177,7 +177,7 @@ export default function StatisticsTraffic() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async (win: "1h" | "24h", showLoading: boolean) => {
+  const load = useCallback(async (win: StatsWindow, showLoading: boolean) => {
     if (showLoading) setIsLoading(true)
     try {
       const result = await trafficStatisticsService.getTopHosts(win, ROWS_LIMIT)
@@ -237,12 +237,19 @@ export default function StatisticsTraffic() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <StatsWindowSelect value={window_} onChange={setWindow} />
+        <div className="flex flex-wrap items-center gap-2">
           {data && <AccuracyBadge accuracy={data.accuracy} />}
-          <Button variant="outline" size="sm" onClick={() => load(window_, true)} disabled={isLoading}>
+          <StatsWindowTabs value={window_} onChange={setWindow} />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => load(window_, true)}
+            disabled={isLoading}
+            title="Refresh"
+            aria-label="Refresh"
+          >
             <RefreshCw className={isLoading ? "size-4 animate-spin" : "size-4"} />
-            Refresh
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
         </div>
       </div>

@@ -73,9 +73,7 @@ func parseConvKey(key string) (src, dst, proto string, port uint16, ok bool) {
 // each (plan §1.2/T-03). window/limit are re-validated defensively here even
 // though the HTTP handler already whitelists/clamps them.
 func (s *StatisticsService) GetTrafficTopHosts(window string, limit int) model.TrafficTopHosts {
-	if window != trafficWindow24h {
-		window = trafficWindow1h
-	}
+	window = normalizeStatsWindow(window)
 	limit = clampLimit(limit, trafficTopHostsDefaultLimit, trafficTopHostsMaxLimit)
 
 	breakdown := s.traffic.GetTrafficBreakdown(window)
@@ -147,9 +145,7 @@ func applyRates(hosts []model.TopHost, rates map[string]RatePair) {
 // method does not re-validate it as an address, only compares it as a plain
 // string against each conversation's srcIP/dstIP.
 func (s *StatisticsService) GetTrafficHostDetail(window, ip string, limit int) model.TrafficHostDetail {
-	if window != trafficWindow24h {
-		window = trafficWindow1h
-	}
+	window = normalizeStatsWindow(window)
 	limit = clampLimit(limit, trafficHostDetailDefaultLimit, trafficHostDetailMaxLimit)
 
 	// GetTrafficBreakdownForIP (not GetTrafficBreakdown) — Hosts/Dests/Convs/

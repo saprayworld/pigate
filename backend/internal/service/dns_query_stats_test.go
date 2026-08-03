@@ -265,6 +265,41 @@ func TestStatisticsService_DNSDrilldown_WindowSelection(t *testing.T) {
 	}
 }
 
+// TestStatisticsService_DnsWindowBuckets_AllSeven is docs/ref/todo/
+// statistics-window-granularity-plan.md T-07 item 5: dnsWindowBuckets must
+// select exactly statsWindowBuckets[window] trailing buckets for all 7
+// windows, from a ring wider than every one of them.
+func TestStatisticsService_DnsWindowBuckets_AllSeven(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+	s.SetDNSLoggingEnabled(true)
+
+	s.dns.mu.Lock()
+	s.dns.buckets = make([]domainBucket, trafficDetailBucketMax)
+	for i := range s.dns.buckets {
+		s.dns.buckets[i] = domainBucket{ts: fmt.Sprintf("bucket-%03d", i)}
+	}
+	s.dns.mu.Unlock()
+
+	cases := []struct {
+		window string
+		want   int
+	}{
+		{"15m", 3}, {"30m", 6}, {"1h", 12}, {"3h", 36}, {"6h", 72}, {"12h", 144}, {"24h", 288},
+	}
+	s.dns.mu.RLock()
+	defer s.dns.mu.RUnlock()
+	for _, c := range cases {
+		got := s.dnsWindowBuckets(c.window)
+		if len(got) != c.want {
+			t.Fatalf("window %s: expected %d buckets, got %d", c.window, c.want, len(got))
+		}
+		// Must be the TRAILING (newest) buckets, not the first N.
+		if got[len(got)-1].ts != fmt.Sprintf("bucket-%03d", trafficDetailBucketMax-1) {
+			t.Fatalf("window %s: expected the newest bucket last, got ts=%q", c.window, got[len(got)-1].ts)
+		}
+	}
+}
+
 // TestStatisticsService_DNSDrilldown_Percent is drilldown plan T-05 item 5:
 // Top Domains/Top Clients percentages must never sum above 100%, and a
 // drilldown computed from a single-client domain's own total must be 100%.

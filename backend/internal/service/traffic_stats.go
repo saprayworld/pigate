@@ -72,7 +72,9 @@ const (
 	trafficWindow1h  = "1h"
 	trafficWindow24h = "24h"
 	// trafficWindow1hBuckets is how many trailing 5-minute buckets make up
-	// the "1h" window (12 x 5min = 1h).
+	// the "1h" window (12 x 5min = 1h) — kept as its own const because many
+	// existing tests reference it by name, but its value is always in sync
+	// with statsWindowBuckets[trafficWindow1h] below (see the init() check).
 	trafficWindow1hBuckets = 12
 
 	// sessionSampleInterval is the cadence of the Active Sessions sampler
@@ -84,6 +86,62 @@ const (
 	// minutes (5s x 360 points); never persisted to SQLite.
 	sessionRingMax = 360
 )
+
+// statsWindowBuckets is the single source of truth for how many trailing
+// trafficDetailBucketSpan (5-minute) buckets make up each supported
+// statistics window (docs/ref/todo/statistics-window-granularity-plan.md
+// §2.1). Every ring in the project that windows over time — the traffic
+// bucket ring here, the deny/NFLOG ring in statistics.go, and the DNS ring in
+// dns_query_stats.go — stores exactly trafficDetailBucketMax (288) buckets of
+// trafficDetailBucketSpan (5 minutes) each, i.e. 24h of history, so every
+// window below is simply "the last N of those buckets" (N = window minutes /
+// 5) — no extra storage, polling, or migration is needed to add a window
+// here. Do not add a second map/switch anywhere else in the codebase; call
+// normalizeStatsWindow/statsWindowBucketCount instead.
+var statsWindowBuckets = map[string]int{
+	"15m": 3,
+	"30m": 6,
+	"1h":  12,
+	"3h":  36,
+	"6h":  72,
+	"12h": 144,
+	"24h": 288,
+}
+
+func init() {
+	if statsWindowBuckets[trafficWindow1h] != trafficWindow1hBuckets {
+		panic("traffic_stats.go: trafficWindow1hBuckets out of sync with statsWindowBuckets")
+	}
+}
+
+// normalizeStatsWindow returns w unchanged when it is one of the 7 supported
+// statistics windows, or trafficWindow1h ("1h") for anything else — including
+// empty string, unknown values, and label-cased values like "1H" (plan §0
+// D-3/D-4: unknown values fall back silently, never an error; the fallback is
+// deliberately NOT case-insensitive so a frontend bug that sends the button
+// label instead of its value is caught by tests instead of silently masked).
+func normalizeStatsWindow(w string) string {
+	if _, ok := statsWindowBuckets[w]; ok {
+		return w
+	}
+	return trafficWindow1h
+}
+
+// statsWindowBucketCount returns how many trailing 5-minute buckets the given
+// window covers, normalizing w first (see normalizeStatsWindow).
+func statsWindowBucketCount(w string) int {
+	return statsWindowBuckets[normalizeStatsWindow(w)]
+}
+
+// lastNBuckets returns the trailing n elements of ring (oldest-to-newest,
+// same order as ring itself), or the whole ring when it holds fewer than n
+// elements — never panics on n > len(ring).
+func lastNBuckets[T any](ring []T, n int) []T {
+	if n > len(ring) {
+		n = len(ring)
+	}
+	return ring[len(ring)-n:]
+}
 
 // flowSampleState is the per-flow-key baseline the poller keeps between
 // ticks: the last-seen cumulative byte count (for delta computation) and a
@@ -1089,9 +1147,7 @@ func mergeRuleMap(dst, src map[string]model.RuleCounter) {
 // whole read+aggregate under one RLock instead (see traffic_stats_test.go
 // TestTrafficStats_GetTrafficDetailNoRaceWithPoll, run with `go test -race`).
 func (s *TrafficStatsService) GetTrafficDetail(window string) model.TrafficDetail {
-	if window != trafficWindow24h {
-		window = trafficWindow1h
-	}
+	window = normalizeStatsWindow(window)
 
 	hostTotals := make(map[string]uint64)
 	catTotals := make(map[string]uint64)
@@ -1099,16 +1155,12 @@ func (s *TrafficStatsService) GetTrafficDetail(window string) model.TrafficDetai
 	var observed uint64
 
 	s.mu.RLock()
-	var windowBuckets []trafficDetailBucket
-	if window == trafficWindow1h {
-		n := trafficWindow1hBuckets
-		if len(s.buckets) < n {
-			n = len(s.buckets)
-		}
-		windowBuckets = s.buckets[len(s.buckets)-n:]
-	} else {
-		windowBuckets = s.buckets
-	}
+	// For window == trafficWindow24h this is a no-op versus the old "use the
+	// whole ring" branch: the ring is already capped at trafficDetailBucketMax
+	// (288) by addBucket above, and statsWindowBuckets["24h"] == 288 too, so
+	// lastNBuckets(s.buckets, 288) always returns the entire ring unchanged
+	// (plan §2.1 item 6 / §6 item 5).
+	windowBuckets := lastNBuckets(s.buckets, statsWindowBucketCount(window))
 	for _, b := range windowBuckets {
 		// Summed via .Total() — GetTrafficDetail's response (Dashboard
 		// "Detailed" tab) MUST NOT change out of this plan (plan §5 Caution
@@ -1215,9 +1267,7 @@ func (s *TrafficStatsService) GetTrafficBreakdownForIP(window, ip string) Traffi
 // (zero added cost for every existing caller — GetTrafficBreakdown itself,
 // GetTrafficTopHosts, GetStatistics).
 func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string) TrafficBreakdown {
-	if window != trafficWindow24h {
-		window = trafficWindow1h
-	}
+	window = normalizeStatsWindow(window)
 
 	hostTotals := make(map[string]dirBytes)
 	dstTotals := make(map[string]dirBytes)
@@ -1231,10 +1281,11 @@ func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string) Traffi
 	// in windowBuckets is aggregated into both Observed and Series under the
 	// exact same lock acquisition — the race the plan's revision 2 fixed
 	// (§2.5 item 1) is structurally impossible here.
-	n := trafficWindow1hBuckets
-	if window == trafficWindow24h {
-		n = trafficDetailBucketMax
-	}
+	// n is computed ONCE here via statsWindowBucketCount and reused unchanged
+	// for both the series axis above and the bucket selection below (plan §6
+	// item 1 — the single most important invariant of this file: if these two
+	// uses of n ever diverge, sum(Series[].Bytes) == Observed breaks silently).
+	n := statsWindowBucketCount(window)
 	axisEnd := time.Now().Truncate(trafficDetailBucketSpan)
 	axisStart := axisEnd.Add(-time.Duration(n-1) * trafficDetailBucketSpan)
 	series := make([]model.BandwidthPoint, n)
@@ -1269,16 +1320,10 @@ func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string) Traffi
 	}
 
 	s.mu.RLock()
-	var windowBuckets []trafficDetailBucket
-	if window == trafficWindow1h {
-		n := trafficWindow1hBuckets
-		if len(s.buckets) < n {
-			n = len(s.buckets)
-		}
-		windowBuckets = s.buckets[len(s.buckets)-n:]
-	} else {
-		windowBuckets = s.buckets
-	}
+	// Same n as the series axis above (see the comment there) — for
+	// window == trafficWindow24h this is a no-op versus the old "use the
+	// whole ring" branch (plan §2.1 item 6 / §6 item 5).
+	windowBuckets := lastNBuckets(s.buckets, n)
 	for _, b := range windowBuckets {
 		for k, v := range b.hostBytes {
 			cur := hostTotals[k]

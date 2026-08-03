@@ -125,7 +125,11 @@ type BandwidthPoint struct {
 
 // TrafficStatistics is the /api/statistics/traffic response.
 type TrafficStatistics struct {
-	Window        string `json:"window"` // "1h" | "24h"
+	// Window is one of "15m", "30m", "1h", "3h", "6h", "12h", "24h". An
+	// unrecognized value sent to the API (including empty) is never returned
+	// here — it falls back to "1h" server-side (docs/ref/todo/
+	// statistics-window-granularity-plan.md §0 D-3) before this DTO is built.
+	Window        string `json:"window"` // "15m" | "30m" | "1h" | "3h" | "6h" | "12h" | "24h"
 	ObservedBytes uint64 `json:"observedBytes"`
 	// Accuracy mirrors TrafficDetail.Accuracy ("estimated" | "near-exact") —
 	// same conntrack-poll-vs-DESTROY-event signal, computed the same way.
@@ -139,8 +143,10 @@ type TrafficStatistics struct {
 	// Overview page's top row (plan T-01/T-03): one BandwidthPoint per raw
 	// 5-minute bucket, zero-filled and carried to the nearest edge point when
 	// the ring covers a wider span than the window (plan §2.5/§7 item 6), so
-	// Series always has a fixed length (12 for "1h", 288 for "24h"), sorted
-	// oldest -> newest, and sum(Series[].Bytes) == ObservedBytes exactly.
+	// Series always has a fixed length equal to the number of 5-minute
+	// buckets the window covers (3/6/12/36/72/144/288 for
+	// 15m/30m/1h/3h/6h/12h/24h respectively), sorted oldest -> newest, and
+	// sum(Series[].Bytes) == ObservedBytes exactly.
 	Series []BandwidthPoint `json:"series"`
 
 	DeniedSources []TopDeniedSource `json:"deniedSources"`
@@ -197,7 +203,10 @@ type DNSClientStat struct {
 // — same source ring as TrafficStatistics.TopDomains, but with the client
 // dimension added (plan T-02).
 type DNSQueryStatistics struct {
-	Window       string `json:"window"` // "1h" | "24h"
+	// Window is one of "15m", "30m", "1h", "3h", "6h", "12h", "24h" — see the
+	// TrafficStatistics.Window comment above for the unknown-value fallback
+	// rule (identical here).
+	Window string `json:"window"` // "15m" | "30m" | "1h" | "3h" | "6h" | "12h" | "24h"
 	Enabled      bool   `json:"enabled"`
 	TotalQueries uint64 `json:"totalQueries"`
 	// Truncated is true when the domain×client pair ring or the client ring
@@ -259,7 +268,9 @@ type DNSClientDrilldown struct {
 // Limit rows each, so the Traffic page can filter/sort more than the
 // Overview page's statsTopN cards ever expose (plan §1.2).
 type TrafficTopHosts struct {
-	Window        string `json:"window"` // "1h" | "24h"
+	// Window is one of "15m", "30m", "1h", "3h", "6h", "12h", "24h" — see
+	// TrafficStatistics.Window for the unknown-value fallback rule.
+	Window        string `json:"window"` // "15m" | "30m" | "1h" | "3h" | "6h" | "12h" | "24h"
 	ObservedBytes uint64 `json:"observedBytes"`
 	// Accuracy mirrors TrafficStatistics.Accuracy ("estimated" | "near-exact").
 	Accuracy string `json:"accuracy"`
@@ -279,7 +290,9 @@ type TrafficTopHosts struct {
 	// — the SAME network-wide, LAN-relative series as TrafficStatistics.Series
 	// above (Up = leaving the LAN, Down = entering it), fed by the identical
 	// bucket computation so sum(Series[].Bytes) == ObservedBytes exactly.
-	// Fixed length (12 for "1h", 288 for "24h"), sorted oldest -> newest.
+	// Fixed length equal to the window's 5-minute bucket count
+	// (3/6/12/36/72/144/288 for 15m/30m/1h/3h/6h/12h/24h), sorted oldest ->
+	// newest.
 	Series      []BandwidthPoint `json:"series"`
 	GeneratedAt string           `json:"generatedAt"`
 	// RateSampledAt is the RFC3339 UTC timestamp the RateBpsUp/RateBpsDown
@@ -381,9 +394,10 @@ type TrafficHostDetail struct {
 	// TrafficStatistics.Series. Invariant: sum(Series[].Bytes) == TotalBytes,
 	// sum(Series[].BytesUp) == TotalBytesUp, sum(Series[].BytesDown) ==
 	// TotalBytesDown, by construction (same convBytes map TotalBytes is
-	// summed from — see GetTrafficBreakdownForIP). Fixed length (12 for "1h",
-	// 288 for "24h") always, even when Found is false (a zero-filled array,
-	// never nil).
+	// summed from — see GetTrafficBreakdownForIP). Fixed length equal to the
+	// window's 5-minute bucket count (3/6/12/36/72/144/288 for
+	// 15m/30m/1h/3h/6h/12h/24h) always, even when Found is false (a
+	// zero-filled array, never nil).
 	Series      []BandwidthPoint `json:"series"`
 	GeneratedAt string           `json:"generatedAt"`
 	// CurrentRateBpsUp/CurrentRateBpsDown are this IP's real-time throughput

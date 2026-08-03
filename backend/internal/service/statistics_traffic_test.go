@@ -372,6 +372,39 @@ func TestGetTrafficHostDetail_SeriesLengthFixed(t *testing.T) {
 	}
 }
 
+// TestGetTrafficHostDetail_AllSevenWindows_SeriesLengthFixed is docs/ref/todo/
+// statistics-window-granularity-plan.md T-07 item 1: HostSeries length across
+// all 7 supported windows must match statsWindowBuckets exactly.
+func TestGetTrafficHostDetail_AllSevenWindows_SeriesLengthFixed(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "8.8.8.8", Proto: 17, DstPort: 53, BytesOrig: 100, BytesReply: 100}},
+		},
+	}
+	s := newTestStatisticsService(t, acct)
+	s.traffic.poll()
+	s.traffic.poll()
+
+	cases := []struct {
+		window string
+		want   int
+	}{
+		{"15m", 3}, {"30m", 6}, {"1h", 12}, {"3h", 36}, {"6h", 72}, {"12h", 144}, {"24h", 288},
+	}
+	for _, c := range cases {
+		got := s.GetTrafficHostDetail(c.window, "192.168.1.50", 100)
+		if len(got.Series) != c.want {
+			t.Fatalf("window %s: expected %d points, got %d", c.window, c.want, len(got.Series))
+		}
+		bytes, up, down := seriesSum(got.Series)
+		if bytes != got.TotalBytes || up != got.TotalBytesUp || down != got.TotalBytesDown {
+			t.Fatalf("window %s: series sum (bytes=%d up=%d down=%d) != totals (bytes=%d up=%d down=%d)",
+				c.window, bytes, up, down, got.TotalBytes, got.TotalBytesUp, got.TotalBytesDown)
+		}
+	}
+}
+
 // TestGetTrafficHostDetail_SeriesIsPerIPNotNetworkWide is plan T-03 case 3 —
 // guards against a regression that wires the network-wide breakdown.Series
 // into TrafficHostDetail.Series instead of breakdown.HostSeries (plan §2.2

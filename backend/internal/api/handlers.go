@@ -396,53 +396,60 @@ func (s *Server) HandleGetTrafficHistory(w http.ResponseWriter, r *http.Request)
 	s.writeJSON(w, http.StatusOK, s.systemStatus.GetTrafficHistory())
 }
 
+// statsWindowValues is the api-layer whitelist for the `window` query param,
+// shared by every handler that accepts one (docs/ref/todo/
+// statistics-window-granularity-plan.md T-05) — must stay in sync with
+// service.statsWindowBuckets (backend/internal/service/traffic_stats.go),
+// which the service layer re-normalizes against independently as
+// defense-in-depth. Kept as its own set (not exported from service) so the
+// api package doesn't need an import just to validate a query string.
+var statsWindowValues = map[string]bool{
+	"15m": true, "30m": true, "1h": true, "3h": true, "6h": true, "12h": true, "24h": true,
+}
+
+// statsWindowParam reads and whitelists the `window` query param to the 7
+// supported statistics windows — any other value (including empty, wrong
+// case like "1H", or garbage) silently falls back to "1h" rather than
+// passing a client-supplied raw string into the service (plan §0 D-3: no
+// error response, so an old bookmark/link with `?window=24h` — or no window
+// at all — keeps working). Every handler below that accepts `window` (the
+// Dashboard traffic-detail endpoint included, per plan §0 D-2) calls this
+// single helper.
+func statsWindowParam(r *http.Request) string {
+	window := r.URL.Query().Get("window")
+	if !statsWindowValues[window] {
+		return "1h"
+	}
+	return window
+}
+
 // HandleGetTrafficDetail backs the Dashboard "Detailed" tab's Protocol
 // Breakdown / Top Talkers / Top Rules by Traffic cards
-// (docs/ref/todo/dashboard-traffic-detail-plan.md). window is whitelisted to
-// {"1h","24h"} — any other value (including empty) silently falls back to
-// "1h" rather than passing a client-supplied raw string into the service
-// (plan T-09: "ห้ามส่งค่าดิบจาก client ต่อเข้า service").
+// (docs/ref/todo/dashboard-traffic-detail-plan.md). window is whitelisted via
+// statsWindowParam (7 values — plan §0 D-2: the Dashboard UI itself still
+// only ever sends "1h"/"24h", but the endpoint accepts all 7 like every other
+// statistics endpoint) — any other value (including empty) silently falls
+// back to "1h" rather than passing a client-supplied raw string into the
+// service (plan T-09: "ห้ามส่งค่าดิบจาก client ต่อเข้า service").
 func (s *Server) HandleGetTrafficDetail(w http.ResponseWriter, r *http.Request) {
-	window := r.URL.Query().Get("window")
-	if window != "24h" {
-		window = "1h"
-	}
+	window := statsWindowParam(r)
 	s.writeJSON(w, http.StatusOK, s.trafficStats.GetTrafficDetail(window))
 }
 
 // HandleGetStatistics backs the Statistics page (Top Source Hosts / Top
 // Destinations / Top Conversations / Top Denied —
-// docs/ref/todo/statistics-page-plan.md). window is whitelisted to
-// {"1h","24h"} exactly like HandleGetTrafficDetail above — any other value
-// (including empty) silently falls back to "1h" rather than passing a
-// client-supplied raw string into the service (plan §5 Caution 1: the only
-// client input in this whole feature).
+// docs/ref/todo/statistics-page-plan.md). window is whitelisted via
+// statsWindowParam exactly like HandleGetTrafficDetail above.
 func (s *Server) HandleGetStatistics(w http.ResponseWriter, r *http.Request) {
-	window := r.URL.Query().Get("window")
-	if window != "24h" {
-		window = "1h"
-	}
+	window := statsWindowParam(r)
 	s.writeJSON(w, http.StatusOK, s.statistics.GetStatistics(window))
-}
-
-// dnsStatsWindow whitelists the `window` query param to {"1h","24h"} exactly
-// like HandleGetStatistics/HandleGetTrafficDetail above — any other value
-// (including empty) silently falls back to "1h" rather than passing a
-// client-supplied raw string into the service (docs/ref/todo/
-// dns-query-statistics-drilldown-plan.md T-03).
-func dnsStatsWindow(r *http.Request) string {
-	window := r.URL.Query().Get("window")
-	if window != "24h" {
-		window = "1h"
-	}
-	return window
 }
 
 // HandleGetDNSQueryStatistics backs the DNS Query Statistics tab's two
 // top-level tables (Top Domains / Top Clients — drilldown plan T-03). No
 // client-supplied input besides the whitelisted window.
 func (s *Server) HandleGetDNSQueryStatistics(w http.ResponseWriter, r *http.Request) {
-	window := dnsStatsWindow(r)
+	window := statsWindowParam(r)
 	s.writeJSON(w, http.StatusOK, s.statistics.GetDNSQueryStatistics(window))
 }
 
@@ -457,7 +464,7 @@ func (s *Server) HandleGetDNSQueryStatistics(w http.ResponseWriter, r *http.Requ
 // still returns 200 with an empty client list (plan T-03: "not found" is a
 // normal outcome of window/timing, not an error).
 func (s *Server) HandleGetDNSDomainClients(w http.ResponseWriter, r *http.Request) {
-	window := dnsStatsWindow(r)
+	window := statsWindowParam(r)
 	raw := r.URL.Query().Get("domain")
 	if raw == "" {
 		s.writeError(w, http.StatusBadRequest, "domain is required")
@@ -480,7 +487,7 @@ func (s *Server) HandleGetDNSDomainClients(w http.ResponseWriter, r *http.Reques
 // bucket — plan §5 item 5). On validation failure it returns 400 with a
 // generic message; the raw value sent is never echoed back.
 func (s *Server) HandleGetDNSClientDomains(w http.ResponseWriter, r *http.Request) {
-	window := dnsStatsWindow(r)
+	window := statsWindowParam(r)
 	raw := r.URL.Query().Get("client")
 	if raw == "" {
 		s.writeError(w, http.StatusBadRequest, "client is required")
@@ -538,10 +545,10 @@ func clampQueryLimit(r *http.Request, def, max int) int {
 // HandleGetStatistics's statsTopN-cut response, this endpoint returns up to
 // `limit` rows (default 100, clamped to 500) so the page can filter/sort
 // beyond the Overview page's top-10 cards. window is whitelisted exactly like
-// dnsStatsWindow/HandleGetStatistics; limit is clamped, never rejected — the
+// statsWindowParam/HandleGetStatistics; limit is clamped, never rejected — the
 // only validated client input on this route.
 func (s *Server) HandleGetTrafficTopHosts(w http.ResponseWriter, r *http.Request) {
-	window := dnsStatsWindow(r)
+	window := statsWindowParam(r)
 	limit := clampQueryLimit(r, trafficTopHostsDefaultLimit, trafficTopHostsMaxLimit)
 	s.writeJSON(w, http.StatusOK, s.statistics.GetTrafficTopHosts(window, limit))
 }
@@ -557,7 +564,7 @@ func (s *Server) HandleGetTrafficTopHosts(w http.ResponseWriter, r *http.Request
 // client-normalization rule above). window/limit are handled exactly like
 // HandleGetTrafficTopHosts, with the drill-down's own (lower) limit ceiling.
 func (s *Server) HandleGetTrafficHostDetail(w http.ResponseWriter, r *http.Request) {
-	window := dnsStatsWindow(r)
+	window := statsWindowParam(r)
 	limit := clampQueryLimit(r, trafficHostDetailDefaultLimit, trafficHostDetailMaxLimit)
 
 	raw := r.URL.Query().Get("ip")

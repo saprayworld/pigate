@@ -364,11 +364,12 @@ paths:
           in: query
           schema:
             type: string
-            enum: [1h, 24h]
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
             default: 1h
           description: >
-            Aggregation window. Any value outside {1h, 24h} (including
-            omitted) silently falls back to 1h rather than erroring.
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
       responses:
         '200':
           description: Traffic detail retrieved
@@ -402,11 +403,12 @@ paths:
           in: query
           schema:
             type: string
-            enum: [1h, 24h]
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
             default: 1h
           description: >
-            Aggregation window. Any value outside {1h, 24h} (including
-            omitted) silently falls back to 1h rather than erroring.
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
       responses:
         '200':
           description: Traffic statistics retrieved
@@ -434,11 +436,12 @@ paths:
           in: query
           schema:
             type: string
-            enum: [1h, 24h]
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
             default: 1h
           description: >
-            Aggregation window. Any value outside {1h, 24h} (including
-            omitted) silently falls back to 1h rather than erroring.
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
         - name: limit
           in: query
           schema:
@@ -498,11 +501,12 @@ paths:
           in: query
           schema:
             type: string
-            enum: [1h, 24h]
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
             default: 1h
           description: >
-            Aggregation window. Any value outside {1h, 24h} (including
-            omitted) silently falls back to 1h rather than erroring.
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
         - name: limit
           in: query
           schema:
@@ -550,11 +554,12 @@ paths:
           in: query
           schema:
             type: string
-            enum: [1h, 24h]
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
             default: 1h
           description: >
-            Aggregation window. Any value outside {1h, 24h} (including
-            omitted) silently falls back to 1h rather than erroring.
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
       responses:
         '200':
           description: DNS query statistics retrieved
@@ -599,11 +604,12 @@ paths:
           in: query
           schema:
             type: string
-            enum: [1h, 24h]
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
             default: 1h
           description: >
-            Aggregation window. Any value outside {1h, 24h} (including
-            omitted) silently falls back to 1h rather than erroring.
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
       responses:
         '200':
           description: Clients that queried this domain in the window
@@ -649,11 +655,12 @@ paths:
           in: query
           schema:
             type: string
-            enum: [1h, 24h]
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
             default: 1h
           description: >
-            Aggregation window. Any value outside {1h, 24h} (including
-            omitted) silently falls back to 1h rather than erroring.
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
       responses:
         '200':
           description: Domains this client queried in the window
@@ -4052,7 +4059,7 @@ components:
       properties:
         window:
           type: string
-          enum: [1h, 24h]
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
         observedBytes:
           type: integer
           format: int64
@@ -4344,7 +4351,7 @@ components:
       properties:
         window:
           type: string
-          enum: [1h, 24h]
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
         observedBytes:
           type: integer
           format: int64
@@ -4424,8 +4431,10 @@ components:
             page's top row (docs/ref/todo/
             statistics-overview-bandwidth-chart-plan.md). Fixed-length,
             zero-filled 5-minute buckets from the same conntrack-derived
-            bucket ring as observedBytes/topSources/etc: 12 points for
-            window=1h, 288 points for window=24h, sorted oldest -> newest.
+            bucket ring as observedBytes/topSources/etc: the number of points
+            equals the window's 5-minute bucket count (3/6/12/36/72/144/288
+            for window=15m/30m/1h/3h/6h/12h/24h respectively), sorted oldest
+            -> newest.
             sum(series[].bytes) always equals observedBytes exactly (buckets
             outside the array's own time axis, e.g. after a long quiet
             period, are carried into the nearest edge point rather than
@@ -4494,7 +4503,7 @@ components:
       properties:
         window:
           type: string
-          enum: [1h, 24h]
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
         observedBytes:
           type: integer
           format: int64
@@ -4533,7 +4542,8 @@ components:
             SAME convention as TrafficStatistics.series above (docs/ref/todo/
             statistics-traffic-bandwidth-chart-plan.md T-01/T-02): direction
             is LAN-relative (bytesUp = leaving the LAN, bytesDown = entering
-            the LAN), fixed length (12 for window=1h, 288 for window=24h),
+            the LAN), fixed length equal to the window's 5-minute bucket count
+            (3/6/12/36/72/144/288 for window=15m/30m/1h/3h/6h/12h/24h),
             sorted oldest -> newest, and sum(series[].bytes) always equals
             observedBytes exactly. This is the identical series
             TrafficStatistics.series would show for the same window — reused
@@ -4679,7 +4689,7 @@ components:
           example: true
         window:
           type: string
-          enum: [1h, 24h]
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
         accuracy:
           type: string
           enum: [estimated, near-exact]
@@ -4749,9 +4759,9 @@ components:
             sum(series[].bytes) == totalBytes, sum(series[].bytesUp) ==
             totalBytesUp, sum(series[].bytesDown) == totalBytesDown, always
             exactly (computed from the same conversation data totalBytes is
-            summed from). Fixed length (12 for window=1h, 288 for
-            window=24h) always, even when found=false — a zero-filled array,
-            never null.
+            summed from). Fixed length equal to the window's 5-minute bucket
+            count (3/6/12/36/72/144/288 for window=15m/30m/1h/3h/6h/12h/24h)
+            always, even when found=false — a zero-filled array, never null.
           items:
             $ref: '#/components/schemas/BandwidthPoint'
         generatedAt:
@@ -4836,7 +4846,7 @@ components:
       properties:
         window:
           type: string
-          enum: [1h, 24h]
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
         enabled:
           type: boolean
           description: Mirrors DNSServerSettings.queryLogging.
@@ -4887,7 +4897,7 @@ components:
           example: www.youtube.com
         window:
           type: string
-          enum: [1h, 24h]
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
         enabled:
           type: boolean
           description: Mirrors DNSServerSettings.queryLogging.
@@ -4940,7 +4950,7 @@ components:
           example: laptop-living-room
         window:
           type: string
-          enum: [1h, 24h]
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
         enabled:
           type: boolean
           description: Mirrors DNSServerSettings.queryLogging.

@@ -399,9 +399,14 @@ func TestTrafficStats_GetTrafficDetailNoRaceWithPoll(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
+		// Exercise all 7 supported windows (docs/ref/todo/
+		// statistics-window-granularity-plan.md T-07 item 7), not just 1h/24h,
+		// so a race introduced by the new bucket-selection path would still be
+		// caught here.
 		for i := 0; i < iterations; i++ {
-			_ = s.GetTrafficDetail("1h")
-			_ = s.GetTrafficDetail("24h")
+			for w := range statsWindowBuckets {
+				_ = s.GetTrafficDetail(w)
+			}
 		}
 	}()
 	wg.Wait()
@@ -985,4 +990,125 @@ func TestTrafficStats_CurrentRatesNoRaceWithPoll(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+}
+
+// TestNormalizeStatsWindow_AllSevenAndFallback is docs/ref/todo/
+// statistics-window-granularity-plan.md T-07 item 6 at the normalizeStatsWindow
+// level: all 7 canonical values pass through unchanged; anything else
+// (including empty, garbage, and — critically — the UPPERCASE button labels
+// like "1H"/"24H"/"15M" and a value with surrounding whitespace) falls back to
+// "1h". normalizeStatsWindow must NOT be case-insensitive (plan §0 D-4/§6
+// item 3) — a frontend bug that sends the label instead of the value must be
+// caught by this test, not silently masked by a toLowerCase() here.
+func TestNormalizeStatsWindow_AllSevenAndFallback(t *testing.T) {
+	for w := range statsWindowBuckets {
+		if got := normalizeStatsWindow(w); got != w {
+			t.Errorf("normalizeStatsWindow(%q) = %q, want unchanged", w, got)
+		}
+	}
+
+	fallbackCases := []string{
+		"", "evil", "99h", "2h", "1H", "24H", "15M", " 1h", "../etc/passwd",
+	}
+	for _, w := range fallbackCases {
+		if got := normalizeStatsWindow(w); got != trafficWindow1h {
+			t.Errorf("normalizeStatsWindow(%q) = %q, want %q", w, got, trafficWindow1h)
+		}
+	}
+}
+
+// TestStatsWindowBucketCount_AllSeven is T-07 item 1's helper-level check:
+// statsWindowBucketCount must return exactly the table in statsWindowBuckets
+// for all 7 windows.
+func TestStatsWindowBucketCount_AllSeven(t *testing.T) {
+	want := map[string]int{
+		"15m": 3, "30m": 6, "1h": 12, "3h": 36, "6h": 72, "12h": 144, "24h": 288,
+	}
+	for w, n := range want {
+		if got := statsWindowBucketCount(w); got != n {
+			t.Errorf("statsWindowBucketCount(%q) = %d, want %d", w, got, n)
+		}
+	}
+}
+
+// TestLastNBuckets_NoPanicWhenNExceedsLen is T-07 item 4's helper-level check:
+// lastNBuckets must never panic when n > len(ring), returning the whole ring
+// instead.
+func TestLastNBuckets_NoPanicWhenNExceedsLen(t *testing.T) {
+	ring := []int{1, 2, 3}
+	got := lastNBuckets(ring, 288)
+	if len(got) != 3 || got[0] != 1 || got[2] != 3 {
+		t.Fatalf("lastNBuckets(ring of 3, 288) = %v, want the whole ring unchanged", got)
+	}
+	empty := lastNBuckets([]int{}, 288)
+	if len(empty) != 0 {
+		t.Fatalf("lastNBuckets(empty ring, 288) = %v, want empty", empty)
+	}
+}
+
+// TestBandwidthSeries_AllSevenWindows_FixedLength is T-07 item 1: series/
+// breakdown length across all 7 windows, from GetTrafficBreakdown, matches
+// statsWindowBuckets exactly, even on an empty ring.
+func TestBandwidthSeries_AllSevenWindows_FixedLength(t *testing.T) {
+	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+
+	cases := []struct {
+		window string
+		want   int
+	}{
+		{"15m", 3}, {"30m", 6}, {"1h", 12}, {"3h", 36}, {"6h", 72}, {"12h", 144}, {"24h", 288},
+	}
+	for _, c := range cases {
+		bd := s.GetTrafficBreakdown(c.window)
+		if len(bd.Series) != c.want {
+			t.Fatalf("window %s: expected %d points, got %d", c.window, c.want, len(bd.Series))
+		}
+	}
+}
+
+// TestBandwidthSeries_AllSevenWindows_SumEqualsObserved is T-07 items 1/3: a
+// full 288-bucket ring, checked at all 7 windows — the sum invariant must
+// hold everywhere, and a short window (e.g. 15m -> 3 trailing buckets) must
+// only include ITS OWN trailing buckets, not the whole ring carried into the
+// first point (plan §6 item 1/D-1).
+func TestBandwidthSeries_AllSevenWindows_SumEqualsObserved(t *testing.T) {
+	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+	now := time.Now()
+	for i := trafficDetailBucketMax - 1; i >= 0; i-- {
+		s.addBucket(now.Add(-time.Duration(i)*trafficDetailBucketSpan), nil, nil, nil, nil, nil, dirBytes{Orig: 1, Reply: 1})
+	}
+
+	for window, n := range statsWindowBuckets {
+		bd := s.GetTrafficBreakdown(window)
+		bytes, _, _ := seriesSum(bd.Series)
+		if bytes != bd.Observed {
+			t.Fatalf("window %s: sum(series.bytes)=%d != observed=%d", window, bytes, bd.Observed)
+		}
+		if bd.Observed != uint64(n*2) {
+			t.Fatalf("window %s: expected observed=%d (only the last %d of 288 buckets, 2 bytes each), got %d — a short window must not pull in the whole ring", window, n*2, n, bd.Observed)
+		}
+	}
+}
+
+// TestBandwidthSeries_RingSmallerThanWindow_ZeroFillsNoPanic is T-07 item 4:
+// a freshly-booted service (ring has only 2 buckets) asked for the widest
+// window (24h, 288 buckets) must not panic and must return a zero-filled,
+// fixed-length series.
+func TestBandwidthSeries_RingSmallerThanWindow_ZeroFillsNoPanic(t *testing.T) {
+	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+	now := time.Now()
+	s.addBucket(now.Add(-trafficDetailBucketSpan), nil, nil, nil, nil, nil, dirBytes{Orig: 5, Reply: 5})
+	s.addBucket(now, nil, nil, nil, nil, nil, dirBytes{Orig: 5, Reply: 5})
+
+	bd := s.GetTrafficBreakdown("24h")
+	if len(bd.Series) != 288 {
+		t.Fatalf("expected series length 288 even with only 2 buckets in the ring, got %d", len(bd.Series))
+	}
+	if bd.Observed != 20 {
+		t.Fatalf("expected observed=20, got %d", bd.Observed)
+	}
+	bytes, _, _ := seriesSum(bd.Series)
+	if bytes != bd.Observed {
+		t.Fatalf("sum(series.bytes)=%d != observed=%d", bytes, bd.Observed)
+	}
 }

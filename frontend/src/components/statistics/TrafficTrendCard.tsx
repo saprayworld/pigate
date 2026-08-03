@@ -15,7 +15,7 @@ import { fmtBytes, fmtRate } from "@/lib/formatBytes"
 import { lastBucketSpanSeconds } from "@/components/statistics/TrafficStatsShared"
 import { useTheme } from "@/hooks/useTheme"
 import type { BandwidthPoint } from "@/services/statisticsService"
-import type { StatsWindow } from "@/components/statistics/DnsStatsShared"
+import { statsWindowLongLabel, type StatsWindow } from "@/lib/statsWindow"
 
 // TrafficTrendCard (formerly TrafficTrendCard) is the Statistics Overview
 // page's traffic-over-time chart (docs/ref/todo/
@@ -106,12 +106,15 @@ export function TrafficTrendCard({
 
   const hasSignal = points.some((p) => p.bytes > 0)
 
-  // Aim for ~8-12 X-axis labels regardless of window (12 points for 1h, 288
-  // for 24h) — a raw `interval="preserveStartEnd"`/auto at 288 points would
-  // overlap into an unreadable smear on a 2/3-width card (plan T-07).
+  // Aim for ~8-12 X-axis labels regardless of window (3/6/12/36/72/144/288
+  // points for 15m/30m/1h/3h/6h/12h/24h respectively, docs/ref/todo/
+  // statistics-window-granularity-plan.md) — a raw
+  // `interval="preserveStartEnd"`/auto at 288 points would overlap into an
+  // unreadable smear on a 2/3-width card (plan T-07); at the short end (3
+  // points for 15m) this correctly evaluates to 0, i.e. show every tick.
   const tickInterval = Math.max(0, Math.ceil(data.length / 10) - 1)
 
-  const windowLabel = statsWindow === "24h" ? "24 ชม. ล่าสุด" : "1 ชม. ล่าสุด"
+  const windowLabel = statsWindowLongLabel(statsWindow)
 
   return (
     <Card className={cn(className)}>

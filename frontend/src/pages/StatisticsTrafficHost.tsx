@@ -16,7 +16,7 @@ import {
   type TrafficHostConversation,
   type TrafficHostDetail,
 } from "@/services/trafficStatisticsService"
-import { useStatsWindow, StatsWindowSelect, type StatsWindow } from "@/components/statistics/DnsStatsShared"
+import { useStatsWindow, StatsWindowTabs, type StatsWindow } from "@/components/statistics/DnsStatsShared"
 import { TrafficTrendCard } from "@/components/statistics/TrafficTrendCard"
 import {
   AccuracyBadge,
@@ -275,7 +275,7 @@ export default function StatisticsTrafficHost() {
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(
-    async (targetIp: string, win: "1h" | "24h", showLoading: boolean, isStale: () => boolean, isNewTarget: boolean) => {
+    async (targetIp: string, win: StatsWindow, showLoading: boolean, isStale: () => boolean, isNewTarget: boolean) => {
       if (showLoading) setIsLoading(true)
       if (isNewTarget) {
         setData(null)
@@ -387,18 +387,20 @@ export default function StatisticsTrafficHost() {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <StatsWindowSelect value={window_} onChange={setWindow} />
+        <div className="flex flex-wrap items-center gap-2">
           {data && <AccuracyBadge accuracy={data.accuracy} />}
+          <StatsWindowTabs value={window_} onChange={setWindow} />
           <Button
             variant="outline"
             size="sm"
             onClick={() => load(ip, window_, true, () => false, false)}
             disabled={isLoading}
             className="cursor-pointer gap-1.5"
+            title="Refresh"
+            aria-label="Refresh"
           >
             <RefreshCw className={isLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-            Refresh
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
         </div>
       </div>
