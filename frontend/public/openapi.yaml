@@ -4162,6 +4162,30 @@ components:
             stale (the IP could since be reused for another domain, e.g.
             CDN/cloud load balancers).
           example: www.youtube.com
+        rateBpsUp:
+          type: integer
+          format: int64
+          description: >-
+            Real-time throughput in bits/second (docs/ref/todo/
+            statistics-traffic-speed-plan.md), flow-relative in the SAME
+            direction convention as bytesUp (Orig, i.e. src -> dst) — not the
+            LAN-relative convention BandwidthPoint uses. This is an AVERAGE
+            over the most recent conntrack poll window (~10 seconds), not an
+            instantaneous value, and only as accurate as the response's own
+            accuracy field. Only present on GET /api/statistics/traffic/hosts
+            (the Traffic page) — the Overview page's GET
+            /api/statistics/traffic reuses this same schema but never
+            populates this field, so it is entirely absent from that
+            response's JSON.
+          example: 512000
+        rateBpsDown:
+          type: integer
+          format: int64
+          description: >-
+            Real-time throughput in bits/second in the reply direction (see
+            rateBpsUp for the shared caveats: average over ~10s, conntrack
+            accuracy, absent on the Overview page's response).
+          example: 4300000
 
     TopConversation:
       type: object
@@ -4520,6 +4544,15 @@ components:
         generatedAt:
           type: string
           format: date-time
+        rateSampledAt:
+          type: string
+          format: date-time
+          description: >-
+            RFC3339 UTC timestamp the rateBpsUp/rateBpsDown values on
+            sources/destinations above were sampled at (docs/ref/todo/
+            statistics-traffic-speed-plan.md) — absent/empty when no rate
+            sample exists yet (e.g. right after backend startup, before the
+            first poll tick has rotated).
 
     TrafficHostConversation:
       type: object
@@ -4706,6 +4739,32 @@ components:
         generatedAt:
           type: string
           format: date-time
+        currentRateBpsUp:
+          type: integer
+          format: int64
+          description: >-
+            This IP's real-time throughput in bits/second (docs/ref/todo/
+            statistics-traffic-speed-plan.md), an AVERAGE over the most
+            recent conntrack poll window (~10 seconds), not an instantaneous
+            value, and only as accurate as accuracy above. Direction is
+            flow-relative (up = orig direction), the same convention as
+            totalBytesUp/totalBytesDown. Absent/zero when found is false or
+            no rate sample exists yet.
+          example: 512000
+        currentRateBpsDown:
+          type: integer
+          format: int64
+          description: >-
+            This IP's real-time throughput in bits/second in the reply
+            direction — see currentRateBpsUp for the shared caveats.
+          example: 4300000
+        rateSampledAt:
+          type: string
+          format: date-time
+          description: >-
+            RFC3339 UTC timestamp currentRateBpsUp/currentRateBpsDown above
+            were sampled at — same field as TrafficTopHosts.rateSampledAt,
+            absent/empty when no rate sample exists yet.
 
     DNSClientStat:
       type: object

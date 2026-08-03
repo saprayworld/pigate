@@ -4,9 +4,10 @@ import { ArrowLeftRight, RefreshCw } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { getErrorMessage } from "@/lib/errors"
-import { fmtBytes } from "@/lib/formatBytes"
+import { fmtBytes, fmtRate } from "@/lib/formatBytes"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { trafficStatisticsService, type TopHost, type TrafficTopHosts } from "@/services/trafficStatisticsService"
 import { useStatsWindow, StatsWindowSelect } from "@/components/statistics/DnsStatsShared"
 import { HostLabel } from "@/components/statistics/HostCells"
@@ -78,12 +79,22 @@ function HostsTable({
                     <SortableHead<TopHost> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
                     <SortableHead<TopHost> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
                     <SortableHead<TopHost> label="%" sortKey="percent" sort={sort} onToggle={toggle} align="right" className="w-16" />
+                    <TableHead className="hidden w-28 text-right text-xs font-medium text-muted-foreground md:table-cell">
+                      <Tooltip>
+                        <TooltipTrigger className="inline-flex cursor-default items-center gap-1">
+                          Speed
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          ความเร็วเฉลี่ยประมาณ 10 วินาทีล่าสุด (ค่าประมาณจาก conntrack)
+                        </TooltipContent>
+                      </Tooltip>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {shown.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="py-8 text-center text-xs text-muted-foreground">
+                      <TableCell colSpan={6} className="py-8 text-center text-xs text-muted-foreground">
                         ไม่พบรายการที่ตรงกับคำค้นหา
                       </TableCell>
                     </TableRow>
@@ -110,6 +121,10 @@ function HostsTable({
                         <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{fmtBytes(h.bytesUp)}</TableCell>
                         <TableCell className="py-3 text-right font-mono text-xs text-foreground">{fmtBytes(h.bytes)}</TableCell>
                         <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{h.percent}%</TableCell>
+                        <TableCell className="hidden py-3 text-right font-mono text-[11px] leading-tight text-muted-foreground md:table-cell">
+                          <div className="text-primary">{h.rateBpsDown !== undefined ? fmtRate(h.rateBpsDown) : "—"}</div>
+                          <div>{h.rateBpsUp !== undefined ? fmtRate(h.rateBpsUp) : "—"}</div>
+                        </TableCell>
                       </TableRow>
                     ))
                   )}

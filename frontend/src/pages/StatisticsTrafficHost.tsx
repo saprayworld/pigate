@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Table, TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table"
 import { getErrorMessage } from "@/lib/errors"
-import { fmtBytes } from "@/lib/formatBytes"
+import { fmtBytes, fmtRate } from "@/lib/formatBytes"
 import {
   trafficStatisticsService,
   type BandwidthPoint,
@@ -426,10 +426,27 @@ export default function StatisticsTrafficHost() {
               </CardHeader>
               <CardContent className="text-lg font-semibold">{data.percentOfObserved}%</CardContent>
             </Card>
+            <Card>
+              <CardHeader className="space-y-0 pb-2">
+                <CardTitle className="text-xs font-medium text-muted-foreground">ความเร็ว Down (~10 วิ)</CardTitle>
+              </CardHeader>
+              <CardContent className="text-lg font-semibold text-primary">
+                {data.currentRateBpsDown !== undefined ? fmtRate(data.currentRateBpsDown) : "—"}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="space-y-0 pb-2">
+                <CardTitle className="text-xs font-medium text-muted-foreground">ความเร็ว Up (~10 วิ)</CardTitle>
+              </CardHeader>
+              <CardContent className="text-lg font-semibold">
+                {data.currentRateBpsUp !== undefined ? fmtRate(data.currentRateBpsUp) : "—"}
+              </CardContent>
+            </Card>
           </div>
           <p className="text-[11px] text-muted-foreground">
             หมายเหตุ: % ในตารางด้านล่างคือสัดส่วนเทียบกับทราฟฟิกรวมของ {title} เองเท่านั้น ไม่ใช่ % ของทราฟฟิกทั้งเครือข่าย
-            (ซึ่งคือค่า "% ของทราฟฟิกทั้งหมด" ด้านบน)
+            (ซึ่งคือค่า "% ของทราฟฟิกทั้งหมด" ด้านบน) · ความเร็ว Down/Up คือค่าเฉลี่ยประมาณ 10 วินาทีล่าสุด (ค่าประมาณจาก
+            conntrack) แตกต่างจากยอดสะสม Total/Down/Up ด้านบนซึ่งเป็นผลรวมทั้งช่วงเวลา
           </p>
 
           <Card>

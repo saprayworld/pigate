@@ -90,19 +90,53 @@ func (s *StatisticsService) GetTrafficTopHosts(window string, limit int) model.T
 	}
 	ipDomain := s.dns.reverseCache.LookupMany(ips)
 
+	sources := buildTopHosts(breakdown.Hosts, breakdown.Observed, leaseByIP, resByIP, ipDomain, limit)
+	destinations := buildTopHosts(breakdown.Dests, breakdown.Observed, leaseByIP, resByIP, ipDomain, limit)
+
+	// Real-time throughput (docs/ref/todo/statistics-traffic-speed-plan.md
+	// T-05) — CurrentRates() is called exactly once per request and its
+	// snapshot applied to the already-built rows by IP; Sources uses the
+	// by-src map, Destinations the by-dst map, matching how Hosts/Dests
+	// themselves are two separate maps above. Deliberately NOT threaded
+	// through buildTopHosts itself: that helper is shared with
+	// StatisticsService.GetStatistics (the Overview page), which must never
+	// gain these fields (plan §1.7 byte-compatibility requirement).
+	rates := s.traffic.CurrentRates()
+	rateSampledAt := ""
+	if !rates.At.IsZero() {
+		rateSampledAt = rates.At.UTC().Format(time.RFC3339)
+	}
+	applyRates(sources, rates.Hosts)
+	applyRates(destinations, rates.Dests)
+
 	return model.TrafficTopHosts{
 		Window:        window,
 		ObservedBytes: breakdown.Observed,
 		Accuracy:      breakdown.Accuracy,
 		Truncated:     breakdown.Truncated,
 		Limit:         limit,
-		Sources:       buildTopHosts(breakdown.Hosts, breakdown.Observed, leaseByIP, resByIP, ipDomain, limit),
-		Destinations:  buildTopHosts(breakdown.Dests, breakdown.Observed, leaseByIP, resByIP, ipDomain, limit),
+		Sources:       sources,
+		Destinations:  destinations,
 		// Series is network-wide/LAN-relative — the SAME slice
 		// StatisticsService.GetStatistics copies into TrafficStatistics.Series
 		// for the Overview page (plan §2.1: "ของฟรี" — no extra computation).
-		Series:      breakdown.Series,
-		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Series:        breakdown.Series,
+		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+		RateSampledAt: rateSampledAt,
+	}
+}
+
+// applyRates fills RateBpsUp/RateBpsDown on each row of hosts (in place) from
+// a CurrentRates() snapshot map keyed by IP, leaving both fields at their
+// zero value (and therefore omitted from the JSON via omitempty) for any row
+// with no matching key — e.g. a host with byte totals in the window but no
+// traffic in the most recent ~10s poll.
+func applyRates(hosts []model.TopHost, rates map[string]RatePair) {
+	for i := range hosts {
+		if r, ok := rates[hosts[i].IP]; ok {
+			hosts[i].RateBpsUp = r.UpBps
+			hosts[i].RateBpsDown = r.DownBps
+		}
 	}
 }
 
@@ -234,6 +268,34 @@ func (s *StatisticsService) GetTrafficHostDetail(window, ip string, limit int) m
 
 	hostname, mac := hostnameFor(ip, leaseByIP, resByIP)
 
+	// Real-time throughput for this IP (docs/ref/todo/
+	// statistics-traffic-speed-plan.md T-05) — CurrentRates() is called
+	// exactly once here (not per-conversation, not a second breakdown call),
+	// and its by-conv map is walked with the SAME rule TotalBytes above uses:
+	// add when srcIP == ip, add AGAIN (never else-if) when dstIP == ip, so a
+	// same-IP-both-sides row counts twice in both figures identically (plan
+	// §2.2 "by construction, not by luck").
+	var currentRateUp, currentRateDown uint64
+	rateSampledAt := ""
+	rates := s.traffic.CurrentRates()
+	if !rates.At.IsZero() {
+		rateSampledAt = rates.At.UTC().Format(time.RFC3339)
+		for key, r := range rates.Convs {
+			srcIP, dstIP, _, _, ok := parseConvKey(key)
+			if !ok {
+				continue
+			}
+			if srcIP == ip {
+				currentRateUp += r.UpBps
+				currentRateDown += r.DownBps
+			}
+			if dstIP == ip {
+				currentRateUp += r.UpBps
+				currentRateDown += r.DownBps
+			}
+		}
+	}
+
 	return model.TrafficHostDetail{
 		IP:                ip,
 		Hostname:          hostname,
@@ -256,7 +318,10 @@ func (s *StatisticsService) GetTrafficHostDetail(window, ip string, limit int) m
 		// breakdown.Series (network-wide, LAN-relative — that field is only
 		// used by GetTrafficTopHosts above) — plan §2.2 decision 1/2, T-02
 		// step 4.
-		Series:      breakdown.HostSeries,
-		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Series:             breakdown.HostSeries,
+		GeneratedAt:        time.Now().UTC().Format(time.RFC3339),
+		CurrentRateBpsUp:   currentRateUp,
+		CurrentRateBpsDown: currentRateDown,
+		RateSampledAt:      rateSampledAt,
 	}
 }

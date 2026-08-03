@@ -24,6 +24,16 @@ export interface TopHost {
   // statistics-dns-top-domain-plan.md) — empty when unknown/expired/DNS
   // Statistics disabled. Display only: what DNS answered, not verified fact.
   domain: string;
+  // rateBpsUp/rateBpsDown are this row's real-time throughput in bits/second
+  // (docs/ref/todo/statistics-traffic-speed-plan.md T-08) — optional because
+  // the backend uses `omitempty` and never populates them on the Overview
+  // page's GET /api/statistics/traffic response (TopHost is shared verbatim
+  // between that endpoint and GET /api/statistics/traffic/hosts, which does
+  // populate them). Average over the most recent ~10s conntrack poll, not an
+  // instantaneous value; same flow-relative up/down convention as
+  // bytesUp/bytesDown above.
+  rateBpsUp?: number;
+  rateBpsDown?: number;
 }
 
 export interface TopConversation {

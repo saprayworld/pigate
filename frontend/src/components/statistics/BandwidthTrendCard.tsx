@@ -1,4 +1,4 @@
-import { useMemo } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
   ResponsiveContainer,
   LineChart,
@@ -9,8 +9,9 @@ import {
   CartesianGrid,
 } from "recharts"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { cn } from "@/lib/utils"
-import { fmtBytes } from "@/lib/formatBytes"
+import { fmtBytes, fmtRate } from "@/lib/formatBytes"
 import { useTheme } from "@/hooks/useTheme"
 import type { BandwidthPoint } from "@/services/statisticsService"
 import type { StatsWindow } from "@/components/statistics/DnsStatsShared"
@@ -52,20 +53,57 @@ export function BandwidthTrendCard({
   const downloadColor = "var(--primary)"
   const uploadColor = isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.38)"
 
+  // mode toggles the chart between the raw 5-minute-bucket byte totals
+  // (default, pixel-identical to before T-02) and a derived bits/second view
+  // (docs/ref/todo/statistics-traffic-speed-plan.md T-02 / §2.1). Default
+  // MUST stay "bytes" so every existing caller (Overview, Traffic list,
+  // drill-down) renders unchanged until the user opts in.
+  const [mode, setMode] = useState<"bytes" | "speed">("bytes")
+
+  // nowMs is read via state (like Dashboard.tsx's own `now` ticker) rather
+  // than calling Date.now() directly inside the useMemo below — the latter
+  // is an impure render-time call the React Compiler's purity rule flags.
+  // Refreshed every 10s, matching the page-level poll cadence these cards
+  // already refresh on (span_last only needs second-level precision, not
+  // per-render precision).
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 10_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const points = useMemo(() => series ?? [], [series])
+
   const data = useMemo(
-    // series ?? [] defensively (plan §5): a stale cached frontend build
-    // talking to a newer/older backend must not crash on undefined.map.
     () =>
-      (series ?? []).map((p) => {
+      points.map((p, idx) => {
         const d = new Date(p.ts)
         const label = Number.isNaN(d.getTime())
           ? p.ts
           : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })
-        return { time: label, download: p.bytesDown, upload: p.bytesUp, total: p.bytes }
+        if (mode === "bytes") {
+          return { time: label, download: p.bytesDown, upload: p.bytesUp, total: p.bytes }
+        }
+        // span_last: the newest bucket hasn't finished accumulating a full 5
+        // minutes yet — dividing it by 300 would make the last point of the
+        // speed chart droop on every refresh, so use elapsed real time
+        // clamped to [30, 300] instead (plan §2.1).
+        const isLast = idx === points.length - 1
+        let span = 300
+        if (isLast) {
+          const tsSec = Number.isNaN(d.getTime()) ? NaN : d.getTime() / 1000
+          const nowSec = nowMs / 1000
+          span = Number.isNaN(tsSec) ? 300 : Math.min(300, Math.max(30, nowSec - tsSec))
+        }
+        return {
+          time: label,
+          download: (p.bytesDown * 8) / span,
+          upload: (p.bytesUp * 8) / span,
+          total: (p.bytes * 8) / span,
+        }
       }),
-    [series]
+    [points, mode, nowMs]
   )
-  const points = series ?? []
 
   const hasSignal = points.some((p) => p.bytes > 0)
 
@@ -82,7 +120,9 @@ export function BandwidthTrendCard({
         <div>
           <CardTitle className="text-base font-semibold">Bandwidth · {windowLabel}</CardTitle>
           <p className="text-[11px] text-muted-foreground">
-            {subtitle ?? "ยอดต่อ 5 นาที (ไม่ใช่ความเร็ว) · Up/Down นับตามทิศทางเข้า-ออกเครือข่าย LAN"}
+            {mode === "bytes"
+              ? (subtitle ?? "ยอดต่อ 5 นาที (ไม่ใช่ความเร็ว) · Up/Down นับตามทิศทางเข้า-ออกเครือข่าย LAN")
+              : "ความเร็วเฉลี่ยต่อช่วง 5 นาที ไม่ใช่ค่าพีค · จุดล่าสุดเก็บข้อมูลยังไม่ครบช่วง"}
           </p>
         </div>
         <div className="flex items-center gap-4 text-xs text-muted-foreground">
@@ -94,6 +134,20 @@ export function BandwidthTrendCard({
             <span className="h-2.5 w-2.5 rounded-sm bg-muted-foreground/40" />
             Upload
           </span>
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            value={mode}
+            onValueChange={(v) => v && setMode(v as "bytes" | "speed")}
+          >
+            <ToggleGroupItem value="bytes" className="px-2 text-[11px]">
+              Bytes
+            </ToggleGroupItem>
+            <ToggleGroupItem value="speed" className="px-2 text-[11px]">
+              Speed
+            </ToggleGroupItem>
+          </ToggleGroup>
         </div>
       </CardHeader>
       <CardContent>
@@ -119,7 +173,7 @@ export function BandwidthTrendCard({
                   fontSize={11}
                   tickLine={false}
                   axisLine={false}
-                  tickFormatter={(v) => fmtBytes(Number(v))}
+                  tickFormatter={(v) => (mode === "bytes" ? fmtBytes(Number(v)) : fmtRate(Number(v)))}
                   width={64}
                 />
                 <Tooltip
@@ -131,7 +185,11 @@ export function BandwidthTrendCard({
                     fontSize: "12px",
                     color: isDark ? "#fff" : "#111",
                   }}
-                  formatter={(value, name) => [`${fmtBytes(Number(value))} / 5 นาที`, name]}
+                  formatter={(value, name) =>
+                    mode === "bytes"
+                      ? [`${fmtBytes(Number(value))} / 5 นาที`, name]
+                      : [fmtRate(Number(value)), name]
+                  }
                 />
                 <Line
                   type="monotone"

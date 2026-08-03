@@ -531,3 +531,52 @@ func TestGetStatistics_StillCappedAtStatsTopN(t *testing.T) {
 		t.Fatalf("expected GetStatistics to stay capped at statsTopN=%d, got %d", statsTopN, len(stats.TopSources))
 	}
 }
+
+// TestGetTrafficHostDetail_CurrentRateSameRuleAsTotalBytes is plan T-06 item
+// 4: CurrentRateBpsUp/CurrentRateBpsDown must use the exact same
+// src==ip-then-dst==ip counting rule (not else-if) that TotalBytes already
+// uses, so a same-IP-both-sides conversation (e.g. loopback) counts its rate
+// twice too — otherwise the drill-down page's "current speed" figure would
+// disagree with its own TotalBytes for the identical reason.
+func TestGetTrafficHostDetail_CurrentRateSameRuleAsTotalBytes(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "loop", SrcIP: "192.168.1.50", DstIP: "192.168.1.50", Proto: 6, DstPort: 8080}},
+			{{Key: "loop", SrcIP: "192.168.1.50", DstIP: "192.168.1.50", Proto: 6, DstPort: 8080, BytesOrig: 100, BytesReply: 400}},
+		},
+	}
+	s := newTestStatisticsService(t, acct)
+	s.traffic.poll() // seed
+	s.traffic.poll() // delta
+
+	elapsed := s.traffic.lastRateElapsed.Seconds()
+	if elapsed <= 0 {
+		t.Fatalf("expected positive elapsed after poll, got %v", s.traffic.lastRateElapsed)
+	}
+
+	got := s.GetTrafficHostDetail("1h", "192.168.1.50", 100)
+	wantUp := uint64(float64(100)*8/elapsed) * 2
+	wantDown := uint64(float64(400)*8/elapsed) * 2
+	if got.CurrentRateBpsUp != wantUp || got.CurrentRateBpsDown != wantDown {
+		t.Fatalf("expected src==dst row to count rate twice like TotalBytes: got up=%d down=%d want up=%d down=%d",
+			got.CurrentRateBpsUp, got.CurrentRateBpsDown, wantUp, wantDown)
+	}
+	if got.RateSampledAt == "" {
+		t.Fatalf("expected RateSampledAt to be set once a rate sample exists")
+	}
+}
+
+// TestGetTrafficHostDetail_RateZeroBeforeFirstSample is plan T-05 case 3: a
+// fresh service that has never rotated a rate accumulator must report a zero
+// rate and an empty RateSampledAt, never a stale/undefined value.
+func TestGetTrafficHostDetail_RateZeroBeforeFirstSample(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+
+	got := s.GetTrafficHostDetail("1h", "192.168.1.50", 100)
+	if got.CurrentRateBpsUp != 0 || got.CurrentRateBpsDown != 0 {
+		t.Fatalf("expected zero rate before any poll tick, got up=%d down=%d", got.CurrentRateBpsUp, got.CurrentRateBpsDown)
+	}
+	if got.RateSampledAt != "" {
+		t.Fatalf("expected empty RateSampledAt before any poll tick, got %q", got.RateSampledAt)
+	}
+}

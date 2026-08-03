@@ -835,3 +835,154 @@ func TestBandwidthSeries_1hIsSubsetOf24h(t *testing.T) {
 		t.Fatalf("expected sum(series(1h))=%d <= sum(series(24h))=%d", sum1h, sum24h)
 	}
 }
+
+// TestTrafficStats_CurrentRates_MatchesElapsed is plan T-06 item 1: rotating
+// the accumulator over a known elapsed duration must produce
+// bps == delta_bytes*8/elapsed_seconds. lastRotateAt is set directly (same
+// package as TrafficStatsService) rather than sleeping the test, so the
+// expected elapsed is controlled precisely; the actual elapsed the code used
+// is then read back from s.lastRateElapsed to compute the expected bps,
+// tolerating only the code's own float64->uint64 truncation, not test flake.
+func TestTrafficStats_CurrentRates_MatchesElapsed(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 1000, BytesReply: 4000}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 2000, BytesReply: 9000}},
+		},
+	}
+	s := newTestTrafficStatsService(t, acct, nil)
+	s.poll() // seed
+
+	s.lastRotateAt = time.Now().Add(-10 * time.Second)
+	s.poll() // delta orig=1000, reply=5000
+
+	elapsed := s.lastRateElapsed.Seconds()
+	if elapsed <= 0 {
+		t.Fatalf("expected positive elapsed, got %v", s.lastRateElapsed)
+	}
+	rates := s.CurrentRates()
+	r, ok := rates.Hosts["192.168.1.50"]
+	if !ok {
+		t.Fatalf("expected rate entry for 192.168.1.50, got %+v", rates.Hosts)
+	}
+	wantUp := uint64(float64(1000) * 8 / elapsed)
+	wantDown := uint64(float64(5000) * 8 / elapsed)
+	if r.UpBps != wantUp || r.DownBps != wantDown {
+		t.Fatalf("rate mismatch: got up=%d down=%d, want up=%d down=%d (elapsed=%v)", r.UpBps, r.DownBps, wantUp, wantDown, elapsed)
+	}
+	// Forcing elapsed to ~10s on a 1000/5000-byte delta must land in a
+	// plausible Kbps range — an 8x-off value here would mean a bit/byte
+	// mixup (plan Caution 1), not just a rounding difference.
+	if wantUp < 100 || wantUp > 2000 || wantDown < 1000 || wantDown > 10000 {
+		t.Fatalf("computed rate outside plausible range: up=%d down=%d", wantUp, wantDown)
+	}
+}
+
+// TestTrafficStats_CurrentRates_DecaysToZeroOnQuietTick is plan T-06 item 2 —
+// the single most important case of this whole feature (plan Caution 3): a
+// tick with zero byte delta must rotate the rate back down instead of leaving
+// the previous tick's speed stuck forever, which would happen if rotateRates
+// ran after poll()'s early-return for a silent tick.
+func TestTrafficStats_CurrentRates_DecaysToZeroOnQuietTick(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		flowResponses: [][]model.FlowSample{
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 1000, BytesReply: 4000}},
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 2000, BytesReply: 9000}},
+			// identical byte counts -> delta 0 -> genuinely quiet tick
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 2000, BytesReply: 9000}},
+		},
+	}
+	s := newTestTrafficStatsService(t, acct, nil)
+	s.poll() // seed
+	s.poll() // delta -> rate becomes non-zero
+
+	rates := s.CurrentRates()
+	if r, ok := rates.Hosts["192.168.1.50"]; !ok || (r.UpBps == 0 && r.DownBps == 0) {
+		t.Fatalf("expected a non-zero rate before the quiet tick, got %+v (ok=%v)", rates.Hosts["192.168.1.50"], ok)
+	}
+
+	s.poll() // quiet tick: no byte delta at all
+
+	rates = s.CurrentRates()
+	if r, ok := rates.Hosts["192.168.1.50"]; ok && (r.UpBps != 0 || r.DownBps != 0) {
+		t.Fatalf("expected rate to decay to 0 after a quiet tick (accumulator must rotate before poll()'s early-return), got %+v", r)
+	}
+}
+
+// TestTrafficStats_CurrentRates_IncludesOnFlowEndDelta is plan T-06 item 3: a
+// flow reported only via onFlowEnd (never seen by poll()'s own DumpFlows)
+// must still be visible through CurrentRates() — otherwise a flow that is
+// born and dies entirely between two poll ticks would silently vanish from
+// the "current speed" view even though it already counts toward the bucket
+// ring's byte totals.
+func TestTrafficStats_CurrentRates_IncludesOnFlowEndDelta(t *testing.T) {
+	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+	s.poll() // establishes an initial lastRotateAt
+
+	s.lastRotateAt = time.Now().Add(-5 * time.Second)
+	s.onFlowEnd(model.FlowSample{
+		Key: "flow-end-1", SrcIP: "192.168.1.60", DstIP: "8.8.8.8", Proto: 17, DstPort: 53,
+		BytesOrig: 100, BytesReply: 300,
+	})
+	// onFlowEnd itself never rotates (only poll() does) — a subsequent quiet
+	// poll() tick is what picks up the accumulator's onFlowEnd delta into
+	// lastRate.
+	s.poll()
+
+	elapsed := s.lastRateElapsed.Seconds()
+	if elapsed <= 0 {
+		t.Fatalf("expected positive elapsed, got %v", s.lastRateElapsed)
+	}
+	rates := s.CurrentRates()
+	r, ok := rates.Hosts["192.168.1.60"]
+	if !ok {
+		t.Fatalf("expected onFlowEnd's delta to be visible via CurrentRates, got %+v", rates.Hosts)
+	}
+	wantUp := uint64(float64(100) * 8 / elapsed)
+	wantDown := uint64(float64(300) * 8 / elapsed)
+	if r.UpBps != wantUp || r.DownBps != wantDown {
+		t.Fatalf("onFlowEnd rate mismatch: got up=%d down=%d want up=%d down=%d", r.UpBps, r.DownBps, wantUp, wantDown)
+	}
+}
+
+// TestTrafficStats_CurrentRatesNoRaceWithPoll is plan T-06 item 5 — same
+// pattern as TestTrafficStats_GetTrafficDetailNoRaceWithPoll above, but
+// exercising CurrentRates() concurrently with poll()/onFlowEnd() instead of
+// GetTrafficDetail(), to catch the exact class of bug (returning an internal
+// map that the poller goroutine keeps mutating) the CurrentRates doc comment
+// warns about. Run with `go test -race`.
+func TestTrafficStats_CurrentRatesNoRaceWithPoll(t *testing.T) {
+	s := newTestTrafficStatsService(t, nil, nil)
+	s.acct = &raceFakeAcct{}
+
+	const iterations = 300
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			s.poll()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			s.onFlowEnd(model.FlowSample{
+				Key:        fmt.Sprintf("rate-race-event-%d", i),
+				SrcIP:      "192.168.1.98",
+				DstIP:      "1.1.1.1",
+				Proto:      17,
+				DstPort:    53,
+				BytesOrig:  uint64(i + 1),
+				BytesReply: uint64(i + 1),
+			})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_ = s.CurrentRates()
+		}
+	}()
+	wg.Wait()
+}

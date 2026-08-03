@@ -12,3 +12,16 @@ export function fmtBytes(n: number): string {
   const v = n / 1024 ** i
   return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`
 }
+
+// fmtRate is the shared throughput formatter (docs/ref/todo/
+// statistics-traffic-speed-plan.md T-01). Input is always bits/second — the
+// backend converts bytes to bits at the source (see TrafficStatsService.
+// CurrentRates()), so callers must never multiply by 8 themselves. Uses
+// base-1000 network units (bps/Kbps/Mbps/Gbps), not base-1024.
+export function fmtRate(bitsPerSec: number): string {
+  if (!bitsPerSec || !Number.isFinite(bitsPerSec) || bitsPerSec <= 0) return "0 bps"
+  const units = ["bps", "Kbps", "Mbps", "Gbps"]
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bitsPerSec) / Math.log(1000)))
+  const v = bitsPerSec / 1000 ** i
+  return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`
+}
