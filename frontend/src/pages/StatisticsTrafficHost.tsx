@@ -3,7 +3,7 @@ import { NavLink, Navigate, useNavigate, useParams, useSearchParams } from "reac
 import { ArrowDown, ArrowLeft, ArrowUp, ChevronsUpDown, RefreshCw } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -53,6 +53,41 @@ function peerIp(row: TrafficHostConversation, ownIsSrc: boolean): string {
 }
 function peerHostname(row: TrafficHostConversation, ownIsSrc: boolean): string {
   return ownIsSrc ? row.dstHostname : row.srcHostname
+}
+
+// TrafficStatCard is the 3-line stat card shared by the Total Traffic /
+// Current Speed / Ratio cards below: a muted label, a bold headline value,
+// and an optional Down/Up breakdown line. `breakdown` is omitted entirely
+// for cards that don't have one yet (e.g. Ratio, the empty placeholder).
+function TrafficStatCard({
+  label,
+  value,
+  breakdown,
+}: {
+  label: string
+  value: string
+  breakdown?: { down: string; up: string }
+}) {
+  return (
+    <Card size="sm">
+      <CardContent className="space-y-1.5 pt-4">
+        <p className="text-xs text-muted-foreground">{label}</p>
+        <p className="text-xl font-bold tracking-tight text-foreground">{value}</p>
+        {breakdown && (
+          <div className="flex items-center gap-3 text-xs font-mono">
+            <span className="flex items-center gap-1 text-primary">
+              <ArrowDown className="size-3" />
+              {breakdown.down}
+            </span>
+            <span className="flex items-center gap-1 text-muted-foreground">
+              <ArrowUp className="size-3" />
+              {breakdown.up}
+            </span>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
 }
 
 function ConversationTable({
@@ -435,46 +470,21 @@ export default function StatisticsTrafficHost() {
       {data && data.found && (
         <>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Card>
-              <CardHeader className="space-y-0 pb-2">
-                <CardTitle className="text-xs font-medium text-muted-foreground">Total</CardTitle>
-              </CardHeader>
-              <CardContent className="text-lg font-semibold">{fmtBytes(data.totalBytes)}</CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="space-y-0 pb-2">
-                <CardTitle className="text-xs font-medium text-muted-foreground">Down</CardTitle>
-              </CardHeader>
-              <CardContent className="text-lg font-semibold text-primary">{fmtBytes(data.totalBytesDown)}</CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="space-y-0 pb-2">
-                <CardTitle className="text-xs font-medium text-muted-foreground">Up</CardTitle>
-              </CardHeader>
-              <CardContent className="text-lg font-semibold">{fmtBytes(data.totalBytesUp)}</CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="space-y-0 pb-2">
-                <CardTitle className="text-xs font-medium text-muted-foreground">% ของทราฟฟิกทั้งหมด</CardTitle>
-              </CardHeader>
-              <CardContent className="text-lg font-semibold">{data.percentOfObserved}%</CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="space-y-0 pb-2">
-                <CardTitle className="text-xs font-medium text-muted-foreground">ความเร็ว Down (~10 วิ)</CardTitle>
-              </CardHeader>
-              <CardContent className="text-lg font-semibold text-primary">
-                {data.currentRateBpsDown !== undefined ? fmtRate(data.currentRateBpsDown) : "—"}
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="space-y-0 pb-2">
-                <CardTitle className="text-xs font-medium text-muted-foreground">ความเร็ว Up (~10 วิ)</CardTitle>
-              </CardHeader>
-              <CardContent className="text-lg font-semibold">
-                {data.currentRateBpsUp !== undefined ? fmtRate(data.currentRateBpsUp) : "—"}
-              </CardContent>
-            </Card>
+            <TrafficStatCard
+              label={`Total Traffic (${window_})`}
+              value={fmtBytes(data.totalBytes)}
+              breakdown={{ down: fmtBytes(data.totalBytesDown), up: fmtBytes(data.totalBytesUp) }}
+            />
+            <TrafficStatCard
+              label="Current Speed"
+              value={fmtRate((data.currentRateBpsDown ?? 0) + (data.currentRateBpsUp ?? 0))}
+              breakdown={{
+                down: data.currentRateBpsDown !== undefined ? fmtRate(data.currentRateBpsDown) : "—",
+                up: data.currentRateBpsUp !== undefined ? fmtRate(data.currentRateBpsUp) : "—",
+              }}
+            />
+            <TrafficStatCard label="Ratio" value={`${data.percentOfObserved}%`} />
+            <Card size="sm" className="border-dashed" />
           </div>
           <p className="text-[11px] text-muted-foreground">
             หมายเหตุ: % ในตารางด้านล่างคือสัดส่วนเทียบกับทราฟฟิกรวมของ {title} เองเท่านั้น ไม่ใช่ % ของทราฟฟิกทั้งเครือข่าย
