@@ -160,7 +160,7 @@ export function TrafficTrendCard({
             </div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={data} margin={{ top: 8, right: 8, left: -24, bottom: 0 }}>
+              <LineChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={grid} />
                 <XAxis
                   dataKey="time"
