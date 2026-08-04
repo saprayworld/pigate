@@ -4,6 +4,7 @@ import { BarChart3, Loader2, RefreshCw, Settings2 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { getErrorMessage } from "@/lib/errors"
+import { fmtBytes } from "@/lib/formatBytes"
 import {
   dnsStatisticsService,
   type DNSQueryStatistics,
@@ -15,14 +16,19 @@ import {
   ClientStatsTable,
   DnsStatsPrivacyNote,
   DnsStatsTruncatedWarning,
+  DnsVolumeInfoButton,
   type StatsWindow,
 } from "@/components/statistics/DnsStatsShared"
+import { TrafficStatCard } from "@/components/statistics/TrafficStatsShared"
 
 // DNS Statistics page (docs/ref/todo/statistics-nav-restructure-plan.md T-02)
 // — promoted from the DNS Server page's former "สถิติ" tab
 // (components/dns/DnsStatisticsTab.tsx, now deleted) into a standalone route.
 // Row clicks navigate to a dedicated drill-down page instead of opening a
-// Dialog (plan §2.5).
+// Dialog (plan §2.5). Restructured in docs/ref/todo/
+// statistics-dns-page-revamp-plan.md T-10 to mirror pages/StatisticsTraffic.tsx's
+// layout: a stat-card row up top, a DnsVolumeInfoButton next to the window
+// tabs, and the sortable/filterable tables from T-09.
 const REFRESH_INTERVAL_MS = 10_000
 
 export default function StatisticsDns() {
@@ -80,6 +86,7 @@ export default function StatisticsDns() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <DnsVolumeInfoButton />
           <StatsWindowTabs value={window_} onChange={setWindow} />
           <Button
             variant="outline"
@@ -95,6 +102,22 @@ export default function StatisticsDns() {
           </Button>
         </div>
       </div>
+
+      {stats && stats.enabled && (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <TrafficStatCard label={`Total Queries (${window_})`} value={stats.totalQueries.toLocaleString()} />
+          <TrafficStatCard label="Domains found" value={stats.totalDomains.toLocaleString()} />
+          <TrafficStatCard label="Clients found" value={stats.totalClients.toLocaleString()} />
+          <TrafficStatCard
+            label="Volume (attributable)"
+            value={fmtBytes(stats.domainBytes)}
+            breakdown={{
+              down: fmtBytes(stats.topDomains.reduce((sum, d) => sum + d.bytesDown, 0)),
+              up: fmtBytes(stats.topDomains.reduce((sum, d) => sum + d.bytesUp, 0)),
+            }}
+          />
+        </div>
+      )}
 
       {stats?.truncated && <DnsStatsTruncatedWarning />}
 

@@ -434,16 +434,32 @@ var mockDNSQueryEvents = []struct {
 }
 
 // mockDNSAnswerEvents map IPs to domains that intentionally mirror
-// mockFlowTemplates' dstIP values (plan T-06), so Top Destinations/
-// Conversations in -mock=true dev mode visibly show resolved domain names.
-// 8.8.8.8 and 203.0.113.55 are deliberately left unmapped so the "IP with no
-// known domain" fallback path is exercised too.
+// mockFlowTemplates' dstIP values (plan T-06 of
+// statistics-dns-page-revamp-plan.md), so both the legacy Top Destinations/
+// Conversations cards and the DNS statistics volume table (domain -> IP ->
+// bytes join) show real, non-zero numbers in -mock=true dev mode:
+//   - www.youtube.com resolves to 3 IPs, two of which (142.250.80.46,
+//     64.233.166.127) match dstIP values in mockFlowTemplates.
+//   - googlevideo.com resolves to 2 IPs, one of which (173.194.76.94)
+//     matches a mockFlowTemplates dstIP.
+//   - 64.233.166.127 is deliberately shared between www.youtube.com and
+//     googlevideo.com so the "shared IP" flag/badge has a real case to
+//     exercise in mock mode (plan §1.1 item 1 / DNSDomainIP.Shared).
+//   - cdn.jsdelivr.net keeps a single IP match, for the plain single-row
+//     case.
+//   - line-apps.com is intentionally left with no answer entries at all, so
+//     the "domain with unknown IPs" empty-case is exercisable.
+//   - 8.8.8.8 and 203.0.113.55 remain deliberately unmapped so the "IP with
+//     no known domain" fallback path is exercised too.
 var mockDNSAnswerEvents = []struct {
 	domain string
 	ip     string
 }{
 	{"www.youtube.com", "142.250.80.46"},
+	{"www.youtube.com", "64.233.166.127"},
+	{"www.youtube.com", "172.217.16.14"},
 	{"googlevideo.com", "173.194.76.94"},
+	{"googlevideo.com", "64.233.166.127"},
 	{"cdn.jsdelivr.net", "151.101.1.69"},
 }
 
@@ -485,15 +501,19 @@ func (m *MockDNSServerManager) WatchDNSLog(ctx context.Context, cb func(model.DN
 					}
 				}
 			}
-			// Emit the matching answer event(s) every other tick so the
-			// reverse cache also gets populated in dev mode.
+			// Emit every mockDNSAnswerEvents entry every other tick, so the
+			// reverse cache *and* the new domain->IP forward index (plan
+			// T-02 of statistics-dns-page-revamp-plan.md) both get fully
+			// populated in dev mode — a subset would silently hide the
+			// multi-IP/shared-IP cases mockDNSAnswerEvents was built for.
 			if len(mockDNSAnswerEvents) > 0 && tick%2 == 0 {
-				a := mockDNSAnswerEvents[(tick/2)%len(mockDNSAnswerEvents)]
-				cb(model.DNSLogEvent{
-					Kind:     model.DNSLogAnswer,
-					Domain:   a.domain,
-					AnswerIP: a.ip,
-				})
+				for _, a := range mockDNSAnswerEvents {
+					cb(model.DNSLogEvent{
+						Kind:     model.DNSLogAnswer,
+						Domain:   a.domain,
+						AnswerIP: a.ip,
+					})
+				}
 			}
 			tick++
 		}

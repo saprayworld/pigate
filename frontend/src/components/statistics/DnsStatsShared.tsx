@@ -1,7 +1,9 @@
-import { useCallback } from "react"
+import { useCallback, useState } from "react"
 import { useSearchParams } from "react-router"
-import { TriangleAlert } from "lucide-react"
+import { Info, TriangleAlert } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
   Table,
   TableBody,
@@ -10,7 +12,18 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { type TopDomain, type DNSClientStat } from "@/services/dnsStatisticsService"
+import { fmtBytes } from "@/lib/formatBytes"
+import {
+  SortableHead,
+  TrafficFilterInput,
+  useSortableRows,
+  useTextFilter,
+} from "@/components/statistics/TrafficStatsShared"
+import {
+  type DNSDomainStat,
+  type DNSClientStat,
+  type DNSDomainIP,
+} from "@/services/dnsStatisticsService"
 import { STATS_WINDOWS, parseStatsWindow, type StatsWindow } from "@/lib/statsWindow"
 
 // Shared presentation pieces for the three DNS statistics pages
@@ -94,58 +107,101 @@ export function StatsWindowTabs({
   )
 }
 
+// DomainStatsTable — the "Top Domains" / per-client "Domains queried" table
+// (docs/ref/todo/statistics-dns-page-revamp-plan.md T-09). Every column is
+// sortable via useSortableRows/SortableHead and the table owns its own
+// free-text filter (TrafficFilterInput), mirroring TrafficStatsShared's
+// HostsTable pattern — callers keep wrapping this in their own <Card>.
+// `%` (percent, query count) and `% Vol` (bytesPercent, bytes) are
+// deliberately two separate, differently-labelled columns (plan §1.3) so
+// they can never be mistaken for the same metric.
 export function DomainStatsTable({
   rows,
   emptyLabel,
   onRowClick,
 }: {
-  rows: TopDomain[]
+  rows: DNSDomainStat[]
   emptyLabel: string
   onRowClick?: (domain: string) => void
 }) {
+  const [query, setQuery] = useState("")
+  const filtered = useTextFilter(rows, query, [(d) => d.domain, (d) => d.queryType])
+  const { rows: sorted, sort, toggle } = useSortableRows(filtered, { key: "count", dir: "desc" })
+
   return (
-    <Table>
-      <TableHeader>
-        <TableRow className="hover:bg-transparent">
-          <TableHead className="text-xs font-medium text-muted-foreground">Domain</TableHead>
-          <TableHead className="w-[15%] text-xs font-medium text-muted-foreground">Type</TableHead>
-          <TableHead className="w-[15%] text-right text-xs font-medium text-muted-foreground">Count</TableHead>
-          <TableHead className="w-[15%] text-right text-xs font-medium text-muted-foreground">%</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows.length === 0 ? (
-          <TableRow>
-            <TableCell colSpan={4} className="py-8 text-center text-xs text-muted-foreground">
-              {emptyLabel}
-            </TableCell>
-          </TableRow>
-        ) : (
-          rows.map((d) => (
-            <TableRow
-              key={d.domain}
-              onClick={onRowClick ? () => onRowClick(d.domain) : undefined}
-              className={onRowClick ? "cursor-pointer hover:bg-muted/50" : "hover:bg-transparent"}
-              title={onRowClick ? "คลิกเพื่อดูว่าเครื่องไหนถามโดเมนนี้บ้าง" : undefined}
-            >
-              <TableCell className="max-w-[220px] truncate py-3 font-mono text-xs font-medium text-foreground" title={d.domain}>
-                {d.domain}
-              </TableCell>
-              <TableCell className="py-3">
-                <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0 text-[10px] font-medium text-primary">
-                  {d.queryType}
-                </Badge>
-              </TableCell>
-              <TableCell className="py-3 text-right font-mono text-xs text-foreground">{d.count}</TableCell>
-              <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{d.percent.toFixed(1)}%</TableCell>
+    <div className="space-y-3">
+      <TrafficFilterInput value={query} onChange={setQuery} placeholder="ค้นหาโดเมน, ประเภท..." />
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <SortableHead<DNSDomainStat> label="Domain" sortKey="domain" sort={sort} onToggle={toggle} />
+              <SortableHead<DNSDomainStat> label="Type" sortKey="queryType" sort={sort} onToggle={toggle} className="w-20" />
+              <SortableHead<DNSDomainStat> label="Clients" sortKey="clients" sort={sort} onToggle={toggle} align="right" className="w-20" />
+              <SortableHead<DNSDomainStat> label="IPs" sortKey="ipCount" sort={sort} onToggle={toggle} align="right" className="w-20" />
+              <SortableHead<DNSDomainStat> label="Count" sortKey="count" sort={sort} onToggle={toggle} align="right" className="w-20" />
+              <SortableHead<DNSDomainStat> label="% Query" sortKey="percent" sort={sort} onToggle={toggle} align="right" className="w-20" />
+              <SortableHead<DNSDomainStat> label="Down" sortKey="bytesDown" sort={sort} onToggle={toggle} align="right" className="w-24" />
+              <SortableHead<DNSDomainStat> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
+              <SortableHead<DNSDomainStat> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
+              <SortableHead<DNSDomainStat> label="% Vol" sortKey="bytesPercent" sort={sort} onToggle={toggle} align="right" className="w-20" />
             </TableRow>
-          ))
-        )}
-      </TableBody>
-    </Table>
+          </TableHeader>
+          <TableBody>
+            {sorted.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={10} className="py-8 text-center text-xs text-muted-foreground">
+                  {emptyLabel}
+                </TableCell>
+              </TableRow>
+            ) : (
+              sorted.map((d) => (
+                <TableRow
+                  key={d.domain}
+                  onClick={onRowClick ? () => onRowClick(d.domain) : undefined}
+                  className={onRowClick ? "cursor-pointer hover:bg-muted/50" : "hover:bg-transparent"}
+                  title={onRowClick ? "คลิกเพื่อดูว่าเครื่องไหนถามโดเมนนี้บ้าง" : undefined}
+                >
+                  <TableCell className="max-w-[220px] truncate py-3 font-mono text-xs font-medium text-foreground" title={d.domain}>
+                    {d.domain}
+                  </TableCell>
+                  <TableCell className="py-3">
+                    <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0 text-[10px] font-medium text-primary">
+                      {d.queryType}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-foreground">{d.clients}</TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-foreground">
+                    <span className="inline-flex items-center justify-end gap-1">
+                      {d.sharedIps && (
+                        <span title="มี IP ที่ใช้ร่วมกับโดเมนอื่น — ปริมาณข้อมูลอาจถูกนับซ้ำ">
+                          <TriangleAlert className="size-3 text-warning" />
+                        </span>
+                      )}
+                      {d.ipCount}
+                    </span>
+                  </TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-foreground">{d.count}</TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{d.percent.toFixed(1)}%</TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-primary">{fmtBytes(d.bytesDown)}</TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{fmtBytes(d.bytesUp)}</TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-foreground">{fmtBytes(d.bytes)}</TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{d.bytesPercent.toFixed(1)}%</TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        แสดง {sorted.length} จาก {rows.length} รายการ
+      </p>
+    </div>
   )
 }
 
+// ClientStatsTable — the "Top Source Hosts" / per-domain "Clients" table
+// (T-09). Same sortable/filterable pattern as DomainStatsTable above.
 export function ClientStatsTable({
   rows,
   emptyLabel,
@@ -155,49 +211,181 @@ export function ClientStatsTable({
   emptyLabel: string
   onRowClick?: (ip: string, hostname: string) => void
 }) {
+  const [query, setQuery] = useState("")
+  const filtered = useTextFilter(rows, query, [(c) => c.ip, (c) => c.hostname])
+  const { rows: sorted, sort, toggle } = useSortableRows(filtered, { key: "count", dir: "desc" })
+
   return (
-    <Table>
-      <TableHeader>
-        <TableRow className="hover:bg-transparent">
-          <TableHead className="text-xs font-medium text-muted-foreground">Host</TableHead>
-          <TableHead className="w-[15%] text-right text-xs font-medium text-muted-foreground">Count</TableHead>
-          <TableHead className="w-[15%] text-right text-xs font-medium text-muted-foreground">%</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows.length === 0 ? (
-          <TableRow>
-            <TableCell colSpan={3} className="py-8 text-center text-xs text-muted-foreground">
-              {emptyLabel}
-            </TableCell>
-          </TableRow>
-        ) : (
-          rows.map((c) => (
-            <TableRow
-              key={c.ip}
-              onClick={onRowClick ? () => onRowClick(c.ip, c.hostname) : undefined}
-              className={onRowClick ? "cursor-pointer hover:bg-muted/50" : "hover:bg-transparent"}
-              title={onRowClick ? "คลิกเพื่อดูว่าเครื่องนี้ค้นหาโดเมนอะไรบ้าง" : undefined}
-            >
-              <TableCell className="max-w-[220px] truncate py-3 text-xs text-foreground" title={`${c.hostname || c.ip}${c.hostname ? ` (${c.ip})` : ""}`}>
-                {c.ip === "unknown" ? (
-                  <span className="text-muted-foreground">ไม่ทราบต้นทาง</span>
-                ) : (
-                  <>
-                    <span className="font-medium">{c.hostname || c.ip}</span>
-                    {c.hostname && (
-                      <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">{c.ip}</span>
-                    )}
-                  </>
-                )}
-              </TableCell>
-              <TableCell className="py-3 text-right font-mono text-xs text-foreground">{c.count}</TableCell>
-              <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{c.percent.toFixed(1)}%</TableCell>
+    <div className="space-y-3">
+      <TrafficFilterInput value={query} onChange={setQuery} placeholder="ค้นหา IP, hostname..." />
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <SortableHead<DNSClientStat> label="Host" sortKey="hostname" sort={sort} onToggle={toggle} />
+              <SortableHead<DNSClientStat> label="Domains" sortKey="domains" sort={sort} onToggle={toggle} align="right" className="w-20" />
+              <SortableHead<DNSClientStat> label="Count" sortKey="count" sort={sort} onToggle={toggle} align="right" className="w-20" />
+              <SortableHead<DNSClientStat> label="% Query" sortKey="percent" sort={sort} onToggle={toggle} align="right" className="w-20" />
+              <SortableHead<DNSClientStat> label="Down" sortKey="bytesDown" sort={sort} onToggle={toggle} align="right" className="w-24" />
+              <SortableHead<DNSClientStat> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
+              <SortableHead<DNSClientStat> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
+              <SortableHead<DNSClientStat> label="% Vol" sortKey="bytesPercent" sort={sort} onToggle={toggle} align="right" className="w-20" />
             </TableRow>
-          ))
-        )}
-      </TableBody>
-    </Table>
+          </TableHeader>
+          <TableBody>
+            {sorted.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={8} className="py-8 text-center text-xs text-muted-foreground">
+                  {emptyLabel}
+                </TableCell>
+              </TableRow>
+            ) : (
+              sorted.map((c) => (
+                <TableRow
+                  key={c.ip}
+                  onClick={onRowClick ? () => onRowClick(c.ip, c.hostname) : undefined}
+                  className={onRowClick ? "cursor-pointer hover:bg-muted/50" : "hover:bg-transparent"}
+                  title={onRowClick ? "คลิกเพื่อดูว่าเครื่องนี้ค้นหาโดเมนอะไรบ้าง" : undefined}
+                >
+                  <TableCell className="max-w-[220px] truncate py-3 text-xs text-foreground" title={`${c.hostname || c.ip}${c.hostname ? ` (${c.ip})` : ""}`}>
+                    {c.ip === "unknown" ? (
+                      <span className="text-muted-foreground">ไม่ทราบต้นทาง</span>
+                    ) : (
+                      <>
+                        <span className="font-medium">{c.hostname || c.ip}</span>
+                        {c.hostname && (
+                          <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">{c.ip}</span>
+                        )}
+                      </>
+                    )}
+                  </TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-foreground">{c.domains}</TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-foreground">{c.count}</TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{c.percent.toFixed(1)}%</TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-primary">{fmtBytes(c.bytesDown)}</TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{fmtBytes(c.bytesUp)}</TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-foreground">{fmtBytes(c.bytes)}</TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{c.bytesPercent.toFixed(1)}%</TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        แสดง {sorted.length} จาก {rows.length} รายการ
+      </p>
+    </div>
+  )
+}
+
+// DomainIpTable — the domain drill-down's "Resolved IPs" table (T-09,
+// plan §2.2 DNSDomainIP): one row per known IP, default-sorted by bytes
+// (volume) descending — this is the table that answers "which IP of this
+// domain used the most data". Every column is sortable; a "shared" badge
+// flags an IP referenced by more than one domain (bytes double-counted
+// across domains, plan §1.1 item 1).
+export function DomainIpTable({
+  rows,
+  emptyLabel,
+}: {
+  rows: DNSDomainIP[]
+  emptyLabel: string
+}) {
+  const [query, setQuery] = useState("")
+  const filtered = useTextFilter(rows, query, [(r) => r.ip])
+  const { rows: sorted, sort, toggle } = useSortableRows(filtered, { key: "bytes", dir: "desc" })
+
+  return (
+    <div className="space-y-3">
+      <TrafficFilterInput value={query} onChange={setQuery} placeholder="ค้นหา IP..." />
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <SortableHead<DNSDomainIP> label="IP" sortKey="ip" sort={sort} onToggle={toggle} />
+              <SortableHead<DNSDomainIP> label="Down" sortKey="bytesDown" sort={sort} onToggle={toggle} align="right" className="w-24" />
+              <SortableHead<DNSDomainIP> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
+              <SortableHead<DNSDomainIP> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
+              <SortableHead<DNSDomainIP> label="% Vol" sortKey="bytesPercent" sort={sort} onToggle={toggle} align="right" className="w-20" />
+              <SortableHead<DNSDomainIP> label="Last seen" sortKey="lastSeen" sort={sort} onToggle={toggle} className="w-40" />
+              <TableHead className="w-20 text-right text-xs font-medium text-muted-foreground">Shared</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {sorted.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={7} className="py-8 text-center text-xs text-muted-foreground">
+                  {emptyLabel}
+                </TableCell>
+              </TableRow>
+            ) : (
+              sorted.map((r) => (
+                <TableRow key={r.ip} className="hover:bg-transparent">
+                  <TableCell className="py-3 font-mono text-xs font-medium text-foreground">{r.ip}</TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-primary">{fmtBytes(r.bytesDown)}</TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{fmtBytes(r.bytesUp)}</TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-foreground">{fmtBytes(r.bytes)}</TableCell>
+                  <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{r.bytesPercent.toFixed(1)}%</TableCell>
+                  <TableCell className="py-3 font-mono text-[11px] text-muted-foreground">
+                    {new Date(r.lastSeen).toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" })}
+                  </TableCell>
+                  <TableCell className="py-3 text-right">
+                    {r.shared && (
+                      <Badge variant="outline" className="rounded border-warning/20 bg-warning/10 px-1.5 py-0 text-[10px] font-medium text-warning">
+                        shared
+                      </Badge>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        แสดง {sorted.length} จาก {rows.length} รายการ
+      </p>
+    </div>
+  )
+}
+
+// DnsVolumeInfoButton — icon-only Popover (mirrors TrafficStatsShared's
+// AccuracyInfoButton) explaining the domain<->IP volume approximation's
+// three caveats from plan §1.1: shared IPs get double-counted, non-DNS
+// traffic isn't counted, and the mapping has a TTL and can go stale.
+export function DnsVolumeInfoButton() {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="cursor-pointer"
+          aria-label="รายละเอียดความแม่นยำของปริมาณข้อมูล DNS"
+        >
+          <Info className="size-4" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 space-y-2 text-xs">
+        <p className="font-medium text-foreground">ปริมาณข้อมูล (Volume) เป็นค่าประมาณ</p>
+        <p className="text-muted-foreground">
+          ระบบไม่ได้นับ byte แยกตามชื่อโดเมนโดยตรง — ตัวเลขคือผลรวม byte ของ IP ที่โดเมนนั้นเคยถูก DNS
+          ตอบกลับ (resolve) ในช่วงเวลานี้
+        </p>
+        <p className="text-muted-foreground">
+          IP ที่ใช้ร่วมกันหลายโดเมน (เช่น CDN หรือ cloud load balancer) จะถูกนับให้ทุกโดเมนที่อ้างถึงมัน —
+          ผลรวมของทุกแถวจึงอาจมากกว่าปริมาณข้อมูลจริง แถวที่มีป้าย "shared" คือ IP ลักษณะนี้
+        </p>
+        <p className="text-muted-foreground">
+          ทราฟฟิกที่วิ่งตรงไปยัง IP โดยไม่ผ่านการ resolve ผ่านอุปกรณ์นี้จะไม่ถูกนับให้โดเมนใดเลย
+        </p>
+        <p className="text-muted-foreground">
+          การจับคู่โดเมน↔IP มีอายุจำกัด (TTL) — โดเมนที่ resolve ไว้นานแล้วอาจไม่มีปริมาณข้อมูลแสดงในหน้านี้
+        </p>
+      </PopoverContent>
+    </Popover>
   )
 }
 

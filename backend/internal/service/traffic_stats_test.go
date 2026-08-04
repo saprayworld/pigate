@@ -186,7 +186,7 @@ func TestTrafficStats_Categorization(t *testing.T) {
 func TestTrafficStats_OnFlowEnd_CreditsOnlyDeltaAboveBaseline(t *testing.T) {
 	acct := &fakeTrafficAccounting{
 		flowResponses: [][]model.FlowSample{
-			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 0, BytesReply: 0}},       // seed
+			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 0, BytesReply: 0}},     // seed
 			{{Key: "f1", SrcIP: "192.168.1.50", DstIP: "1.1.1.1", Proto: 6, DstPort: 443, BytesOrig: 200, BytesReply: 800}}, // delta 1000 (200/800)
 		},
 	}
@@ -1110,5 +1110,57 @@ func TestBandwidthSeries_RingSmallerThanWindow_ZeroFillsNoPanic(t *testing.T) {
 	bytes, _, _ := seriesSum(bd.Series)
 	if bytes != bd.Observed {
 		t.Fatalf("sum(series.bytes)=%d != observed=%d", bytes, bd.Observed)
+	}
+}
+
+// TestGetTrafficBreakdownForDests_SumEqualsDestTotals is plan
+// statistics-dns-page-revamp-plan.md T-03: for a dstSet of 2 IPs (one
+// tracked, one not), DestSeries must be fixed-length/zero-filled per window
+// and sum(DestSeries[].Bytes) must equal DestTotals.Total() exactly, at more
+// than one window value.
+func TestGetTrafficBreakdownForDests_SumEqualsDestTotals(t *testing.T) {
+	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+	now := time.Now()
+	for i := trafficDetailBucketMax - 1; i >= 0; i-- {
+		ts := now.Add(-time.Duration(i) * trafficDetailBucketSpan)
+		dstDeltas := map[string]dirBytes{
+			"8.8.8.8": {Orig: 3, Reply: 7},     // in dstSet
+			"1.1.1.1": {Orig: 100, Reply: 100}, // NOT in dstSet — must be excluded
+		}
+		s.addBucket(ts, nil, nil, nil, dstDeltas, nil, dirBytes{Orig: 103, Reply: 107})
+	}
+
+	dstSet := []string{"8.8.8.8", "9.9.9.9"} // 9.9.9.9 never appears — must not error or add bytes
+
+	for _, window := range []string{"15m", "24h"} {
+		n := statsWindowBucketCount(window)
+		bd := s.GetTrafficBreakdownForDests(window, dstSet)
+
+		if len(bd.DestSeries) != n {
+			t.Fatalf("window %s: expected DestSeries length %d, got %d", window, n, len(bd.DestSeries))
+		}
+
+		bytes, up, down := seriesSum(bd.DestSeries)
+		if bytes != bd.DestTotals.Total() {
+			t.Fatalf("window %s: sum(DestSeries.bytes)=%d != DestTotals.Total()=%d", window, bytes, bd.DestTotals.Total())
+		}
+		if up != bd.DestTotals.Orig || down != bd.DestTotals.Reply {
+			t.Fatalf("window %s: DestSeries up/down (%d/%d) != DestTotals.Orig/Reply (%d/%d)", window, up, down, bd.DestTotals.Orig, bd.DestTotals.Reply)
+		}
+
+		wantTotal := uint64(n) * 10 // only 8.8.8.8 (3+7=10) counted per bucket, 1.1.1.1 excluded
+		if bd.DestTotals.Total() != wantTotal {
+			t.Fatalf("window %s: expected DestTotals.Total()=%d (only dstSet IPs), got %d", window, wantTotal, bd.DestTotals.Total())
+		}
+	}
+
+	// Empty/nil dstIPs must behave exactly like GetTrafficBreakdown: no
+	// DestSeries, zero DestTotals (plan T-03 "nil = zero extra cost").
+	bd := s.GetTrafficBreakdownForDests("1h", nil)
+	if bd.DestSeries != nil {
+		t.Fatalf("expected nil DestSeries for empty dstIPs, got %+v", bd.DestSeries)
+	}
+	if bd.DestTotals.Total() != 0 {
+		t.Fatalf("expected zero DestTotals for empty dstIPs, got %+v", bd.DestTotals)
 	}
 }

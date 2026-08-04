@@ -1,5 +1,30 @@
 # Statistics → DNS page revamp (domain-centric stats + volume + drill-down)
 
+> **Status: implemented, QA passed.** All tasks T-01 through T-13 landed on
+> branch `feat/statistics-dns-page`. Backend build/vet/test and frontend
+> build/lint are clean; `bash build.sh` produces the binary. QA verified the
+> plan's §5 Final Acceptance checklist live against `-mock=true` — the
+> byte-join math, the `sum(series[].bytes) == totalBytes` invariant, input
+> validation (400s with no input echo), auth (401 without session), and the
+> disabled-logging empty-non-nil-slice contract all hold. Regression guard
+> confirmed: `TopDomain`/`TopHost`/`TopConversation`/`TrafficStatistics` in
+> `model/statistics.go` are byte-for-byte untouched, `statistics_test.go` has
+> zero diff, and the Overview page's Top Queried Domains card is unchanged.
+> Security-sensitive files (`dns_domain_ips.go`, `statistics_dns.go`, the DNS
+> handlers in `handlers.go`) were reviewed clean — no nested locks, no I/O or
+> domain-name logging on the hot path, unchanged validation contract, no new
+> `exec.Command`, `internal/kernel/interfaces.go`/`internal/db` untouched.
+> The shared-IP client-drilldown attribution edge case noted during
+> development (§ "known flagged item" below) is intentional and covered by
+> `TestGetDNSClientDomains_VolumeJoin` plus the `DnsVolumeInfoButton` UI
+> disclaimer — not a bug.
+>
+> **One outstanding pre-merge action item:** `go test -race
+> ./internal/service/...` could not be run anywhere in this pipeline (no C
+> toolchain / `gcc` available in the dev/QA/tech-lead sandboxes). This was an
+> explicit §5 Final Acceptance item — run it on a machine with a C toolchain
+> (CI or the owner's real dev box) before merging.
+
 > Goal: ยกระดับหน้า **Statistics → DNS** ให้เทียบชั้นกับ **Statistics → Traffic** — overview table ที่
 > sort ได้ทุกคอลัมน์และมี Volume (Down/Up) + drill-down ที่บอกได้ว่าโดเมนหนึ่งถูก resolve เป็น IP อะไรบ้าง
 > และ IP ไหนกินปริมาณข้อมูลมากที่สุด

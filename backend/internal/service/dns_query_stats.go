@@ -95,6 +95,7 @@ type dnsQueryStats struct {
 	enabled      bool
 	buckets      []domainBucket
 	reverseCache *dnsReverseCache
+	domainIPs    *dnsDomainIPs
 
 	// maxPairs/maxClients are the effective per-bucket caps, set once at
 	// construction (NewStatisticsService) and never mutated afterwards —
@@ -118,6 +119,7 @@ func (s *StatisticsService) RecordDNSEvent(ev model.DNSLogEvent) {
 	case model.DNSLogAnswer:
 		if ev.Domain != "" && ev.AnswerIP != "" {
 			s.dns.reverseCache.Put(ev.AnswerIP, ev.Domain)
+			s.dns.domainIPs.Put(ev.Domain, ev.AnswerIP)
 		}
 	}
 }
@@ -204,20 +206,38 @@ func (s *StatisticsService) SetDNSLoggingEnabled(enabled bool) {
 	}
 }
 
-// ClearDNSStats wipes the domain ring and reverse cache. Called when the
-// query-logging switch is turned off, and available for tests/handlers that
-// need a clean slate.
+// ClearDNSStats wipes the domain ring, reverse cache and domain->IP index.
+// Called when the query-logging switch is turned off, and available for
+// tests/handlers that need a clean slate.
 func (s *StatisticsService) ClearDNSStats() {
 	s.dns.mu.Lock()
 	s.dns.buckets = nil
 	s.dns.mu.Unlock()
 	s.dns.reverseCache.Clear()
+	s.dns.domainIPs.Clear()
 }
 
 // SetReverseCacheLimits forwards to the reverse cache's SetLimits — see
 // dns_reverse_cache.go for the clamp/evict-immediately contract (plan T-08).
+// It also forwards the same ttlMinutes to the domain->IP index's SetLimits
+// (plan §1.6/T-02 — the two indices share one TTL knob), leaving that
+// index's own maxDomains/maxIPsPerDomain caps untouched (those are set
+// separately via SetDomainIPsLimits, config keys dns-stats-max-domains /
+// dns-stats-max-ips-per-domain, plan T-05).
 func (s *StatisticsService) SetReverseCacheLimits(ttlMinutes, maxEntries int) {
 	s.dns.reverseCache.SetLimits(ttlMinutes, maxEntries)
+	maxDomains, maxIPsPerDomain := s.dns.domainIPs.caps()
+	s.dns.domainIPs.SetLimits(ttlMinutes, maxDomains, maxIPsPerDomain)
+}
+
+// SetDomainIPsLimits forwards to the domain->IP index's SetLimits. Called
+// separately from SetReverseCacheLimits because maxDomains/maxIPsPerDomain
+// come from their own bootstrap config keys (dns-stats-max-domains /
+// dns-stats-max-ips-per-domain, plan T-05) rather than the reverse cache's
+// ttl/maxEntries pair; ttlMinutes should be passed the same value given to
+// SetReverseCacheLimits so both indices' TTLs stay in sync (plan §1.6).
+func (s *StatisticsService) SetDomainIPsLimits(ttlMinutes, maxDomains, maxIPsPerDomain int) {
+	s.dns.domainIPs.SetLimits(ttlMinutes, maxDomains, maxIPsPerDomain)
 }
 
 // dnsWindowBuckets selects the trailing statsWindowBucketCount(window)
@@ -290,190 +310,14 @@ func buildTopDomains(totals map[string]uint64, typeByDomain map[string]string, t
 	return out
 }
 
-// GetDNSQueryStatistics composes the /api/statistics/dns response: the two
-// top-level tables (Top Domains / Top Clients) for the DNS Query Statistics
-// tab (drilldown plan T-02). window must already be whitelisted by the
-// caller (the API handler) — this method only re-validates defensively.
-func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryStatistics {
-	window = normalizeStatsWindow(window)
-
-	s.dns.mu.RLock()
-	enabled := s.dns.enabled
-	if !enabled {
-		s.dns.mu.RUnlock()
-		return model.DNSQueryStatistics{
-			Window:      window,
-			Enabled:     false,
-			TopDomains:  []model.TopDomain{},
-			TopClients:  []model.DNSClientStat{},
-			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		}
-	}
-
-	domainTotals := make(map[string]uint64)
-	typeByDomain := make(map[string]string)
-	clientTotals := make(map[string]uint64)
-	var totalQueries uint64
-	var truncated bool
-
-	for _, b := range s.dnsWindowBuckets(window) {
-		for domain, clients := range b.pairs {
-			for client, count := range clients {
-				domainTotals[domain] += count
-				clientTotals[client] += count
-			}
-		}
-		for k, v := range b.typeByDomain {
-			typeByDomain[k] = v
-		}
-		totalQueries += b.queries
-		if b.pairCount >= s.dns.maxPairs || len(b.clientCount) >= s.dns.maxClients {
-			truncated = true
-		}
-	}
-	s.dns.mu.RUnlock()
-
-	leaseByIP, resByIP := s.traffic.hostLookup()
-
-	topDomains := rankTopDomains(domainTotals, typeByDomain, totalQueries, dnsStatsTopN)
-	if len(domainTotals) > dnsStatsTopN {
-		truncated = true
-	}
-	topClients := rankDNSClients(clientTotals, totalQueries, leaseByIP, resByIP, dnsStatsTopN)
-	if len(clientTotals) > dnsStatsTopN {
-		truncated = true
-	}
-
-	return model.DNSQueryStatistics{
-		Window:       window,
-		Enabled:      true,
-		TotalQueries: totalQueries,
-		Truncated:    truncated,
-		TopDomains:   topDomains,
-		TopClients:   topClients,
-		GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
-	}
-}
-
-// GetDNSDomainClients composes the /api/statistics/dns/domain response: for
-// a single domain, the clients that queried it in the window, ranked by
-// count (drilldown plan T-02). Percent is relative to this domain's own
-// total, NOT the window's overall total (a different denominator than
-// GetDNSQueryStatistics.TopClients — plan §2 item 6). domain must already be
-// validated/normalized by the caller (the API handler).
-func (s *StatisticsService) GetDNSDomainClients(window, domain string) model.DNSDomainDrilldown {
-	window = normalizeStatsWindow(window)
-
-	s.dns.mu.RLock()
-	enabled := s.dns.enabled
-	if !enabled {
-		s.dns.mu.RUnlock()
-		return model.DNSDomainDrilldown{
-			Domain:      domain,
-			Window:      window,
-			Enabled:     false,
-			Clients:     []model.DNSClientStat{},
-			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		}
-	}
-
-	clientTotals := make(map[string]uint64)
-	var totalQueries uint64
-	var truncated bool
-
-	for _, b := range s.dnsWindowBuckets(window) {
-		for client, count := range b.pairs[domain] {
-			clientTotals[client] += count
-			totalQueries += count
-		}
-		if b.pairCount >= s.dns.maxPairs {
-			truncated = true
-		}
-	}
-	s.dns.mu.RUnlock()
-
-	leaseByIP, resByIP := s.traffic.hostLookup()
-
-	clients := rankDNSClients(clientTotals, totalQueries, leaseByIP, resByIP, dnsStatsTopN)
-	if len(clientTotals) > dnsStatsTopN {
-		truncated = true
-	}
-
-	return model.DNSDomainDrilldown{
-		Domain:       domain,
-		Window:       window,
-		Enabled:      true,
-		TotalQueries: totalQueries,
-		Truncated:    truncated,
-		Clients:      clients,
-		GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
-	}
-}
-
-// GetDNSClientDomains composes the /api/statistics/dns/client response: for
-// a single client IP (or the "unknown" bucket), the domains it queried in
-// the window, ranked by count (drilldown plan T-02). Percent is relative to
-// this client's own total, NOT the window's overall total (same rule as
-// GetDNSDomainClients above). client must already be validated/normalized by
-// the caller (the API handler) — it must equal either a netip-parseable
-// string or dnsUnknownClient exactly, matching the key recordDomainQuery
-// stores.
-func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNSClientDrilldown {
-	window = normalizeStatsWindow(window)
-
-	s.dns.mu.RLock()
-	enabled := s.dns.enabled
-	if !enabled {
-		s.dns.mu.RUnlock()
-		return model.DNSClientDrilldown{
-			Client:      client,
-			Window:      window,
-			Enabled:     false,
-			Domains:     []model.TopDomain{},
-			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		}
-	}
-
-	domainTotals := make(map[string]uint64)
-	typeByDomain := make(map[string]string)
-	var totalQueries uint64
-	var truncated bool
-
-	for _, b := range s.dnsWindowBuckets(window) {
-		for domain, clients := range b.pairs {
-			if count, ok := clients[client]; ok {
-				domainTotals[domain] += count
-				totalQueries += count
-				if qtype := b.typeByDomain[domain]; qtype != "" {
-					typeByDomain[domain] = qtype
-				}
-			}
-		}
-		if b.pairCount >= s.dns.maxPairs {
-			truncated = true
-		}
-	}
-	s.dns.mu.RUnlock()
-
-	leaseByIP, resByIP := s.traffic.hostLookup()
-	hostname, _ := hostnameFor(client, leaseByIP, resByIP)
-
-	domains := rankTopDomains(domainTotals, typeByDomain, totalQueries, dnsStatsTopN)
-	if len(domainTotals) > dnsStatsTopN {
-		truncated = true
-	}
-
-	return model.DNSClientDrilldown{
-		Client:       client,
-		Hostname:     hostname,
-		Window:       window,
-		Enabled:      true,
-		TotalQueries: totalQueries,
-		Truncated:    truncated,
-		Domains:      domains,
-		GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
-	}
-}
+// GetDNSQueryStatistics, GetDNSDomainClients and GetDNSClientDomains (the 3
+// DNS statistics endpoints' composers) moved to statistics_dns.go once the
+// domain->IP forward index (dns_domain_ips.go, T-02) and the traffic-
+// breakdown byte join (docs/ref/todo/statistics-dns-page-revamp-plan.md
+// §1.1/§1.2, T-04) were added — this file stays focused on the ring + hot
+// path + the generic ranking helpers below, which statistics_dns.go reuses
+// as its base ranking/sort before decorating rows with the byte-volume
+// fields.
 
 // rankTopDomains is buildTopDomains with a caller-supplied row cap, used by
 // the DNS Query Statistics tab (dnsStatsTopN) instead of the card-sized
