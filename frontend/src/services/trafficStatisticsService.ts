@@ -79,6 +79,12 @@ export interface TrafficHostDetail {
   mac: string
   domain: string
   private: boolean
+  // Backend does not send this field yet (UI prepared ahead of time per
+  // docs/ref/todo/statistics-traffic-host-header-plan.md D-2). Intended
+  // meaning: "this IP is a LAN host currently in use" — only meaningful when
+  // private === true. UI must only show the Active badge when
+  // `private && active === true`; undefined must NOT be read as active.
+  active?: boolean
   window: StatsWindow
   accuracy: "estimated" | "near-exact"
   truncated: boolean
@@ -413,6 +419,7 @@ export const trafficStatisticsService = {
         mac,
         domain: mockIpDomains[ip] ?? "",
         private: mockIsPrivate(ip),
+        active: mockIsPrivate(ip) ? true : undefined,
         window,
         accuracy: "near-exact",
         truncated: false,

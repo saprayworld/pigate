@@ -14,7 +14,7 @@ import { HostLabel } from "@/components/statistics/HostCells"
 import { TrafficTrendCard } from "@/components/statistics/TrafficTrendCard"
 import { TopHostsShareCard } from "@/components/statistics/TopHostsShareCard"
 import {
-  AccuracyBadge,
+  AccuracyInfoButton,
   SortableHead,
   TrafficEmptyState,
   TrafficFilterInput,
@@ -238,7 +238,7 @@ export default function StatisticsTraffic() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {data && <AccuracyBadge accuracy={data.accuracy} />}
+          {data && <AccuracyInfoButton accuracy={data.accuracy} />}
           <StatsWindowTabs value={window_} onChange={setWindow} />
           <Button
             variant="outline"
