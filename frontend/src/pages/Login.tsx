@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { getErrorMessage } from "@/lib/errors"
 import type { FormEvent } from "react"
-import { useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router"
 import { Lock, User, AlertCircle, Loader2 } from "lucide-react"
 import { authService } from "@/services/authService"
 import { PiGateLogo } from "@/components/PiGateLogo"
