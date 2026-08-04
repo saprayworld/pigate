@@ -430,7 +430,7 @@ export default function StatisticsTrafficHost() {
           </p>
 
           <Card>
-            <CardContent className="pt-4">
+            <CardContent>
               <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-2">View As</div>
               <Tabs value={role} onValueChange={(v) => setRole(v as Role)}>
                 <TabsList>

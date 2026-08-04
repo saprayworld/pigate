@@ -244,7 +244,7 @@ export function TrafficStatCard({
 }) {
   return (
     <Card size="sm">
-      <CardContent className="space-y-1.5 pt-4">
+      <CardContent className="space-y-1.5">
         <p className="text-xs text-muted-foreground">{label}</p>
         <p className="text-xl font-bold tracking-tight text-foreground">{value}</p>
         {breakdown && (
