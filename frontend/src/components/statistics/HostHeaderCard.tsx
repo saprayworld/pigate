@@ -40,7 +40,7 @@ export function HostHeaderCard({
 
   return (
     <Card>
-      <CardContent className="flex flex-wrap items-start justify-between gap-4 pt-4">
+      <CardContent className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex min-w-0 items-start gap-3">
           <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
             <Icon className="size-5" />
@@ -90,7 +90,7 @@ export function HostHeaderCard({
           </div>
         </div>
 
-        <div className="flex w-full min-w-0 flex-wrap items-center justify-end gap-2 sm:w-auto">
+        <div className="flex w-full min-w-0 flex-wrap items-center justify-start gap-2 sm:w-auto sm:justify-end">
           <AccuracyInfoButton accuracy={detail?.accuracy} />
           <StatsWindowTabs value={window} onChange={onWindowChange} />
           <Button
