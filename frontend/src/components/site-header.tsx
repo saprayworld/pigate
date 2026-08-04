@@ -1,4 +1,4 @@
-import { useLocation } from "react-router-dom"
+import { useLocation } from "react-router"
 import { Thermometer } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"

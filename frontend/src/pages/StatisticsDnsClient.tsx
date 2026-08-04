@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { NavLink, Navigate, useNavigate, useParams } from "react-router-dom"
+import { NavLink, Navigate, useNavigate, useParams } from "react-router"
 import { ArrowLeft, Loader2, RefreshCw } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"

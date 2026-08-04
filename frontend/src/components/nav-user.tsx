@@ -1,4 +1,4 @@
-import { useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router"
 import { EllipsisVerticalIcon, Settings, LogOut, Moon, Sun, Power, RefreshCw } from "lucide-react"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"

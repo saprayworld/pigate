@@ -36,6 +36,7 @@ yarn lint
 ```
 - Package management uses **Yarn v1** — always use `yarn add`, not `npm install`.
 - Yarn v1 has no `yarn dlx`, so new shadcn components must be added with `npx shadcn@latest add <component>` (run inside `frontend/`), never via yarn.
+- Routing uses `react-router` v8 directly — the `react-router-dom` package was removed in v8, so **all router imports (`BrowserRouter`, `Routes`, `Route`, `Navigate`, `Outlet`, `Link`, `NavLink`, `useNavigate`, `useLocation`, `useParams`, `useSearchParams`) must come from `"react-router"`**, not `"react-router-dom"`.
 
 ### Full single-binary build
 ```bash

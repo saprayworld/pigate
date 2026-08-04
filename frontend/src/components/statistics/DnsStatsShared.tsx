@@ -1,5 +1,5 @@
 import { useCallback } from "react"
-import { useSearchParams } from "react-router-dom"
+import { useSearchParams } from "react-router"
 import { TriangleAlert } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import {

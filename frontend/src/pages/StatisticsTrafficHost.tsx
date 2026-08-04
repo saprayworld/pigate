@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { NavLink, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom"
+import { NavLink, Navigate, useNavigate, useParams, useSearchParams } from "react-router"
 import { ArrowDown, ArrowLeft, ArrowUp, ChevronsUpDown, Info } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"

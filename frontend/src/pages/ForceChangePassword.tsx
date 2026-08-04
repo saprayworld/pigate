@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { getErrorMessage } from "@/lib/errors"
 import type { FormEvent } from "react"
-import { useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router"
 import { Lock, AlertCircle, Loader2, Key, CheckCircle2 } from "lucide-react"
 import { systemService } from "@/services/systemService"
 import { authService } from "@/services/authService"
