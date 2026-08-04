@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { NavLink, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom"
-import { ArrowDown, ArrowLeft, ArrowUp, ChevronsUpDown } from "lucide-react"
+import { ArrowDown, ArrowLeft, ArrowUp, ChevronsUpDown, Info } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -55,11 +56,43 @@ function peerHostname(row: TrafficHostConversation, ownIsSrc: boolean): string {
   return ownIsSrc ? row.dstHostname : row.srcHostname
 }
 
+// ConversationNoteButton — icon-only button + Popover explaining the %/Speed
+// columns in the conversation table below, mirroring the AccuracyInfoButton
+// pattern (icon button that opens a Popover instead of a standing text note).
+function ConversationNoteButton({ title }: { title: string }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 shrink-0 cursor-pointer"
+          aria-label="คำอธิบายคอลัมน์ % และ Speed ในตาราง"
+        >
+          <Info className="size-4" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 space-y-2 text-xs text-muted-foreground">
+        <p>
+          % ในตารางด้านล่างคือสัดส่วนเทียบกับทราฟฟิกรวมของ {title} เองเท่านั้น ไม่ใช่ % ของทราฟฟิกทั้งเครือข่าย
+          (ซึ่งคือค่า "% ของทราฟฟิกทั้งหมด" ด้านบน)
+        </p>
+        <p>
+          ความเร็ว Down/Up คือค่าเฉลี่ยประมาณ 10 วินาทีล่าสุด (ค่าประมาณจาก conntrack) แตกต่างจากยอดสะสม
+          Total/Down/Up ด้านบนซึ่งเป็นผลรวมทั้งช่วงเวลา
+        </p>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 function ConversationTable({
   rows,
   ownIsSrc,
   window_,
   series,
+  title,
 }: {
   rows: TrafficHostConversation[]
   ownIsSrc: boolean
@@ -72,6 +105,7 @@ function ConversationTable({
   // from the text-filtered rows below (plan Caution 5 — moving that logic up
   // to the page would break "Top peers follows the search box").
   series: BandwidthPoint[]
+  title: string
 }) {
   const navigate = useNavigate()
   const [query, setQuery] = useState("")
@@ -156,7 +190,15 @@ function ConversationTable({
         )}
       </div>
 
-      <TrafficFilterInput value={query} onChange={setQuery} placeholder="ค้นหา IP, hostname, domain, proto, port..." />
+      <div className="flex items-center gap-2">
+        <TrafficFilterInput
+          value={query}
+          onChange={setQuery}
+          placeholder="ค้นหา IP, hostname, domain, proto, port..."
+          className="min-w-0 flex-1"
+        />
+        <ConversationNoteButton title={title} />
+      </div>
 
       {rows.length === 0 ? (
         <TrafficEmptyState label="ไม่พบข้อมูลในทิศทางนี้สำหรับช่วงเวลาที่เลือก" />
@@ -423,11 +465,6 @@ export default function StatisticsTrafficHost() {
             <TrafficStatCard label="Ratio" value={`${data.percentOfObserved}%`} />
             <Card size="sm" className="border-dashed" />
           </div>
-          <p className="text-[11px] text-muted-foreground">
-            หมายเหตุ: % ในตารางด้านล่างคือสัดส่วนเทียบกับทราฟฟิกรวมของ {title} เองเท่านั้น ไม่ใช่ % ของทราฟฟิกทั้งเครือข่าย
-            (ซึ่งคือค่า "% ของทราฟฟิกทั้งหมด" ด้านบน) · ความเร็ว Down/Up คือค่าเฉลี่ยประมาณ 10 วินาทีล่าสุด (ค่าประมาณจาก
-            conntrack) แตกต่างจากยอดสะสม Total/Down/Up ด้านบนซึ่งเป็นผลรวมทั้งช่วงเวลา
-          </p>
 
           <Card>
             <CardContent>
@@ -438,10 +475,10 @@ export default function StatisticsTrafficHost() {
                   <TabsTrigger value="dst">Destination · {data.asDestination.length}</TabsTrigger>
                 </TabsList>
                 <TabsContent value="src" className="pt-3">
-                  <ConversationTable rows={data.asSource} ownIsSrc={true} window_={window_} series={data.series} />
+                  <ConversationTable rows={data.asSource} ownIsSrc={true} window_={window_} series={data.series} title={title} />
                 </TabsContent>
                 <TabsContent value="dst" className="pt-3">
-                  <ConversationTable rows={data.asDestination} ownIsSrc={false} window_={window_} series={data.series} />
+                  <ConversationTable rows={data.asDestination} ownIsSrc={false} window_={window_} series={data.series} title={title} />
                 </TabsContent>
               </Tabs>
             </CardContent>
