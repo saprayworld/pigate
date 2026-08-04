@@ -27,13 +27,13 @@ import {
 } from "@/services/statisticsService"
 import { useStatsWindow, StatsWindowTabs, type StatsWindow } from "@/components/statistics/DnsStatsShared"
 import { UpDownLine, HostLabel } from "@/components/statistics/HostCells"
-import { AccuracyBadge, HostBar } from "@/components/statistics/TrafficStatsShared"
+import { AccuracyInfoButton, HostBar } from "@/components/statistics/TrafficStatsShared"
 import { TrafficTrendCard } from "@/components/statistics/TrafficTrendCard"
 import { TopHostsShareCard } from "@/components/statistics/TopHostsShareCard"
 
 const REFRESH_INTERVAL = 10_000
 
-// AccuracyBadge/HostBar moved to @/components/statistics/TrafficStatsShared
+// AccuracyInfoButton/HostBar moved to @/components/statistics/TrafficStatsShared
 // (docs/ref/todo/statistics-traffic-page-plan.md T-09) so the new Traffic
 // pages reuse the exact same definitions instead of duplicating them —
 // imported above.
@@ -410,7 +410,7 @@ export default function StatisticsOverview() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {stats && <AccuracyBadge accuracy={stats.accuracy} />}
+          {stats && <AccuracyInfoButton accuracy={stats.accuracy} />}
           <StatsWindowTabs value={window_} onChange={setWindow} />
           <Button
             variant="outline"

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { NavLink, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom"
-import { ArrowDown, ArrowLeft, ArrowUp, ChevronsUpDown, RefreshCw } from "lucide-react"
-import { Badge } from "@/components/ui/badge"
+import { ArrowDown, ArrowLeft, ArrowUp, ChevronsUpDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -16,10 +15,10 @@ import {
   type TrafficHostConversation,
   type TrafficHostDetail,
 } from "@/services/trafficStatisticsService"
-import { useStatsWindow, StatsWindowTabs, type StatsWindow } from "@/components/statistics/DnsStatsShared"
+import { useStatsWindow, type StatsWindow } from "@/components/statistics/DnsStatsShared"
 import { TrafficTrendCard } from "@/components/statistics/TrafficTrendCard"
+import { HostHeaderCard } from "@/components/statistics/HostHeaderCard"
 import {
-  AccuracyBadge,
   HostBar,
   SortableHead,
   TrafficEmptyState,
@@ -357,53 +356,23 @@ export default function StatisticsTrafficHost() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0 space-y-2">
-          <Button asChild variant="outline" size="sm" className="cursor-pointer gap-1.5">
-            <NavLink to={`/statistics/traffic?window=${window_}`}>
-              <ArrowLeft className="size-4" />
-              กลับไปหน้า Traffic
-            </NavLink>
-          </Button>
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="truncate text-lg font-bold tracking-tight">{title}</h1>
-            {title !== ip && <span className="font-mono text-xs text-muted-foreground">{ip}</span>}
-            {data?.domain && (
-              <Badge variant="outline" className="font-normal border-primary/20 bg-primary/10 text-primary">
-                {data.domain}
-              </Badge>
-            )}
-            {data && (
-              <Badge
-                variant="outline"
-                className={
-                  data.private
-                    ? "font-normal border-primary/30 text-primary"
-                    : "font-normal border-muted-foreground/30 text-muted-foreground"
-                }
-              >
-                {data.private ? "LAN" : "Internet"}
-              </Badge>
-            )}
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {data && <AccuracyBadge accuracy={data.accuracy} />}
-          <StatsWindowTabs value={window_} onChange={setWindow} />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => load(ip, window_, true, () => false, false)}
-            disabled={isLoading}
-            className="cursor-pointer gap-1.5"
-            title="Refresh"
-            aria-label="Refresh"
-          >
-            <RefreshCw className={isLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
-        </div>
+      <div>
+        <Button asChild variant="outline" size="sm" className="cursor-pointer gap-1.5">
+          <NavLink to={`/statistics/traffic?window=${window_}`}>
+            <ArrowLeft className="size-4" />
+            กลับไปหน้า Traffic
+          </NavLink>
+        </Button>
       </div>
+
+      <HostHeaderCard
+        ip={ip}
+        detail={data}
+        isLoading={isLoading}
+        window={window_}
+        onWindowChange={setWindow}
+        onRefresh={() => load(ip, window_, true, () => false, false)}
+      />
 
       {data?.truncated && <TruncatedWarning />}
 

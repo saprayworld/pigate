@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react"
-import { ArrowDown, ArrowUp, ChevronsUpDown, Search, TriangleAlert, X } from "lucide-react"
-import { Badge } from "@/components/ui/badge"
+import { ArrowDown, ArrowUp, ChevronsUpDown, Info, Search, TriangleAlert, X } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { TableHead } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
 
@@ -160,21 +161,42 @@ export function TruncatedWarning() {
   )
 }
 
-// AccuracyBadge — extracted verbatim from StatisticsOverview.tsx so both the
-// Overview page and the two new Traffic pages share ONE definition (plan
-// T-09: "extract it into TrafficStatsShared and use it from BOTH pages").
-export function AccuracyBadge({ accuracy }: { accuracy?: "estimated" | "near-exact" }) {
+// AccuracyInfoButton — icon-only button (docs/ref/todo/statistics-traffic-host-header-plan.md
+// D-4) that opens a Popover explaining the current accuracy mode. Replaces
+// the old text AccuracyBadge; shared by Overview, Traffic and TrafficHost
+// pages (Dashboard.tsx keeps its own separate copy, untouched by this plan).
+export function AccuracyInfoButton({ accuracy }: { accuracy?: "estimated" | "near-exact" }) {
   const isNearExact = accuracy === "near-exact"
   return (
-    <Badge
-      variant="outline"
-      className={cn(
-        "font-normal",
-        isNearExact ? "border-primary/30 text-primary" : "border-muted-foreground/30 text-muted-foreground"
-      )}
-    >
-      {isNearExact ? "ใกล้เคียงจริง" : "ประมาณการ"}
-    </Badge>
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="cursor-pointer"
+          aria-label="รายละเอียดความแม่นยำของข้อมูล"
+        >
+          <Info className="size-4" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 space-y-2 text-xs">
+        <p className={cn("font-medium", isNearExact ? "text-primary" : "text-muted-foreground")}>
+          {isNearExact ? "ใกล้เคียงจริง" : "ประมาณการ"}
+        </p>
+        <p className="text-muted-foreground">
+          ใกล้เคียงจริง = ระบบนับไบต์จากทั้ง event ตอน conntrack ปิด flow (DESTROY) และการ poll ทุก ~10
+          วินาที จึงเก็บ flow สั้น ๆ ได้เกือบครบ
+        </p>
+        <p className="text-muted-foreground">
+          ประมาณการ = ขณะนี้นับจากการ poll conntrack ทุก ~10 วินาทีอย่างเดียว flow ที่เกิดและจบภายในช่วง
+          poll เดียวกันอาจตกหล่นได้
+        </p>
+        <p className="text-muted-foreground">
+          ข้อมูลทั้งหมดเก็บใน RAM เท่านั้น เริ่มนับใหม่ทุกครั้งที่ restart pigate
+        </p>
+      </PopoverContent>
+    </Popover>
   )
 }
 
