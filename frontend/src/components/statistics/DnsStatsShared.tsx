@@ -24,6 +24,7 @@ import {
   type DNSClientStat,
   type DNSDomainIP,
 } from "@/services/dnsStatisticsService"
+import { HostNameLines } from "@/components/statistics/HostCells"
 import { STATS_WINDOWS, parseStatsWindow, type StatsWindow } from "@/lib/statsWindow"
 
 // Shared presentation pieces for the three DNS statistics pages
@@ -224,7 +225,13 @@ export function DomainStatsTable({
 }
 
 // ClientStatsTable — the "Top Source Hosts" / per-domain "Clients" table
-// (T-09). Same sortable/filterable pattern as DomainStatsTable above.
+// (T-09). Same sortable/filterable pattern as DomainStatsTable above. The
+// Host column now renders through HostNameLines, the same component the
+// Statistics -> Traffic page uses (docs/ref/todo/
+// statistics-dns-host-domain-label-plan.md T-07): domain wins over hostname
+// when known, ip always shows on the second line — no onClick passed to it
+// and no LAN/Internet Badge, since the whole row is already clickable via
+// onRowClick and the badge wasn't asked for (plan §0).
 export function ClientStatsTable({
   rows,
   emptyLabel,
@@ -235,12 +242,12 @@ export function ClientStatsTable({
   onRowClick?: (ip: string, hostname: string) => void
 }) {
   const [query, setQuery] = useState("")
-  const filtered = useTextFilter(rows, query, [(c) => c.ip, (c) => c.hostname])
+  const filtered = useTextFilter(rows, query, [(c) => c.ip, (c) => c.hostname, (c) => c.domain])
   const { rows: sorted, sort, toggle } = useSortableRows(filtered, { key: "count", dir: "desc" })
 
   return (
     <div className="space-y-3">
-      <TrafficFilterInput value={query} onChange={setQuery} placeholder="ค้นหา IP, hostname..." />
+      <TrafficFilterInput value={query} onChange={setQuery} placeholder="ค้นหา IP, hostname, domain..." />
       <div className="overflow-x-auto">
         <Table>
           <TableHeader>
@@ -268,16 +275,14 @@ export function ClientStatsTable({
                   className={onRowClick ? "cursor-pointer hover:bg-muted/50" : "hover:bg-transparent"}
                   title={onRowClick ? "คลิกเพื่อดูว่าเครื่องนี้ค้นหาโดเมนอะไรบ้าง" : undefined}
                 >
-                  <TableCell className="max-w-[220px] truncate py-3 text-xs text-foreground" title={`${c.hostname || c.ip}${c.hostname ? ` (${c.ip})` : ""}`}>
+                  <TableCell
+                    className="max-w-[220px] truncate py-3 text-xs text-foreground"
+                    title={c.domain ? `${c.domain} (${c.ip})` : `${c.hostname || c.ip}${c.hostname ? ` (${c.ip})` : ""}`}
+                  >
                     {c.ip === "unknown" ? (
                       <span className="text-muted-foreground">ไม่ทราบต้นทาง</span>
                     ) : (
-                      <>
-                        <span className="font-medium">{c.hostname || c.ip}</span>
-                        {c.hostname && (
-                          <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">{c.ip}</span>
-                        )}
-                      </>
+                      <HostNameLines host={c} />
                     )}
                   </TableCell>
                   <TableCell className="py-3 text-right font-mono text-xs text-foreground">{c.domains}</TableCell>

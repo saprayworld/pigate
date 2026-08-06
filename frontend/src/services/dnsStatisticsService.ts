@@ -80,6 +80,15 @@ export interface DNSDomainStat extends TopDomain {
 export interface DNSClientStat {
   ip: string
   hostname: string
+  // The domain name dnsmasq most recently answered for ip, from the same
+  // ip->domain reverse lookup as TopHost.domain
+  // (docs/ref/todo/statistics-dns-host-domain-label-plan.md T-05) — display
+  // only, empty when unknown/expired. NEVER used for any decision (firewall,
+  // policy, routing, QoS) — the underlying cache can be poisoned by any LAN
+  // client simply querying a name it controls. Usually empty for rows in
+  // this table: it's keyed by DNS ANSWER ips (mostly Internet destinations),
+  // while these rows are LAN client (source) ips.
+  domain: string
   count: number
   percent: number
   // Number of distinct domains this client queried in the window,
@@ -204,6 +213,16 @@ const mockHostnames: Record<string, string> = {
   "192.168.1.101": "iPhone-13",
   "192.168.1.102": "Android-SmartTV",
   "192.168.1.105": "iPad-Pro",
+}
+
+// mockClientDomains gives exactly ONE mock client IP a reverse-lookup
+// domain, so mock mode can exercise the "domain wins over hostname" path
+// (docs/ref/todo/statistics-dns-host-domain-label-plan.md T-05) — every
+// other client is deliberately left with no entry, reflecting the real
+// backend's behaviour where a LAN client IP usually has no reverse entry at
+// all (see DNSClientStat.domain's doc comment above).
+const mockClientDomains: Record<string, string> = {
+  "192.168.1.102": "smarttv.home.lan",
 }
 
 // mockPairs mirrors kernel/mock.go's mockDNSQueryEvents (domain, client)
@@ -415,6 +434,7 @@ export const dnsStatisticsService = {
           return {
             ip,
             hostname: mockHostnames[ip] ?? "",
+            domain: mockClientDomains[ip] ?? "",
             count: v.count,
             percent: totalQueries > 0 ? Math.round((v.count / totalQueries) * 1000) / 10 : 0,
             domains: v.domains.size,
@@ -490,6 +510,7 @@ export const dnsStatisticsService = {
           return {
             ip,
             hostname: mockHostnames[ip] ?? "",
+            domain: mockClientDomains[ip] ?? "",
             count,
             percent: totalQueries > 0 ? Math.round((count / totalQueries) * 1000) / 10 : 0,
             domains: domainsForClient,

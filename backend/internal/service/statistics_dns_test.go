@@ -389,3 +389,47 @@ func TestDNSStatistics_DisabledReturnsEmptyNonNilSlices(t *testing.T) {
 		t.Fatalf("expected non-nil empty Series, got %#v", clientDrill.Series)
 	}
 }
+
+// TestDNSClientStat_DomainFromReverseCache covers plan
+// docs/ref/todo/statistics-dns-host-domain-label-plan.md T-02/T-03: a
+// DNSClientStat row's Domain is populated from the SAME dnsReverseCache
+// TopHost.Domain uses (answer event with an AnswerIP pointing back at a LAN
+// client IP), stays empty for clients with no matching answer (never falls
+// back to the IP), and the same behaviour holds for both
+// GetDNSQueryStatistics.TopClients and GetDNSDomainClients.Clients. Uses its
+// own StatisticsService (not seedDNSVolumeFixture's shared instance) so this
+// extra answer event can't perturb that fixture's existing assertions (plan
+// T-03 instruction).
+func TestDNSClientStat_DomainFromReverseCache(t *testing.T) {
+	s := seedDNSVolumeFixture(t)
+
+	// nas.home.lan resolves back to 192.168.1.10 (a LAN client IP, not one of
+	// the a/b/c.example.com destination IPs) — the "local zone" scenario the
+	// plan describes as the only realistic source of a non-empty Domain for
+	// rows in this table.
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogAnswer, Domain: "nas.home.lan", AnswerIP: "192.168.1.10"})
+
+	stats := s.GetDNSQueryStatistics("1h")
+	byIP := map[string]model.DNSClientStat{}
+	for _, c := range stats.TopClients {
+		byIP[c.IP] = c
+	}
+	if got := byIP["192.168.1.10"].Domain; got != "nas.home.lan" {
+		t.Fatalf("expected TopClients[192.168.1.10].Domain=nas.home.lan, got %q", got)
+	}
+	if got := byIP["192.168.1.11"].Domain; got != "" {
+		t.Fatalf("expected TopClients[192.168.1.11].Domain to be empty (no reverse entry), got %q", got)
+	}
+
+	domainDrill := s.GetDNSDomainClients("1h", "b.example.com")
+	byIP = map[string]model.DNSClientStat{}
+	for _, c := range domainDrill.Clients {
+		byIP[c.IP] = c
+	}
+	if got := byIP["192.168.1.10"].Domain; got != "nas.home.lan" {
+		t.Fatalf("expected domain drilldown Clients[192.168.1.10].Domain=nas.home.lan, got %q", got)
+	}
+	if got := byIP["192.168.1.11"].Domain; got != "" {
+		t.Fatalf("expected domain drilldown Clients[192.168.1.11].Domain to be empty, got %q", got)
+	}
+}

@@ -4826,7 +4826,7 @@ components:
 
     DNSClientStat:
       type: object
-      required: [ip, hostname, count, percent, domains, bytes, bytesUp, bytesDown, bytesPercent]
+      required: [ip, hostname, domain, count, percent, domains, bytes, bytesUp, bytesDown, bytesPercent]
       description: >-
         One ranked row for the "Top Clients" table on the DNS Query
         Statistics tab (docs/ref/todo/dns-query-statistics-drilldown-plan.md),
@@ -4843,8 +4843,26 @@ components:
           example: 192.168.1.101
         hostname:
           type: string
-          description: DHCP lease/reservation hostname; empty when unknown.
+          description: >-
+            DHCP lease/reservation hostname; falls back to this row's own ip
+            when there is no matching lease/reservation, NOT an empty
+            string.
           example: laptop-living-room
+        domain:
+          type: string
+          description: >-
+            The domain name dnsmasq most recently answered for ip, from the
+            SAME reverse cache TopHost.domain above uses
+            (docs/ref/todo/statistics-dns-host-domain-label-plan.md T-04) —
+            display only, empty when unknown/expired. NEVER used for
+            firewall/policy/routing/QoS decisions — the cache can be
+            poisoned by any LAN client simply querying a name it controls.
+            Usually empty for the rows in this table: the reverse cache is
+            keyed by DNS ANSWER ips (mostly Internet destinations), while
+            these rows are LAN client (source) ips — a value only appears
+            when a DNS answer happens to point back at a LAN ip (e.g. a
+            local zone like nas.home.lan -> 192.168.1.50).
+          example: nas.home.lan
         count:
           type: integer
           format: int64

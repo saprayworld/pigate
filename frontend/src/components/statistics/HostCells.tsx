@@ -4,12 +4,17 @@ import { cn } from "@/lib/utils"
 import { fmtBytes } from "@/lib/formatBytes"
 import type { TopHost } from "@/services/statisticsService"
 
-// UpDownLine/HostLabel are shared row-cell components (docs/ref/todo/
-// statistics-overview-bandwidth-chart-plan.md T-08A) — moved here verbatim
-// (same markup/logic) from what used to be local-only components in
-// pages/StatisticsOverview.tsx, so new components (e.g. TopHostsShareCard)
-// can reuse them without a circular import (a card importing from the page
-// that renders it). Pure move: do not change markup/logic here.
+// UpDownLine/HostLabel/HostNameLines are shared row-cell components
+// (docs/ref/todo/statistics-overview-bandwidth-chart-plan.md T-08A) — moved
+// here verbatim (same markup/logic) from what used to be local-only
+// components in pages/StatisticsOverview.tsx, so new components (e.g.
+// TopHostsShareCard) can reuse them without a circular import (a card
+// importing from the page that renders it). Pure move: do not change
+// markup/logic here. HostNameLines was later split out of HostLabel
+// (docs/ref/todo/statistics-dns-host-domain-label-plan.md T-06) so the
+// "domain/hostname line + ip line" markup can be reused by callers that
+// don't want HostLabel's LAN/Internet Badge (e.g. the DNS statistics page's
+// ClientStatsTable) without duplicating the logic.
 
 // UpDownLine renders the small "↑ up · ↓ down" byte sub-line shared by
 // TopHostsCard rows and the Conversations table (docs/ref/todo/
@@ -31,49 +36,27 @@ export function UpDownLine({ up, down }: { up: number; down: number }) {
   )
 }
 
-// onClick is OPTIONAL (docs/ref/todo/statistics-traffic-page-plan.md T-12):
-// when supplied, the primary label renders as a real <button> (same click
-// affordance the Top Queried Domains card already uses — cursor-pointer +
-// hover:text-primary hover:underline + a Thai title tooltip) that opens the
-// Traffic drill-down for this host; without it, HostLabel renders byte-for-
-// byte as before (Dashboard/other callers unaffected).
-export function HostLabel({ host, onClick }: { host: TopHost; onClick?: () => void }) {
+// HostNameLines renders the "primary name line (domain/hostname) + small
+// font-mono ip line" markup shared by HostLabel below (docs/ref/todo/
+// statistics-dns-host-domain-label-plan.md T-06) — split out into its own
+// component so callers that don't want HostLabel's LAN/Internet Badge (e.g.
+// DnsStatsShared.tsx's ClientStatsTable) can reuse the exact same
+// domain-wins-over-hostname markup/logic without duplicating it. `host` is a
+// structural subset (not TopHost) so both TopHost and DNSClientStat rows can
+// be passed in directly.
+export function HostNameLines({
+  host,
+  onClick,
+}: {
+  host: { ip: string; hostname: string; domain: string }
+  onClick?: () => void
+}) {
   // When the destination has a known domain (docs/ref/todo/
   // statistics-dns-top-domain-plan.md T-13), show it as the primary line and
   // demote the IP to a small font-mono label beside it — otherwise the
   // layout is unchanged from before this feature existed (plan §5 item 12).
   if (host.domain) {
     return (
-      <span className="flex min-w-0 items-center gap-2">
-        <span className="min-w-0">
-          {onClick ? (
-            <button
-              type="button"
-              onClick={onClick}
-              title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
-              className="block max-w-full cursor-pointer truncate text-left text-foreground/90 hover:text-primary hover:underline"
-            >
-              {host.domain}
-            </button>
-          ) : (
-            <span className="block truncate text-foreground/90">{host.domain}</span>
-          )}
-          <span className="block truncate font-mono text-[10px] text-muted-foreground">{host.ip}</span>
-        </span>
-        <Badge
-          variant="outline"
-          className={cn(
-            "shrink-0 font-normal text-[10px]",
-            host.private ? "border-primary/30 text-primary" : "border-muted-foreground/30 text-muted-foreground"
-          )}
-        >
-          {host.private ? "LAN" : "Internet"}
-        </Badge>
-      </span>
-    )
-  }
-  return (
-    <span className="flex min-w-0 items-center gap-2">
       <span className="min-w-0">
         {onClick ? (
           <button
@@ -82,15 +65,53 @@ export function HostLabel({ host, onClick }: { host: TopHost; onClick?: () => vo
             title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
             className="block max-w-full cursor-pointer truncate text-left text-foreground/90 hover:text-primary hover:underline"
           >
-            {host.hostname}
+            {host.domain}
           </button>
         ) : (
-          <span className="block truncate text-foreground/90">{host.hostname}</span>
+          <span className="block truncate text-foreground/90">{host.domain}</span>
         )}
-        {host.hostname !== host.ip && (
-          <span className="block truncate font-mono text-[10px] text-muted-foreground">{host.ip}</span>
-        )}
+        <span className="block truncate font-mono text-[10px] text-muted-foreground">{host.ip}</span>
       </span>
+    )
+  }
+  // hostname||ip fallback (docs/ref/todo/statistics-dns-host-domain-label-
+  // plan.md T-06 item 3): the real backend's hostnameFor() already falls
+  // back to the IP itself when there's no DHCP lease/reservation, but mock
+  // frontend data can send an empty string — this only changes what renders
+  // for the (currently blank) case, never for a caller that already sends a
+  // non-empty hostname.
+  const primary = host.hostname || host.ip
+  return (
+    <span className="min-w-0">
+      {onClick ? (
+        <button
+          type="button"
+          onClick={onClick}
+          title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
+          className="block max-w-full cursor-pointer truncate text-left text-foreground/90 hover:text-primary hover:underline"
+        >
+          {primary}
+        </button>
+      ) : (
+        <span className="block truncate text-foreground/90">{primary}</span>
+      )}
+      {host.hostname !== host.ip && (
+        <span className="block truncate font-mono text-[10px] text-muted-foreground">{host.ip}</span>
+      )}
+    </span>
+  )
+}
+
+// onClick is OPTIONAL (docs/ref/todo/statistics-traffic-page-plan.md T-12):
+// when supplied, the primary label renders as a real <button> (same click
+// affordance the Top Queried Domains card already uses — cursor-pointer +
+// hover:text-primary hover:underline + a Thai title tooltip) that opens the
+// Traffic drill-down for this host; without it, HostLabel renders byte-for-
+// byte as before (Dashboard/other callers unaffected).
+export function HostLabel({ host, onClick }: { host: TopHost; onClick?: () => void }) {
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <HostNameLines host={host} onClick={onClick} />
       <Badge
         variant="outline"
         className={cn(

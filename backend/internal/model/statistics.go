@@ -262,11 +262,24 @@ type DNSDomainIP struct {
 type DNSClientStat struct {
 	IP string `json:"ip"`
 	// Hostname is resolved from a DHCP lease/reservation, same pattern as
-	// TopHost.Hostname/TopDeniedSource.Hostname above — display only, empty
-	// when unknown.
-	Hostname string  `json:"hostname"`
-	Count    uint64  `json:"count"`
-	Percent  float64 `json:"percent"`
+	// TopHost.Hostname/TopDeniedSource.Hostname above — display only. Falls
+	// back to the row's own IP (via hostnameFor(), service/traffic_stats.go)
+	// when there is no matching lease/reservation, NOT an empty string.
+	Hostname string `json:"hostname"`
+	// Domain is the domain name dnsmasq most recently answered for this IP,
+	// from the same dnsReverseCache as TopHost.Domain above
+	// (docs/ref/todo/statistics-dns-host-domain-label-plan.md T-01) —
+	// display only, empty when unknown/expired. NEVER used for firewall rule
+	// generation, policy matching, routing, or QoS decisions — the cache can
+	// be poisoned by any LAN client simply querying a name it controls.
+	// Usually empty for the rows in this table: the reverse cache is keyed
+	// by DNS *answer* IPs (mostly Internet destinations), while these rows
+	// are LAN client (source) IPs — a value only appears when a DNS answer
+	// happens to point back at a LAN IP (e.g. a local zone like
+	// nas.home.lan -> 192.168.1.50).
+	Domain  string  `json:"domain"`
+	Count   uint64  `json:"count"`
+	Percent float64 `json:"percent"`
 	// Domains is the number of distinct domains this client queried in the
 	// window, system-wide — NOT scoped to the parent DTO's own domain/client
 	// focus (docs/ref/todo/statistics-dns-review-fixes-plan.md T-06): in a

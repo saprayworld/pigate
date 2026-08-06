@@ -160,9 +160,16 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 	// Base ranking/sort reused from rankDNSClients, decorated with
 	// domains/bytes*.
 	topClients := rankDNSClients(clientTotals, totalQueries, leaseByIP, resByIP, dnsStatsTopN)
+	// Domain enrichment (docs/ref/todo/statistics-dns-host-domain-label-plan.md
+	// T-02): ONE reverseCache.LookupMany batch over just the top-N IPs, called
+	// here — after s.dns.mu.RUnlock() above — because reverseCache has its own
+	// mutex, separate from the ring lock, and must never be touched while
+	// s.dns.mu is held (plan Caution 3 / this file's header comment).
+	ipDomain := s.dns.reverseCache.LookupMany(dnsClientStatIPs(topClients))
 	for i := range topClients {
 		ip := topClients[i].IP
 		topClients[i].Domains = len(clientDomains[ip])
+		topClients[i].Domain = ipDomain[ip]
 		v := breakdown.Hosts[ip]
 		topClients[i].Bytes = v.Total()
 		topClients[i].BytesUp = v.Orig
@@ -337,7 +344,13 @@ func (s *StatisticsService) GetDNSDomainClients(window, domain string) model.DNS
 	}
 
 	clients := rankDNSClients(clientTotals, totalQueries, leaseByIP, resByIP, dnsStatsTopN)
+	// Domain enrichment (docs/ref/todo/statistics-dns-host-domain-label-plan.md
+	// T-02): ONE reverseCache.LookupMany batch over just the top-N IPs, called
+	// here — after s.dns.mu.RUnlock() above — for the same locking reason as
+	// GetDNSQueryStatistics above.
+	ipDomain := s.dns.reverseCache.LookupMany(dnsClientStatIPs(clients))
 	for i := range clients {
+		clients[i].Domain = ipDomain[clients[i].IP]
 		v := clientBytes[clients[i].IP]
 		clients[i].Bytes = v.Total()
 		clients[i].BytesUp = v.Orig
@@ -574,4 +587,15 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 		Accuracy:       breakdown.Accuracy,
 		GeneratedAt:    time.Now().UTC().Format(time.RFC3339),
 	}
+}
+
+// dnsClientStatIPs collects the IPs of an already top-N-trimmed slice of
+// DNSClientStat rows, for a single reverseCache.LookupMany batch call (plan
+// T-02) — never call reverseCache.Lookup per-row.
+func dnsClientStatIPs(clients []model.DNSClientStat) []string {
+	ips := make([]string, len(clients))
+	for i, c := range clients {
+		ips[i] = c.IP
+	}
+	return ips
 }
