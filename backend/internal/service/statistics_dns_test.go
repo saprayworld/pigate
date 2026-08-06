@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -431,5 +432,49 @@ func TestDNSClientStat_DomainFromReverseCache(t *testing.T) {
 	}
 	if got := byIP["192.168.1.11"].Domain; got != "" {
 		t.Fatalf("expected domain drilldown Clients[192.168.1.11].Domain to be empty, got %q", got)
+	}
+}
+
+// TestGetDNSQueryStatistics_ManyDomainsNotTruncated is a regression test for
+// a bug where Truncated was set whenever len(domainTotals)/len(clientTotals)
+// exceeded dnsStatsTopN (the top-50 table row cap) — conflating "more unique
+// domains/clients exist than fit in the table" (normal, nothing lost) with
+// "a per-bucket RAM cap actually dropped data" (real data loss). A single
+// client querying 60 distinct domains (well under maxPairs=2400/
+// maxClients=200) is fully and accurately tracked and must NOT trip
+// Truncated, exactly like TrafficBreakdown.Truncated never fires just
+// because more than statsTopN hosts exist.
+func TestGetDNSQueryStatistics_ManyDomainsNotTruncated(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+	s.SetDNSLoggingEnabled(true)
+
+	const domainCount = 60 // > dnsStatsTopN (50), far under any tracking cap
+	for i := 0; i < domainCount; i++ {
+		domain := fmt.Sprintf("d%02d.example.com", i)
+		s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogQuery, Domain: domain, QueryType: "A", ClientIP: "192.168.1.50"})
+	}
+
+	stats := s.GetDNSQueryStatistics("1h")
+	if stats.Truncated {
+		t.Fatalf("expected Truncated=false for %d fully-tracked domains under every cap, got true", domainCount)
+	}
+	if stats.TotalDomains != domainCount {
+		t.Fatalf("expected TotalDomains=%d, got %d", domainCount, stats.TotalDomains)
+	}
+	if len(stats.TopDomains) != dnsStatsTopN {
+		t.Fatalf("expected TopDomains capped at dnsStatsTopN=%d, got %d", dnsStatsTopN, len(stats.TopDomains))
+	}
+
+	domainDrill := s.GetDNSDomainClients("1h", "d00.example.com")
+	if domainDrill.Truncated {
+		t.Fatalf("expected domain drilldown Truncated=false, got true")
+	}
+
+	clientDrill := s.GetDNSClientDomains("1h", "192.168.1.50")
+	if clientDrill.Truncated {
+		t.Fatalf("expected client drilldown Truncated=false, got true")
+	}
+	if clientDrill.TotalQueries != domainCount {
+		t.Fatalf("expected client drilldown TotalQueries=%d, got %d", domainCount, clientDrill.TotalQueries)
 	}
 }

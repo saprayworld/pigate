@@ -319,10 +319,15 @@ type DNSQueryStatistics struct {
 	Window       string `json:"window"` // "15m" | "30m" | "1h" | "3h" | "6h" | "12h" | "24h"
 	Enabled      bool   `json:"enabled"`
 	TotalQueries uint64 `json:"totalQueries"`
-	// Truncated is true when the domain×client pair ring or the client ring
-	// hit its tracking cap during this window (plan §2.1 — the configurable
-	// per-bucket caps set via dns-stats-max-pairs/dns-stats-max-clients in
-	// pigate.conf, see service/dns_query_stats.go).
+	// Truncated is true only when data was actually dropped: the domain×client
+	// pair ring or the client ring hit its per-bucket tracking cap during this
+	// window (the configurable caps set via dns-stats-max-pairs/
+	// dns-stats-max-clients in pigate.conf, see service/dns_query_stats.go), or
+	// the domain->IP forward index hit its own cap. Deliberately does NOT fire
+	// just because TotalDomains/TotalClients exceeds the top-50 table size
+	// below — that is normal, fully-and-accurately-tracked data that simply
+	// doesn't all fit in the table, the same distinction
+	// TrafficBreakdown.Truncated already makes.
 	Truncated bool `json:"truncated"`
 	// TopDomains is the domain-centric overview table (plan §2.2, T-01) — now
 	// []DNSDomainStat (added clients/ipCount/sharedIps/bytes/*) instead of the

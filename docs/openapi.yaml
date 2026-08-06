@@ -5105,9 +5105,12 @@ components:
         truncated:
           type: boolean
           description: >-
-            True when the domain×client pair ring or the per-bucket client
-            tracking cap was hit during this window — the ranking may be
-            missing entries.
+            True only when data was actually dropped: the domain×client
+            pair ring, the per-bucket client tracking cap, or the domain->IP
+            forward index cap was hit during this window. Deliberately does
+            NOT fire just because totalDomains/totalClients exceeds the
+            top-50 table size — that is normal, fully-and-accurately-tracked
+            data that simply doesn't all fit in the table.
         topDomains:
           type: array
           description: >-
@@ -5210,10 +5213,12 @@ components:
         truncated:
           type: boolean
           description: >-
-            True when the domain×client pair ring or the per-bucket client
-            tracking cap was hit during this window — the client list may be
-            missing entries, and the sum of clients[].count may be less than
-            totalQueries.
+            True only when data was actually dropped: the domain×client pair
+            ring, the per-bucket client tracking cap, or the domain->IP
+            forward index cap was hit during this window. Deliberately does
+            NOT fire just because totalDomains/totalClients exceeds the
+            top-50 table size — that is normal, fully-and-accurately-tracked
+            data that simply doesn't all fit in the table.
         clients:
           type: array
           description: >-
@@ -5346,10 +5351,12 @@ components:
         truncated:
           type: boolean
           description: >-
-            True when the domain×client pair ring or the per-bucket client
-            tracking cap was hit during this window — the domain list may be
-            missing entries, and the sum of domains[].count may be less than
-            totalQueries.
+            True only when data was actually dropped: the domain×client pair
+            ring, the per-bucket client tracking cap, or the domain->IP
+            forward index cap was hit during this window. Deliberately does
+            NOT fire just because totalDomains/totalClients exceeds the
+            top-50 table size — that is normal, fully-and-accurately-tracked
+            data that simply doesn't all fit in the table.
         domains:
           type: array
           description: >-

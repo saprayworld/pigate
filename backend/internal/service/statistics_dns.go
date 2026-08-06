@@ -153,9 +153,12 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 			BytesPercent: percentOf(bytes.Total(), domainBytesDenominator),
 		}
 	}
-	if len(domainTotals) > dnsStatsTopN {
-		truncated = true
-	}
+	// NOTE: deliberately NOT setting truncated when len(domainTotals) >
+	// dnsStatsTopN — that just means the table shows the top 50 of a larger,
+	// FULLY and ACCURATELY tracked set (TotalDomains/TotalClients below still
+	// reports the true count); it is not data loss and must not share the
+	// "tracking limit hit" warning with the RAM-cap conditions above, which
+	// mirrors how GetTrafficBreakdown's Truncated field works (statistics_traffic.go).
 
 	// Base ranking/sort reused from rankDNSClients, decorated with
 	// domains/bytes*.
@@ -180,9 +183,9 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 		// denominator from the domain rows above — do not swap these.
 		topClients[i].BytesPercent = percentOf(v.Total(), breakdown.Observed)
 	}
-	if len(clientTotals) > dnsStatsTopN {
-		truncated = true
-	}
+	// Same reasoning as the domainTotals check above — len(clientTotals) >
+	// dnsStatsTopN is not truncation, it's TotalClients being larger than the
+	// top-50 table.
 
 	return model.DNSQueryStatistics{
 		Window:        window,
@@ -366,9 +369,8 @@ func (s *StatisticsService) GetDNSDomainClients(window, domain string) model.DNS
 		// GetDNSClientDomains' Clients field (plan T-06).
 		clients[i].Domains = len(clientDomains[clients[i].IP])
 	}
-	if len(clientTotals) > dnsStatsTopN {
-		truncated = true
-	}
+	// NOTE: deliberately NOT setting truncated when len(clientTotals) >
+	// dnsStatsTopN — see the same-named note in GetDNSQueryStatistics above.
 
 	series := breakdown.DestSeries
 	if series == nil {
@@ -469,9 +471,8 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 	}
 
 	baseDomains := rankTopDomains(domainTotals, typeByDomain, totalQueries, dnsStatsTopN)
-	if len(domainTotals) > dnsStatsTopN {
-		truncated = true
-	}
+	// NOTE: deliberately NOT setting truncated when len(domainTotals) >
+	// dnsStatsTopN — see the same-named note in GetDNSQueryStatistics above.
 
 	// ipCount/sharedIps for every top domain, in a single locked pass (plan
 	// T-03/T-04) — never Snapshot() (collapses shared IPs to one domain, see
