@@ -116,14 +116,16 @@ function RingCard({ ring, highlighted }: { ring: RingCapacity; highlighted: bool
   const status = ringStatus(ring)
   return (
     <Card className={cn(highlighted && "border-primary/50")}>
-      <CardHeader className="flex-row flex-wrap items-start justify-between gap-2 space-y-0">
-        <div>
-          <CardTitle className="text-sm font-semibold">{ring.label}</CardTitle>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">ที่มาของ cap: {ring.capSource}</p>
+      <CardHeader>
+        <div className="flex flex-wrap items-start justify-between space-y-0">
+          <div>
+            <CardTitle className="text-sm font-semibold">{ring.label}</CardTitle>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">ที่มาของ cap: {ring.capSource}</p>
+          </div>
+          <Badge variant="outline" className={cn("shrink-0 font-normal", ringStatusClasses[status])}>
+            {Math.round(ring.peakPercent)}% peak
+          </Badge>
         </div>
-        <Badge variant="outline" className={cn("shrink-0 font-normal", ringStatusClasses[status])}>
-          {Math.round(ring.peakPercent)}% peak
-        </Badge>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
