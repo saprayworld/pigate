@@ -412,3 +412,23 @@ type DNSClientStat struct {
   ]
 }
 ```
+
+## 6. หมายเหตุ (2026-08-06) — สัญญาบางส่วนถูกยกเลิกโดยรีวิว PR 127
+
+หลัง PR 127 (`feat/statistics-dns-page`) เข้ารีวิว เจ้าของ repo ให้แก้ 3 จุด ซึ่งเปลี่ยนสัญญาบางส่วนที่
+เอกสารนี้เคยล็อกไว้ — รายละเอียดทั้งหมดอยู่ที่ `docs/ref/todo/statistics-dns-review-fixes-plan.md`
+(T-01 ถึง T-10) ประเด็นสำคัญ:
+
+- **ข้อกำหนดเดิมที่ว่า "client drill-down: clients/ipCount/sharedIps = 0 เสมอ"
+  (ดู §2.2/T-04 ในเอกสารนี้) ถูกยกเลิกแล้ว** — ตอนนี้ 3 ฟิลด์นี้ถูกเติมด้วยค่าที่มีความหมายจริง
+  (system-wide ไม่ขึ้นกับ client/domain ที่กำลัง drill-down) ทั้งในหน้า client drill-down
+  (`GetDNSClientDomains`) และหน้า domain drill-down (`GetDNSDomainClients` — บั๊กแฝดชนิดเดียวกันที่
+  คอลัมน์ `Domains`) ดูรายละเอียดที่ ข้อ 2, T-03, T-04, T-06 ของแผนใหม่
+- **คอลัมน์ Down/Up แยก + Total ในตารางหน้า Statistics > DNS ทั้ง 3 หน้าถูกยุบเหลือคอลัมน์เดียวชื่อ
+  "Traffic"** (เซลล์ 2 บรรทัด: บน = Down, ล่าง = Up, sort ตามผลรวม) — ไม่ใช่แบบที่ข้อ 5 ของเอกสารนี้
+  (Final Acceptance บรรทัด "มีคอลัมน์ Down/Up/Total") ระบุไว้อีกต่อไป ข้อกำหนดนั้นใช้ได้เฉพาะหน้า
+  Statistics > Traffic (`pages/StatisticsTraffic.tsx`, `pages/StatisticsTrafficHost.tsx`) ซึ่ง**ไม่ได้แก้**
+  ในรอบรีวิวนี้
+
+ถือว่าเอกสารฉบับนี้ (§2.2, ข้อ 5) เป็นข้อมูลประวัติศาสตร์สำหรับ 2 จุดข้างต้น — อ้างอิงพฤติกรรมปัจจุบันที่
+`docs/ref/todo/statistics-dns-review-fixes-plan.md` แทน

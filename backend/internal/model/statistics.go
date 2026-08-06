@@ -268,9 +268,12 @@ type DNSClientStat struct {
 	Count    uint64  `json:"count"`
 	Percent  float64 `json:"percent"`
 	// Domains is the number of distinct domains this client queried in the
-	// window — 0 when not meaningful in the DTO this row is embedded in
-	// (e.g. a domain drill-down's per-client row, where the count would
-	// always be 1 and is omitted instead — plan §2.2).
+	// window, system-wide — NOT scoped to the parent DTO's own domain/client
+	// focus (docs/ref/todo/statistics-dns-review-fixes-plan.md T-06): in a
+	// domain drill-down's per-client row this is the count across every
+	// domain that client asked in the window, not just this one (which would
+	// trivially always be 1) — same "system-wide, not drill-down-scoped"
+	// convention as DNSDomainStat.Clients below.
 	Domains int `json:"domains"`
 	// Bytes/BytesUp/BytesDown: the MEANING depends on the parent DTO this
 	// row is embedded in (plan §2.2 note b) —
@@ -405,10 +408,16 @@ type DNSClientDrilldown struct {
 	Truncated    bool   `json:"truncated"`
 	// Domains is now []DNSDomainStat (added clients/ipCount/sharedIps/
 	// bytes/* per row) instead of the plain []TopDomain used before this
-	// revamp (plan §2.2) — Clients/IPCount/SharedIPs are always 0/false here
-	// (not meaningful in a single-client context); Bytes/BytesUp/BytesDown
-	// are ONLY the bytes exchanged between THIS client and that domain's
-	// known IPs (see DNSClientStat.Bytes doc for the general per-DTO rule).
+	// revamp (plan §2.2). Since docs/ref/todo/statistics-dns-review-fixes-plan.md
+	// T-04 (review fix on PR 127): Clients = the number of clients,
+	// system-wide, that queried that domain in this window (NOT just this
+	// one); IPCount/SharedIPs = that domain's known IPs in the RAM-only
+	// forward index, system-wide — identical meaning to the same fields on
+	// the overview (DNSQueryStatistics.TopDomains) and domain drill-down
+	// (DNSDomainDrilldown), not scoped to Client. Bytes/BytesUp/BytesDown are
+	// still ONLY the bytes exchanged between THIS client and that domain's
+	// known IPs (see DNSClientStat.Bytes doc for the general per-DTO rule) —
+	// unlike Clients/IPCount/SharedIPs, those stay drill-down-scoped.
 	Domains []DNSDomainStat `json:"domains"`
 	// TotalBytes/Up/Down are this client's total observed bytes across ALL
 	// destinations in the window (TrafficBreakdown.Hosts[client]) — NOT

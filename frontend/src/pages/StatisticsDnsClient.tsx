@@ -156,7 +156,7 @@ export default function StatisticsDnsClient() {
             <TrafficTrendCard
               series={data?.series}
               window={window_}
-              subtitle="ยอดต่อ 5 นาที เฉพาะทราฟฟิกของเครื่องนี้ · Up/Down นับตามทิศทางของ flow เหมือนคอลัมน์ Up/Down ในตารางด้านล่าง"
+              subtitle="ยอดต่อ 5 นาที เฉพาะทราฟฟิกของเครื่องนี้ · Up/Down นับตามทิศทางของ flow ตรงกับบรรทัด Down/Up ในคอลัมน์ Traffic ของตารางด้านล่าง"
             />
           )}
 

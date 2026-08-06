@@ -217,17 +217,43 @@ func (s *StatisticsService) GetDNSDomainClients(window, domain string) model.DNS
 	}
 
 	clientTotals := make(map[string]uint64)
+	// clientDomainsAll tracks, for every client seen in this window (not just
+	// the ones that queried `domain`), the full set of domains it queried —
+	// same union-across-buckets/across-domains pattern as GetDNSQueryStatistics's
+	// clientDomains and GetDNSClientDomains' domainClients (docs/ref/todo/
+	// statistics-dns-review-fixes-plan.md T-06: the "Source Hosts" table's
+	// Domains column needs "how many domains has this client asked,
+	// system-wide, in this window" — not scoped to the current domain, which
+	// would trivially always be 1).
+	clientDomainsAll := make(map[string]map[string]struct{})
 	var totalQueries uint64
 	var truncated bool
 
 	for _, b := range s.dnsWindowBuckets(window) {
-		for client, count := range b.pairs[domain] {
-			clientTotals[client] += count
-			totalQueries += count
+		for d, clients := range b.pairs {
+			if d == domain {
+				for client, count := range clients {
+					clientTotals[client] += count
+					totalQueries += count
+				}
+			}
+			for client := range clients {
+				if clientDomainsAll[client] == nil {
+					clientDomainsAll[client] = make(map[string]struct{})
+				}
+				clientDomainsAll[client][d] = struct{}{}
+			}
 		}
 		if b.pairCount >= s.dns.maxPairs {
 			truncated = true
 		}
+	}
+	// Keep only the clients that actually queried `domain` (clientTotals) to
+	// bound clientDomains' size, same trimming as GetDNSClientDomains' T-04
+	// change.
+	clientDomains := make(map[string]map[string]struct{}, len(clientTotals))
+	for c := range clientTotals {
+		clientDomains[c] = clientDomainsAll[c]
 	}
 	s.dns.mu.RUnlock() // ring lock released before touching domainIPs/traffic below (plan Caution 3)
 
@@ -321,9 +347,11 @@ func (s *StatisticsService) GetDNSDomainClients(window, domain string) model.DNS
 		// ObservedBytes — plan §2.2 note (b): a domain drill-down's client
 		// row bytes are a strict subset of that client's window-wide total.
 		clients[i].BytesPercent = percentOf(v.Total(), totalBytesSum)
-		// Domains is not meaningful in a single-domain drill-down row (it
-		// would always be 1) — left at its zero value per DNSClientStat's
-		// doc comment.
+		// Domains = how many domains this client queried system-wide in this
+		// window (not scoped to `domain`, which would trivially always be 1)
+		// — same "system-wide, not drill-down-scoped" meaning as
+		// GetDNSClientDomains' Clients field (plan T-06).
+		clients[i].Domains = len(clientDomains[clients[i].IP])
 	}
 	if len(clientTotals) > dnsStatsTopN {
 		truncated = true
@@ -386,6 +414,12 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 
 	domainTotals := make(map[string]uint64)
 	typeByDomain := make(map[string]string)
+	// domainClientsAll tracks, for every domain seen in this window (not just
+	// the ones `client` queried), the full set of clients that queried it —
+	// same union-across-buckets pattern as GetDNSQueryStatistics's
+	// domainClients (plan §0.1/T-04: derived from the same ring loop already
+	// running here, no new data source).
+	domainClientsAll := make(map[string]map[string]struct{})
 	var totalQueries uint64
 	var truncated bool
 
@@ -398,10 +432,22 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 					typeByDomain[domain] = qtype
 				}
 			}
+			if domainClientsAll[domain] == nil {
+				domainClientsAll[domain] = make(map[string]struct{})
+			}
+			for c := range clients {
+				domainClientsAll[domain][c] = struct{}{}
+			}
 		}
 		if b.pairCount >= s.dns.maxPairs {
 			truncated = true
 		}
+	}
+	// Keep only the domains `client` actually queried (domainTotals) to bound
+	// domainClients' size (plan T-04 item 1).
+	domainClients := make(map[string]map[string]struct{}, len(domainTotals))
+	for domain := range domainTotals {
+		domainClients[domain] = domainClientsAll[domain]
 	}
 	s.dns.mu.RUnlock() // ring lock released before touching domainIPs/traffic below (plan Caution 3)
 
@@ -414,13 +460,31 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 		truncated = true
 	}
 
+	// ipCount/sharedIps for every top domain, in a single locked pass (plan
+	// T-03/T-04) — never Snapshot() (collapses shared IPs to one domain, see
+	// dns_domain_ips.go's Snapshot doc comment) and never one IPsFor call per
+	// domain (would re-lock domainIPs once per row).
+	domainNames := make([]string, len(baseDomains))
+	for i, td := range baseDomains {
+		domainNames[i] = td.Domain
+	}
+	domainIPStats := s.dns.domainIPs.StatsFor(domainNames)
+
 	// The reserved "unknown" client bucket has no IP to join against — never
 	// attempt a traffic-breakdown call for it (plan §4 item 9 / final
-	// acceptance: "client=unknown ... ไม่มีการพยายาม join volume").
+	// acceptance: "client=unknown ... ไม่มีการพยายาม join volume"). Clients/
+	// IPCount/SharedIPs don't need conntrack at all (they come straight from
+	// the ring loop and domainIPs above), so they're still filled in here.
 	if client == dnsUnknownClient {
 		domains := make([]model.DNSDomainStat, len(baseDomains))
 		for i, td := range baseDomains {
-			domains[i] = model.DNSDomainStat{TopDomain: td}
+			stat := domainIPStats[td.Domain]
+			domains[i] = model.DNSDomainStat{
+				TopDomain: td,
+				Clients:   len(domainClients[td.Domain]),
+				IPCount:   stat.Count,
+				SharedIPs: stat.Shared,
+			}
 		}
 		return model.DNSClientDrilldown{
 			Client:       client,
@@ -471,6 +535,7 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 	domains := make([]model.DNSDomainStat, len(baseDomains))
 	for i, td := range baseDomains {
 		bytes := domainBytes[td.Domain]
+		stat := domainIPStats[td.Domain]
 		domains[i] = model.DNSDomainStat{
 			TopDomain: td,
 			Bytes:     bytes.Total(),
@@ -482,8 +547,15 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 			// GetDNSDomainClients' client rows above, just from the other
 			// side of the join.
 			BytesPercent: percentOf(bytes.Total(), clientTotalBytes),
-			// Clients/IPCount/SharedIPs are not meaningful in a
-			// single-client drill-down row — left at zero value.
+			// Clients = how many clients system-wide queried this domain in
+			// this window (not just `client`); IPCount/SharedIPs = this
+			// domain's forward-index IP set, system-wide — same values the
+			// overview/domain drill-down rows show for this domain, not
+			// scoped to the single client being drilled into (docs/ref/todo/
+			// statistics-dns-review-fixes-plan.md §2/T-04 — R-3 fix).
+			Clients:   len(domainClients[td.Domain]),
+			IPCount:   stat.Count,
+			SharedIPs: stat.Shared,
 		}
 	}
 

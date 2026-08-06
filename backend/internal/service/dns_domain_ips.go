@@ -212,6 +212,60 @@ func (d *dnsDomainIPs) IPsFor(domain string) []domainIPEntry {
 	return out
 }
 
+// domainIPStat is one entry of StatsFor's result: how many (still-live) IPs a
+// domain is known to have in the forward index, and whether any of them is
+// currently shared with another domain.
+type domainIPStat struct {
+	Count  int
+	Shared bool
+}
+
+// StatsFor returns, for each of the given domains, the count of still-live
+// IPs known for it and whether any of those IPs is shared with another
+// domain — the same (ipCount, sharedIps) values IPsFor's caller would derive
+// on its own, but for many domains in a single write-lock hold (docs/ref/
+// todo/statistics-dns-review-fixes-plan.md §2/T-03: GetDNSClientDomains needs
+// this for every domain a client queried, and calling IPsFor per-domain would
+// mean one lock acquisition per domain instead of one for the whole request).
+//
+// Domains not present in the index are simply absent from the returned map —
+// callers read the zero value (domainIPStat{}) for those, same convention as
+// a missing key in a Go map read.
+//
+// Deliberately NOT implemented via Snapshot(): Snapshot() collapses the index
+// to a single ip -> domain map (last-writer-wins on IP collisions), which
+// would under-count domains that share an IP and can never report Shared
+// correctly. This method walks byDomain/ipRefs directly instead, exactly the
+// same data IPsFor reads, just batched across domains under one lock.
+func (d *dnsDomainIPs) StatsFor(domains []string) map[string]domainIPStat {
+	now := time.Now()
+	out := make(map[string]domainIPStat, len(domains))
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	for _, domain := range domains {
+		ips, ok := d.byDomain[domain]
+		if !ok {
+			continue
+		}
+		d.evictExpiredInDomainLocked(domain, ips, now)
+		ips, ok = d.byDomain[domain]
+		if !ok {
+			continue
+		}
+		stat := domainIPStat{Count: len(ips)}
+		for ip := range ips {
+			if d.ipRefs[ip] > 1 {
+				stat.Shared = true
+				break
+			}
+		}
+		out[domain] = stat
+	}
+	return out
+}
+
 // Snapshot inverts the whole index into a single ip -> domain map, used by
 // the client drill-down to map a conversation's destination IP back to the
 // domain that resolved to it (plan §2.1/T-04 — "Snapshot() คืน map ip->domain

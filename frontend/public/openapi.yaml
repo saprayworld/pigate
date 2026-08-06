@@ -4860,10 +4860,14 @@ components:
         domains:
           type: integer
           description: >-
-            Number of distinct domains this client queried in the window.
-            Always 0 when not meaningful in the DTO this row is embedded in
-            (e.g. a domain drill-down's per-client row, where the count would
-            always be 1 and is omitted instead).
+            Number of distinct domains this client queried in the window,
+            system-wide — NOT scoped to the parent response's own domain/
+            client focus (docs/ref/todo/statistics-dns-review-fixes-plan.md
+            T-06): in a domain drill-down's per-client row this is the count
+            across every domain that client asked in the window, not just
+            this one (which would trivially always be 1) — same
+            system-wide-not-drill-down-scoped convention as
+            DNSDomainStat.clients below.
           example: 12
         bytes:
           type: integer
@@ -5197,7 +5201,11 @@ components:
           description: >-
             Each row's bytes/bytesUp/bytesDown are ONLY the traffic exchanged
             between that client and this domain's known IPs (a
-            conversation-level join) — see DNSClientStat.bytes.
+            conversation-level join) — see DNSClientStat.bytes. Each row's
+            domains is that client's distinct-domain count system-wide in
+            this window (docs/ref/todo/statistics-dns-review-fixes-plan.md
+            T-06 — review fix on PR 127), NOT scoped to this domain (which
+            would trivially always be 1) — see DNSClientStat.domains.
           items:
             $ref: '#/components/schemas/DNSClientStat'
         ips:
@@ -5327,11 +5335,17 @@ components:
         domains:
           type: array
           description: >-
-            []DNSDomainStat, an ADDITIVE JSON shape scoped to this endpoint
-            (clients/ipCount/sharedIps are always 0/false here — not
-            meaningful in a single-client context); bytes/bytesUp/bytesDown
-            are ONLY the bytes exchanged between THIS client and that
-            domain's known IPs.
+            []DNSDomainStat, an ADDITIVE JSON shape scoped to this endpoint.
+            Since docs/ref/todo/statistics-dns-review-fixes-plan.md T-04
+            (review fix on PR 127): clients = the number of clients,
+            system-wide, that queried that domain in this window (NOT just
+            this one); ipCount/sharedIps = that domain's known IPs in the
+            RAM-only forward index, system-wide — identical meaning to the
+            same fields on the overview (/statistics/dns) and domain
+            drill-down (/statistics/dns/domain) responses, not scoped to
+            client. bytes/bytesUp/bytesDown are still ONLY the bytes
+            exchanged between THIS client and that domain's known IPs —
+            unlike clients/ipCount/sharedIps, those stay drill-down-scoped.
           items:
             $ref: '#/components/schemas/DNSDomainStat'
         totalBytes:

@@ -240,6 +240,50 @@ func TestDNSDomainIPs_ClearedByRecordDNSEvent(t *testing.T) {
 	}
 }
 
+// TestDNSDomainIPs_StatsFor covers docs/ref/todo/statistics-dns-review-fixes-plan.md
+// T-03: an unknown domain, a domain with normal (non-shared) IPs, a domain
+// with an IP shared with another domain, and an entry past its TTL.
+func TestDNSDomainIPs_StatsFor(t *testing.T) {
+	d := newDNSDomainIPs()
+	d.SetLimits(60, 1000, 16)
+
+	d.Put("solo.example.com", "1.1.1.1")
+	d.Put("solo.example.com", "1.1.1.2")
+
+	d.Put("a.example.com", "2.2.2.2")
+	d.Put("b.example.com", "2.2.2.2") // shared IP between a.example.com and b.example.com
+
+	stats := d.StatsFor([]string{"solo.example.com", "a.example.com", "b.example.com", "unknown.example.com"})
+
+	if _, ok := stats["unknown.example.com"]; ok {
+		t.Errorf("expected no entry for a domain not present in the index, got %+v", stats["unknown.example.com"])
+	}
+
+	if got := stats["solo.example.com"]; got.Count != 2 || got.Shared {
+		t.Errorf("solo.example.com: expected Count=2 Shared=false, got %+v", got)
+	}
+
+	if got := stats["a.example.com"]; got.Count != 1 || !got.Shared {
+		t.Errorf("a.example.com: expected Count=1 Shared=true (IP shared with b.example.com), got %+v", got)
+	}
+	if got := stats["b.example.com"]; got.Count != 1 || !got.Shared {
+		t.Errorf("b.example.com: expected Count=1 Shared=true, got %+v", got)
+	}
+
+	// TTL expiry: an entry past its TTL must not be counted.
+	d.mu.Lock()
+	d.byDomain["expired.example.com"] = map[string]time.Time{
+		"9.9.9.9": time.Now().Add(-2 * time.Hour),
+	}
+	d.ipRefs["9.9.9.9"]++
+	d.mu.Unlock()
+
+	stats = d.StatsFor([]string{"expired.example.com"})
+	if got, ok := stats["expired.example.com"]; ok {
+		t.Errorf("expected expired.example.com to have no live IPs left (evicted), got %+v", got)
+	}
+}
+
 // TestDNSDomainIPs_Race exercises Put/IPsFor/Snapshot/SetLimits/sweepExpired
 // concurrently under -race.
 func TestDNSDomainIPs_Race(t *testing.T) {

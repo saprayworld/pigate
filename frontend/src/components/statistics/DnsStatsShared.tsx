@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react"
 import { useSearchParams } from "react-router"
-import { Info, TriangleAlert } from "lucide-react"
+import { ArrowDown, ArrowUp, Info, TriangleAlert } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -107,6 +107,31 @@ export function StatsWindowTabs({
   )
 }
 
+// DnsTrafficCell — the 2-line Down/Up cell that replaces the separate
+// Down / Up / Total columns in all 3 DNS tables (review fix on PR 127, see
+// docs/ref/todo/statistics-dns-review-fixes-plan.md T-01/T-02/R-2): top line
+// is Down (bytesDown), bottom line is Up (bytesUp) — the column itself sorts
+// by the combined `bytes` value (bytesUp + bytesDown, guaranteed by the
+// backend DTO contract).
+export function DnsTrafficCell({ down, up }: { down: number; up: number }) {
+  return (
+    <div
+      className="flex flex-col items-end leading-tight"
+      title={`Down ${fmtBytes(down)} · Up ${fmtBytes(up)}`}
+      aria-label={`Down ${fmtBytes(down)} · Up ${fmtBytes(up)}`}
+    >
+      <span className="flex items-center gap-1 font-mono text-[11px] text-primary">
+        <ArrowDown className="size-3" />
+        {fmtBytes(down)}
+      </span>
+      <span className="flex items-center gap-1 font-mono text-[11px] text-muted-foreground">
+        <ArrowUp className="size-3" />
+        {fmtBytes(up)}
+      </span>
+    </div>
+  )
+}
+
 // DomainStatsTable — the "Top Domains" / per-client "Domains queried" table
 // (docs/ref/todo/statistics-dns-page-revamp-plan.md T-09). Every column is
 // sortable via useSortableRows/SortableHead and the table owns its own
@@ -141,16 +166,14 @@ export function DomainStatsTable({
               <SortableHead<DNSDomainStat> label="IPs" sortKey="ipCount" sort={sort} onToggle={toggle} align="right" className="w-20" />
               <SortableHead<DNSDomainStat> label="Count" sortKey="count" sort={sort} onToggle={toggle} align="right" className="w-20" />
               <SortableHead<DNSDomainStat> label="% Query" sortKey="percent" sort={sort} onToggle={toggle} align="right" className="w-20" />
-              <SortableHead<DNSDomainStat> label="Down" sortKey="bytesDown" sort={sort} onToggle={toggle} align="right" className="w-24" />
-              <SortableHead<DNSDomainStat> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
-              <SortableHead<DNSDomainStat> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
+              <SortableHead<DNSDomainStat> label="Traffic" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-28" />
               <SortableHead<DNSDomainStat> label="% Vol" sortKey="bytesPercent" sort={sort} onToggle={toggle} align="right" className="w-20" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {sorted.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={10} className="py-8 text-center text-xs text-muted-foreground">
+                <TableCell colSpan={8} className="py-8 text-center text-xs text-muted-foreground">
                   {emptyLabel}
                 </TableCell>
               </TableRow>
@@ -183,9 +206,9 @@ export function DomainStatsTable({
                   </TableCell>
                   <TableCell className="py-3 text-right font-mono text-xs text-foreground">{d.count}</TableCell>
                   <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{d.percent.toFixed(1)}%</TableCell>
-                  <TableCell className="py-3 text-right font-mono text-xs text-primary">{fmtBytes(d.bytesDown)}</TableCell>
-                  <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{fmtBytes(d.bytesUp)}</TableCell>
-                  <TableCell className="py-3 text-right font-mono text-xs text-foreground">{fmtBytes(d.bytes)}</TableCell>
+                  <TableCell className="py-3 text-right">
+                    <DnsTrafficCell down={d.bytesDown} up={d.bytesUp} />
+                  </TableCell>
                   <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{d.bytesPercent.toFixed(1)}%</TableCell>
                 </TableRow>
               ))
@@ -226,16 +249,14 @@ export function ClientStatsTable({
               <SortableHead<DNSClientStat> label="Domains" sortKey="domains" sort={sort} onToggle={toggle} align="right" className="w-20" />
               <SortableHead<DNSClientStat> label="Count" sortKey="count" sort={sort} onToggle={toggle} align="right" className="w-20" />
               <SortableHead<DNSClientStat> label="% Query" sortKey="percent" sort={sort} onToggle={toggle} align="right" className="w-20" />
-              <SortableHead<DNSClientStat> label="Down" sortKey="bytesDown" sort={sort} onToggle={toggle} align="right" className="w-24" />
-              <SortableHead<DNSClientStat> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
-              <SortableHead<DNSClientStat> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
+              <SortableHead<DNSClientStat> label="Traffic" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-28" />
               <SortableHead<DNSClientStat> label="% Vol" sortKey="bytesPercent" sort={sort} onToggle={toggle} align="right" className="w-20" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {sorted.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="py-8 text-center text-xs text-muted-foreground">
+                <TableCell colSpan={6} className="py-8 text-center text-xs text-muted-foreground">
                   {emptyLabel}
                 </TableCell>
               </TableRow>
@@ -262,9 +283,9 @@ export function ClientStatsTable({
                   <TableCell className="py-3 text-right font-mono text-xs text-foreground">{c.domains}</TableCell>
                   <TableCell className="py-3 text-right font-mono text-xs text-foreground">{c.count}</TableCell>
                   <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{c.percent.toFixed(1)}%</TableCell>
-                  <TableCell className="py-3 text-right font-mono text-xs text-primary">{fmtBytes(c.bytesDown)}</TableCell>
-                  <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{fmtBytes(c.bytesUp)}</TableCell>
-                  <TableCell className="py-3 text-right font-mono text-xs text-foreground">{fmtBytes(c.bytes)}</TableCell>
+                  <TableCell className="py-3 text-right">
+                    <DnsTrafficCell down={c.bytesDown} up={c.bytesUp} />
+                  </TableCell>
                   <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{c.bytesPercent.toFixed(1)}%</TableCell>
                 </TableRow>
               ))
@@ -304,9 +325,7 @@ export function DomainIpTable({
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <SortableHead<DNSDomainIP> label="IP" sortKey="ip" sort={sort} onToggle={toggle} />
-              <SortableHead<DNSDomainIP> label="Down" sortKey="bytesDown" sort={sort} onToggle={toggle} align="right" className="w-24" />
-              <SortableHead<DNSDomainIP> label="Up" sortKey="bytesUp" sort={sort} onToggle={toggle} align="right" className="w-24" />
-              <SortableHead<DNSDomainIP> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
+              <SortableHead<DNSDomainIP> label="Traffic" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-28" />
               <SortableHead<DNSDomainIP> label="% Vol" sortKey="bytesPercent" sort={sort} onToggle={toggle} align="right" className="w-20" />
               <SortableHead<DNSDomainIP> label="Last seen" sortKey="lastSeen" sort={sort} onToggle={toggle} className="w-40" />
               <TableHead className="w-20 text-right text-xs font-medium text-muted-foreground">Shared</TableHead>
@@ -315,7 +334,7 @@ export function DomainIpTable({
           <TableBody>
             {sorted.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-8 text-center text-xs text-muted-foreground">
+                <TableCell colSpan={5} className="py-8 text-center text-xs text-muted-foreground">
                   {emptyLabel}
                 </TableCell>
               </TableRow>
@@ -323,9 +342,9 @@ export function DomainIpTable({
               sorted.map((r) => (
                 <TableRow key={r.ip} className="hover:bg-transparent">
                   <TableCell className="py-3 font-mono text-xs font-medium text-foreground">{r.ip}</TableCell>
-                  <TableCell className="py-3 text-right font-mono text-xs text-primary">{fmtBytes(r.bytesDown)}</TableCell>
-                  <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{fmtBytes(r.bytesUp)}</TableCell>
-                  <TableCell className="py-3 text-right font-mono text-xs text-foreground">{fmtBytes(r.bytes)}</TableCell>
+                  <TableCell className="py-3 text-right">
+                    <DnsTrafficCell down={r.bytesDown} up={r.bytesUp} />
+                  </TableCell>
                   <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{r.bytesPercent.toFixed(1)}%</TableCell>
                   <TableCell className="py-3 font-mono text-[11px] text-muted-foreground">
                     {new Date(r.lastSeen).toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" })}

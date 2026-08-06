@@ -45,11 +45,16 @@ export interface DNSDomainIP {
 // percent, where percent = % of QUERY COUNT, never confuse with
 // bytesPercent below) with the join-derived volume fields.
 export interface DNSDomainStat extends TopDomain {
-  // Number of distinct client IPs that queried this domain in the window.
+  // Number of distinct client IPs that queried this domain in the window,
+  // system-wide — same value regardless of which page/drill-down this row
+  // is embedded in (docs/ref/todo/statistics-dns-review-fixes-plan.md T-04:
+  // a domain drill-down's client-focused row is NOT scoped to a single
+  // client).
   clients: number
   // Number of IPs currently known for this domain in the RAM-only forward
-  // index — may be 0 when the domain was queried but no matching answer was
-  // observed/kept (TTL expiry, or the index was capped).
+  // index, system-wide — may be 0 when the domain was queried but no
+  // matching answer was observed/kept (TTL expiry, or the index was
+  // capped).
   ipCount: number
   // True when at least one of this domain's known IPs is also referenced by
   // another domain (e.g. a CDN/cloud load balancer) — bytes below
@@ -77,10 +82,12 @@ export interface DNSClientStat {
   hostname: string
   count: number
   percent: number
-  // Number of distinct domains this client queried in the window — 0 when
-  // not meaningful in the DTO this row is embedded in (e.g. a domain
-  // drill-down's per-client row, where the count would always be 1 and is
-  // omitted instead).
+  // Number of distinct domains this client queried in the window,
+  // system-wide — NOT scoped to the parent DTO's own domain/client focus
+  // (docs/ref/todo/statistics-dns-review-fixes-plan.md T-06): in a domain
+  // drill-down's per-client row this is the count across every domain that
+  // client asked in the window, not just the drilled-down domain (which
+  // would trivially always be 1).
   domains: number
   // The MEANING depends on the parent DTO this row is embedded in:
   //   - DNSQueryStatistics.topClients: this client's TOTAL observed bytes
@@ -166,9 +173,14 @@ export interface DNSClientDrilldown {
   enabled: boolean
   totalQueries: number
   truncated: boolean
-  // Clients/ipCount/sharedIps are always 0/false here (not meaningful in a
-  // single-client context); bytes/bytesUp/bytesDown are ONLY the bytes
-  // exchanged between THIS client and that domain's known IPs.
+  // Since docs/ref/todo/statistics-dns-review-fixes-plan.md T-04 (review fix
+  // on PR 127): clients = the number of clients, system-wide, that queried
+  // that domain in this window (NOT just this one); ipCount/sharedIps =
+  // that domain's known IPs in the RAM-only forward index, system-wide —
+  // identical meaning to the same fields on the overview/domain drill-down
+  // responses, not scoped to `client`. bytes/bytesUp/bytesDown are still
+  // ONLY the bytes exchanged between THIS client and that domain's known
+  // IPs — unlike clients/ipCount/sharedIps, those stay drill-down-scoped.
   domains: DNSDomainStat[]
   // This client's total observed bytes across ALL destinations in the
   // window — NOT limited to DNS-resolved domains, so it can exceed the sum
@@ -471,12 +483,16 @@ export const dnsStatisticsService = {
           const share = totals.bytes > 0 ? pairWeight / weightTotal : 0
           const bytes = Math.round(totals.bytes * share)
           const bytesUp = Math.round(totals.bytesUp * share)
+          // domains = how many domains this client queried system-wide in
+          // this window (T-06, docs/ref/todo/statistics-dns-review-fixes-plan.md)
+          // — NOT scoped to `target`, which would trivially always be 1.
+          const domainsForClient = new Set(mockPairs.filter((p) => p.client === ip).map((p) => p.domain)).size
           return {
             ip,
             hostname: mockHostnames[ip] ?? "",
             count,
             percent: totalQueries > 0 ? Math.round((count / totalQueries) * 1000) / 10 : 0,
-            domains: 0,
+            domains: domainsForClient,
             bytes,
             bytesUp,
             bytesDown: bytes - bytesUp,
@@ -544,14 +560,20 @@ export const dnsStatisticsService = {
       const domains: DNSDomainStat[] = Array.from(domainTotals.entries())
         .map(([d, v]) => {
           const b = perDomainBytes?.get(d) ?? { bytes: 0, bytesUp: 0, bytesDown: 0 }
+          // clients/ipCount/sharedIps are system-wide values for domain `d`
+          // — identical meaning to the overview's topDomains row for the
+          // same domain, not scoped to `target` (R-3 fix, T-04/T-07:
+          // docs/ref/todo/statistics-dns-review-fixes-plan.md).
+          const domainIps = mockDomainIpRows(d, scale)
+          const clientsForDomain = new Set(mockPairs.filter((p) => p.domain === d).map((p) => p.client)).size
           return {
             domain: d,
             queryType: v.queryType,
             count: v.count,
             percent: totalQueries > 0 ? Math.round((v.count / totalQueries) * 1000) / 10 : 0,
-            clients: 0,
-            ipCount: 0,
-            sharedIps: false,
+            clients: clientsForDomain,
+            ipCount: domainIps.length,
+            sharedIps: domainIps.some((ip) => ip.shared),
             bytes: b.bytes,
             bytesUp: b.bytesUp,
             bytesDown: b.bytesDown,

@@ -189,6 +189,17 @@ func TestGetDNSDomainClients_VolumeJoin(t *testing.T) {
 	if !approxEqual(c10.BytesPercent, 50) || !approxEqual(c11.BytesPercent, 50) {
 		t.Fatalf("expected both clients at 50%% of this domain's TotalBytes, got %+v / %+v", c10, c11)
 	}
+	// T-06 (docs/ref/todo/statistics-dns-review-fixes-plan.md, review fix on
+	// PR 127): Domains is system-wide, not scoped to b.example.com — .10
+	// queried a.example.com + b.example.com (2), .11 queried b.example.com +
+	// c.example.com (2). Neither is 1, proving this isn't the old
+	// always-1-in-a-single-domain-context placeholder.
+	if c10.Domains != 2 {
+		t.Fatalf("expected client 192.168.1.10's system-wide domain count=2, got %+v", c10)
+	}
+	if c11.Domains != 2 {
+		t.Fatalf("expected client 192.168.1.11's system-wide domain count=2, got %+v", c11)
+	}
 
 	var seriesSum uint64
 	for _, p := range drill.Series {
@@ -267,6 +278,28 @@ func TestGetDNSClientDomains_VolumeJoin(t *testing.T) {
 		t.Fatalf("expected a.example.com bytesPercent ~= %v, got %v", 500.0/800.0*100, a.BytesPercent)
 	}
 
+	// R-3 fix (docs/ref/todo/statistics-dns-review-fixes-plan.md T-04, review
+	// fix on PR 127): Clients/IPCount/SharedIPs must be filled with
+	// system-wide values (identical meaning/value to the overview's
+	// TopDomains rows for the same domain), never left at zero.
+	// a.example.com: only 192.168.1.10 queried it (1 client), 1 known IP
+	// (10.0.0.1), not shared.
+	if a.Clients != 1 {
+		t.Fatalf("expected a.example.com clients=1 (system-wide), got %+v", a)
+	}
+	if a.IPCount != 1 || a.SharedIPs {
+		t.Fatalf("expected a.example.com ipCount=1 sharedIps=false, got %+v", a)
+	}
+	// b.example.com: both 192.168.1.10 and 192.168.1.11 queried it (2
+	// clients), 2 known IPs (10.0.0.2, 10.0.0.3), and 10.0.0.3 is shared with
+	// c.example.com.
+	if b.Clients != 2 {
+		t.Fatalf("expected b.example.com clients=2 (system-wide), got %+v", b)
+	}
+	if b.IPCount != 2 || !b.SharedIPs {
+		t.Fatalf("expected b.example.com ipCount=2 sharedIps=true, got %+v", b)
+	}
+
 	var seriesSum uint64
 	for _, p := range drill.Series {
 		seriesSum += p.Bytes
@@ -300,6 +333,17 @@ func TestGetDNSClientDomains_UnknownBucket(t *testing.T) {
 	}
 	if drill.Domains[0].Bytes != 0 {
 		t.Fatalf("expected zero bytes for the unknown bucket's domain row, got %+v", drill.Domains[0])
+	}
+	// Even for the reserved "unknown" client bucket, Clients/IPCount/
+	// SharedIPs must still be filled in (plan T-04 item 3 — they never need
+	// conntrack, only the ring + forward index): 1 client ("unknown" itself)
+	// queried anonymous.example.com, and it has no known IP (no answer was
+	// ever recorded for it).
+	if drill.Domains[0].Clients != 1 {
+		t.Fatalf("expected anonymous.example.com clients=1 even in the unknown bucket, got %+v", drill.Domains[0])
+	}
+	if drill.Domains[0].IPCount != 0 || drill.Domains[0].SharedIPs {
+		t.Fatalf("expected anonymous.example.com ipCount=0 sharedIps=false (no answer ever recorded), got %+v", drill.Domains[0])
 	}
 }
 
