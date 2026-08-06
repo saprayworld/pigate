@@ -556,9 +556,12 @@ paths:
         `bytes`/`bytesUp`/`bytesDown` are an APPROXIMATION derived by joining
         the DNS answer -> IP mapping against conntrack byte counters, not a
         true per-domain packet count, and that domain->IP mapping must never
-        be used for security/policy decisions (firewall, routing, QoS). No
-        sort-key input is accepted from the client — sorting of the tables is
-        done entirely in the browser.
+        be used for security/policy decisions (firewall, routing, QoS). Also
+        returns `querySeries` (docs/ref/todo/
+        statistics-dns-query-bar-chart-plan.md T-02/T-03/T-05), a time series
+        of DNS query counts per 5-minute bucket for the same window, backing
+        the overview page's bar chart. No sort-key input is accepted from the
+        client — sorting of the tables is done entirely in the browser.
       parameters:
         - name: window
           in: query
@@ -4576,6 +4579,29 @@ components:
           description: Download bytes in this bucket — direction convention set by the containing schema's `series` property, see its description.
           example: 3900000
 
+    DNSQueryPoint:
+      type: object
+      required: [ts, count]
+      description: >-
+        One point of DNSQueryStatistics.querySeries (docs/ref/todo/
+        statistics-dns-query-bar-chart-plan.md T-02/T-05) — a single 5-minute
+        bucket. count is the NUMBER OF DNS QUERIES observed in the bucket,
+        not bytes — deliberately a separate schema from BandwidthPoint so
+        clients can't confuse a query count with a byte count.
+      properties:
+        ts:
+          type: string
+          format: date-time
+          description: >-
+            RFC3339 start of this bucket, in device local time (same
+            clock/format as BandwidthPoint.ts).
+          example: '2026-08-01T14:35:00+07:00'
+        count:
+          type: integer
+          format: int64
+          description: Number of DNS queries recorded in this bucket.
+          example: 42
+
     TrafficTopHosts:
       type: object
       required: [window, observedBytes, accuracy, truncated, limit, sources, destinations, series, generatedAt]
@@ -5309,6 +5335,7 @@ components:
         - window
         - enabled
         - totalQueries
+        - querySeries
         - truncated
         - topDomains
         - topClients
@@ -5342,6 +5369,23 @@ components:
           description: >-
             Total DNS queries observed in this window — the denominator for
             both topDomains and topClients percent (query-count) figures.
+        querySeries:
+          type: array
+          description: >-
+            DNS-query-count-over-time bar chart series backing the Statistics
+            -> DNS overview page (docs/ref/todo/
+            statistics-dns-query-bar-chart-plan.md T-02/T-03): one
+            DNSQueryPoint per raw 5-minute bucket. Fixed length equal to the
+            number of 5-minute buckets the window covers (3/6/12/36/72/144/288
+            for 15m/30m/1h/3h/6h/12h/24h respectively), zero-filled — never
+            null. Sorted oldest -> newest; the last point is the current,
+            still-open bucket (its count keeps climbing until the bucket
+            closes). Invariant: sum(querySeries[].count) == totalQueries
+            always holds, using the same carry rule as
+            TrafficStatistics.series. Empty array (not omitted) when
+            enabled=false.
+          items:
+            $ref: '#/components/schemas/DNSQueryPoint'
         truncated:
           type: boolean
           description: >-

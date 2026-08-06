@@ -40,18 +40,34 @@ import (
 func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryStatistics {
 	window = normalizeStatsWindow(window)
 
+	// Query-count series axis (docs/ref/todo/statistics-dns-query-bar-chart-
+	// plan.md §2.3/T-03): computed BEFORE s.dns.mu.RLock() below and reused
+	// unchanged inside the bucket loop, for the exact same reason
+	// getTrafficBreakdown computes its axis before s.mu.RLock() (traffic_stats.go)
+	// — calculating it under the lock would risk a race against a concurrent
+	// request that makes sum(QuerySeries[].Count) == TotalQueries false in a
+	// way that's invisible until two requests interleave.
+	axisStart, seriesN := statsSeriesAxis(window)
+	querySeries := make([]model.DNSQueryPoint, seriesN)
+	for i := range querySeries {
+		querySeries[i].Ts = axisStart.Add(time.Duration(i) * trafficDetailBucketSpan).Format(time.RFC3339)
+	}
+
 	s.dns.mu.RLock()
 	enabled := s.dns.enabled
 	if !enabled {
 		s.dns.mu.RUnlock()
 		// Disabled: never touch domainIPs or the traffic breakdown (plan
 		// T-04 mandatory rule / privacy) — every slice field is a non-nil
-		// empty slice, never nil.
+		// empty slice, never nil. QuerySeries is deliberately its OWN empty
+		// slice here (not the zero-filled one built above), so no timing/count
+		// data ever leaks while DNS query logging is switched off.
 		return model.DNSQueryStatistics{
 			Window:      window,
 			Enabled:     false,
 			TopDomains:  []model.DNSDomainStat{},
 			TopClients:  []model.DNSClientStat{},
+			QuerySeries: []model.DNSQueryPoint{},
 			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		}
 	}
@@ -87,6 +103,11 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 			typeByDomain[k] = v
 		}
 		totalQueries += b.queries
+		// Plot this bucket into querySeries at the same idx a bucket with this
+		// ts would land at in getTrafficBreakdown's series (same axis, same
+		// carry rule) — this is what keeps
+		// sum(QuerySeries[].Count) == TotalQueries true (plan §2/T-03 step 3).
+		querySeries[statsSeriesIndex(b.ts, axisStart, seriesN)].Count += b.queries
 		if b.pairCount >= s.dns.maxPairs || len(b.clientCount) >= s.dns.maxClients {
 			truncated = true
 		}
@@ -191,6 +212,7 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 		Window:        window,
 		Enabled:       true,
 		TotalQueries:  totalQueries,
+		QuerySeries:   querySeries,
 		Truncated:     truncated,
 		TopDomains:    topDomains,
 		TopClients:    topClients,

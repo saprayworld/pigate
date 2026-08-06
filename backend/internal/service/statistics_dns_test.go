@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	"pigate/internal/model"
 )
@@ -606,5 +607,163 @@ func TestGetDNSIPDomains_Disabled(t *testing.T) {
 	}
 	if got.Series == nil || len(got.Series) != 0 {
 		t.Fatalf("expected non-nil empty Series, got %#v", got.Series)
+	}
+}
+
+// TestGetDNSQueryStatistics_QuerySeries_LengthPerWindow covers plan
+// docs/ref/todo/statistics-dns-query-bar-chart-plan.md T-04 item 1:
+// QuerySeries must always be exactly statsWindowBucketCount(window) long,
+// zero-filled, for every supported window — checked here for 15m/1h/24h.
+func TestGetDNSQueryStatistics_QuerySeries_LengthPerWindow(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+	s.SetDNSLoggingEnabled(true)
+
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogQuery, Domain: "a.example.com", QueryType: "A", ClientIP: "192.168.1.10"})
+
+	for _, window := range []string{"15m", "1h", "24h"} {
+		stats := s.GetDNSQueryStatistics(window)
+		want := statsWindowBucketCount(window)
+		if len(stats.QuerySeries) != want {
+			t.Fatalf("window %s: expected QuerySeries length %d, got %d", window, want, len(stats.QuerySeries))
+		}
+	}
+}
+
+// TestGetDNSQueryStatistics_QuerySeries_SumEqualsTotal covers plan T-04 item
+// 2: sum(QuerySeries[].Count) must equal TotalQueries after several
+// RecordDNSEvent calls, for every supported window.
+func TestGetDNSQueryStatistics_QuerySeries_SumEqualsTotal(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+	s.SetDNSLoggingEnabled(true)
+
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogQuery, Domain: "a.example.com", QueryType: "A", ClientIP: "192.168.1.10"})
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogQuery, Domain: "b.example.com", QueryType: "A", ClientIP: "192.168.1.10"})
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogQuery, Domain: "b.example.com", QueryType: "A", ClientIP: "192.168.1.11"})
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogQuery, Domain: "c.example.com", QueryType: "A", ClientIP: "192.168.1.11"})
+
+	for _, window := range []string{"15m", "1h", "24h"} {
+		stats := s.GetDNSQueryStatistics(window)
+		var sum uint64
+		for _, p := range stats.QuerySeries {
+			sum += p.Count
+		}
+		if sum != stats.TotalQueries {
+			t.Fatalf("window %s: expected sum(QuerySeries[].Count)=%d to equal TotalQueries=%d", window, sum, stats.TotalQueries)
+		}
+	}
+}
+
+// TestGetDNSQueryStatistics_QuerySeries_OrderedOldestToNewest covers plan
+// T-04 item 3: QuerySeries must be sorted oldest -> newest, every point 5
+// minutes apart, and the last point must be the current (open) bucket.
+func TestGetDNSQueryStatistics_QuerySeries_OrderedOldestToNewest(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+	s.SetDNSLoggingEnabled(true)
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogQuery, Domain: "a.example.com", QueryType: "A", ClientIP: "192.168.1.10"})
+
+	stats := s.GetDNSQueryStatistics("1h")
+	if len(stats.QuerySeries) < 2 {
+		t.Fatalf("expected at least 2 points, got %d", len(stats.QuerySeries))
+	}
+
+	var prev time.Time
+	for i, p := range stats.QuerySeries {
+		ts, err := time.Parse(time.RFC3339, p.Ts)
+		if err != nil {
+			t.Fatalf("point %d: Ts %q did not parse as RFC3339: %v", i, p.Ts, err)
+		}
+		if i > 0 {
+			if gap := ts.Sub(prev); gap != trafficDetailBucketSpan {
+				t.Fatalf("point %d: expected 5-minute gap from previous point, got %v", i, gap)
+			}
+		}
+		prev = ts
+	}
+
+	lastTs, _ := time.Parse(time.RFC3339, stats.QuerySeries[len(stats.QuerySeries)-1].Ts)
+	currentBucket := time.Now().Truncate(trafficDetailBucketSpan)
+	if !lastTs.Equal(currentBucket) {
+		t.Fatalf("expected last point to be the current bucket %v, got %v", currentBucket, lastTs)
+	}
+}
+
+// TestGetDNSQueryStatistics_QuerySeries_DisabledIsEmptyNotNil covers plan
+// T-04 item 4: with DNS query logging off, QuerySeries must be a non-nil
+// empty slice (never serialize as JSON null, and never leak timing data).
+func TestGetDNSQueryStatistics_QuerySeries_DisabledIsEmptyNotNil(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+
+	stats := s.GetDNSQueryStatistics("1h")
+	if stats.Enabled {
+		t.Fatalf("expected Enabled=false")
+	}
+	if stats.QuerySeries == nil {
+		t.Fatalf("expected non-nil QuerySeries when disabled")
+	}
+	if len(stats.QuerySeries) != 0 {
+		t.Fatalf("expected empty QuerySeries when disabled, got %#v", stats.QuerySeries)
+	}
+}
+
+// TestGetDNSQueryStatistics_QuerySeries_NoQueriesStillFullLength covers plan
+// T-04 item 5: enabled with zero queries recorded still returns a
+// full-length, all-zero QuerySeries (not an empty/nil slice) for the window.
+func TestGetDNSQueryStatistics_QuerySeries_NoQueriesStillFullLength(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+	s.SetDNSLoggingEnabled(true)
+
+	stats := s.GetDNSQueryStatistics("1h")
+	want := statsWindowBucketCount("1h")
+	if len(stats.QuerySeries) != want {
+		t.Fatalf("expected QuerySeries length %d with no queries recorded, got %d", want, len(stats.QuerySeries))
+	}
+	for i, p := range stats.QuerySeries {
+		if p.Count != 0 {
+			t.Fatalf("point %d: expected Count=0 with no queries recorded, got %d", i, p.Count)
+		}
+	}
+	if stats.TotalQueries != 0 {
+		t.Fatalf("expected TotalQueries=0 with no queries recorded, got %d", stats.TotalQueries)
+	}
+}
+
+// TestGetDNSQueryStatistics_QuerySeries_CarryRuleForOldBucket covers plan
+// T-04 item 6: a bucket whose ts is older than the series axis (the ring
+// covers a wider span than the window, or a stale/malformed timestamp) must
+// carry into QuerySeries index 0, and sum(QuerySeries[].Count) must still
+// equal TotalQueries — mirrors the same carry rule TrafficStatistics.Series
+// relies on (statsSeriesIndex in traffic_stats.go).
+func TestGetDNSQueryStatistics_QuerySeries_CarryRuleForOldBucket(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+	s.SetDNSLoggingEnabled(true)
+
+	s.dns.mu.Lock()
+	s.dns.buckets = []domainBucket{
+		{
+			ts:           "2000-01-01T00:00:00Z", // far older than any window's axis
+			pairs:        map[string]map[string]uint64{"old.example.com": {"192.168.1.200": 7}},
+			clientCount:  map[string]uint64{"192.168.1.200": 7},
+			typeByDomain: map[string]string{"old.example.com": "A"},
+			queries:      7,
+		},
+	}
+	s.dns.mu.Unlock()
+
+	stats := s.GetDNSQueryStatistics("24h")
+	if stats.TotalQueries != 7 {
+		t.Fatalf("expected TotalQueries=7, got %d", stats.TotalQueries)
+	}
+	if len(stats.QuerySeries) == 0 {
+		t.Fatalf("expected non-empty QuerySeries")
+	}
+	if stats.QuerySeries[0].Count != 7 {
+		t.Fatalf("expected the old bucket's queries to carry into index 0, got %+v", stats.QuerySeries[0])
+	}
+	var sum uint64
+	for _, p := range stats.QuerySeries {
+		sum += p.Count
+	}
+	if sum != stats.TotalQueries {
+		t.Fatalf("expected sum(QuerySeries[].Count)=%d to equal TotalQueries=%d", sum, stats.TotalQueries)
 	}
 }

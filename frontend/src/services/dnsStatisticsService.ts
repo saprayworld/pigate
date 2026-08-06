@@ -74,6 +74,18 @@ export interface DNSDomainStat extends TopDomain {
   bytesPercent: number
 }
 
+// DNSQueryPoint is one point of DNSQueryStatistics.querySeries (docs/ref/todo/
+// statistics-dns-query-bar-chart-plan.md T-02/T-06) — mirrors Go's
+// model.DNSQueryPoint. count is the NUMBER OF DNS QUERIES observed in the
+// 5-minute bucket starting at ts, not bytes — deliberately a separate type
+// from BandwidthPoint so it can't be misread as a byte count. RAM-only, same
+// source ring as the rest of this response; sum(querySeries[].count) ==
+// totalQueries always holds (same carry rule as TrafficStatistics.series).
+export interface DNSQueryPoint {
+  ts: string
+  count: number
+}
+
 // DNSClientStat is one row of the "Top Clients" table on the DNS Query
 // Statistics tab — ranked by query count, one row per source IP that issued
 // DNS queries.
@@ -120,6 +132,14 @@ export interface DNSQueryStatistics {
   window: StatsWindow
   enabled: boolean
   totalQueries: number
+  // Query-count-over-time bar chart series backing the Statistics -> DNS
+  // overview page (docs/ref/todo/statistics-dns-query-bar-chart-plan.md
+  // T-02/T-06): fixed length equal to the number of 5-minute buckets the
+  // window covers, zero-filled, never empty/undefined while a response comes
+  // back (empty array only when enabled=false). Sorted oldest -> newest; the
+  // last point is the current, still-open bucket. Invariant:
+  // sum(querySeries[].count) === totalQueries always holds.
+  querySeries: DNSQueryPoint[]
   truncated: boolean
   topDomains: DNSDomainStat[]
   topClients: DNSClientStat[]
@@ -525,6 +545,18 @@ export const dnsStatisticsService = {
         })
         .sort((a, b) => b.count - a.count || a.ip.localeCompare(b.ip))
 
+      // querySeries reuses mockBandwidthSeries — the same shape generator
+      // TrafficStatistics/drill-down mocks already use — to get the
+      // window-length, zero-filled points, and sum(count) === totalQueries
+      // invariant for free (docs/ref/todo/statistics-dns-query-bar-chart-plan.md
+      // T-06 step 3). Its `bytes` field is deliberately reused as "count" here
+      // — only in this mock — since the generator's carry/zero-fill logic is
+      // identical for either unit.
+      const querySeries: DNSQueryPoint[] = mockBandwidthSeries(window, totalQueries).series.map((p) => ({
+        ts: p.ts,
+        count: p.bytes,
+      }))
+
       return {
         window,
         // Mock mode always reports the feature enabled (mirrors the real
@@ -533,6 +565,7 @@ export const dnsStatisticsService = {
         // empty-state.
         enabled: true,
         totalQueries,
+        querySeries,
         truncated: false,
         topDomains,
         topClients,

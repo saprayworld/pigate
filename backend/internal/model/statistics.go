@@ -123,6 +123,22 @@ type BandwidthPoint struct {
 	BytesDown uint64 `json:"bytesDown"`
 }
 
+// DNSQueryPoint is one point of DNSQueryStatistics.QuerySeries — a fixed
+// 5-minute bucket of the same RAM-only DNS query ring backing the rest of
+// that response (backend/internal/service/dns_query_stats.go), never
+// persisted to SQLite (docs/ref/todo/statistics-dns-query-bar-chart-plan.md
+// T-02). Count is the NUMBER OF DNS QUERIES observed in the bucket, not
+// bytes — deliberately a separate type from BandwidthPoint (rather than
+// reusing it with Count stuffed into the Bytes field) so callers can't
+// misread a query count as a byte count.
+type DNSQueryPoint struct {
+	// Ts is the RFC3339 start of this 5-minute bucket, in device local time
+	// (with UTC offset) — same format/clock as BandwidthPoint.Ts.
+	Ts string `json:"ts"`
+	// Count is the number of DNS queries recorded in this bucket.
+	Count uint64 `json:"count"`
+}
+
 // TrafficStatistics is the /api/statistics/traffic response.
 type TrafficStatistics struct {
 	// Window is one of "15m", "30m", "1h", "3h", "6h", "12h", "24h". An
@@ -434,6 +450,20 @@ type DNSQueryStatistics struct {
 	Window       string `json:"window"` // "15m" | "30m" | "1h" | "3h" | "6h" | "12h" | "24h"
 	Enabled      bool   `json:"enabled"`
 	TotalQueries uint64 `json:"totalQueries"`
+	// QuerySeries is the DNS-query-count-over-time bar chart backing the
+	// Statistics DNS overview page (docs/ref/todo/
+	// statistics-dns-query-bar-chart-plan.md T-02/T-03): one DNSQueryPoint per
+	// raw 5-minute bucket. (a) Fixed length equal to the number of 5-minute
+	// buckets the window covers (3/6/12/36/72/144/288 for
+	// 15m/30m/1h/3h/6h/12h/24h respectively), zero-filled — never nil. (b)
+	// Sorted oldest -> newest; the last point is the current, still-open
+	// bucket (its Count will keep climbing until the bucket closes). (c)
+	// Invariant: sum(QuerySeries[].Count) == TotalQueries always holds, using
+	// the same carry rule as TrafficStatistics.Series (statsSeriesAxis/
+	// statsSeriesIndex in service/traffic_stats.go). (d) When Enabled is
+	// false this is an empty (non-nil) slice — no timing/count data is ever
+	// exposed while DNS query logging is switched off.
+	QuerySeries []DNSQueryPoint `json:"querySeries"`
 	// Truncated is true only when data was actually dropped: the domain×client
 	// pair ring or the client ring hit its per-bucket tracking cap during this
 	// window (the configurable caps set via dns-stats-max-pairs/

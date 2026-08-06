@@ -458,7 +458,12 @@ func (s *Server) HandleGetStatistics(w http.ResponseWriter, r *http.Request) {
 // No client-supplied input besides the whitelisted window: there is still no
 // sort-key parameter accepted here — ranking within each list, and any
 // re-sorting of the table beyond that, is done entirely client-side in the
-// browser (plan §1.4), never by this handler or the service it calls.
+// browser (plan §1.4), never by this handler or the service it calls. The
+// response also carries querySeries (docs/ref/todo/
+// statistics-dns-query-bar-chart-plan.md T-02/T-03/T-05), a time series of
+// DNS query counts per 5-minute bucket for the Statistics -> DNS overview
+// page's bar chart — sourced from the same RAM-only ring the tables above
+// already read, with no additional input from the client.
 func (s *Server) HandleGetDNSQueryStatistics(w http.ResponseWriter, r *http.Request) {
 	window := statsWindowParam(r)
 	s.writeJSON(w, http.StatusOK, s.statistics.GetDNSQueryStatistics(window))

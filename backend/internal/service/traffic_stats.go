@@ -143,6 +143,47 @@ func lastNBuckets[T any](ring []T, n int) []T {
 	return ring[len(ring)-n:]
 }
 
+// statsSeriesAxis returns the fixed time axis shared by every per-bucket
+// series this file (and dns_query_stats.go/statistics_dns.go) produces: n =
+// statsWindowBucketCount(window) points, oldest -> newest, ending at the
+// current (possibly still-open) trafficDetailBucketSpan bucket. Callers must
+// compute this BEFORE taking any ring lock (s.mu.RLock / s.dns.mu.RLock) and
+// reuse the same n for both the axis and the ring's lastNBuckets selection —
+// this is the single most important invariant in the statistics subsystem:
+// if these two uses of n ever diverge, sum(series[].Bytes/Count) == the
+// corresponding total breaks silently (docs/ref/todo/
+// statistics-dns-query-bar-chart-plan.md §2.5/T-01, mirrors the original
+// comment that lived inline in getTrafficBreakdown).
+func statsSeriesAxis(window string) (axisStart time.Time, n int) {
+	n = statsWindowBucketCount(window)
+	axisEnd := time.Now().Truncate(trafficDetailBucketSpan)
+	axisStart = axisEnd.Add(-time.Duration(n-1) * trafficDetailBucketSpan)
+	return axisStart, n
+}
+
+// statsSeriesIndex maps a bucket's RFC3339 timestamp ts onto the axis
+// returned by statsSeriesAxis, applying the same "carry to the nearest edge"
+// rule for every ring in the project: a bucket older than axisStart (the ring
+// covers a wider span than the window) carries into index 0, a bucket newer
+// than the axis end (e.g. after an NTP step back) carries into index n-1, and
+// a ts that fails to parse (should never happen — addBucket/its DNS
+// equivalent are the only writers) also carries into index 0. This carry
+// rule is what keeps sum(series) == total true even though the window is
+// bucket-count-based, not time-range-based.
+func statsSeriesIndex(ts string, axisStart time.Time, n int) int {
+	bt, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return 0
+	}
+	idx := int(bt.Sub(axisStart) / trafficDetailBucketSpan)
+	if idx < 0 {
+		idx = 0
+	} else if idx >= n {
+		idx = n - 1
+	}
+	return idx
+}
+
 // flowSampleState is the per-flow-key baseline the poller keeps between
 // ticks: the last-seen cumulative byte count (for delta computation) and a
 // consecutive-miss counter (for pruning an expired conntrack entry —
@@ -1316,14 +1357,11 @@ func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string, dstSet
 	// s.mu.RLock and reused unchanged inside the loop below, so every bucket
 	// in windowBuckets is aggregated into both Observed and Series under the
 	// exact same lock acquisition — the race the plan's revision 2 fixed
-	// (§2.5 item 1) is structurally impossible here.
-	// n is computed ONCE here via statsWindowBucketCount and reused unchanged
-	// for both the series axis above and the bucket selection below (plan §6
-	// item 1 — the single most important invariant of this file: if these two
-	// uses of n ever diverge, sum(Series[].Bytes) == Observed breaks silently).
-	n := statsWindowBucketCount(window)
-	axisEnd := time.Now().Truncate(trafficDetailBucketSpan)
-	axisStart := axisEnd.Add(-time.Duration(n-1) * trafficDetailBucketSpan)
+	// (§2.5 item 1) is structurally impossible here. n/axisStart come from the
+	// shared statsSeriesAxis helper (statistics-dns-query-bar-chart-plan.md
+	// §2.5/T-01) so this axis logic has exactly one implementation in the
+	// codebase — do not inline the formula again.
+	axisStart, n := statsSeriesAxis(window)
 	series := make([]model.BandwidthPoint, n)
 	for i := range series {
 		series[i].Ts = axisStart.Add(time.Duration(i) * trafficDetailBucketSpan).Format(time.RFC3339)
@@ -1392,23 +1430,11 @@ func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string, dstSet
 		}
 		observed += b.observed.Total()
 
-		// Plot this bucket into series (plan §2.5 item 2 / T-03 step 4): index
-		// by elapsed time from axisStart, carried into the nearest edge point
-		// when the ring covers a wider span than the window (older than the
-		// axis -> index 0, newer -> index n-1, e.g. after an NTP step back) or
-		// when b.ts fails to parse (should never happen — addBucket is the
-		// only writer) — this carry rule is what keeps
+		// Plot this bucket into series (plan §2.5 item 2 / T-03 step 4) using
+		// the shared statsSeriesIndex carry rule — this is what keeps
 		// sum(Series[].Bytes) == Observed true even when the window is
 		// bucket-count-based, not time-based (§7 item 6 / §2.5 item 2).
-		idx := 0
-		if bt, err := time.Parse(time.RFC3339, b.ts); err == nil {
-			idx = int(bt.Sub(axisStart) / trafficDetailBucketSpan)
-			if idx < 0 {
-				idx = 0
-			} else if idx >= n {
-				idx = n - 1
-			}
-		}
+		idx := statsSeriesIndex(b.ts, axisStart, n)
 		series[idx].BytesUp += b.observed.Orig
 		series[idx].BytesDown += b.observed.Reply
 		series[idx].Bytes += b.observed.Total()

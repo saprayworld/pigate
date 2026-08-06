@@ -23,6 +23,7 @@ import {
   type StatsWindow,
 } from "@/components/statistics/DnsStatsShared"
 import { TrafficStatCard } from "@/components/statistics/TrafficStatsShared"
+import { DnsQueryTrendCard } from "@/components/statistics/DnsQueryTrendCard"
 
 // DNS Statistics page (docs/ref/todo/statistics-nav-restructure-plan.md T-02)
 // — promoted from the DNS Server page's former "สถิติ" tab
@@ -40,6 +41,12 @@ import { TrafficStatCard } from "@/components/statistics/TrafficStatsShared"
 // mode survives a refresh/Back and is linkable. Only Top Domains is affected;
 // Top Source Hosts and the 4 stat cards above stay on the window-wide
 // overview at all times.
+//
+// DNS query-count bar chart (docs/ref/todo/statistics-dns-query-bar-chart-plan.md
+// T-08): DnsQueryTrendCard sits between the stat-card row and the truncated
+// warning, sourced from stats.querySeries (no extra request) — like the stat
+// cards, it always shows the window-wide overview and is unaffected by
+// IP-filter mode.
 const REFRESH_INTERVAL_MS = 10_000
 const IP_QUERY_DEBOUNCE_MS = 300
 
@@ -202,6 +209,8 @@ export default function StatisticsDns() {
           />
         </div>
       )}
+
+      {stats && stats.enabled && <DnsQueryTrendCard series={stats.querySeries} window={window_} />}
 
       {stats?.truncated && <DnsStatsTruncatedWarning />}
 
