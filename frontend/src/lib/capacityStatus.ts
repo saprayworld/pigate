@@ -23,8 +23,11 @@ export function ringStatus(ring: RingCapacity): CapacityStatus {
 
 // Semantic-only colors (docs/rules_of_work.md — no hardcoded Tailwind
 // palette classes like text-amber-500, no shadow-*/backdrop-blur-*).
+// ok uses --primary (green) rather than a neutral gray so the icon-only
+// compact form (CapacityIndicator on small screens) still reads as a
+// traffic-light: green/yellow/red, not "colored when bad, gray when fine".
 export const ringStatusClasses: Record<CapacityStatus, string> = {
-  ok: "border-border text-muted-foreground",
+  ok: "border-primary/30 bg-primary/10 text-primary",
   warn: "border-warning/30 bg-warning/10 text-warning",
   danger: "border-destructive/30 bg-destructive/10 text-destructive",
 }
