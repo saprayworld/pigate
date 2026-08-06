@@ -539,6 +539,46 @@ func (s *Server) HandleGetDNSClientDomains(w http.ResponseWriter, r *http.Reques
 	s.writeJSON(w, http.StatusOK, s.statistics.GetDNSClientDomains(window, client))
 }
 
+// HandleGetDNSIPDomains backs the Statistics -> DNS page's IP-filter mode
+// (docs/ref/todo/statistics-dns-ip-filter-plan.md T-04): given an IP, every
+// domain the RAM-only reverse index (service/dns_domain_ips.go's
+// DomainsForIP) remembers resolving to it — answering "this IP shows up
+// under more than one domain, which ones?" for CDN/shared-hosting IP reuse.
+// This domain<->IP mapping is display-only and derived from dnsmasq's
+// answer log, which any LAN client can influence by simply querying
+// attacker-controlled domains — it MUST NEVER be used for firewall rule
+// generation, policy matching, routing, or QoS decisions.
+//
+// 🔒 `ip` is the one REQUIRED, security-sensitive input here: it MUST parse
+// via netip.ParseAddr, and on failure this returns 400 with a generic
+// message and NEVER calls the service — the raw client-supplied string is
+// never echoed back in the response body (plan §4 item 4/Caution 4). The
+// parsed address is re-serialized via addr.String() before being passed
+// down, exactly like HandleGetTrafficHostDetail/HandleGetDNSClientDomains
+// above, so a non-canonical IPv6 literal (e.g. "2001:DB8::1") hits the same
+// index key the forward index itself uses. window is whitelisted via
+// statsWindowParam like every other statistics endpoint. No sort/limit
+// parameter is accepted — sorting/filtering of `domains` is done entirely
+// client-side in the browser, same convention as the other DNS statistics
+// endpoints.
+func (s *Server) HandleGetDNSIPDomains(w http.ResponseWriter, r *http.Request) {
+	window := statsWindowParam(r)
+
+	raw := r.URL.Query().Get("ip")
+	if raw == "" {
+		s.writeError(w, http.StatusBadRequest, "invalid ip")
+		return
+	}
+	addr, err := netip.ParseAddr(raw)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid ip")
+		return
+	}
+	ip := addr.String()
+
+	s.writeJSON(w, http.StatusOK, s.statistics.GetDNSIPDomains(window, ip))
+}
+
 // trafficTopHostsDefaultLimit/trafficTopHostsMaxLimit and
 // trafficHostDetailDefaultLimit/trafficHostDetailMaxLimit mirror the same
 // constants in service/statistics_traffic.go — duplicated here (rather than

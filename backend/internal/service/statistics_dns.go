@@ -590,6 +590,174 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 	}
 }
 
+// GetDNSIPDomains composes the /api/statistics/dns/ip response: every domain
+// the RAM-only reverse index (dns_domain_ips.go's DomainsForIP) knows to have
+// resolved to ip, answering "this IP shows up under more than one domain —
+// which ones?" (docs/ref/todo/statistics-dns-ip-filter-plan.md §0/T-03). ip
+// must already be validated/normalized (netip.ParseAddr + addr.String()) by
+// the caller (the API handler) — this method does no further validation.
+//
+// Deliberately does NOT use rankTopDomains: it drops rows with count==0,
+// which would silently hide domains the forward index still remembers but
+// that had no query in this window — exactly the answer this endpoint exists
+// to give (plan §2.4/Caution 10).
+func (s *StatisticsService) GetDNSIPDomains(window, ip string) model.DNSIPDomains {
+	window = normalizeStatsWindow(window)
+
+	s.dns.mu.RLock()
+	enabled := s.dns.enabled
+	if !enabled {
+		s.dns.mu.RUnlock()
+		// Disabled: never touch domainIPs or the traffic breakdown (plan
+		// Caution 4/11 — privacy) — every slice field is a non-nil empty
+		// slice, never nil.
+		return model.DNSIPDomains{
+			IP:          ip,
+			Window:      window,
+			Enabled:     false,
+			Domains:     []model.DNSIPDomain{},
+			Series:      []model.BandwidthPoint{},
+			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		}
+	}
+
+	domainTotals := make(map[string]uint64)
+	typeByDomain := make(map[string]string)
+	domainClients := make(map[string]map[string]struct{})
+	var totalQueries uint64
+	var truncated bool
+
+	for _, b := range s.dnsWindowBuckets(window) {
+		for domain, clients := range b.pairs {
+			for client, count := range clients {
+				domainTotals[domain] += count
+				if domainClients[domain] == nil {
+					domainClients[domain] = make(map[string]struct{})
+				}
+				domainClients[domain][client] = struct{}{}
+			}
+		}
+		for k, v := range b.typeByDomain {
+			typeByDomain[k] = v
+		}
+		totalQueries += b.queries
+		if b.pairCount >= s.dns.maxPairs || len(b.clientCount) >= s.dns.maxClients {
+			truncated = true
+		}
+	}
+	s.dns.mu.RUnlock() // ring lock released before touching domainIPs/traffic below (plan Caution 3)
+
+	matches := s.dns.domainIPs.DomainsForIP(ip)
+	ipsTruncated := s.dns.domainIPs.Truncated()
+
+	domainNames := make([]string, len(matches))
+	for i, m := range matches {
+		domainNames[i] = m.Domain
+	}
+	ipsByDomain := s.dns.domainIPs.IPsForMany(domainNames)
+
+	// Exactly ONE traffic-breakdown call and ONE hostLookup call for this
+	// request (plan Caution 2 / T-03).
+	breakdown := s.traffic.GetTrafficBreakdownForDests(window, []string{ip})
+	leaseByIP, resByIP := s.traffic.hostLookup()
+	hostname, _ := hostnameFor(ip, leaseByIP, resByIP)
+
+	rows := make([]model.DNSIPDomain, 0, len(matches))
+	var matchedBytes dirBytes
+	for _, m := range matches {
+		domainIPs := ipsByDomain[m.Domain]
+		var bytes dirBytes
+		for _, e := range domainIPs {
+			v := breakdown.Dests[e.IP]
+			bytes.Orig += v.Orig
+			bytes.Reply += v.Reply
+		}
+		var sharedIPs bool
+		for _, e := range domainIPs {
+			if e.Shared {
+				sharedIPs = true
+				break
+			}
+		}
+		count := domainTotals[m.Domain]
+		rows = append(rows, model.DNSIPDomain{
+			DNSDomainStat: model.DNSDomainStat{
+				TopDomain: model.TopDomain{
+					Domain:    m.Domain,
+					QueryType: typeByDomain[m.Domain],
+					Count:     count,
+					Percent:   percentOf(count, totalQueries),
+				},
+				Clients:   len(domainClients[m.Domain]),
+				IPCount:   len(domainIPs),
+				SharedIPs: sharedIPs,
+				Bytes:     bytes.Total(),
+				BytesUp:   bytes.Orig,
+				BytesDown: bytes.Reply,
+				// BytesPercent's denominator is filled in below once
+				// matchedBytes (the sum across every row) is known — see
+				// model.DNSIPDomain's doc comment for why this differs from
+				// the window-wide DomainBytes used elsewhere.
+			},
+			LastSeen: m.LastSeen.UTC().Format(time.RFC3339),
+		})
+		matchedBytes.Orig += bytes.Orig
+		matchedBytes.Reply += bytes.Reply
+	}
+	matchedBytesTotal := matchedBytes.Total()
+	for i := range rows {
+		rows[i].BytesPercent = percentOf(rows[i].Bytes, matchedBytesTotal)
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Bytes != rows[j].Bytes {
+			return rows[i].Bytes > rows[j].Bytes
+		}
+		if rows[i].Count != rows[j].Count {
+			return rows[i].Count > rows[j].Count
+		}
+		return rows[i].Domain < rows[j].Domain
+	})
+
+	ipBytes := breakdown.Dests[ip]
+
+	series := breakdown.DestSeries
+	if series == nil {
+		// No known domains (or GetTrafficBreakdownForDests was called with an
+		// IP that has no conntrack data) — DestSeries is nil in that case;
+		// build a zero-filled array of the same fixed length instead (same
+		// pattern as GetDNSDomainClients above), reusing breakdown.Series' Ts
+		// axis so this never re-derives the window's bucket boundaries.
+		series = make([]model.BandwidthPoint, len(breakdown.Series))
+		for i, p := range breakdown.Series {
+			series[i].Ts = p.Ts
+		}
+	}
+
+	return model.DNSIPDomains{
+		IP:               ip,
+		Window:           window,
+		Enabled:          true,
+		Hostname:         hostname,
+		TotalQueries:     totalQueries,
+		Truncated:        truncated,
+		IPsTruncated:     ipsTruncated,
+		Domains:          rows,
+		DomainCount:      len(rows),
+		Shared:           len(rows) > 1,
+		MatchedBytes:     matchedBytesTotal,
+		MatchedBytesUp:   matchedBytes.Orig,
+		MatchedBytesDown: matchedBytes.Reply,
+		IPBytes:          ipBytes.Total(),
+		IPBytesUp:        ipBytes.Orig,
+		IPBytesDown:      ipBytes.Reply,
+		Series:           series,
+		ObservedBytes:    breakdown.Observed,
+		Accuracy:         breakdown.Accuracy,
+		GeneratedAt:      time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
 // dnsClientStatIPs collects the IPs of an already top-N-trimmed slice of
 // DNSClientStat rows, for a single reverseCache.LookupMany batch call (plan
 // T-02) — never call reverseCache.Lookup per-row.

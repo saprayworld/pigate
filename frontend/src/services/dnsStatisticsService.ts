@@ -207,6 +207,71 @@ export interface DNSClientDrilldown {
   generatedAt: string
 }
 
+// DNSIPDomain is one row of the /statistics/dns/ip response (docs/ref/todo/
+// statistics-dns-ip-filter-plan.md T-06) — a domain that has ever resolved
+// to the IP being looked up. Extends DNSDomainStat (count/percent are
+// window-scoped for THIS domain; clients/ipCount/sharedIps are this domain's
+// system-wide values; bytes/bytesUp/bytesDown are this domain's TOTAL volume
+// across ALL of its known IPs, not just the one being looked up).
+// bytesPercent here is bytes as a percent of DNSIPDomains.matchedBytes (the
+// sum across every row of this response) — deliberately NOT the window-wide
+// domainBytes used elsewhere, so the UI must label this "% Vol" as scoped to
+// this matched domain group, not the whole window (plan §2.4).
+export interface DNSIPDomain extends DNSDomainStat {
+  // RFC3339 UTC timestamp of the most recent DNS answer that resolved this
+  // domain to the IP being looked up — not tied to the stats window.
+  lastSeen: string
+}
+
+// DNSIPDomains is the GET /api/statistics/dns/ip response — every domain
+// the RAM-only reverse index knows to have resolved to `ip`. Display-only,
+// derived from dnsmasq's answer log (poisonable by any LAN client): NEVER
+// used to drive firewall rule generation, policy matching, routing, or QoS
+// decisions.
+export interface DNSIPDomains {
+  // Canonical form of the address that was looked up.
+  ip: string
+  window: StatsWindow
+  enabled: boolean
+  // Resolved from a DHCP lease/reservation for ip — display only, falls
+  // back to ip itself when unknown.
+  hostname: string
+  // Total DNS queries observed in this window across ALL domains (not just
+  // the ones matching this IP) — the denominator for each domains[] row's
+  // percent.
+  totalQueries: number
+  truncated: boolean
+  // True when the RAM-only domain->IP forward index hit one of its caps at
+  // some point — domains below could be incomplete.
+  ipsTruncated: boolean
+  // Every domain known to have resolved to ip, sorted by bytes desc, then
+  // count desc, then domain asc. Never undefined — an empty array means no
+  // domain in the RAM-only index currently maps to this IP.
+  domains: DNSIPDomain[]
+  domainCount: number
+  // True when domainCount > 1 — this IP is used by more than one domain
+  // (e.g. a CDN or shared hosting IP), so each domain's bytes double-counts
+  // the same underlying traffic to this IP.
+  shared: boolean
+  // Sum of domains[].bytes/bytesUp/bytesDown across every row of this
+  // response — the denominator for each row's bytesPercent.
+  matchedBytes: number
+  matchedBytesUp: number
+  matchedBytesDown: number
+  // Conntrack-derived byte counters for the IP being looked up itself (not
+  // summed across domains).
+  ipBytes: number
+  ipBytesUp: number
+  ipBytesDown: number
+  // This IP's traffic over time, flow-relative (orig = up, reply = down).
+  // Fixed length equal to the window's bucket count, zero-filled (never
+  // undefined). Invariant: sum(series[].bytes) == ipBytes.
+  series: BandwidthPoint[]
+  observedBytes: number
+  accuracy: "estimated" | "near-exact"
+  generatedAt: string
+}
+
 // mockHostnames mirrors statisticsService.ts's mockHosts and kernel/mock.go's
 // mockDNSQueryEvents matrix (same 3 LAN client IPs).
 const mockHostnames: Record<string, string> = {
@@ -373,6 +438,20 @@ function mockClientTotalBytes(
   bytes = Math.round(bytes * 1.4)
   bytesUp = Math.round(bytesUp * 1.4)
   return { bytes, bytesUp, bytesDown: bytes - bytesUp }
+}
+
+// mockDomainsForIP is the reverse of mockDomainIps — every (domain,
+// lastSeenMinAgo) pair whose known IPs include `ip`, mirroring the real
+// forward index's DomainsForIP (service/dns_domain_ips.go). 64.233.166.127
+// is used by both www.youtube.com and googlevideo.com, giving mock mode a
+// ready-made "shared IP" test case (plan T-06).
+function mockDomainsForIP(ip: string): { domain: string; lastSeenMinAgo: number }[] {
+  const out: { domain: string; lastSeenMinAgo: number }[] = []
+  for (const [domain, entries] of Object.entries(mockDomainIPs)) {
+    const match = entries.find((e) => e.ip === ip)
+    if (match) out.push({ domain, lastSeenMinAgo: match.lastSeenMinAgo })
+  }
+  return out
 }
 
 export const dnsStatisticsService = {
@@ -630,6 +709,104 @@ export const dnsStatisticsService = {
     )
     if (!response.ok) {
       throw new Error(`Failed to fetch DNS client drill-down: ${response.statusText}`)
+    }
+    return response.json()
+  },
+
+  // GET /api/statistics/dns/ip — every domain that has resolved to a given
+  // IP (docs/ref/todo/statistics-dns-ip-filter-plan.md T-06), for the
+  // Statistics -> DNS page's IP-filter mode.
+  getIPDomains: async (ip: string, window: StatsWindow = "1h"): Promise<DNSIPDomains> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      const scale = mockWindowScale(window)
+      const target = ip.trim().toLowerCase()
+
+      const matches = mockDomainsForIP(target)
+
+      // Same domainTotals/totalQueries computation as getDNSStatistics above
+      // — count/percent must agree with the overview for the same window.
+      const domainTotals = new Map<string, { count: number; queryType: string; clients: Set<string> }>()
+      let totalQueries = 0
+      for (const p of mockPairs) {
+        const count = mockCount(p.weight, scale)
+        totalQueries += count
+        const d = domainTotals.get(p.domain) ?? { count: 0, queryType: p.queryType, clients: new Set<string>() }
+        d.count += count
+        d.clients.add(p.client)
+        domainTotals.set(p.domain, d)
+      }
+
+      const domains: DNSIPDomain[] = matches
+        .map(({ domain, lastSeenMinAgo }) => {
+          const totals = mockDomainTotals(domain, scale)
+          const domainIps = mockDomainIpRows(domain, scale)
+          const d = domainTotals.get(domain)
+          return {
+            domain,
+            queryType: d?.queryType ?? "",
+            count: d?.count ?? 0,
+            percent: d && totalQueries > 0 ? Math.round((d.count / totalQueries) * 1000) / 10 : 0,
+            clients: d?.clients.size ?? 0,
+            ipCount: domainIps.length,
+            sharedIps: domainIps.some((row) => row.shared),
+            bytes: totals.bytes,
+            bytesUp: totals.bytesUp,
+            bytesDown: totals.bytesDown,
+            bytesPercent: 0, // filled below once matchedBytes is final
+            lastSeen: new Date(Date.now() - lastSeenMinAgo * 60_000).toISOString(),
+          }
+        })
+        .sort((a, b) => b.bytes - a.bytes || b.count - a.count || a.domain.localeCompare(b.domain))
+
+      const matchedBytes = domains.reduce((sum, d) => sum + d.bytes, 0)
+      const matchedBytesUp = domains.reduce((sum, d) => sum + d.bytesUp, 0)
+      for (const d of domains) d.bytesPercent = percentOf(d.bytes, matchedBytes)
+
+      // IP-level bytes: the per-(domain,ip) bytesBase is defined IP-level in
+      // mockDomainIPs (equal across every domain that references it), so any
+      // matching row's bytes are this IP's own total.
+      const ipRow =
+        matches.length > 0
+          ? mockDomainIpRows(matches[0].domain, scale).find((row) => row.ip === target)
+          : undefined
+      const ipBytes = ipRow?.bytes ?? 0
+      const ipBytesUp = ipRow?.bytesUp ?? 0
+
+      const series = mockBandwidthSeries(window, ipBytes, ipBytes > 0 ? ipBytesUp / ipBytes : 0.15).series
+
+      return {
+        ip: target,
+        window,
+        enabled: true,
+        hostname: mockHostnames[target] ?? target,
+        totalQueries,
+        truncated: false,
+        ipsTruncated: false,
+        domains,
+        domainCount: domains.length,
+        shared: domains.length > 1,
+        matchedBytes,
+        matchedBytesUp,
+        matchedBytesDown: matchedBytes - matchedBytesUp,
+        ipBytes,
+        ipBytesUp,
+        ipBytesDown: ipBytes - ipBytesUp,
+        series,
+        observedBytes: ipBytes,
+        accuracy: "near-exact",
+        generatedAt: new Date().toISOString(),
+      }
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/statistics/dns/ip?ip=${encodeURIComponent(ip)}&window=${window}`
+    )
+    if (response.status === 400) {
+      throw new Error("IP ไม่ถูกต้อง")
+    }
+    if (!response.ok) {
+      throw new Error(`Failed to fetch DNS IP reverse lookup: ${response.statusText}`)
     }
     return response.json()
   },

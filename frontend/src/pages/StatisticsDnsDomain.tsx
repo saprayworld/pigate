@@ -166,7 +166,11 @@ export default function StatisticsDnsDomain() {
                 <CardTitle className="text-base font-semibold">IP ที่ได้จากการ resolve</CardTitle>
               </CardHeader>
               <CardContent>
-                <DomainIpTable rows={data?.ips ?? []} emptyLabel={ipsEmptyLabel} />
+                <DomainIpTable
+                  rows={data?.ips ?? []}
+                  emptyLabel={ipsEmptyLabel}
+                  onRowClick={(ip) => navigate(`/statistics/dns?window=${window_}&ip=${encodeURIComponent(ip)}`)}
+                />
               </CardContent>
             </Card>
 

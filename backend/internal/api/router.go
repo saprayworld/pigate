@@ -52,6 +52,12 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("GET /api/statistics/dns", s.HandleGetDNSQueryStatistics)
 	authRoute("GET /api/statistics/dns/domain", s.HandleGetDNSDomainClients)
 	authRoute("GET /api/statistics/dns/client", s.HandleGetDNSClientDomains)
+	// IP -> domains reverse lookup for the Statistics -> DNS page's IP-filter
+	// mode (docs/ref/todo/statistics-dns-ip-filter-plan.md T-04): same
+	// sensitivity level as the 3 DNS statistics routes above, authRoute only
+	// (not superAdminRoute); GET, so DisableEditMiddleware never blocks it —
+	// this is a pure read.
+	authRoute("GET /api/statistics/dns/ip", s.HandleGetDNSIPDomains)
 	authRoute("GET /api/dashboard/logs", s.HandleGetRecentLogs)
 	authRoute("POST /api/dashboard/logs/clear", s.HandleClearLogs)
 	authRoute("GET /api/dashboard/logs/stream", s.HandleLogStream)

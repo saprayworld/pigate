@@ -28,15 +28,24 @@ import (
 // (plan §5 item 6/7) — display-only enrichment for the DNS statistics pages.
 //
 // RAM budget: worst case is maxDomains (default 1000) x maxIPsPerDomain
-// (default 16) ~= 16,000 (domain,ip) entries. Each entry is a short string
-// key in a nested map plus a time.Time value, so this is on the order of
-// ~1 MB worst case — bounded and small relative to the rest of the process,
-// same order of magnitude as dnsReverseCache's own cap.
+// (default 16) ~= 16,000 (domain,ip) entries, same as before. ipDomains is
+// the reverse of byDomain, so in the worst case it holds the same ~16,000
+// (ip,domain) pairs again (one small set entry per domain that references an
+// IP) — RAM stays on the order of ~1-2 MB worst case, still bounded and small
+// relative to the rest of the process, same order of magnitude as
+// dnsReverseCache's own cap.
+//
+// ipDomains is what makes "IP -> every domain that resolved to it" (plan
+// docs/ref/todo/statistics-dns-ip-filter-plan.md §2.2, T-01) answerable
+// without a full scan of byDomain: it is the true reverse index (ip -> set of
+// domains), replacing the old ipRefs counter which only tracked *how many*
+// domains referenced an IP, not *which* ones. DomainsForIP (below) is the
+// reader the new GET /api/statistics/dns/ip endpoint (T-03/T-04) is built on.
 type dnsDomainIPs struct {
 	mu sync.RWMutex
 
-	byDomain map[string]map[string]time.Time // domain -> ip -> lastSeen
-	ipRefs   map[string]int                  // ip -> number of distinct domains currently referencing it (drives the "shared" flag)
+	byDomain  map[string]map[string]time.Time // domain -> ip -> lastSeen
+	ipDomains map[string]map[string]struct{}  // ip -> set of distinct domains currently referencing it (drives "shared" flag and DomainsForIP)
 
 	ttl             time.Duration // shared with dnsReverseCache's TTL via SetLimits, so both indices age out consistently
 	maxDomains      int
@@ -60,6 +69,15 @@ type domainIPEntry struct {
 	Shared   bool
 }
 
+// ipDomainEntry is one row of DomainsForIP's result: a single (domain,
+// lastSeen) pairing for the IP being looked up (docs/ref/todo/statistics-
+// dns-ip-filter-plan.md §2.2/T-01 — the "IP -> domains" reverse read that
+// backs GET /api/statistics/dns/ip).
+type ipDomainEntry struct {
+	Domain   string
+	LastSeen time.Time
+}
+
 const (
 	// defaultMaxTrackedDomains/defaultMaxIPsPerDomain are the fallback
 	// defaults used when a caller (NewStatisticsService) passes a
@@ -81,7 +99,7 @@ const (
 func newDNSDomainIPs() *dnsDomainIPs {
 	return &dnsDomainIPs{
 		byDomain:        make(map[string]map[string]time.Time),
-		ipRefs:          make(map[string]int),
+		ipDomains:       make(map[string]map[string]struct{}),
 		ttl:             time.Duration(model.DNSCacheTTLDefault) * time.Minute,
 		maxDomains:      defaultMaxTrackedDomains,
 		maxIPsPerDomain: defaultMaxIPsPerDomain,
@@ -175,7 +193,12 @@ func (d *dnsDomainIPs) Put(domain, ip string) {
 			d.truncated = true
 			return
 		}
-		d.ipRefs[ip]++
+		set, ok := d.ipDomains[ip]
+		if !ok {
+			set = make(map[string]struct{})
+			d.ipDomains[ip] = set
+		}
+		set[domain] = struct{}{}
 	}
 	ips[ip] = now
 }
@@ -205,10 +228,99 @@ func (d *dnsDomainIPs) IPsFor(domain string) []domainIPEntry {
 		out = append(out, domainIPEntry{
 			IP:       ip,
 			LastSeen: lastSeen,
-			Shared:   d.ipRefs[ip] > 1,
+			Shared:   len(d.ipDomains[ip]) > 1,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].IP < out[j].IP })
+	return out
+}
+
+// DomainsForIP returns every (still-live) domain known to have resolved to
+// ip, newest lastSeen first (ties broken by domain name ascending, for
+// deterministic output) — the reverse of IPsFor, and the reader the new
+// GET /api/statistics/dns/ip endpoint (docs/ref/todo/statistics-dns-ip-
+// filter-plan.md T-01/T-03/T-04) is built on. Unlike Snapshot(), which
+// collapses to a single last-writer-wins domain per IP, this returns every
+// domain currently sharing the IP.
+//
+// Deliberately walks only d.ipDomains[ip] and, for each of those domains,
+// d.byDomain[domain][ip] — never the whole byDomain map — so this stays
+// O(domains referencing ip), not O(index size) (plan Caution 3: this can be
+// called on every 10s dashboard refresh, must not full-scan under lock).
+func (d *dnsDomainIPs) DomainsForIP(ip string) []ipDomainEntry {
+	if ip == "" {
+		return nil
+	}
+	now := time.Now()
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	domains, ok := d.ipDomains[ip]
+	if !ok {
+		return nil
+	}
+
+	out := make([]ipDomainEntry, 0, len(domains))
+	for domain := range domains {
+		ips, ok := d.byDomain[domain]
+		if !ok {
+			continue
+		}
+		d.evictExpiredInDomainLocked(domain, ips, now)
+		ips, ok = d.byDomain[domain]
+		if !ok {
+			continue
+		}
+		lastSeen, ok := ips[ip]
+		if !ok {
+			continue
+		}
+		out = append(out, ipDomainEntry{Domain: domain, LastSeen: lastSeen})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].LastSeen.Equal(out[j].LastSeen) {
+			return out[i].LastSeen.After(out[j].LastSeen)
+		}
+		return out[i].Domain < out[j].Domain
+	})
+	return out
+}
+
+// IPsForMany is IPsFor batched across many domains under a single lock
+// acquisition, same rationale as StatsFor (below) — GetDNSIPDomains (T-03)
+// needs the (ip, lastSeen, shared) rows for every domain DomainsForIP just
+// returned, and calling IPsFor once per domain would mean one lock
+// acquisition per domain instead of one for the whole request. Domains not
+// present in the index are simply absent from the returned map.
+func (d *dnsDomainIPs) IPsForMany(domains []string) map[string][]domainIPEntry {
+	now := time.Now()
+	out := make(map[string][]domainIPEntry, len(domains))
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	for _, domain := range domains {
+		ips, ok := d.byDomain[domain]
+		if !ok {
+			continue
+		}
+		d.evictExpiredInDomainLocked(domain, ips, now)
+		ips, ok = d.byDomain[domain]
+		if !ok {
+			continue
+		}
+		rows := make([]domainIPEntry, 0, len(ips))
+		for ip, lastSeen := range ips {
+			rows = append(rows, domainIPEntry{
+				IP:       ip,
+				LastSeen: lastSeen,
+				Shared:   len(d.ipDomains[ip]) > 1,
+			})
+		}
+		sort.Slice(rows, func(i, j int) bool { return rows[i].IP < rows[j].IP })
+		out[domain] = rows
+	}
 	return out
 }
 
@@ -235,8 +347,8 @@ type domainIPStat struct {
 // Deliberately NOT implemented via Snapshot(): Snapshot() collapses the index
 // to a single ip -> domain map (last-writer-wins on IP collisions), which
 // would under-count domains that share an IP and can never report Shared
-// correctly. This method walks byDomain/ipRefs directly instead, exactly the
-// same data IPsFor reads, just batched across domains under one lock.
+// correctly. This method walks byDomain/ipDomains directly instead, exactly
+// the same data IPsFor reads, just batched across domains under one lock.
 func (d *dnsDomainIPs) StatsFor(domains []string) map[string]domainIPStat {
 	now := time.Now()
 	out := make(map[string]domainIPStat, len(domains))
@@ -256,7 +368,7 @@ func (d *dnsDomainIPs) StatsFor(domains []string) map[string]domainIPStat {
 		}
 		stat := domainIPStat{Count: len(ips)}
 		for ip := range ips {
-			if d.ipRefs[ip] > 1 {
+			if len(d.ipDomains[ip]) > 1 {
 				stat.Shared = true
 				break
 			}
@@ -273,9 +385,9 @@ func (d *dnsDomainIPs) StatsFor(domains []string) map[string]domainIPStat {
 // domain is visited anyway).
 //
 // On IP collision across domains (the same IP resolved for more than one
-// domain — exactly the case ipRefs/Shared tracks), the domain whose lastSeen
-// for that IP is most recent wins, for deterministic output (plan §2.1
-// explicit requirement).
+// domain — exactly the case ipDomains/Shared tracks), the domain whose
+// lastSeen for that IP is most recent wins, for deterministic output (plan
+// §2.1 explicit requirement).
 func (d *dnsDomainIPs) Snapshot() map[string]string {
 	now := time.Now()
 
@@ -284,8 +396,8 @@ func (d *dnsDomainIPs) Snapshot() map[string]string {
 
 	d.evictExpiredLocked(now)
 
-	out := make(map[string]string, len(d.ipRefs))
-	latest := make(map[string]time.Time, len(d.ipRefs))
+	out := make(map[string]string, len(d.ipDomains))
+	latest := make(map[string]time.Time, len(d.ipDomains))
 	for domain, ips := range d.byDomain {
 		for ip, lastSeen := range ips {
 			if prev, ok := latest[ip]; !ok || lastSeen.After(prev) {
@@ -313,7 +425,7 @@ func (d *dnsDomainIPs) Clear() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.byDomain = make(map[string]map[string]time.Time)
-	d.ipRefs = make(map[string]int)
+	d.ipDomains = make(map[string]map[string]struct{})
 	d.truncated = false
 }
 
@@ -333,14 +445,14 @@ func (d *dnsDomainIPs) sweepExpired() {
 }
 
 // evictExpiredLocked removes every (domain, ip) entry past its TTL across
-// the whole index, decrementing/deleting ipRefs correctly and dropping
+// the whole index, decrementing/deleting ipDomains correctly and dropping
 // domains left with zero IPs. Caller must hold mu (write lock).
 func (d *dnsDomainIPs) evictExpiredLocked(now time.Time) {
 	for domain, ips := range d.byDomain {
 		for ip, lastSeen := range ips {
 			if now.Sub(lastSeen) > d.ttl {
 				delete(ips, ip)
-				d.decRefLocked(ip)
+				d.decRefLocked(ip, domain)
 			}
 		}
 		if len(ips) == 0 {
@@ -351,13 +463,13 @@ func (d *dnsDomainIPs) evictExpiredLocked(now time.Time) {
 
 // evictExpiredInDomainLocked removes expired IPs for a single domain only
 // (bounded by maxIPsPerDomain, so cheap even inline on Put/IPsFor), keeping
-// ipRefs consistent the same way evictExpiredLocked does. Caller must hold mu
-// (write lock) and ips must be d.byDomain[domain].
+// ipDomains consistent the same way evictExpiredLocked does. Caller must hold
+// mu (write lock) and ips must be d.byDomain[domain].
 func (d *dnsDomainIPs) evictExpiredInDomainLocked(domain string, ips map[string]time.Time, now time.Time) {
 	for ip, lastSeen := range ips {
 		if now.Sub(lastSeen) > d.ttl {
 			delete(ips, ip)
-			d.decRefLocked(ip)
+			d.decRefLocked(ip, domain)
 		}
 	}
 	if len(ips) == 0 {
@@ -365,16 +477,18 @@ func (d *dnsDomainIPs) evictExpiredInDomainLocked(domain string, ips map[string]
 	}
 }
 
-// decRefLocked decrements ipRefs[ip], deleting the key once it reaches zero
-// so ipRefs never accumulates stale zero-count entries (which would make
-// Snapshot/IPsFor allocate larger maps than necessary but is otherwise
-// harmless — still cleaned up for hygiene). Caller must hold mu.
-func (d *dnsDomainIPs) decRefLocked(ip string) {
-	if n, ok := d.ipRefs[ip]; ok {
-		if n <= 1 {
-			delete(d.ipRefs, ip)
-		} else {
-			d.ipRefs[ip] = n - 1
-		}
+// decRefLocked removes domain from ipDomains[ip]'s set, deleting the key
+// entirely once the set is empty so ipDomains never accumulates stale empty
+// entries (which would make Snapshot/IPsFor allocate larger maps than
+// necessary but is otherwise harmless — still cleaned up for hygiene).
+// Caller must hold mu.
+func (d *dnsDomainIPs) decRefLocked(ip, domain string) {
+	set, ok := d.ipDomains[ip]
+	if !ok {
+		return
+	}
+	delete(set, domain)
+	if len(set) == 0 {
+		delete(d.ipDomains, ip)
 	}
 }

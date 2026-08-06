@@ -86,7 +86,7 @@ func TestDNSDomainIPs_PerDomainIPCap(t *testing.T) {
 }
 
 // TestDNSDomainIPs_TTLExpiry covers plan §2.1: entries past ttl are evicted
-// lazily on read (IPsFor/Snapshot), and ipRefs is kept consistent.
+// lazily on read (IPsFor/Snapshot), and ipDomains is kept consistent.
 func TestDNSDomainIPs_TTLExpiry(t *testing.T) {
 	d := newDNSDomainIPs()
 	d.SetLimits(1, 1000, 16) // 1 minute TTL
@@ -95,7 +95,7 @@ func TestDNSDomainIPs_TTLExpiry(t *testing.T) {
 	d.byDomain["old.example.com"] = map[string]time.Time{
 		"1.2.3.4": time.Now().Add(-2 * time.Minute),
 	}
-	d.ipRefs["1.2.3.4"] = 1
+	d.ipDomains["1.2.3.4"] = map[string]struct{}{"old.example.com": {}}
 	d.mu.Unlock()
 
 	ips := d.IPsFor("old.example.com")
@@ -105,13 +105,13 @@ func TestDNSDomainIPs_TTLExpiry(t *testing.T) {
 
 	d.mu.RLock()
 	_, domainStillExists := d.byDomain["old.example.com"]
-	_, refStillExists := d.ipRefs["1.2.3.4"]
+	_, refStillExists := d.ipDomains["1.2.3.4"]
 	d.mu.RUnlock()
 	if domainStillExists {
 		t.Errorf("expected domain with zero remaining IPs to be dropped")
 	}
 	if refStillExists {
-		t.Errorf("expected ipRefs entry to be cleaned up on expiry")
+		t.Errorf("expected ipDomains entry to be cleaned up on expiry")
 	}
 
 	// A fresh Put should not be expired.
@@ -186,7 +186,7 @@ func TestDNSDomainIPs_Snapshot(t *testing.T) {
 }
 
 // TestDNSDomainIPs_Clear covers plan §2.1/T-02: Clear wipes byDomain,
-// ipRefs, and the truncated flag.
+// ipDomains, and the truncated flag.
 func TestDNSDomainIPs_Clear(t *testing.T) {
 	d := newDNSDomainIPs()
 	// maxDomains below dnsDomainIPsMaxDomainsMin would be clamped back to the
@@ -207,10 +207,10 @@ func TestDNSDomainIPs_Clear(t *testing.T) {
 
 	d.mu.RLock()
 	domains := len(d.byDomain)
-	refs := len(d.ipRefs)
+	refs := len(d.ipDomains)
 	d.mu.RUnlock()
 	if domains != 0 || refs != 0 {
-		t.Errorf("expected Clear to empty byDomain/ipRefs, got domains=%d refs=%d", domains, refs)
+		t.Errorf("expected Clear to empty byDomain/ipDomains, got domains=%d refs=%d", domains, refs)
 	}
 	if d.Truncated() {
 		t.Errorf("expected Truncated()=false after Clear")
@@ -275,12 +275,102 @@ func TestDNSDomainIPs_StatsFor(t *testing.T) {
 	d.byDomain["expired.example.com"] = map[string]time.Time{
 		"9.9.9.9": time.Now().Add(-2 * time.Hour),
 	}
-	d.ipRefs["9.9.9.9"]++
+	if d.ipDomains["9.9.9.9"] == nil {
+		d.ipDomains["9.9.9.9"] = make(map[string]struct{})
+	}
+	d.ipDomains["9.9.9.9"]["expired.example.com"] = struct{}{}
 	d.mu.Unlock()
 
 	stats = d.StatsFor([]string{"expired.example.com"})
 	if got, ok := stats["expired.example.com"]; ok {
 		t.Errorf("expected expired.example.com to have no live IPs left (evicted), got %+v", got)
+	}
+}
+
+// TestDNSDomainIPs_DomainsForIP covers docs/ref/todo/statistics-dns-ip-filter-
+// plan.md T-01: an IP shared by 2 domains must return both, an unknown IP
+// returns nil, and an expired entry is neither returned nor left behind.
+func TestDNSDomainIPs_DomainsForIP(t *testing.T) {
+	d := newDNSDomainIPs()
+	d.SetLimits(60, 1000, 16)
+
+	d.Put("a.example.com", "203.0.113.1")
+	time.Sleep(2 * time.Millisecond)
+	d.Put("b.example.com", "203.0.113.1")
+	d.Put("solo.example.com", "203.0.113.2")
+
+	got := d.DomainsForIP("203.0.113.1")
+	if len(got) != 2 {
+		t.Fatalf("expected 2 domains sharing 203.0.113.1, got %+v", got)
+	}
+	// Newest lastSeen first: b.example.com was Put after a.example.com.
+	if got[0].Domain != "b.example.com" || got[1].Domain != "a.example.com" {
+		t.Errorf("expected [b.example.com, a.example.com] newest-first, got %+v", got)
+	}
+
+	if got := d.DomainsForIP("203.0.113.2"); len(got) != 1 || got[0].Domain != "solo.example.com" {
+		t.Errorf("expected solo.example.com for 203.0.113.2, got %+v", got)
+	}
+
+	if got := d.DomainsForIP("10.10.10.10"); got != nil {
+		t.Errorf("expected nil for an unknown IP, got %+v", got)
+	}
+
+	if got := d.DomainsForIP(""); got != nil {
+		t.Errorf("expected nil for an empty ip, got %+v", got)
+	}
+
+	// TTL expiry: an entry past its TTL must not be returned and must be swept.
+	d.mu.Lock()
+	d.byDomain["expired.example.com"] = map[string]time.Time{
+		"203.0.113.3": time.Now().Add(-2 * time.Hour),
+	}
+	d.ipDomains["203.0.113.3"] = map[string]struct{}{"expired.example.com": {}}
+	d.mu.Unlock()
+
+	if got := d.DomainsForIP("203.0.113.3"); len(got) != 0 {
+		t.Errorf("expected expired domain to be excluded, got %+v", got)
+	}
+	d.mu.RLock()
+	_, stillExists := d.ipDomains["203.0.113.3"]
+	d.mu.RUnlock()
+	if stillExists {
+		t.Errorf("expected expired entry to be swept from ipDomains after DomainsForIP")
+	}
+}
+
+// TestDNSDomainIPs_IPsForMany covers T-01: batching IPsFor across several
+// domains in one call, including a domain absent from the index.
+func TestDNSDomainIPs_IPsForMany(t *testing.T) {
+	d := newDNSDomainIPs()
+	d.SetLimits(60, 1000, 16)
+
+	d.Put("a.example.com", "198.51.100.1")
+	d.Put("a.example.com", "198.51.100.2")
+	d.Put("b.example.com", "198.51.100.1") // shared with a.example.com
+
+	out := d.IPsForMany([]string{"a.example.com", "b.example.com", "unknown.example.com"})
+
+	if _, ok := out["unknown.example.com"]; ok {
+		t.Errorf("expected no entry for a domain absent from the index, got %+v", out["unknown.example.com"])
+	}
+
+	aIPs := out["a.example.com"]
+	if len(aIPs) != 2 {
+		t.Fatalf("expected 2 IPs for a.example.com, got %+v", aIPs)
+	}
+	for _, e := range aIPs {
+		if e.IP == "198.51.100.1" && !e.Shared {
+			t.Errorf("expected 198.51.100.1 marked shared, got %+v", e)
+		}
+		if e.IP == "198.51.100.2" && e.Shared {
+			t.Errorf("expected 198.51.100.2 not shared, got %+v", e)
+		}
+	}
+
+	bIPs := out["b.example.com"]
+	if len(bIPs) != 1 || bIPs[0].IP != "198.51.100.1" || !bIPs[0].Shared {
+		t.Errorf("expected b.example.com to have 1 shared IP, got %+v", bIPs)
 	}
 }
 

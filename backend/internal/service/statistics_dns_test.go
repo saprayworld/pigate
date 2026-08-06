@@ -478,3 +478,133 @@ func TestGetDNSQueryStatistics_ManyDomainsNotTruncated(t *testing.T) {
 		t.Fatalf("expected client drilldown TotalQueries=%d, got %d", domainCount, clientDrill.TotalQueries)
 	}
 }
+
+// TestGetDNSIPDomains_SharedIP covers docs/ref/todo/statistics-dns-ip-filter-
+// plan.md T-03: an IP shared by 2 domains (10.0.0.3 -> b.example.com,
+// c.example.com in seedDNSVolumeFixture) returns both rows, Shared=true, and
+// bytesPercent sums to ~100% against MatchedBytes (NOT DomainBytes/
+// ObservedBytes — plan §2.4).
+func TestGetDNSIPDomains_SharedIP(t *testing.T) {
+	s := seedDNSVolumeFixture(t)
+
+	got := s.GetDNSIPDomains("1h", "10.0.0.3")
+	if !got.Enabled {
+		t.Fatalf("expected Enabled=true")
+	}
+	if got.IP != "10.0.0.3" {
+		t.Fatalf("expected IP echoed back, got %q", got.IP)
+	}
+	if got.DomainCount != 2 || !got.Shared {
+		t.Fatalf("expected DomainCount=2 Shared=true, got %+v", got)
+	}
+	if len(got.Domains) != 2 {
+		t.Fatalf("expected 2 domain rows, got %+v", got.Domains)
+	}
+
+	byDomain := map[string]model.DNSIPDomain{}
+	for _, d := range got.Domains {
+		byDomain[d.Domain] = d
+	}
+	b, c := byDomain["b.example.com"], byDomain["c.example.com"]
+	if b.Domain == "" || c.Domain == "" {
+		t.Fatalf("expected both b.example.com and c.example.com present, got %+v", got.Domains)
+	}
+	// b.example.com's Bytes is its FULL join (10.0.0.2 + 10.0.0.3 = 600), same
+	// as the overview row — not scoped down to just 10.0.0.3's contribution.
+	if b.Bytes != 600 {
+		t.Fatalf("expected b.example.com Bytes=600 (full domain join), got %d", b.Bytes)
+	}
+	if c.Bytes != 400 {
+		t.Fatalf("expected c.example.com Bytes=400, got %d", c.Bytes)
+	}
+	if !b.SharedIPs || !c.SharedIPs {
+		t.Fatalf("expected both rows SharedIPs=true, got b=%+v c=%+v", b, c)
+	}
+	if got.MatchedBytes != 1000 { // 600 + 400
+		t.Fatalf("expected MatchedBytes=1000, got %d", got.MatchedBytes)
+	}
+	total := b.BytesPercent + c.BytesPercent
+	if !approxEqual(total, 100.0) {
+		t.Fatalf("expected bytesPercent to sum to ~100%% of MatchedBytes, got %v", total)
+	}
+	if !approxEqual(b.BytesPercent, 600.0/1000.0*100) {
+		t.Fatalf("expected b.example.com bytesPercent ~= %v, got %v", 600.0/1000.0*100, b.BytesPercent)
+	}
+}
+
+// TestGetDNSIPDomains_UnsharedIP covers T-03: an IP resolved by exactly one
+// domain returns 1 row with Shared=false.
+func TestGetDNSIPDomains_UnsharedIP(t *testing.T) {
+	s := seedDNSVolumeFixture(t)
+
+	got := s.GetDNSIPDomains("1h", "10.0.0.1")
+	if got.DomainCount != 1 || got.Shared {
+		t.Fatalf("expected DomainCount=1 Shared=false, got %+v", got)
+	}
+	if len(got.Domains) != 1 || got.Domains[0].Domain != "a.example.com" {
+		t.Fatalf("expected a.example.com row, got %+v", got.Domains)
+	}
+	if !approxEqual(got.Domains[0].BytesPercent, 100.0) {
+		t.Fatalf("expected sole row bytesPercent ~= 100%%, got %v", got.Domains[0].BytesPercent)
+	}
+}
+
+// TestGetDNSIPDomains_UnknownIP covers T-03: an IP no domain has ever
+// resolved to returns Enabled=true with an empty (non-nil) Domains slice —
+// never an error.
+func TestGetDNSIPDomains_UnknownIP(t *testing.T) {
+	s := seedDNSVolumeFixture(t)
+
+	got := s.GetDNSIPDomains("1h", "10.9.9.9")
+	if !got.Enabled {
+		t.Fatalf("expected Enabled=true")
+	}
+	if got.Domains == nil || len(got.Domains) != 0 {
+		t.Fatalf("expected non-nil empty Domains, got %#v", got.Domains)
+	}
+	if got.DomainCount != 0 || got.Shared {
+		t.Fatalf("expected DomainCount=0 Shared=false, got %+v", got)
+	}
+}
+
+// TestGetDNSIPDomains_MappingWithoutQueryInWindow covers plan §2.4/Caution
+// 10: a domain the forward index still remembers (an AnswerIP event was
+// recorded) but that had NO query event in the window must still appear as a
+// row with Count=0/Percent=0 — rankTopDomains would incorrectly drop it.
+func TestGetDNSIPDomains_MappingWithoutQueryInWindow(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+	s.SetDNSLoggingEnabled(true)
+
+	// Only an answer event, never a query event, for this domain.
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogAnswer, Domain: "quiet.example.com", AnswerIP: "203.0.113.9"})
+
+	got := s.GetDNSIPDomains("1h", "203.0.113.9")
+	if len(got.Domains) != 1 {
+		t.Fatalf("expected 1 row for the mapping-but-no-query domain, got %+v", got.Domains)
+	}
+	row := got.Domains[0]
+	if row.Domain != "quiet.example.com" {
+		t.Fatalf("expected quiet.example.com, got %+v", row)
+	}
+	if row.Count != 0 || row.Percent != 0 {
+		t.Fatalf("expected Count=0 Percent=0 for a domain with mapping but no query in window, got %+v", row)
+	}
+}
+
+// TestGetDNSIPDomains_Disabled covers plan Caution 4/11: with DNS query
+// logging off, the endpoint must not touch domainIPs/traffic and must return
+// Enabled=false with non-nil empty slices.
+func TestGetDNSIPDomains_Disabled(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+
+	got := s.GetDNSIPDomains("1h", "10.0.0.1")
+	if got.Enabled {
+		t.Fatalf("expected Enabled=false")
+	}
+	if got.Domains == nil || len(got.Domains) != 0 {
+		t.Fatalf("expected non-nil empty Domains, got %#v", got.Domains)
+	}
+	if got.Series == nil || len(got.Series) != 0 {
+		t.Fatalf("expected non-nil empty Series, got %#v", got.Series)
+	}
+}

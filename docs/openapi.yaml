@@ -703,6 +703,63 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /statistics/dns/ip:
+    get:
+      tags:
+        - Statistics
+      summary: Reverse-lookup an IP from the Statistics -> DNS page into every domain that has resolved to it
+      description: >
+        Given an IP, returns every domain the RAM-only reverse index
+        (docs/ref/todo/statistics-dns-ip-filter-plan.md T-03/T-04) knows to
+        have resolved to it — answering "this IP shows up under more than
+        one domain, which ones?" for CDN/shared-hosting IP reuse. Same
+        RAM-only, display-only, opt-in data source as `/statistics/dns` —
+        never persisted to SQLite, resets on restart, and MUST NEVER be used
+        for firewall rule generation, policy matching, routing, or QoS
+        decisions (the mapping is derived from dnsmasq's answer log, which
+        any LAN client can influence). `bytesPercent` on `domains[]` rows is
+        relative to this response's own `matchedBytes` (the sum of
+        `domains[].bytes`), NOT the window-wide `domainBytes` used by
+        `/statistics/dns`. A domain the forward index still remembers but
+        that had no query in this window still appears with
+        `count`/`percent` = 0 — that row is still the correct answer to
+        "what domain is this IP for". No sort-key input is accepted —
+        sorting is done entirely in the browser.
+      parameters:
+        - name: ip
+          in: query
+          required: true
+          schema:
+            type: string
+            example: 142.250.199.14
+          description: >
+            IP address to look up. Must parse as an IP address (IPv4 or
+            IPv6); anything else returns 400 with a generic message — the
+            submitted value is never echoed back in the error response. A
+            valid IP is re-normalized (e.g. non-canonical IPv6) before
+            lookup so it matches the forward index's stored key.
+        - name: window
+          in: query
+          schema:
+            type: string
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
+            default: 1h
+          description: >
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
+      responses:
+        '200':
+          description: Domains that have resolved to this IP
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSIPDomains'
+        '400':
+          description: Missing or invalid `ip`
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /dashboard/logs:
     get:
       tags:
@@ -5062,6 +5119,189 @@ components:
             it can be older than the window if the answer hasn't been
             refreshed.
           example: '2026-08-04T10:12:00Z'
+
+    DNSIPDomain:
+      description: >-
+        One row of the /statistics/dns/ip response (docs/ref/todo/
+        statistics-dns-ip-filter-plan.md T-02) — a domain that has ever
+        resolved to the IP being looked up. Same fields as DNSDomainStat
+        (count/percent are window-scoped for THIS domain; clients/ipCount/
+        sharedIps are this domain's system-wide values; bytes/bytesUp/
+        bytesDown are this domain's TOTAL volume across ALL of its known IPs,
+        not just the one being looked up) plus lastSeen. bytesPercent here is
+        bytes as a percent of DNSIPDomains.matchedBytes (the sum across every
+        row of this response) — deliberately NOT the window-wide domainBytes
+        used by the other DNS statistics endpoints, because computing that
+        denominator would mean joining every domain in the window without
+        helping answer "what domains use this IP"; the UI must label this
+        clearly as scoped to the matched domain group, not the whole window.
+        A domain can appear here with count=0/percent=0 when the forward
+        index still remembers the domain->IP mapping but the domain had no
+        query in this time window — that row is still the correct answer to
+        "what domain is this IP for" and is never dropped.
+      allOf:
+        - $ref: '#/components/schemas/DNSDomainStat'
+        - type: object
+          required: [lastSeen]
+          properties:
+            lastSeen:
+              type: string
+              format: date-time
+              description: >-
+                RFC3339 UTC timestamp of the most recent DNS answer that
+                resolved this domain to the IP being looked up — NOT tied to
+                the stats window (same convention as DNSDomainIP.lastSeen).
+                The domain<->IP mapping backing this row is display-only and
+                MUST NEVER be used to drive firewall rule generation, policy
+                matching, routing, or QoS decisions.
+              example: '2026-08-04T10:12:00Z'
+
+    DNSIPDomains:
+      type: object
+      required:
+        - ip
+        - window
+        - enabled
+        - hostname
+        - totalQueries
+        - truncated
+        - ipsTruncated
+        - domains
+        - domainCount
+        - shared
+        - matchedBytes
+        - matchedBytesUp
+        - matchedBytesDown
+        - ipBytes
+        - ipBytesUp
+        - ipBytesDown
+        - series
+        - observedBytes
+        - accuracy
+        - generatedAt
+      description: >-
+        The /statistics/dns/ip response — every domain the RAM-only reverse
+        index (service/dns_domain_ips.go's DomainsForIP) knows to have
+        resolved to `ip`, answering "this IP shows up under more than one
+        domain — which ones?" (docs/ref/todo/statistics-dns-ip-filter-plan.md
+        §0/§2). Same RAM-only, display-only, opt-in data source as
+        /statistics/dns — never persisted to SQLite, resets on restart. The
+        domain<->IP mapping backing this response is derived from dnsmasq's
+        answer log, which any LAN client can influence by simply querying
+        attacker-controlled domains: it MUST NEVER be used to drive firewall
+        rule generation, policy matching, routing, or QoS decisions. No
+        sort-key input is accepted — sorting is done entirely in the browser.
+      properties:
+        ip:
+          type: string
+          description: >-
+            Canonical (net/netip-normalized) form of the address that was
+            looked up — never the raw client-supplied string.
+          example: 64.233.166.127
+        window:
+          type: string
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
+        enabled:
+          type: boolean
+          description: Mirrors DNSServerSettings.queryLogging.
+        hostname:
+          type: string
+          description: >-
+            Resolved from a DHCP lease/reservation for ip — display only,
+            falls back to ip itself when unknown.
+          example: 64.233.166.127
+        totalQueries:
+          type: integer
+          format: int64
+          description: >-
+            Total DNS queries observed in this window across ALL domains
+            (not just the ones matching this IP) — the denominator for each
+            domains[] row's percent, identical meaning to
+            DNSQueryStatistics.totalQueries.
+        truncated:
+          type: boolean
+          description: >-
+            True when the window's query-count ring hit one of its
+            per-bucket tracking caps while computing count/percent for the
+            rows below — same signal as DNSDomainDrilldown.truncated.
+        ipsTruncated:
+          type: boolean
+          description: >-
+            True when the RAM-only domain->IP forward index hit one of its
+            caps at some point — meaning the reverse index this endpoint
+            reads from may be missing some domain<->IP associations, so
+            domains below could be incomplete.
+        domains:
+          type: array
+          description: >-
+            Every domain known to have resolved to ip, sorted by bytes desc,
+            then count desc, then domain asc. Never null — an empty array
+            means no domain in the RAM-only index currently maps to this IP
+            (it may have expired past its TTL, or traffic to it never went
+            through this device's DNS resolver).
+          items:
+            $ref: '#/components/schemas/DNSIPDomain'
+        domainCount:
+          type: integer
+          description: len(domains), echoed for convenience.
+          example: 2
+        shared:
+          type: boolean
+          description: >-
+            True when domainCount > 1 — this IP is used by more than one
+            domain (e.g. a CDN or shared hosting IP), so each domain's bytes
+            below double-counts the same underlying traffic to this IP.
+          example: true
+        matchedBytes:
+          type: integer
+          format: int64
+          description: >-
+            Sum of domains[].bytes across every row of this response — the
+            denominator for each row's bytesPercent (see DNSIPDomain's
+            description for why this differs from the window-wide
+            domainBytes used by the other DNS statistics endpoints).
+          example: 20500000
+        matchedBytesUp:
+          type: integer
+          format: int64
+          example: 1400000
+        matchedBytesDown:
+          type: integer
+          format: int64
+          example: 19100000
+        ipBytes:
+          type: integer
+          format: int64
+          description: >-
+            Conntrack-derived byte counters for the IP being looked up
+            itself (not summed across domains) — the same per-destination
+            totals TrafficHostDetail would report for this IP.
+          example: 20500000
+        ipBytesUp:
+          type: integer
+          format: int64
+          example: 1400000
+        ipBytesDown:
+          type: integer
+          format: int64
+          example: 19100000
+        series:
+          type: array
+          description: >-
+            This IP's traffic over time — flow-relative (orig = up, reply =
+            down), fixed length equal to the window's bucket count,
+            zero-filled (never null). sum(series[].bytes) == ipBytes.
+          items:
+            $ref: '#/components/schemas/BandwidthPoint'
+        observedBytes:
+          type: integer
+          format: int64
+        accuracy:
+          type: string
+          enum: [estimated, near-exact]
+        generatedAt:
+          type: string
+          format: date-time
 
     DNSQueryStatistics:
       type: object

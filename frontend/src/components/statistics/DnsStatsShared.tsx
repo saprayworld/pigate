@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react"
+import { useCallback, useState, type ReactNode } from "react"
 import { useSearchParams } from "react-router"
 import { ArrowDown, ArrowUp, Info, TriangleAlert } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
@@ -145,18 +145,51 @@ export function DomainStatsTable({
   rows,
   emptyLabel,
   onRowClick,
+  query: controlledQuery,
+  onQueryChange,
+  placeholder = "ค้นหาโดเมน, ประเภท หรือใส่ IP...",
+  filterDisabled = false,
+  hint,
+  banner,
+  footerNote,
 }: {
   rows: DNSDomainStat[]
   emptyLabel: string
   onRowClick?: (domain: string) => void
+  // query/onQueryChange are optional (controlled) — omitted, this component
+  // keeps its own uncontrolled state exactly as before (docs/ref/todo/
+  // statistics-dns-ip-filter-plan.md T-08). The DNS page (T-09) controls
+  // these to sync the filter box with the `?ip=` URL param.
+  query?: string
+  onQueryChange?: (v: string) => void
+  placeholder?: string
+  // filterDisabled=true skips useTextFilter (rows are already filtered
+  // server-side, e.g. the IP-filter mode's GET /statistics/dns/ip result) —
+  // sorting still applies.
+  filterDisabled?: boolean
+  // hint renders under the search box (e.g. "พิมพ์ IP ให้ครบ..." while the
+  // user is mid-way through typing an IP).
+  hint?: ReactNode
+  // banner renders above the table (e.g. the shared-IP / index-truncated
+  // warnings in IP-filter mode).
+  banner?: ReactNode
+  // footerNote replaces the default "แสดง N จาก M รายการ" line when given.
+  footerNote?: ReactNode
 }) {
-  const [query, setQuery] = useState("")
-  const filtered = useTextFilter(rows, query, [(d) => d.domain, (d) => d.queryType])
+  const [uncontrolledQuery, setUncontrolledQuery] = useState("")
+  const query = controlledQuery ?? uncontrolledQuery
+  const setQuery = onQueryChange ?? setUncontrolledQuery
+  const textFiltered = useTextFilter(rows, query, [(d) => d.domain, (d) => d.queryType])
+  const filtered = filterDisabled ? rows : textFiltered
   const { rows: sorted, sort, toggle } = useSortableRows(filtered, { key: "count", dir: "desc" })
 
   return (
     <div className="space-y-3">
-      <TrafficFilterInput value={query} onChange={setQuery} placeholder="ค้นหาโดเมน, ประเภท..." />
+      <div className="space-y-1">
+        <TrafficFilterInput value={query} onChange={setQuery} placeholder={placeholder} />
+        {hint}
+      </div>
+      {banner}
       <div className="overflow-x-auto">
         <Table>
           <TableHeader>
@@ -217,9 +250,11 @@ export function DomainStatsTable({
           </TableBody>
         </Table>
       </div>
-      <p className="text-[11px] text-muted-foreground">
-        แสดง {sorted.length} จาก {rows.length} รายการ
-      </p>
+      {footerNote ?? (
+        <p className="text-[11px] text-muted-foreground">
+          แสดง {sorted.length} จาก {rows.length} รายการ
+        </p>
+      )}
     </div>
   )
 }
@@ -314,9 +349,15 @@ export function ClientStatsTable({
 export function DomainIpTable({
   rows,
   emptyLabel,
+  onRowClick,
 }: {
   rows: DNSDomainIP[]
   emptyLabel: string
+  // onRowClick (docs/ref/todo/statistics-dns-ip-filter-plan.md T-10) opens
+  // the Statistics -> DNS page's IP-filter mode for this row's IP — answers
+  // "is this IP shared with another domain?" in one click, same pattern as
+  // DomainStatsTable/ClientStatsTable's onRowClick above.
+  onRowClick?: (ip: string) => void
 }) {
   const [query, setQuery] = useState("")
   const filtered = useTextFilter(rows, query, [(r) => r.ip])
@@ -345,7 +386,12 @@ export function DomainIpTable({
               </TableRow>
             ) : (
               sorted.map((r) => (
-                <TableRow key={r.ip} className="hover:bg-transparent">
+                <TableRow
+                  key={r.ip}
+                  onClick={onRowClick ? () => onRowClick(r.ip) : undefined}
+                  className={onRowClick ? "cursor-pointer hover:bg-muted/50" : "hover:bg-transparent"}
+                  title={onRowClick ? "คลิกเพื่อดูว่ามีโดเมนอื่นใช้ IP นี้อีกไหม" : undefined}
+                >
                   <TableCell className="py-3 font-mono text-xs font-medium text-foreground">{r.ip}</TableCell>
                   <TableCell className="py-3 text-right">
                     <DnsTrafficCell down={r.bytesDown} up={r.bytesUp} />
