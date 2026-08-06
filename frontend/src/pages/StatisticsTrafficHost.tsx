@@ -7,7 +7,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { getErrorMessage } from "@/lib/errors"
 import { fmtBytes, fmtRate } from "@/lib/formatBytes"
 import {
@@ -215,29 +214,22 @@ function ConversationTable({
                 <SortableHead<ConversationRow> label="Total" sortKey="bytes" sort={sort} onToggle={toggle} align="right" className="w-24" />
                 <SortableHead<ConversationRow> label="%" sortKey="percent" sort={sort} onToggle={toggle} align="right" className="w-16" />
                 <TableHead className="w-28">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={() => toggle("rateTotal")}
-                        className="inline-flex w-full cursor-pointer items-center justify-end gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
-                      >
-                        Speed
-                        {sort.key === "rateTotal" ? (
-                          sort.dir === "asc" ? (
-                            <ArrowUp className="size-3 text-primary" />
-                          ) : (
-                            <ArrowDown className="size-3 text-primary" />
-                          )
-                        ) : (
-                          <ChevronsUpDown className="size-3 text-muted-foreground/60" />
-                        )}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      ความเร็วเฉลี่ยประมาณ 10 วินาทีล่าสุด (ค่าประมาณจาก conntrack) · เรียงจาก Down+Up
-                    </TooltipContent>
-                  </Tooltip>
+                  <button
+                    type="button"
+                    onClick={() => toggle("rateTotal")}
+                    className="inline-flex w-full cursor-pointer items-center justify-end gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    Speed
+                    {sort.key === "rateTotal" ? (
+                      sort.dir === "asc" ? (
+                        <ArrowUp className="size-3 text-primary" />
+                      ) : (
+                        <ArrowDown className="size-3 text-primary" />
+                      )
+                    ) : (
+                      <ChevronsUpDown className="size-3 text-muted-foreground/60" />
+                    )}
+                  </button>
                 </TableHead>
               </TableRow>
             </TableHeader>
