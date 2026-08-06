@@ -24,6 +24,8 @@ import {
 } from "@/components/statistics/DnsStatsShared"
 import { TrafficStatCard } from "@/components/statistics/TrafficStatsShared"
 import { DnsQueryTrendCard } from "@/components/statistics/DnsQueryTrendCard"
+import { CapacityIndicator } from "@/components/statistics/CapacityIndicator"
+import { capacityService, type RingCapacity } from "@/services/capacityService"
 
 // DNS Statistics page (docs/ref/todo/statistics-nav-restructure-plan.md T-02)
 // — promoted from the DNS Server page's former "สถิติ" tab
@@ -56,6 +58,10 @@ export default function StatisticsDns() {
   const [stats, setStats] = useState<DNSQueryStatistics | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Capacity indicator pill (docs/ref/todo/statistics-capacity-visibility-plan.md
+  // T-12) — same poll cycle as `stats` below, no extra interval; a failed
+  // fetch here just hides CapacityIndicator, never surfaces its own error.
+  const [capacityRings, setCapacityRings] = useState<RingCapacity[] | undefined>(undefined)
 
   const [searchParams, setSearchParams] = useSearchParams()
   const [query, setQuery] = useState(() => searchParams.get("ip") ?? "")
@@ -101,14 +107,31 @@ export default function StatisticsDns() {
     }
   }, [])
 
+  const loadCapacity = useCallback(async (win: StatsWindow) => {
+    try {
+      const result = await capacityService.getCapacityStatistics(win, { series: false })
+      setCapacityRings(result.rings)
+    } catch {
+      // Swallowed on purpose (plan T-12) — see comment on capacityRings above.
+    }
+  }, [])
+
   const loadRef = useRef(load)
   useEffect(() => {
     loadRef.current = load
   })
+  const loadCapacityRef = useRef(loadCapacity)
+  useEffect(() => {
+    loadCapacityRef.current = loadCapacity
+  })
 
   useEffect(() => {
     loadRef.current(window_, true)
-    const id = setInterval(() => loadRef.current(window_, false), REFRESH_INTERVAL_MS)
+    loadCapacityRef.current(window_)
+    const id = setInterval(() => {
+      loadRef.current(window_, false)
+      loadCapacityRef.current(window_)
+    }, REFRESH_INTERVAL_MS)
     return () => clearInterval(id)
   }, [window_])
 
@@ -177,6 +200,7 @@ export default function StatisticsDns() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <CapacityIndicator rings={capacityRings} group="dns" window={window_} />
           <DnsVolumeInfoButton />
           <StatsWindowTabs value={window_} onChange={setWindow} />
           <Button

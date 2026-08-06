@@ -763,6 +763,65 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /statistics/capacity:
+    get:
+      tags:
+        - Statistics
+      summary: Current usage vs configured cap for every RAM-only statistics tracking ring/index
+      description: >
+        Backs the Statistics -> Capacity page and the small "capacity"
+        indicator pills on the Overview/Traffic/DNS pages (docs/ref/todo/
+        statistics-capacity-visibility-plan.md, GitHub issue #123). Returns
+        exactly 9 rings, always in the same fixed order (traffic.hosts,
+        traffic.dests, traffic.conversations, firewall.denySources,
+        firewall.denyPorts, dns.pairs, dns.clients, dns.reverseCache,
+        dns.domainIps) — the current/peak size of each of the RAM-only
+        in-memory tracking structures backing `/statistics/traffic` and
+        `/statistics/dns`, relative to its configured cap. This is an
+        EARLY-WARNING signal (percent full, before data is dropped) on top
+        of the existing after-the-fact `truncated` booleans those other two
+        endpoints already expose. Contains ONLY counts and percentages — no
+        domain name, IP address, or hostname ever appears in this response,
+        which is why (unlike some other Statistics endpoints) it carries no
+        extra sensitivity beyond ordinary authenticated access. `estimatedBytes`
+        on each ring is an APPROXIMATION (entries currently held in RAM x a
+        documented per-entry byte constant) — never a measured value — and,
+        for a "bucket"-kind ring, reflects the WHOLE ring (up to 24h of
+        history), not just the requested `window`.
+      parameters:
+        - name: window
+          in: query
+          schema:
+            type: string
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
+            default: 1h
+          description: >
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring. Scopes each
+            ring's `series` (when requested)/`peak`/`fullBuckets`; does NOT
+            scope `estimatedBytes` (see above).
+        - name: series
+          in: query
+          schema:
+            type: string
+            default: "0"
+          description: >
+            Whether to include each bucket-kind ring's per-bucket `series`
+            array. Strict whitelist: exactly "1" or "true" means true;
+            anything else (omitted, "0", "false", garbage) means false —
+            never a 400. Flat-kind rings (`dns.reverseCache`, `dns.domainIps`)
+            never carry a `series`, regardless of this parameter.
+      responses:
+        '200':
+          description: Capacity usage for all 9 tracking rings/indices
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapacityStatistics'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /dashboard/logs:
     get:
       tags:
@@ -5690,6 +5749,168 @@ components:
           description: >-
             Mirrors TrafficStatistics.accuracy — same signal backing
             totalBytes/series above.
+        generatedAt:
+          type: string
+          format: date-time
+
+    CapacityPoint:
+      type: object
+      required:
+        - ts
+        - count
+      description: >-
+        One point of RingCapacity.series — a fixed 5-minute bucket on the
+        same time axis as BandwidthPoint.ts/DNSQueryPoint.ts (docs/ref/todo/
+        statistics-capacity-visibility-plan.md T-01). Only meaningful for a
+        "bucket"-kind ring.
+      properties:
+        ts:
+          type: string
+          format: date-time
+          description: RFC3339 start of this 5-minute bucket, device local time.
+        count:
+          type: integer
+          description: >-
+            How many distinct keys (hosts/dests/conversations/sources/ports/
+            pairs/clients, depending on the ring) were tracked in this
+            bucket — NOT a byte count.
+
+    RingCapacity:
+      type: object
+      required:
+        - id
+        - group
+        - label
+        - kind
+        - cap
+        - capSource
+        - current
+        - currentPercent
+        - peak
+        - peakPercent
+        - fullBuckets
+        - truncated
+        - estimatedBytes
+        - entryBytes
+      description: >-
+        One row of CapacityStatistics.rings — current/peak usage of a single
+        RAM-only tracking structure against its configured cap (docs/ref/todo/
+        statistics-capacity-visibility-plan.md T-01).
+      properties:
+        id:
+          type: string
+          description: >-
+            Stable machine-readable identifier (e.g. "traffic.hosts",
+            "dns.reverseCache") — links a CapacityIndicator pill to its
+            section on the /statistics/capacity detail page.
+          example: traffic.hosts
+        group:
+          type: string
+          enum: [traffic, dns, firewall]
+          description: Which Statistics page(s) this ring is relevant to.
+        label:
+          type: string
+          description: Short human-readable display name.
+          example: Top Source Hosts
+        kind:
+          type: string
+          enum: [bucket, flat]
+          description: >-
+            "bucket" = a 5-minute-bucket ring (series populated when
+            requested); "flat" = a single flat map/index with no time
+            dimension (series never populated).
+        cap:
+          type: integer
+          description: >-
+            The configured maximum this ring/index enforces. For a "bucket"
+            ring this is the PER-BUCKET cap, not a whole-ring total.
+        capSource:
+          type: string
+          description: >-
+            The config key backing cap (e.g. "traffic-stats-max-hosts"),
+            display-only.
+          example: traffic-stats-max-hosts
+        current:
+          type: integer
+          description: >-
+            Live size right now: most recent bucket's tracked-key count for
+            a "bucket" ring, or the current total entry count for a "flat"
+            index.
+        currentPercent:
+          type: number
+          format: double
+          description: current as a percent of cap (can exceed 100).
+        peak:
+          type: integer
+          description: >-
+            Highest tracked-key count seen across the buckets `window`
+            covers (bucket ring), or equal to current (flat index).
+        peakPercent:
+          type: number
+          format: double
+        fullBuckets:
+          type: integer
+          description: >-
+            How many buckets within `window` had their tracked-key count at
+            or above cap at least once. Always 0 for a "flat" index.
+        truncated:
+          type: boolean
+          description: >-
+            True once at least one admission has actually been rejected
+            because this cap was hit — the SAME after-the-fact signal
+            already exposed elsewhere; currentPercent/peakPercent are the
+            NEW early-warning signal this endpoint adds.
+        estimatedBytes:
+          type: integer
+          format: int64
+          description: >-
+            APPROXIMATE RAM footprint (entries currently held x entryBytes)
+            — NEVER a measured value. For a "bucket" ring this sums entries
+            across the WHOLE ring (up to 24h), not just `window`.
+        entryBytes:
+          type: integer
+          description: >-
+            Assumed per-entry RAM cost (bytes) used to compute
+            estimatedBytes — documented per-ring in
+            service/statistics_capacity.go.
+        series:
+          type: array
+          description: >-
+            Per-bucket tracked-key count over `window`. Only present when
+            the request asked for it (series=1/true) AND kind == "bucket".
+          items:
+            $ref: '#/components/schemas/CapacityPoint'
+
+    CapacityStatistics:
+      type: object
+      required:
+        - window
+        - bucketCount
+        - rings
+        - generatedAt
+      description: >-
+        The GET /statistics/capacity response — current usage vs configured
+        cap for all 9 RAM-only tracking structures, always in the same fixed
+        order (docs/ref/todo/statistics-capacity-visibility-plan.md T-01,
+        GitHub issue #123). Contains ONLY counts/percentages — no domain
+        name, IP address, or hostname ever appears here.
+      properties:
+        window:
+          type: string
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
+        bucketCount:
+          type: integer
+          description: >-
+            How many 5-minute buckets `window` covers (3/6/12/36/72/144/288).
+        rings:
+          type: array
+          description: >-
+            Always exactly 9 entries, in the fixed order: traffic.hosts,
+            traffic.dests, traffic.conversations, firewall.denySources,
+            firewall.denyPorts, dns.pairs, dns.clients, dns.reverseCache,
+            dns.domainIps.
+          items:
+            $ref: '#/components/schemas/RingCapacity'
         generatedAt:
           type: string
           format: date-time

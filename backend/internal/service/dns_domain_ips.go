@@ -409,6 +409,20 @@ func (d *dnsDomainIPs) Snapshot() map[string]string {
 	return out
 }
 
+// Usage returns the index's current domain count and configured caps —
+// read-only, RLock only, NEVER performs eviction (docs/ref/todo/
+// statistics-capacity-visibility-plan.md T-05: viewing capacity must not
+// change it) — unlike Put/IPsFor/DomainsForIP/Snapshot, which all lazily
+// evict expired entries as a side effect. domains is therefore an UPPER
+// BOUND, not an exact live count: it can include domains whose IP entries
+// are all logically expired (past ttl) but not yet swept by a Put/read that
+// happens to touch them.
+func (d *dnsDomainIPs) Usage() (domains, maxDomains, maxIPsPerDomain int, truncated bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return len(d.byDomain), d.maxDomains, d.maxIPsPerDomain, d.truncated
+}
+
 // Truncated reports whether at least one Put has been rejected since
 // construction/last Clear/SetLimits because a cap (maxDomains or
 // maxIPsPerDomain) was hit — surfaced to the API response so the UI can warn
