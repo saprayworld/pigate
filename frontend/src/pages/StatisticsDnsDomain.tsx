@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { NavLink, Navigate, useNavigate, useParams } from "react-router"
 import { ArrowLeft, Loader2, RefreshCw } from "lucide-react"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { getErrorMessage } from "@/lib/errors"
 import { fmtBytes } from "@/lib/formatBytes"
@@ -157,25 +157,32 @@ export default function StatisticsDnsDomain() {
                 window={window_}
                 subtitle="ยอดต่อ 5 นาที เฉพาะทราฟฟิกของ IP ที่โดเมนนี้ resolve ไป (ประมาณจากการ join) · Up/Down นับตามทิศทางของ flow"
               />
-
-              <Card>
-                <CardContent>
-                  <h2 className="mb-3 text-sm font-semibold text-foreground">IP ที่ได้จากการ resolve</h2>
-                  <DomainIpTable rows={data.ips} emptyLabel={ipsEmptyLabel} />
-                </CardContent>
-              </Card>
             </>
           )}
 
-          <Card>
-            <CardContent>
-              <ClientStatsTable
-                rows={data?.clients ?? []}
-                emptyLabel="ไม่พบเครื่องที่ค้นหาโดเมนนี้ในช่วงเวลานี้"
-                onRowClick={(ip) => navigate(`/statistics/dns/client/${encodeURIComponent(ip)}?window=${window_}`)}
-              />
-            </CardContent>
-          </Card>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <Card>
+              <CardHeader className="space-y-0">
+                <CardTitle className="text-base font-semibold">IP ที่ได้จากการ resolve</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <DomainIpTable rows={data?.ips ?? []} emptyLabel={ipsEmptyLabel} />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="space-y-0">
+                <CardTitle className="text-base font-semibold">Source Hosts</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ClientStatsTable
+                  rows={data?.clients ?? []}
+                  emptyLabel="ไม่พบเครื่องที่ค้นหาโดเมนนี้ในช่วงเวลานี้"
+                  onRowClick={(ip) => navigate(`/statistics/dns/client/${encodeURIComponent(ip)}?window=${window_}`)}
+                />
+              </CardContent>
+            </Card>
+          </div>
         </>
       ) : null}
 
