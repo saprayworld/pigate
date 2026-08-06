@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { NavLink, Navigate, useNavigate, useParams } from "react-router"
 import { ArrowLeft, Loader2, RefreshCw } from "lucide-react"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { getErrorMessage } from "@/lib/errors"
+import { fmtBytes } from "@/lib/formatBytes"
 import {
   dnsStatisticsService,
   type DNSDomainDrilldown,
@@ -12,13 +13,19 @@ import {
   useStatsWindow,
   StatsWindowTabs,
   ClientStatsTable,
+  DomainIpTable,
+  DnsVolumeInfoButton,
   DnsStatsPrivacyNote,
   type StatsWindow,
 } from "@/components/statistics/DnsStatsShared"
+import { TrafficTrendCard } from "@/components/statistics/TrafficTrendCard"
+import { TrafficStatCard } from "@/components/statistics/TrafficStatsShared"
 
 // Domain drill-down page (docs/ref/todo/statistics-nav-restructure-plan.md
-// T-03) — replaces the former Dialog drill-down: which hosts queried a given
-// domain, reached via a Top Domains row click on /statistics/dns.
+// T-03; expanded by docs/ref/todo/statistics-dns-page-revamp-plan.md T-11) —
+// replaces the former Dialog drill-down: which hosts queried a given
+// domain, which IPs it resolved to and how much traffic each one carried,
+// reached via a Top Domains row click on /statistics/dns.
 const REFRESH_INTERVAL_MS = 10_000
 
 export default function StatisticsDnsDomain() {
@@ -78,6 +85,16 @@ export default function StatisticsDnsDomain() {
     return <Navigate to="/statistics/dns" replace />
   }
 
+  // Two distinct, non-error empty states for the Resolved IPs table (plan
+  // T-11 item f) — must never be conflated: "we don't know any IP for this
+  // domain at all" (the forward index has no entry, e.g. TTL expiry or the
+  // domain was never answered) vs "we know the IP(s) but there was no
+  // traffic to them in this window".
+  const noKnownIps = (data?.ips.length ?? 0) === 0
+  const ipsEmptyLabel = noKnownIps
+    ? "ยังไม่มีข้อมูล IP ที่โดเมนนี้เคยถูก resolve ไป (อาจยังไม่มีการ query ผ่านอุปกรณ์นี้ หรือข้อมูลหมดอายุแล้ว)"
+    : "รู้จัก IP ของโดเมนนี้แล้ว แต่ไม่พบทราฟฟิกไปยัง IP เหล่านั้นในช่วงเวลาที่เลือก"
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -94,6 +111,7 @@ export default function StatisticsDnsDomain() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <StatsWindowTabs value={window_} onChange={setWindow} />
+          <DnsVolumeInfoButton />
           <Button
             variant="outline"
             size="sm"
@@ -120,15 +138,56 @@ export default function StatisticsDnsDomain() {
           <Loader2 className="h-6 w-6 animate-spin text-primary" />
         </div>
       ) : !error || data ? (
-        <Card>
-          <CardContent>
-            <ClientStatsTable
-              rows={data?.clients ?? []}
-              emptyLabel="ไม่พบเครื่องที่ค้นหาโดเมนนี้ในช่วงเวลานี้"
-              onRowClick={(ip) => navigate(`/statistics/dns/client/${encodeURIComponent(ip)}?window=${window_}`)}
-            />
-          </CardContent>
-        </Card>
+        <>
+          {data && (
+            <>
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <TrafficStatCard label={`Total Queries (${window_})`} value={data.totalQueries.toLocaleString()} />
+                <TrafficStatCard label="Clients" value={data.clients.length.toLocaleString()} />
+                <TrafficStatCard label="Resolved IPs" value={data.ips.length.toLocaleString()} />
+                <TrafficStatCard
+                  label="Volume"
+                  value={fmtBytes(data.totalBytes)}
+                  breakdown={{ down: fmtBytes(data.totalBytesDown), up: fmtBytes(data.totalBytesUp) }}
+                />
+              </div>
+
+              <TrafficTrendCard
+                series={data.series}
+                window={window_}
+                subtitle="ยอดต่อ 5 นาที เฉพาะทราฟฟิกของ IP ที่โดเมนนี้ resolve ไป (ประมาณจากการ join) · Up/Down นับตามทิศทางของ flow"
+              />
+            </>
+          )}
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <Card>
+              <CardHeader className="space-y-0">
+                <CardTitle className="text-base font-semibold">IP ที่ได้จากการ resolve</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <DomainIpTable
+                  rows={data?.ips ?? []}
+                  emptyLabel={ipsEmptyLabel}
+                  onRowClick={(ip) => navigate(`/statistics/dns?window=${window_}&ip=${encodeURIComponent(ip)}`)}
+                />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="space-y-0">
+                <CardTitle className="text-base font-semibold">Source Hosts</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ClientStatsTable
+                  rows={data?.clients ?? []}
+                  emptyLabel="ไม่พบเครื่องที่ค้นหาโดเมนนี้ในช่วงเวลานี้"
+                  onRowClick={(ip) => navigate(`/statistics/dns/client/${encodeURIComponent(ip)}?window=${window_}`)}
+                />
+              </CardContent>
+            </Card>
+          </div>
+        </>
       ) : null}
 
       <DnsStatsPrivacyNote />

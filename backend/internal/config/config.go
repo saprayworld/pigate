@@ -41,6 +41,12 @@
 // statistics-traffic-page-plan.md §1.6/T-02) mirror this exact pattern —
 // file-only, same two-tier validation — for the Statistics -> Traffic page's
 // per-bucket tracking caps (service/traffic_stats.go).
+//
+// dns-stats-max-domains / dns-stats-max-ips-per-domain (docs/ref/todo/
+// statistics-dns-page-revamp-plan.md §2.1/T-05) mirror the same pattern for
+// the Statistics -> DNS page's domain->resolved-IP forward index
+// (service/dns_domain_ips.go) — file-only, non-integer is a fail-fast error,
+// out-of-range-but-syntactically-valid clamps to the default with a warning.
 package config
 
 import (
@@ -83,6 +89,16 @@ type Config struct {
 	TrafficStatsMaxHosts         int
 	TrafficStatsMaxDests         int
 	TrafficStatsMaxConversations int
+
+	// DNSStatsMaxDomains/DNSStatsMaxIPsPerDomain are also file-only (no
+	// matching CLI flag) — RAM-guard caps for the domain->resolved-IP forward
+	// index (service/dns_domain_ips.go, docs/ref/todo/
+	// statistics-dns-page-revamp-plan.md §2.1/T-05). Worst-case RAM for this
+	// index is maxDomains x maxIPsPerDomain entries — NOT multiplied by any
+	// bucket count, unlike the DNS query-pair stats ring above, because this
+	// index is a flat map, not a ring.
+	DNSStatsMaxDomains      int
+	DNSStatsMaxIPsPerDomain int
 }
 
 // Defaults returns the Config populated with the exact same defaults as the
@@ -115,6 +131,12 @@ func Defaults() Config {
 		TrafficStatsMaxHosts:         500,
 		TrafficStatsMaxDests:         500,
 		TrafficStatsMaxConversations: 600,
+
+		// Keep in sync with the defaults documented for dnsDomainIPs in
+		// internal/service/dns_domain_ips.go (docs/ref/todo/
+		// statistics-dns-page-revamp-plan.md §2.1).
+		DNSStatsMaxDomains:      1000,
+		DNSStatsMaxIPsPerDomain: 16,
 	}
 }
 
@@ -145,6 +167,11 @@ const (
 	keyTrafficStatsMaxHosts         = "traffic-stats-max-hosts"
 	keyTrafficStatsMaxDests         = "traffic-stats-max-dests"
 	keyTrafficStatsMaxConversations = "traffic-stats-max-conversations"
+
+	// keyDNSStatsMaxDomains/keyDNSStatsMaxIPsPerDomain are also file-only (no
+	// CLI flag — docs/ref/todo/statistics-dns-page-revamp-plan.md T-05).
+	keyDNSStatsMaxDomains      = "dns-stats-max-domains"
+	keyDNSStatsMaxIPsPerDomain = "dns-stats-max-ips-per-domain"
 )
 
 // maxDNSStatsPairsCap/maxDNSStatsClientsCap are RAM-guard sanity ceilings for
@@ -168,6 +195,21 @@ const (
 // clamps a syntactically-valid-but-insane value back to the default rather
 // than trusting it blindly, exactly like the DNS stats caps above.
 const maxTrafficStatsCap = 20000
+
+// minDNSStatsMaxDomains/maxDNSStatsMaxDomains and
+// minDNSStatsMaxIPsPerDomain/maxDNSStatsMaxIPsPerDomain are the accepted
+// ranges for the two domain->IP index caps (docs/ref/todo/
+// statistics-dns-page-revamp-plan.md §2.1/T-05). Unlike the DNS query-pair
+// ring above, this index is NOT a ring — worst-case RAM is simply
+// maxDomains x maxIPsPerDomain entries (no x288-bucket multiplier) — e.g. the
+// defaults (1000 x 16 = 16000 entries, ~1 MB) or the ceiling of this range
+// (20000 x 64 = 1,280,000 entries) is still a bounded, single flat map.
+const (
+	minDNSStatsMaxDomains      = 100
+	maxDNSStatsMaxDomains      = 20000
+	minDNSStatsMaxIPsPerDomain = 2
+	maxDNSStatsMaxIPsPerDomain = 64
+)
 
 // orderedKeys is the fixed key order used by Write (and reused by KnownKeys)
 // so the generated file is stable/diffable across runs.
@@ -194,6 +236,10 @@ var orderedKeys = []string{
 	keyTrafficStatsMaxHosts,
 	keyTrafficStatsMaxDests,
 	keyTrafficStatsMaxConversations,
+	// Also appended at the end, after the traffic stats keys (docs/ref/todo/
+	// statistics-dns-page-revamp-plan.md T-05).
+	keyDNSStatsMaxDomains,
+	keyDNSStatsMaxIPsPerDomain,
 }
 
 // KnownKeys returns the list of recognized config/flag keys, in the fixed
@@ -324,6 +370,18 @@ func Resolve(defaults Config, fileVals, explicit map[string]string) (Config, []s
 			cfg.TrafficStatsMaxConversations, maxTrafficStatsCap, defaults.TrafficStatsMaxConversations))
 		cfg.TrafficStatsMaxConversations = defaults.TrafficStatsMaxConversations
 	}
+	if cfg.DNSStatsMaxDomains <= 0 || cfg.DNSStatsMaxDomains < minDNSStatsMaxDomains || cfg.DNSStatsMaxDomains > maxDNSStatsMaxDomains {
+		warnings = append(warnings, fmt.Sprintf(
+			"dns-stats-max-domains=%d out of range (%d..%d), using default %d",
+			cfg.DNSStatsMaxDomains, minDNSStatsMaxDomains, maxDNSStatsMaxDomains, defaults.DNSStatsMaxDomains))
+		cfg.DNSStatsMaxDomains = defaults.DNSStatsMaxDomains
+	}
+	if cfg.DNSStatsMaxIPsPerDomain <= 0 || cfg.DNSStatsMaxIPsPerDomain < minDNSStatsMaxIPsPerDomain || cfg.DNSStatsMaxIPsPerDomain > maxDNSStatsMaxIPsPerDomain {
+		warnings = append(warnings, fmt.Sprintf(
+			"dns-stats-max-ips-per-domain=%d out of range (%d..%d), using default %d",
+			cfg.DNSStatsMaxIPsPerDomain, minDNSStatsMaxIPsPerDomain, maxDNSStatsMaxIPsPerDomain, defaults.DNSStatsMaxIPsPerDomain))
+		cfg.DNSStatsMaxIPsPerDomain = defaults.DNSStatsMaxIPsPerDomain
+	}
 
 	return cfg, warnings, nil
 }
@@ -430,6 +488,20 @@ func applyKey(cfg *Config, key, value string) error {
 			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
 		}
 		cfg.TrafficStatsMaxConversations = n
+	case keyDNSStatsMaxDomains:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		// Range-checking is deliberately NOT done here — see Resolve's
+		// post-processing pass (clamp + warn, not fail-fast).
+		cfg.DNSStatsMaxDomains = n
+	case keyDNSStatsMaxIPsPerDomain:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		cfg.DNSStatsMaxIPsPerDomain = n
 	default:
 		// Unreachable: callers only invoke applyKey for keys that passed
 		// isKnownKey. Kept as a safety net rather than a silent no-op.
@@ -476,6 +548,10 @@ func keyValue(cfg Config, key string) string {
 		return strconv.Itoa(cfg.TrafficStatsMaxDests)
 	case keyTrafficStatsMaxConversations:
 		return strconv.Itoa(cfg.TrafficStatsMaxConversations)
+	case keyDNSStatsMaxDomains:
+		return strconv.Itoa(cfg.DNSStatsMaxDomains)
+	case keyDNSStatsMaxIPsPerDomain:
+		return strconv.Itoa(cfg.DNSStatsMaxIPsPerDomain)
 	default:
 		return ""
 	}

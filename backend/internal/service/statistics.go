@@ -98,6 +98,7 @@ func NewStatisticsService(traffic *TrafficStatsService, repo *db.Repository, dhc
 		dhcp:    dhcp,
 		dns: &dnsQueryStats{
 			reverseCache: newDNSReverseCache(),
+			domainIPs:    newDNSDomainIPs(),
 			maxPairs:     maxDNSPairs,
 			maxClients:   maxDNSClients,
 		},

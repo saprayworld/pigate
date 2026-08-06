@@ -221,6 +221,83 @@ func TestResolve(t *testing.T) {
 			t.Fatalf("got pairs=%d, want default 2400", cfg.DNSStatsMaxPairs)
 		}
 	})
+
+	t.Run("dns stats domain-ip keys default when absent", func(t *testing.T) {
+		cfg, warns, err := Resolve(Defaults(), nil, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.DNSStatsMaxDomains != 1000 || cfg.DNSStatsMaxIPsPerDomain != 16 {
+			t.Fatalf("got domains=%d ipsPerDomain=%d, want 1000/16", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
+		}
+	})
+
+	t.Run("file overrides dns stats domain-ip keys", func(t *testing.T) {
+		fileVals := map[string]string{"dns-stats-max-domains": "5000", "dns-stats-max-ips-per-domain": "32"}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.DNSStatsMaxDomains != 5000 || cfg.DNSStatsMaxIPsPerDomain != 32 {
+			t.Fatalf("got domains=%d ipsPerDomain=%d, want 5000/32", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
+		}
+	})
+
+	t.Run("non-integer dns stats domain-ip value fails fast", func(t *testing.T) {
+		fileVals := map[string]string{"dns-stats-max-domains": "abc"}
+		_, _, err := Resolve(Defaults(), fileVals, nil)
+		if err == nil {
+			t.Fatalf("expected error for dns-stats-max-domains=abc, got nil")
+		}
+	})
+
+	t.Run("dns stats domain-ip zero/negative clamps to default with a warning", func(t *testing.T) {
+		fileVals := map[string]string{"dns-stats-max-domains": "0", "dns-stats-max-ips-per-domain": "-1"}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(warns) != 2 {
+			t.Fatalf("expected 2 warnings, got %v", warns)
+		}
+		if cfg.DNSStatsMaxDomains != 1000 || cfg.DNSStatsMaxIPsPerDomain != 16 {
+			t.Fatalf("got domains=%d ipsPerDomain=%d, want defaults 1000/16", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
+		}
+	})
+
+	t.Run("dns stats domain-ip below accepted range clamps to default with a warning", func(t *testing.T) {
+		fileVals := map[string]string{"dns-stats-max-domains": "50", "dns-stats-max-ips-per-domain": "1"}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(warns) != 2 {
+			t.Fatalf("expected 2 warnings, got %v", warns)
+		}
+		if cfg.DNSStatsMaxDomains != 1000 || cfg.DNSStatsMaxIPsPerDomain != 16 {
+			t.Fatalf("got domains=%d ipsPerDomain=%d, want defaults 1000/16", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
+		}
+	})
+
+	t.Run("dns stats domain-ip above accepted range clamps to default with a warning", func(t *testing.T) {
+		fileVals := map[string]string{"dns-stats-max-domains": "999999", "dns-stats-max-ips-per-domain": "65"}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(warns) != 2 {
+			t.Fatalf("expected 2 warnings, got %v", warns)
+		}
+		if cfg.DNSStatsMaxDomains != 1000 || cfg.DNSStatsMaxIPsPerDomain != 16 {
+			t.Fatalf("got domains=%d ipsPerDomain=%d, want defaults 1000/16", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
+		}
+	})
 }
 
 func TestWriteParseRoundTrip(t *testing.T) {
@@ -233,6 +310,8 @@ func TestWriteParseRoundTrip(t *testing.T) {
 	cfg.TLSDir = ""
 	cfg.DNSStatsMaxPairs = 3000
 	cfg.DNSStatsMaxClients = 300
+	cfg.DNSStatsMaxDomains = 2000
+	cfg.DNSStatsMaxIPsPerDomain = 24
 
 	var buf bytes.Buffer
 	if err := Write(&buf, cfg); err != nil {
@@ -276,8 +355,8 @@ func TestWriteParseRoundTripDefaults(t *testing.T) {
 
 func TestKnownKeys(t *testing.T) {
 	keys := KnownKeys()
-	if len(keys) != 17 {
-		t.Fatalf("expected 17 known keys, got %d: %v", len(keys), keys)
+	if len(keys) != 19 {
+		t.Fatalf("expected 19 known keys, got %d: %v", len(keys), keys)
 	}
 	// "config" and "v" must never be treated as config-file keys.
 	for _, k := range keys {
@@ -310,5 +389,17 @@ func TestKnownKeys(t *testing.T) {
 	}
 	if !hasHosts || !hasDests || !hasConversations {
 		t.Fatalf("expected traffic-stats-max-hosts/-dests/-conversations in KnownKeys, got %v", keys)
+	}
+	var hasMaxDomains, hasMaxIPsPerDomain bool
+	for _, k := range keys {
+		switch k {
+		case "dns-stats-max-domains":
+			hasMaxDomains = true
+		case "dns-stats-max-ips-per-domain":
+			hasMaxIPsPerDomain = true
+		}
+	}
+	if !hasMaxDomains || !hasMaxIPsPerDomain {
+		t.Fatalf("expected dns-stats-max-domains/dns-stats-max-ips-per-domain in KnownKeys, got %v", keys)
 	}
 }

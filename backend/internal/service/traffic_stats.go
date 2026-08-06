@@ -143,6 +143,47 @@ func lastNBuckets[T any](ring []T, n int) []T {
 	return ring[len(ring)-n:]
 }
 
+// statsSeriesAxis returns the fixed time axis shared by every per-bucket
+// series this file (and dns_query_stats.go/statistics_dns.go) produces: n =
+// statsWindowBucketCount(window) points, oldest -> newest, ending at the
+// current (possibly still-open) trafficDetailBucketSpan bucket. Callers must
+// compute this BEFORE taking any ring lock (s.mu.RLock / s.dns.mu.RLock) and
+// reuse the same n for both the axis and the ring's lastNBuckets selection —
+// this is the single most important invariant in the statistics subsystem:
+// if these two uses of n ever diverge, sum(series[].Bytes/Count) == the
+// corresponding total breaks silently (docs/ref/todo/
+// statistics-dns-query-bar-chart-plan.md §2.5/T-01, mirrors the original
+// comment that lived inline in getTrafficBreakdown).
+func statsSeriesAxis(window string) (axisStart time.Time, n int) {
+	n = statsWindowBucketCount(window)
+	axisEnd := time.Now().Truncate(trafficDetailBucketSpan)
+	axisStart = axisEnd.Add(-time.Duration(n-1) * trafficDetailBucketSpan)
+	return axisStart, n
+}
+
+// statsSeriesIndex maps a bucket's RFC3339 timestamp ts onto the axis
+// returned by statsSeriesAxis, applying the same "carry to the nearest edge"
+// rule for every ring in the project: a bucket older than axisStart (the ring
+// covers a wider span than the window) carries into index 0, a bucket newer
+// than the axis end (e.g. after an NTP step back) carries into index n-1, and
+// a ts that fails to parse (should never happen — addBucket/its DNS
+// equivalent are the only writers) also carries into index 0. This carry
+// rule is what keeps sum(series) == total true even though the window is
+// bucket-count-based, not time-range-based.
+func statsSeriesIndex(ts string, axisStart time.Time, n int) int {
+	bt, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return 0
+	}
+	idx := int(bt.Sub(axisStart) / trafficDetailBucketSpan)
+	if idx < 0 {
+		idx = 0
+	} else if idx >= n {
+		idx = n - 1
+	}
+	return idx
+}
+
 // flowSampleState is the per-flow-key baseline the poller keeps between
 // ticks: the last-seen cumulative byte count (for delta computation) and a
 // consecutive-miss counter (for pruning an expired conntrack entry —
@@ -1231,6 +1272,19 @@ type TrafficBreakdown struct {
 	// so sum(HostSeries[].Bytes) == sum(Convs[...].Total()) for that IP holds
 	// by construction (plan §2.2 decision 1).
 	HostSeries []model.BandwidthPoint
+	// DestSeries is nil whenever getTrafficBreakdown is called without a
+	// non-empty dstSet (i.e. every call through GetTrafficBreakdown/
+	// GetTrafficBreakdownForIP) — only GetTrafficBreakdownForDests populates
+	// it (docs/ref/todo/statistics-dns-page-revamp-plan.md §2.3/T-03). Like
+	// HostSeries, it is flow-relative (Orig = up = client->server, Reply =
+	// down), computed from the SAME b.dstBytes map Dests is summed from in
+	// the same RLock/loop as Series/Observed above — so
+	// sum(DestSeries[].Bytes) == DestTotals.Total() holds by construction.
+	DestSeries []model.BandwidthPoint
+	// DestTotals is the sum, across the whole window, of b.dstBytes for every
+	// IP in the dstSet passed to GetTrafficBreakdownForDests. Zero value
+	// (Total() == 0) whenever dstSet was nil/empty.
+	DestTotals dirBytes
 }
 
 // GetTrafficBreakdown is GetTrafficDetail's sibling for the Statistics page:
@@ -1246,7 +1300,7 @@ type TrafficBreakdown struct {
 // around getTrafficBreakdown with an empty focusIP, which always leaves
 // HostSeries nil (see the TrafficBreakdown.HostSeries comment above).
 func (s *TrafficStatsService) GetTrafficBreakdown(window string) TrafficBreakdown {
-	return s.getTrafficBreakdown(window, "")
+	return s.getTrafficBreakdown(window, "", nil)
 }
 
 // GetTrafficBreakdownForIP is GetTrafficBreakdown's per-IP sibling (plan
@@ -1258,15 +1312,38 @@ func (s *TrafficStatsService) GetTrafficBreakdown(window string) TrafficBreakdow
 // apart, breaking the sum(HostSeries)==TotalBytes invariant the caller
 // (GetTrafficHostDetail) relies on (plan §2.3 rationale).
 func (s *TrafficStatsService) GetTrafficBreakdownForIP(window, ip string) TrafficBreakdown {
-	return s.getTrafficBreakdown(window, ip)
+	return s.getTrafficBreakdown(window, ip, nil)
+}
+
+// GetTrafficBreakdownForDests is GetTrafficBreakdown's per-destination-set
+// sibling (docs/ref/todo/statistics-dns-page-revamp-plan.md §2.3/T-03) — same
+// snapshot/RLock as GetTrafficBreakdown (Hosts/Dests/Convs/Observed/Series
+// are identical for a given window regardless of dstIPs), PLUS DestSeries/
+// DestTotals populated for the given IP set. dstIPs is typically the set of
+// IPs a DNS domain has been observed to resolve to (dnsDomainIPs.IPsFor) —
+// DestSeries is therefore a best-effort approximation of that domain's
+// traffic, not an exact per-domain counter (plan §1.1). Deliberately not a
+// second method that re-locks and re-scans the bucket ring, for the same
+// reason GetTrafficBreakdownForIP isn't (see its comment above).
+func (s *TrafficStatsService) GetTrafficBreakdownForDests(window string, dstIPs []string) TrafficBreakdown {
+	var dstSet map[string]struct{}
+	if len(dstIPs) > 0 {
+		dstSet = make(map[string]struct{}, len(dstIPs))
+		for _, ip := range dstIPs {
+			dstSet[ip] = struct{}{}
+		}
+	}
+	return s.getTrafficBreakdown(window, "", dstSet)
 }
 
 // getTrafficBreakdown is the shared implementation behind
-// GetTrafficBreakdown/GetTrafficBreakdownForIP. When focusIP is "", HostSeries
-// is left nil and the per-bucket convBytes scan below is skipped entirely
-// (zero added cost for every existing caller — GetTrafficBreakdown itself,
-// GetTrafficTopHosts, GetStatistics).
-func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string) TrafficBreakdown {
+// GetTrafficBreakdown/GetTrafficBreakdownForIP/GetTrafficBreakdownForDests.
+// When focusIP is "", HostSeries is left nil and the per-bucket convBytes
+// scan below is skipped entirely. When dstSet is nil/empty, DestSeries is
+// left nil and the per-bucket dstBytes-for-set scan below is skipped
+// entirely (zero added cost for every existing caller — GetTrafficBreakdown
+// itself, GetTrafficTopHosts, GetStatistics).
+func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string, dstSet map[string]struct{}) TrafficBreakdown {
 	window = normalizeStatsWindow(window)
 
 	hostTotals := make(map[string]dirBytes)
@@ -1280,14 +1357,11 @@ func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string) Traffi
 	// s.mu.RLock and reused unchanged inside the loop below, so every bucket
 	// in windowBuckets is aggregated into both Observed and Series under the
 	// exact same lock acquisition — the race the plan's revision 2 fixed
-	// (§2.5 item 1) is structurally impossible here.
-	// n is computed ONCE here via statsWindowBucketCount and reused unchanged
-	// for both the series axis above and the bucket selection below (plan §6
-	// item 1 — the single most important invariant of this file: if these two
-	// uses of n ever diverge, sum(Series[].Bytes) == Observed breaks silently).
-	n := statsWindowBucketCount(window)
-	axisEnd := time.Now().Truncate(trafficDetailBucketSpan)
-	axisStart := axisEnd.Add(-time.Duration(n-1) * trafficDetailBucketSpan)
+	// (§2.5 item 1) is structurally impossible here. n/axisStart come from the
+	// shared statsSeriesAxis helper (statistics-dns-query-bar-chart-plan.md
+	// §2.5/T-01) so this axis logic has exactly one implementation in the
+	// codebase — do not inline the formula again.
+	axisStart, n := statsSeriesAxis(window)
 	series := make([]model.BandwidthPoint, n)
 	for i := range series {
 		series[i].Ts = axisStart.Add(time.Duration(i) * trafficDetailBucketSpan).Format(time.RFC3339)
@@ -1300,6 +1374,17 @@ func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string) Traffi
 		hostSeries = make([]model.BandwidthPoint, n)
 		for i := range hostSeries {
 			hostSeries[i].Ts = series[i].Ts
+		}
+	}
+	// destSeries mirrors hostSeries above but keyed off dstSet instead of a
+	// single focusIP (plan §2.3/T-03) — same fixed-length, zero-filled
+	// allocation rule so callers never see nil when the set matched nothing.
+	var destSeries []model.BandwidthPoint
+	var destTotals dirBytes
+	if len(dstSet) > 0 {
+		destSeries = make([]model.BandwidthPoint, n)
+		for i := range destSeries {
+			destSeries[i].Ts = series[i].Ts
 		}
 	}
 
@@ -1345,23 +1430,11 @@ func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string) Traffi
 		}
 		observed += b.observed.Total()
 
-		// Plot this bucket into series (plan §2.5 item 2 / T-03 step 4): index
-		// by elapsed time from axisStart, carried into the nearest edge point
-		// when the ring covers a wider span than the window (older than the
-		// axis -> index 0, newer -> index n-1, e.g. after an NTP step back) or
-		// when b.ts fails to parse (should never happen — addBucket is the
-		// only writer) — this carry rule is what keeps
+		// Plot this bucket into series (plan §2.5 item 2 / T-03 step 4) using
+		// the shared statsSeriesIndex carry rule — this is what keeps
 		// sum(Series[].Bytes) == Observed true even when the window is
 		// bucket-count-based, not time-based (§7 item 6 / §2.5 item 2).
-		idx := 0
-		if bt, err := time.Parse(time.RFC3339, b.ts); err == nil {
-			idx = int(bt.Sub(axisStart) / trafficDetailBucketSpan)
-			if idx < 0 {
-				idx = 0
-			} else if idx >= n {
-				idx = n - 1
-			}
-		}
+		idx := statsSeriesIndex(b.ts, axisStart, n)
 		series[idx].BytesUp += b.observed.Orig
 		series[idx].BytesDown += b.observed.Reply
 		series[idx].Bytes += b.observed.Total()
@@ -1396,6 +1469,24 @@ func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string) Traffi
 			}
 		}
 
+		// destSeries/destTotals (per-dst-IP-set, flow-relative — plan §2.3/T-03)
+		// is built from the SAME b.dstBytes this bucket already merged into
+		// dstTotals above, at the SAME idx series uses — never a second lock/
+		// scan, so sum(DestSeries[].Bytes) == DestTotals.Total() holds by
+		// construction.
+		if len(dstSet) > 0 {
+			for ip, v := range b.dstBytes {
+				if _, ok := dstSet[ip]; !ok {
+					continue
+				}
+				destSeries[idx].BytesUp += v.Orig
+				destSeries[idx].BytesDown += v.Reply
+				destSeries[idx].Bytes += v.Total()
+				destTotals.Orig += v.Orig
+				destTotals.Reply += v.Reply
+			}
+		}
+
 		if len(b.hostBytes) >= s.maxTrackedHosts || len(b.dstBytes) >= s.maxTrackedDests || len(b.convBytes) >= s.maxTrackedConversations {
 			truncated = true
 		}
@@ -1416,6 +1507,8 @@ func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string) Traffi
 		Accuracy:   accuracy,
 		Series:     series,
 		HostSeries: hostSeries,
+		DestSeries: destSeries,
+		DestTotals: destTotals,
 	}
 }
 

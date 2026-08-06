@@ -537,18 +537,31 @@ paths:
         - Statistics
       summary: Get the DNS Statistics page's Top Domains / Top Clients tables
       description: >
-        Backs the standalone DNS Statistics page (`/statistics/dns`) — formerly
-        a "สถิติ" tab on the DNS Server page, promoted to its own route
-        (docs/ref/todo/statistics-nav-restructure-plan.md). Same
-        opt-in switch as TrafficStatistics.topDomains
-        (`dns/settings.queryLogging`) — `enabled` mirrors it and both
-        list fields are empty arrays (not omitted) when off. Fed by an
-        in-memory ring keyed by (domain, client) pairs; **RAM-only,
-        display-only** — nothing here is ever persisted to SQLite, and a
-        pigate restart resets all counts to zero. `topDomains` reuses the
-        same TopDomain shape as `/statistics/traffic`, but percent is
-        computed against this endpoint's own `totalQueries` (DNS query
-        count), never against `observedBytes`.
+        Backs the Statistics -> DNS page's overview tables (`/statistics/dns`)
+        — formerly a "สถิติ" tab on the DNS Server page, promoted to its own
+        route (docs/ref/todo/statistics-nav-restructure-plan.md), then
+        extended with per-row byte volume and drill-down fields
+        (docs/ref/todo/statistics-dns-page-revamp-plan.md). Same opt-in
+        switch as TrafficStatistics.topDomains (`dns/settings.queryLogging`)
+        — `enabled` mirrors it and both list fields are empty arrays (not
+        omitted) when off. Fed by an in-memory ring keyed by (domain, client)
+        pairs joined against TrafficStatsService's conntrack-derived byte
+        counters by IP; **RAM-only, display-only** — nothing here is ever
+        persisted to SQLite, and a pigate restart resets all counts to zero.
+        `topDomains` is `DNSDomainStat` (NOT the same schema as
+        `/statistics/traffic`'s `topDomains`, which stays `TopDomain`
+        unchanged) — `percent` is computed against this endpoint's own
+        `totalQueries` (DNS query count), `bytesPercent` against
+        `domainBytes` (a separate, byte-based denominator — see the schema).
+        `bytes`/`bytesUp`/`bytesDown` are an APPROXIMATION derived by joining
+        the DNS answer -> IP mapping against conntrack byte counters, not a
+        true per-domain packet count, and that domain->IP mapping must never
+        be used for security/policy decisions (firewall, routing, QoS). Also
+        returns `querySeries` (docs/ref/todo/
+        statistics-dns-query-bar-chart-plan.md T-02/T-03/T-05), a time series
+        of DNS query counts per 5-minute bucket for the same window, backing
+        the overview page's bar chart. No sort-key input is accepted from the
+        client — sorting of the tables is done entirely in the browser.
       parameters:
         - name: window
           in: query
@@ -574,19 +587,29 @@ paths:
     get:
       tags:
         - Statistics
-      summary: Drill down a domain from the DNS Statistics page into the clients that queried it
+      summary: Drill down a domain from the Statistics -> DNS page into its clients, resolved IPs, and volume
       description: >
         Given a domain, returns every client (source IP, or the reserved
         `unknown` bucket for queries whose source IP could not be parsed)
-        that queried it within the window, with per-client counts. Same
-        RAM-only, display-only, opt-in data source as `/statistics/dns`
-        — never persisted to SQLite, resets on restart. `percent` here is
-        relative to this domain's own `totalQueries`, NOT the window's
-        overall total (a different denominator than
-        `/statistics/dns`'s `topDomains`/`topClients`). A domain that
-        passes validation but was never queried in the window still
-        returns 200 with an empty `clients` array (not 404 — a normal
-        outcome as the window slides).
+        that queried it within the window, with per-client counts, plus (as
+        of docs/ref/todo/statistics-dns-page-revamp-plan.md T-04/T-07) the
+        `ips` this domain was resolved to (ranked by APPROXIMATE volume, with
+        a `shared` flag when an IP is also used by another domain),
+        `totalBytes`/`totalBytesUp`/`totalBytesDown`, and a `series` time
+        series — all derived by joining the RAM-only domain->IP forward index
+        against TrafficStatsService's conntrack byte counters by IP, never a
+        true per-domain packet count, and never to be used for
+        security/policy decisions (firewall, routing, QoS). Same RAM-only,
+        display-only, opt-in data source as `/statistics/dns` — never
+        persisted to SQLite, resets on restart. `percent` here is relative to
+        this domain's own `totalQueries`, NOT the window's overall total (a
+        different denominator than `/statistics/dns`'s
+        `topDomains`/`topClients`); `bytesPercent` on `ips[]` rows is
+        relative to this response's own `totalBytes`. A domain that passes
+        validation but was never queried in the window still returns 200
+        with an empty `clients` array (not 404 — a normal outcome as the
+        window slides). No sort-key input is accepted — sorting is done
+        entirely in the browser.
       parameters:
         - name: domain
           in: query
@@ -626,16 +649,26 @@ paths:
     get:
       tags:
         - Statistics
-      summary: Drill down a client from the DNS Statistics page into the domains it queried
+      summary: Drill down a client from the Statistics -> DNS page into the domains it queried and its volume
       description: >
         Given a client, returns every domain it queried within the window,
-        with per-domain counts. Same RAM-only, display-only, opt-in data
-        source as `/statistics/dns` — never persisted to SQLite, resets on
-        restart. `percent` here is relative to this client's own
+        with per-domain counts, plus (as of docs/ref/todo/
+        statistics-dns-page-revamp-plan.md T-04/T-07) `domains[].bytes`
+        (bytes exchanged between THIS client and each domain's known IPs
+        only — a conversation-level join, more precise than the
+        network-wide approximation `/statistics/dns` uses),
+        `totalBytes`/`totalBytesUp`/`totalBytesDown`, and a `series` time
+        series. For the reserved `unknown` client bucket there is no IP to
+        join against, so those byte/series fields stay at their zero value
+        rather than a fabricated number. Same RAM-only, display-only, opt-in
+        data source as `/statistics/dns` — never persisted to SQLite, resets
+        on restart. `percent` here is relative to this client's own
         `totalQueries`, NOT the window's overall total (same rule as
-        `/statistics/dns/domain` above). A client that passes validation
-        but never queried anything in the window still returns 200 with an
-        empty `domains` array (not 404).
+        `/statistics/dns/domain` above); `bytesPercent` on `domains[]` rows is
+        relative to this response's own `totalBytes`. A client that passes
+        validation but never queried anything in the window still returns
+        200 with an empty `domains` array (not 404). No sort-key input is
+        accepted — sorting is done entirely in the browser.
       parameters:
         - name: client
           in: query
@@ -670,6 +703,63 @@ paths:
                 $ref: '#/components/schemas/DNSClientDrilldown'
         '400':
           description: Missing or invalid `client`
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /statistics/dns/ip:
+    get:
+      tags:
+        - Statistics
+      summary: Reverse-lookup an IP from the Statistics -> DNS page into every domain that has resolved to it
+      description: >
+        Given an IP, returns every domain the RAM-only reverse index
+        (docs/ref/todo/statistics-dns-ip-filter-plan.md T-03/T-04) knows to
+        have resolved to it — answering "this IP shows up under more than
+        one domain, which ones?" for CDN/shared-hosting IP reuse. Same
+        RAM-only, display-only, opt-in data source as `/statistics/dns` —
+        never persisted to SQLite, resets on restart, and MUST NEVER be used
+        for firewall rule generation, policy matching, routing, or QoS
+        decisions (the mapping is derived from dnsmasq's answer log, which
+        any LAN client can influence). `bytesPercent` on `domains[]` rows is
+        relative to this response's own `matchedBytes` (the sum of
+        `domains[].bytes`), NOT the window-wide `domainBytes` used by
+        `/statistics/dns`. A domain the forward index still remembers but
+        that had no query in this window still appears with
+        `count`/`percent` = 0 — that row is still the correct answer to
+        "what domain is this IP for". No sort-key input is accepted —
+        sorting is done entirely in the browser.
+      parameters:
+        - name: ip
+          in: query
+          required: true
+          schema:
+            type: string
+            example: 142.250.199.14
+          description: >
+            IP address to look up. Must parse as an IP address (IPv4 or
+            IPv6); anything else returns 400 with a generic message — the
+            submitted value is never echoed back in the error response. A
+            valid IP is re-normalized (e.g. non-canonical IPv6) before
+            lookup so it matches the forward index's stored key.
+        - name: window
+          in: query
+          schema:
+            type: string
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
+            default: 1h
+          description: >
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
+      responses:
+        '200':
+          description: Domains that have resolved to this IP
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSIPDomains'
+        '400':
+          description: Missing or invalid `ip`
         '401':
           $ref: '#/components/responses/Unauthorized'
 
@@ -4489,6 +4579,29 @@ components:
           description: Download bytes in this bucket — direction convention set by the containing schema's `series` property, see its description.
           example: 3900000
 
+    DNSQueryPoint:
+      type: object
+      required: [ts, count]
+      description: >-
+        One point of DNSQueryStatistics.querySeries (docs/ref/todo/
+        statistics-dns-query-bar-chart-plan.md T-02/T-05) — a single 5-minute
+        bucket. count is the NUMBER OF DNS QUERIES observed in the bucket,
+        not bytes — deliberately a separate schema from BandwidthPoint so
+        clients can't confuse a query count with a byte count.
+      properties:
+        ts:
+          type: string
+          format: date-time
+          description: >-
+            RFC3339 start of this bucket, in device local time (same
+            clock/format as BandwidthPoint.ts).
+          example: '2026-08-01T14:35:00+07:00'
+        count:
+          type: integer
+          format: int64
+          description: Number of DNS queries recorded in this bucket.
+          example: 42
+
     TrafficTopHosts:
       type: object
       required: [window, observedBytes, accuracy, truncated, limit, sources, destinations, series, generatedAt]
@@ -4796,12 +4909,14 @@ components:
 
     DNSClientStat:
       type: object
-      required: [ip, hostname, count, percent]
+      required: [ip, hostname, domain, count, percent, domains, bytes, bytesUp, bytesDown, bytesPercent]
       description: >-
         One ranked row for the "Top Clients" table on the DNS Query
-        Statistics tab (docs/ref/todo/dns-query-statistics-drilldown-plan.md)
-        — one row per source IP (or the reserved "unknown" bucket) that
-        issued DNS queries. RAM-only, display-only.
+        Statistics tab (docs/ref/todo/dns-query-statistics-drilldown-plan.md),
+        extended with a distinct-domain count and an APPROXIMATE byte volume
+        by docs/ref/todo/statistics-dns-page-revamp-plan.md T-01/T-04 — one
+        row per source IP (or the reserved "unknown" bucket) that issued DNS
+        queries. RAM-only, display-only.
       properties:
         ip:
           type: string
@@ -4811,8 +4926,26 @@ components:
           example: 192.168.1.101
         hostname:
           type: string
-          description: DHCP lease/reservation hostname; empty when unknown.
+          description: >-
+            DHCP lease/reservation hostname; falls back to this row's own ip
+            when there is no matching lease/reservation, NOT an empty
+            string.
           example: laptop-living-room
+        domain:
+          type: string
+          description: >-
+            The domain name dnsmasq most recently answered for ip, from the
+            SAME reverse cache TopHost.domain above uses
+            (docs/ref/todo/statistics-dns-host-domain-label-plan.md T-04) —
+            display only, empty when unknown/expired. NEVER used for
+            firewall/policy/routing/QoS decisions — the cache can be
+            poisoned by any LAN client simply querying a name it controls.
+            Usually empty for the rows in this table: the reverse cache is
+            keyed by DNS ANSWER ips (mostly Internet destinations), while
+            these rows are LAN client (source) ips — a value only appears
+            when a DNS answer happens to point back at a LAN ip (e.g. a
+            local zone like nas.home.lan -> 192.168.1.50).
+          example: nas.home.lan
         count:
           type: integer
           format: int64
@@ -4821,9 +4954,380 @@ components:
           type: number
           format: float
           description: >-
-            Share of the enclosing response's totalQueries — see that
-            response's schema for which totalQueries this is relative to.
+            Share of the enclosing response's totalQueries (QUERY COUNT, not
+            bytes) — see that response's schema for which totalQueries this
+            is relative to. Never confuse with bytesPercent below.
           example: 41.2
+        domains:
+          type: integer
+          description: >-
+            Number of distinct domains this client queried in the window,
+            system-wide — NOT scoped to the parent response's own domain/
+            client focus (docs/ref/todo/statistics-dns-review-fixes-plan.md
+            T-06): in a domain drill-down's per-client row this is the count
+            across every domain that client asked in the window, not just
+            this one (which would trivially always be 1) — same
+            system-wide-not-drill-down-scoped convention as
+            DNSDomainStat.clients below.
+          example: 12
+        bytes:
+          type: integer
+          format: int64
+          description: >-
+            APPROXIMATE byte volume, computed by joining conntrack-derived
+            traffic data by IP — never a per-query byte count. Meaning
+            depends on the parent response: for DNSQueryStatistics.topClients
+            this is the client's TOTAL observed bytes across ALL
+            destinations in the window (not limited to DNS-resolved
+            traffic); for DNSDomainDrilldown.clients it is ONLY the bytes
+            exchanged between this client and the drilled domain's known
+            IPs (a strict subset of the total). bytesUp + bytesDown ==
+            bytes always.
+          example: 15400000
+        bytesUp:
+          type: integer
+          format: int64
+          description: >-
+            Upload share of bytes, flow-relative (orig direction, i.e.
+            client -> server) — same convention as TopHost.bytesUp.
+          example: 2200000
+        bytesDown:
+          type: integer
+          format: int64
+          description: Download share of bytes, flow-relative (reply direction).
+          example: 13200000
+        bytesPercent:
+          type: number
+          format: float
+          description: >-
+            bytes as a percent of BYTES (never query count) — a separate "%
+            Vol" figure from percent's "% Query" above; the denominator is
+            specified on the parent response's schema.
+          example: 8.4
+
+    DNSDomainStat:
+      type: object
+      required: [domain, queryType, count, percent, clients, ipCount, sharedIps, bytes, bytesUp, bytesDown, bytesPercent]
+      description: >-
+        One row of the domain-centric tables on the Statistics -> DNS page
+        (docs/ref/todo/statistics-dns-page-revamp-plan.md T-01) — the same
+        fields as TopDomain (domain/queryType/count/percent) plus
+        client-count and APPROXIMATE byte-volume fields joined in from
+        TrafficStatsService by IP. Used ONLY by the 3 DNS statistics
+        endpoints below (/statistics/dns, /statistics/dns/domain,
+        /statistics/dns/client) — never by /statistics/traffic, whose
+        topDomains stays the plain TopDomain shape, byte-for-byte unchanged.
+      properties:
+        domain:
+          type: string
+          example: www.youtube.com
+        queryType:
+          type: string
+          description: DNS record type of the most recently seen query for this domain.
+          example: A
+        count:
+          type: integer
+          format: int64
+          example: 128
+        percent:
+          type: number
+          format: float
+          description: Share of QUERY COUNT (never bytesPercent's byte share).
+          example: 22.5
+        clients:
+          type: integer
+          description: >-
+            Number of distinct client IPs that queried this domain in the
+            window.
+          example: 6
+        ipCount:
+          type: integer
+          description: >-
+            Number of IPs currently known for this domain in the RAM-only
+            domain->IP forward index — may be 0 when the domain was queried
+            but no matching DNS answer was ever observed/kept (e.g. the
+            answer's TTL expired, or the index was capped).
+          example: 3
+        sharedIps:
+          type: boolean
+          description: >-
+            True when at least one of this domain's known IPs is also
+            referenced by another domain (e.g. a CDN/cloud load balancer) —
+            a caution flag: bytes below double-counts that IP's traffic
+            against every domain that shares it.
+          example: false
+        bytes:
+          type: integer
+          format: int64
+          description: >-
+            APPROXIMATE traffic volume for this domain, computed by summing
+            the conntrack-derived byte counters of the IPs this domain was
+            last resolved to — NOT a true per-domain packet count (the
+            kernel has no notion of "domain" at the packet level). Traffic
+            to an IP reached without going through this device's DNS
+            resolver is never counted here. bytesUp + bytesDown == bytes
+            always.
+          example: 48200000
+        bytesUp:
+          type: integer
+          format: int64
+          description: Upload share, flow-relative (orig = client -> server).
+          example: 3100000
+        bytesDown:
+          type: integer
+          format: int64
+          description: Download share, flow-relative (reply direction).
+          example: 45100000
+        bytesPercent:
+          type: number
+          format: float
+          description: >-
+            bytes as a percent of BYTES (never query count) — the
+            denominator is specified on the parent response's schema (e.g.
+            DNSQueryStatistics.domainBytes). Always labelled "% Vol"
+            separately from percent's "% Query" in the UI.
+          example: 61.7
+
+    DNSDomainIP:
+      type: object
+      required: [ip, bytes, bytesUp, bytesDown, bytesPercent, shared, lastSeen]
+      description: >-
+        One row of the "Resolved IPs" table on a domain's drill-down page
+        (docs/ref/todo/statistics-dns-page-revamp-plan.md T-01) — an IP a
+        domain was seen resolving to, ranked by APPROXIMATE volume. RAM-only,
+        sourced from the same forward index as DNSDomainStat.ipCount/
+        sharedIps. The domain->IP mapping backing this row is display-only
+        and MUST NEVER be used to drive firewall rule generation, policy
+        matching, routing, or QoS decisions — it can be poisoned by any LAN
+        client's DNS queries.
+      properties:
+        ip:
+          type: string
+          example: 142.250.199.14
+        bytes:
+          type: integer
+          format: int64
+          description: >-
+            This IP's conntrack-derived byte counters within the window —
+            real per-IP data, but attributing it to "this domain" assumes
+            the resolution is still current. bytesUp + bytesDown == bytes.
+          example: 20500000
+        bytesUp:
+          type: integer
+          format: int64
+          example: 1400000
+        bytesDown:
+          type: integer
+          format: int64
+          example: 19100000
+        bytesPercent:
+          type: number
+          format: float
+          description: >-
+            bytes as a percent of the PARENT domain's totalBytes
+            (DNSDomainDrilldown.totalBytes) — a different denominator than
+            DNSDomainStat.bytesPercent above (which is window-wide
+            domainBytes).
+          example: 42.5
+        shared:
+          type: boolean
+          description: >-
+            True when this IP is also referenced by another domain in the
+            forward index (e.g. a CDN/cloud load balancer) — same meaning as
+            DNSDomainStat.sharedIps but scoped to this one IP row.
+          example: true
+        lastSeen:
+          type: string
+          format: date-time
+          description: >-
+            RFC3339 UTC timestamp of the most recent DNS answer that
+            resolved this domain to this IP — NOT tied to the stats window;
+            it can be older than the window if the answer hasn't been
+            refreshed.
+          example: '2026-08-04T10:12:00Z'
+
+    DNSIPDomain:
+      description: >-
+        One row of the /statistics/dns/ip response (docs/ref/todo/
+        statistics-dns-ip-filter-plan.md T-02) — a domain that has ever
+        resolved to the IP being looked up. Same fields as DNSDomainStat
+        (count/percent are window-scoped for THIS domain; clients/ipCount/
+        sharedIps are this domain's system-wide values; bytes/bytesUp/
+        bytesDown are this domain's TOTAL volume across ALL of its known IPs,
+        not just the one being looked up) plus lastSeen. bytesPercent here is
+        bytes as a percent of DNSIPDomains.matchedBytes (the sum across every
+        row of this response) — deliberately NOT the window-wide domainBytes
+        used by the other DNS statistics endpoints, because computing that
+        denominator would mean joining every domain in the window without
+        helping answer "what domains use this IP"; the UI must label this
+        clearly as scoped to the matched domain group, not the whole window.
+        A domain can appear here with count=0/percent=0 when the forward
+        index still remembers the domain->IP mapping but the domain had no
+        query in this time window — that row is still the correct answer to
+        "what domain is this IP for" and is never dropped.
+      allOf:
+        - $ref: '#/components/schemas/DNSDomainStat'
+        - type: object
+          required: [lastSeen]
+          properties:
+            lastSeen:
+              type: string
+              format: date-time
+              description: >-
+                RFC3339 UTC timestamp of the most recent DNS answer that
+                resolved this domain to the IP being looked up — NOT tied to
+                the stats window (same convention as DNSDomainIP.lastSeen).
+                The domain<->IP mapping backing this row is display-only and
+                MUST NEVER be used to drive firewall rule generation, policy
+                matching, routing, or QoS decisions.
+              example: '2026-08-04T10:12:00Z'
+
+    DNSIPDomains:
+      type: object
+      required:
+        - ip
+        - window
+        - enabled
+        - hostname
+        - totalQueries
+        - truncated
+        - ipsTruncated
+        - domains
+        - domainCount
+        - shared
+        - matchedBytes
+        - matchedBytesUp
+        - matchedBytesDown
+        - ipBytes
+        - ipBytesUp
+        - ipBytesDown
+        - series
+        - observedBytes
+        - accuracy
+        - generatedAt
+      description: >-
+        The /statistics/dns/ip response — every domain the RAM-only reverse
+        index (service/dns_domain_ips.go's DomainsForIP) knows to have
+        resolved to `ip`, answering "this IP shows up under more than one
+        domain — which ones?" (docs/ref/todo/statistics-dns-ip-filter-plan.md
+        §0/§2). Same RAM-only, display-only, opt-in data source as
+        /statistics/dns — never persisted to SQLite, resets on restart. The
+        domain<->IP mapping backing this response is derived from dnsmasq's
+        answer log, which any LAN client can influence by simply querying
+        attacker-controlled domains: it MUST NEVER be used to drive firewall
+        rule generation, policy matching, routing, or QoS decisions. No
+        sort-key input is accepted — sorting is done entirely in the browser.
+      properties:
+        ip:
+          type: string
+          description: >-
+            Canonical (net/netip-normalized) form of the address that was
+            looked up — never the raw client-supplied string.
+          example: 64.233.166.127
+        window:
+          type: string
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
+        enabled:
+          type: boolean
+          description: Mirrors DNSServerSettings.queryLogging.
+        hostname:
+          type: string
+          description: >-
+            Resolved from a DHCP lease/reservation for ip — display only,
+            falls back to ip itself when unknown.
+          example: 64.233.166.127
+        totalQueries:
+          type: integer
+          format: int64
+          description: >-
+            Total DNS queries observed in this window across ALL domains
+            (not just the ones matching this IP) — the denominator for each
+            domains[] row's percent, identical meaning to
+            DNSQueryStatistics.totalQueries.
+        truncated:
+          type: boolean
+          description: >-
+            True when the window's query-count ring hit one of its
+            per-bucket tracking caps while computing count/percent for the
+            rows below — same signal as DNSDomainDrilldown.truncated.
+        ipsTruncated:
+          type: boolean
+          description: >-
+            True when the RAM-only domain->IP forward index hit one of its
+            caps at some point — meaning the reverse index this endpoint
+            reads from may be missing some domain<->IP associations, so
+            domains below could be incomplete.
+        domains:
+          type: array
+          description: >-
+            Every domain known to have resolved to ip, sorted by bytes desc,
+            then count desc, then domain asc. Never null — an empty array
+            means no domain in the RAM-only index currently maps to this IP
+            (it may have expired past its TTL, or traffic to it never went
+            through this device's DNS resolver).
+          items:
+            $ref: '#/components/schemas/DNSIPDomain'
+        domainCount:
+          type: integer
+          description: len(domains), echoed for convenience.
+          example: 2
+        shared:
+          type: boolean
+          description: >-
+            True when domainCount > 1 — this IP is used by more than one
+            domain (e.g. a CDN or shared hosting IP), so each domain's bytes
+            below double-counts the same underlying traffic to this IP.
+          example: true
+        matchedBytes:
+          type: integer
+          format: int64
+          description: >-
+            Sum of domains[].bytes across every row of this response — the
+            denominator for each row's bytesPercent (see DNSIPDomain's
+            description for why this differs from the window-wide
+            domainBytes used by the other DNS statistics endpoints).
+          example: 20500000
+        matchedBytesUp:
+          type: integer
+          format: int64
+          example: 1400000
+        matchedBytesDown:
+          type: integer
+          format: int64
+          example: 19100000
+        ipBytes:
+          type: integer
+          format: int64
+          description: >-
+            Conntrack-derived byte counters for the IP being looked up
+            itself (not summed across domains) — the same per-destination
+            totals TrafficHostDetail would report for this IP.
+          example: 20500000
+        ipBytesUp:
+          type: integer
+          format: int64
+          example: 1400000
+        ipBytesDown:
+          type: integer
+          format: int64
+          example: 19100000
+        series:
+          type: array
+          description: >-
+            This IP's traffic over time — flow-relative (orig = up, reply =
+            down), fixed length equal to the window's bucket count,
+            zero-filled (never null). sum(series[].bytes) == ipBytes.
+          items:
+            $ref: '#/components/schemas/BandwidthPoint'
+        observedBytes:
+          type: integer
+          format: int64
+        accuracy:
+          type: string
+          enum: [estimated, near-exact]
+        generatedAt:
+          type: string
+          format: date-time
 
     DNSQueryStatistics:
       type: object
@@ -4831,18 +5335,27 @@ components:
         - window
         - enabled
         - totalQueries
+        - querySeries
         - truncated
         - topDomains
         - topClients
+        - observedBytes
+        - domainBytes
+        - totalDomains
+        - totalClients
+        - accuracy
         - generatedAt
       description: >-
-        The /statistics/dns response backing the standalone DNS Statistics
-        page's two top-level tables (Top Domains / Top Clients). **RAM-only,
-        display-only**: sourced from an in-memory (domain, client) ring, never
-        persisted to SQLite — a pigate restart resets all counts to zero.
-        Opt-in via `dns/settings.queryLogging`; all fields are zero-valued
-        (empty arrays / false) rather than omitted when disabled, so a client
-        never has to special-case absence.
+        The /statistics/dns response backing the Statistics -> DNS page's two
+        top-level tables (Top Domains / Top Clients). **RAM-only,
+        display-only**: sourced from an in-memory (domain, client) ring
+        joined against TrafficStatsService's conntrack-derived byte counters
+        by IP, never persisted to SQLite — a pigate restart resets all counts
+        to zero. Opt-in via `dns/settings.queryLogging`; all fields are
+        zero-valued (empty arrays / false / 0) rather than omitted when
+        disabled, so a client never has to special-case absence. There is no
+        sort-key input accepted from the client — sorting of topDomains/
+        topClients is done entirely client-side in the browser.
       properties:
         window:
           type: string
@@ -4855,22 +5368,83 @@ components:
           format: int64
           description: >-
             Total DNS queries observed in this window — the denominator for
-            both topDomains and topClients percentages.
+            both topDomains and topClients percent (query-count) figures.
+        querySeries:
+          type: array
+          description: >-
+            DNS-query-count-over-time bar chart series backing the Statistics
+            -> DNS overview page (docs/ref/todo/
+            statistics-dns-query-bar-chart-plan.md T-02/T-03): one
+            DNSQueryPoint per raw 5-minute bucket. Fixed length equal to the
+            number of 5-minute buckets the window covers (3/6/12/36/72/144/288
+            for 15m/30m/1h/3h/6h/12h/24h respectively), zero-filled — never
+            null. Sorted oldest -> newest; the last point is the current,
+            still-open bucket (its count keeps climbing until the bucket
+            closes). Invariant: sum(querySeries[].count) == totalQueries
+            always holds, using the same carry rule as
+            TrafficStatistics.series. Empty array (not omitted) when
+            enabled=false.
+          items:
+            $ref: '#/components/schemas/DNSQueryPoint'
         truncated:
           type: boolean
           description: >-
-            True when the domain×client pair ring or the per-bucket client
-            tracking cap was hit during this window — the ranking may be
-            missing entries.
+            True only when data was actually dropped: the domain×client
+            pair ring, the per-bucket client tracking cap, or the domain->IP
+            forward index cap was hit during this window. Deliberately does
+            NOT fire just because totalDomains/totalClients exceeds the
+            top-50 table size — that is normal, fully-and-accurately-tracked
+            data that simply doesn't all fit in the table.
         topDomains:
           type: array
-          description: Same shape as TrafficStatistics.topDomains, reused as-is.
+          description: >-
+            Domain-centric overview table (plan §2.2) — []DNSDomainStat, an
+            ADDITIVE JSON shape scoped to this endpoint only; NOT the same
+            schema as TrafficStatistics.topDomains, which stays TopDomain
+            unchanged.
           items:
-            $ref: '#/components/schemas/TopDomain'
+            $ref: '#/components/schemas/DNSDomainStat'
         topClients:
           type: array
           items:
             $ref: '#/components/schemas/DNSClientStat'
+        observedBytes:
+          type: integer
+          format: int64
+          description: >-
+            The SAME network-wide conntrack-observed byte total as
+            TrafficStatistics.observedBytes for this window — included so
+            the UI can show "% of all traffic" as a second, clearly labelled
+            denominator distinct from domainBytes below.
+          example: 512000000
+        domainBytes:
+          type: integer
+          format: int64
+          description: >-
+            Sum of bytes across all rows of topDomains — i.e. only the
+            portion of observedBytes that could be attributed to a known
+            domain via the domain->IP join (direct-IP traffic with no DNS
+            lookup is never counted here). This is the denominator used for
+            each topDomains row's bytesPercent.
+          example: 210500000
+        totalDomains:
+          type: integer
+          description: >-
+            Number of distinct domains observed in the window (before any
+            per-response row limit is applied), so the UI can show "showing
+            N of M" even when topDomains is capped.
+          example: 143
+        totalClients:
+          type: integer
+          description: Same as totalDomains but for distinct client IPs.
+          example: 18
+        accuracy:
+          type: string
+          enum: [estimated, near-exact]
+          description: >-
+            Mirrors TrafficStatistics.accuracy — the same
+            conntrack-poll-vs-DESTROY-event signal, since bytes above is
+            derived from the same traffic breakdown.
         generatedAt:
           type: string
           format: date-time
@@ -4884,12 +5458,24 @@ components:
         - totalQueries
         - truncated
         - clients
+        - ips
+        - totalBytes
+        - totalBytesUp
+        - totalBytesDown
+        - sharedIps
+        - ipsTruncated
+        - series
+        - accuracy
+        - observedBytes
         - generatedAt
       description: >-
         The /statistics/dns/domain response — for a single domain, the
-        clients that queried it within the window. **RAM-only,
-        display-only**, same opt-in switch and reset-on-restart behavior as
-        DNSQueryStatistics.
+        clients that queried it within the window, the IPs it was resolved
+        to, and an APPROXIMATE traffic volume/time series joined in by IP.
+        **RAM-only, display-only**, same opt-in switch and reset-on-restart
+        behavior as DNSQueryStatistics. There is no sort-key input accepted
+        from the client — sorting of clients/ips is done entirely
+        client-side in the browser.
       properties:
         domain:
           type: string
@@ -4911,14 +5497,91 @@ components:
         truncated:
           type: boolean
           description: >-
-            True when the domain×client pair ring or the per-bucket client
-            tracking cap was hit during this window — the client list may be
-            missing entries, and the sum of clients[].count may be less than
-            totalQueries.
+            True only when data was actually dropped: the domain×client pair
+            ring, the per-bucket client tracking cap, or the domain->IP
+            forward index cap was hit during this window. Deliberately does
+            NOT fire just because totalDomains/totalClients exceeds the
+            top-50 table size — that is normal, fully-and-accurately-tracked
+            data that simply doesn't all fit in the table.
         clients:
           type: array
+          description: >-
+            Each row's bytes/bytesUp/bytesDown are ONLY the traffic exchanged
+            between that client and this domain's known IPs (a
+            conversation-level join) — see DNSClientStat.bytes. Each row's
+            domains is that client's distinct-domain count system-wide in
+            this window (docs/ref/todo/statistics-dns-review-fixes-plan.md
+            T-06 — review fix on PR 127), NOT scoped to this domain (which
+            would trivially always be 1) — see DNSClientStat.domains.
           items:
             $ref: '#/components/schemas/DNSClientStat'
+        ips:
+          type: array
+          description: >-
+            The "Resolved IPs" table for this domain, ranked by APPROXIMATE
+            volume (bytes desc, ip asc). Never null (empty array when no IP
+            is known for this domain, e.g. the answer expired or was never
+            observed).
+          items:
+            $ref: '#/components/schemas/DNSDomainIP'
+        totalBytes:
+          type: integer
+          format: int64
+          description: >-
+            Sum of ips[].bytes above — this domain's approximate total
+            volume in the window, and the denominator for each ips[] row's
+            bytesPercent.
+          example: 48200000
+        totalBytesUp:
+          type: integer
+          format: int64
+          example: 3100000
+        totalBytesDown:
+          type: integer
+          format: int64
+          example: 45100000
+        sharedIps:
+          type: boolean
+          description: >-
+            True when at least one row of ips has shared=true — this
+            domain's total is inflated by traffic to an IP that other
+            domains also resolve to.
+          example: false
+        ipsTruncated:
+          type: boolean
+          description: >-
+            True when the RAM-only domain->IP forward index hit its
+            per-domain IP cap (dns-stats-max-ips-per-domain) while building
+            ips above — a separate truncation signal from truncated (which
+            covers the query-count ring), so the UI can distinguish "clients
+            list may be incomplete" from "resolved-IP list may be
+            incomplete".
+        series:
+          type: array
+          description: >-
+            This domain's approximate volume over time — the sum of dest
+            bytes across all of ips[] per 5-minute bucket, flow-relative (up
+            = orig direction, down = reply), NOT LAN-relative like
+            TrafficStatistics.series. Fixed length equal to the window's
+            bucket count, zero-filled (never null). Invariant:
+            sum(series[].bytes) == totalBytes.
+          items:
+            $ref: '#/components/schemas/BandwidthPoint'
+        accuracy:
+          type: string
+          enum: [estimated, near-exact]
+          description: >-
+            Mirrors TrafficStatistics.accuracy — same signal backing
+            totalBytes/series above.
+        observedBytes:
+          type: integer
+          format: int64
+          description: >-
+            The same network-wide byte total as TrafficStatistics.
+            observedBytes for this window, included so the UI can show
+            totalBytes as "% of all traffic" alongside the per-IP
+            percentages.
+          example: 512000000
         generatedAt:
           type: string
           format: date-time
@@ -4933,12 +5596,20 @@ components:
         - totalQueries
         - truncated
         - domains
+        - totalBytes
+        - totalBytesUp
+        - totalBytesDown
+        - series
+        - accuracy
         - generatedAt
       description: >-
         The /statistics/dns/client response — for a single client (source
         IP, or the reserved "unknown" bucket), the domains it queried within
-        the window. **RAM-only, display-only**, same opt-in switch and
-        reset-on-restart behavior as DNSQueryStatistics.
+        the window plus an APPROXIMATE traffic volume/time series joined in
+        by IP. **RAM-only, display-only**, same opt-in switch and
+        reset-on-restart behavior as DNSQueryStatistics. There is no
+        sort-key input accepted from the client — sorting of domains is done
+        entirely client-side in the browser.
       properties:
         client:
           type: string
@@ -4964,15 +5635,61 @@ components:
         truncated:
           type: boolean
           description: >-
-            True when the domain×client pair ring or the per-bucket client
-            tracking cap was hit during this window — the domain list may be
-            missing entries, and the sum of domains[].count may be less than
-            totalQueries.
+            True only when data was actually dropped: the domain×client pair
+            ring, the per-bucket client tracking cap, or the domain->IP
+            forward index cap was hit during this window. Deliberately does
+            NOT fire just because totalDomains/totalClients exceeds the
+            top-50 table size — that is normal, fully-and-accurately-tracked
+            data that simply doesn't all fit in the table.
         domains:
           type: array
-          description: Same shape as TrafficStatistics.topDomains, reused as-is.
+          description: >-
+            []DNSDomainStat, an ADDITIVE JSON shape scoped to this endpoint.
+            Since docs/ref/todo/statistics-dns-review-fixes-plan.md T-04
+            (review fix on PR 127): clients = the number of clients,
+            system-wide, that queried that domain in this window (NOT just
+            this one); ipCount/sharedIps = that domain's known IPs in the
+            RAM-only forward index, system-wide — identical meaning to the
+            same fields on the overview (/statistics/dns) and domain
+            drill-down (/statistics/dns/domain) responses, not scoped to
+            client. bytes/bytesUp/bytesDown are still ONLY the bytes
+            exchanged between THIS client and that domain's known IPs —
+            unlike clients/ipCount/sharedIps, those stay drill-down-scoped.
           items:
-            $ref: '#/components/schemas/TopDomain'
+            $ref: '#/components/schemas/DNSDomainStat'
+        totalBytes:
+          type: integer
+          format: int64
+          description: >-
+            This client's total observed bytes across ALL destinations in
+            the window — NOT limited to DNS-resolved domains, so it can
+            exceed the sum of domains[].bytes. Always 0 for the reserved
+            "unknown" client bucket (no IP to join against).
+          example: 15400000
+        totalBytesUp:
+          type: integer
+          format: int64
+          example: 2200000
+        totalBytesDown:
+          type: integer
+          format: int64
+          example: 13200000
+        series:
+          type: array
+          description: >-
+            This client's traffic over time, flow-relative (up = orig
+            direction, down = reply) — the same TrafficHostDetail.series
+            convention. Fixed length equal to the window's bucket count,
+            zero-filled (never null) for a known client; empty for the
+            "unknown" bucket. Invariant: sum(series[].bytes) == totalBytes.
+          items:
+            $ref: '#/components/schemas/BandwidthPoint'
+        accuracy:
+          type: string
+          enum: [estimated, near-exact]
+          description: >-
+            Mirrors TrafficStatistics.accuracy — same signal backing
+            totalBytes/series above.
         generatedAt:
           type: string
           format: date-time

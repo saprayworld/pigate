@@ -123,6 +123,22 @@ type BandwidthPoint struct {
 	BytesDown uint64 `json:"bytesDown"`
 }
 
+// DNSQueryPoint is one point of DNSQueryStatistics.QuerySeries — a fixed
+// 5-minute bucket of the same RAM-only DNS query ring backing the rest of
+// that response (backend/internal/service/dns_query_stats.go), never
+// persisted to SQLite (docs/ref/todo/statistics-dns-query-bar-chart-plan.md
+// T-02). Count is the NUMBER OF DNS QUERIES observed in the bucket, not
+// bytes — deliberately a separate type from BandwidthPoint (rather than
+// reusing it with Count stuffed into the Bytes field) so callers can't
+// misread a query count as a byte count.
+type DNSQueryPoint struct {
+	// Ts is the RFC3339 start of this 5-minute bucket, in device local time
+	// (with UTC offset) — same format/clock as BandwidthPoint.Ts.
+	Ts string `json:"ts"`
+	// Count is the number of DNS queries recorded in this bucket.
+	Count uint64 `json:"count"`
+}
+
 // TrafficStatistics is the /api/statistics/traffic response.
 type TrafficStatistics struct {
 	// Window is one of "15m", "30m", "1h", "3h", "6h", "12h", "24h". An
@@ -184,17 +200,242 @@ type TrafficStatistics struct {
 	GeneratedAt string `json:"generatedAt"`
 }
 
+// DNSDomainStat is one row of the domain-centric tables on the
+// Statistics -> DNS page (docs/ref/todo/statistics-dns-page-revamp-plan.md
+// §2.2, T-01) — embeds TopDomain so the "topDomains" field of
+// TrafficStatistics keeps its old, byte-for-byte-identical shape wherever
+// TopDomain itself is reused directly; DNSDomainStat is used ONLY by the 3
+// DNS statistics endpoints (/api/statistics/dns, /dns/domain, /dns/client),
+// never by /api/statistics/traffic.
+type DNSDomainStat struct {
+	TopDomain // domain, queryType, count, percent (percent = % of QUERY COUNT — never confuse with bytesPercent below)
+	// Clients is the number of distinct client IPs that queried this domain
+	// in the window (derived from the existing pairs[domain][clientIP] ring —
+	// plan §0.1, no new source data).
+	Clients int `json:"clients"`
+	// IPCount is the number of IPs currently known for this domain in the
+	// RAM-only forward index (service/dns_domain_ips.go) — may be 0 when the
+	// domain was queried but no matching DNS answer was ever observed/kept
+	// (e.g. answer expired past its TTL, or the index was capped).
+	IPCount int `json:"ipCount"`
+	// SharedIPs is true when at least one of this domain's known IPs is also
+	// referenced by another domain (e.g. a CDN/cloud load balancer) — a
+	// caution flag: Bytes below double-counts that IP's traffic against every
+	// domain that shares it (plan §1.1 item 1).
+	SharedIPs bool `json:"sharedIps"`
+	// Bytes/BytesUp/BytesDown are an APPROXIMATION of this domain's traffic
+	// volume, computed by summing the conntrack-derived byte counters of the
+	// IPs this domain was last resolved to (plan §1.1) — NOT a true per-
+	// domain packet count (the kernel has no notion of "domain" at the
+	// packet level). Traffic to an IP reached without going through this
+	// device's DNS resolver is never counted here. BytesUp/BytesDown are
+	// flow-relative (Orig = up = client->server, Reply = down), the same
+	// convention as TopHost.BytesUp/BytesDown; bytesUp + bytesDown ==
+	// bytes always.
+	Bytes     uint64 `json:"bytes"`
+	BytesUp   uint64 `json:"bytesUp"`
+	BytesDown uint64 `json:"bytesDown"`
+	// BytesPercent is Bytes as a percent of BYTES (never query count) — the
+	// denominator is specified on the parent DTO that embeds this row (e.g.
+	// DNSQueryStatistics.DomainBytes). Always label this "% Vol" separately
+	// from Percent's "% Query" in the UI (plan §1.3).
+	BytesPercent float64 `json:"bytesPercent"`
+}
+
+// DNSDomainIP is one row of the "Resolved IPs" table on a domain's
+// drill-down page — the IPs a domain was seen resolving to, ranked by
+// approximate volume (plan §2.2, T-01). RAM-only, sourced from the same
+// forward index as DNSDomainStat.IPCount/SharedIPs above.
+type DNSDomainIP struct {
+	IP string `json:"ip"`
+	// Bytes/BytesUp/BytesDown are this IP's conntrack-derived byte counters
+	// within the window — the same approximation caveats as
+	// DNSDomainStat.Bytes apply (this is real per-IP data, but attributing it
+	// to "this domain" assumes the resolution is still current).
+	Bytes     uint64 `json:"bytes"`
+	BytesUp   uint64 `json:"bytesUp"`
+	BytesDown uint64 `json:"bytesDown"`
+	// BytesPercent is Bytes as a percent of the PARENT domain's TotalBytes
+	// (DNSDomainDrilldown.TotalBytes) — a different denominator than
+	// DNSDomainStat.BytesPercent above (which is window-wide DomainBytes).
+	BytesPercent float64 `json:"bytesPercent"`
+	// Shared is true when this IP is also referenced by another domain in
+	// the forward index (e.g. CDN/cloud load balancer) — same meaning as
+	// DNSDomainStat.SharedIPs but scoped to this one IP row.
+	Shared bool `json:"shared"`
+	// LastSeen is the RFC3339 UTC timestamp of the most recent DNS answer
+	// that resolved this domain to this IP — NOT tied to the stats window;
+	// it can be older than the window if the answer hasn't been refreshed
+	// (plan §1.1 item 3). The domain->IP mapping backing this row must NEVER
+	// be used to drive firewall rule generation, policy matching, routing,
+	// or QoS decisions — it can be poisoned by any LAN client's DNS queries.
+	LastSeen string `json:"lastSeen"`
+}
+
+// DNSIPDomain is one row of the /api/statistics/dns/ip response — a domain
+// that has ever resolved to the IP being looked up (docs/ref/todo/
+// statistics-dns-ip-filter-plan.md §2.4, T-02). Embeds DNSDomainStat so the
+// Top Domains table on the Statistics -> DNS page can render this row with
+// exactly the same columns/component it already uses for the normal
+// (domain-filtered) mode.
+//
+//   - Count/Percent (from the embedded TopDomain) are this domain's query
+//     count in the window and its percent of TotalQueries — window-scoped,
+//     just like the overview's Top Domains table.
+//   - Clients/IPCount/SharedIPs are this domain's system-wide values (same
+//     meaning as DNSDomainStat elsewhere), NOT scoped to the IP being
+//     looked up.
+//   - Bytes/BytesUp/BytesDown are this domain's total volume (join of ALL of
+//     the domain's known IPs, not just the one being looked up) — same as
+//     the overview.
+//   - BytesPercent is Bytes as a percent of DNSIPDomains.MatchedBytes (the
+//     sum of Bytes across every row of this response) — deliberately NOT the
+//     window-wide DomainBytes used elsewhere, because computing that
+//     denominator here would mean joining every domain in the window (as
+//     much work as the whole overview endpoint) without helping answer "what
+//     domains use this IP". The UI must label this clearly as scoped to the
+//     matched domain group, not the whole window (plan §2.4).
+//
+// A domain can appear here with Count=0/Percent=0 when the forward index
+// still remembers the domain->IP mapping but the domain had no query in this
+// time window — that row is still the correct answer to "what domain is this
+// IP for" and must not be dropped (plan §2.4/Caution 10).
+type DNSIPDomain struct {
+	DNSDomainStat
+	// LastSeen is the RFC3339 UTC timestamp of the most recent DNS answer
+	// that resolved this domain to the IP being looked up — NOT tied to the
+	// stats window (same convention as DNSDomainIP.LastSeen above). The
+	// domain<->IP mapping backing this row is display-only and derived from
+	// dnsmasq's answer log, which any LAN client can influence: NEVER use it
+	// to drive firewall rule generation, policy matching, routing, or QoS
+	// decisions.
+	LastSeen string `json:"lastSeen"`
+}
+
+// DNSIPDomains is the GET /api/statistics/dns/ip response — every domain the
+// RAM-only reverse index (service/dns_domain_ips.go's DomainsForIP) knows to
+// have resolved to IP, answering the owner's question "this IP shows up
+// under more than one domain — which ones?" (docs/ref/todo/statistics-dns-
+// ip-filter-plan.md §0/§2). Display-only, exactly like DNSDomainIP/
+// DNSDomainDrilldown: NEVER used to drive firewall rule generation, policy
+// matching, routing, or QoS decisions — the mapping is derived from
+// dnsmasq's answer log, which any LAN client can influence by simply
+// querying attacker-controlled domains.
+type DNSIPDomains struct {
+	// IP is the canonical (net/netip-normalized) form of the address that was
+	// looked up — never the raw client-supplied string (plan §4 item 4).
+	IP      string `json:"ip"`
+	Window  string `json:"window"`
+	Enabled bool   `json:"enabled"`
+	// Hostname is resolved from a DHCP lease/reservation for IP, same pattern
+	// as DNSClientStat.Hostname — display only, falls back to IP itself when
+	// unknown (hostnameFor(), service/traffic_stats.go).
+	Hostname string `json:"hostname"`
+	// TotalQueries is the window's total query count across ALL domains (not
+	// just the ones matching this IP) — the denominator for each Domains[]
+	// row's Percent, identical meaning to DNSQueryStatistics.TotalQueries.
+	TotalQueries uint64 `json:"totalQueries"`
+	// Truncated is true when the window's query-count ring hit one of its
+	// per-bucket tracking caps while computing Count/Percent for the rows
+	// below — same signal as DNSDomainDrilldown.Truncated.
+	Truncated bool `json:"truncated"`
+	// IPsTruncated is true when the RAM-only domain->IP forward index hit one
+	// of its caps (dns-stats-max-domains / dns-stats-max-ips-per-domain) at
+	// some point — meaning the reverse index this endpoint reads from may be
+	// missing some domain<->IP associations, so Domains below could be
+	// incomplete. Same signal as DNSDomainDrilldown.IPsTruncated, but reported
+	// at the index level (it is not scoped to one domain).
+	IPsTruncated bool `json:"ipsTruncated"`
+	// Domains is every domain known to have resolved to IP, sorted by Bytes
+	// desc, then Count desc, then Domain asc for a deterministic order. Never
+	// nil — an empty slice means no domain in the RAM-only index currently
+	// maps to this IP (it may have expired past its TTL, or traffic to it
+	// never went through this device's DNS resolver).
+	Domains []DNSIPDomain `json:"domains"`
+	// DomainCount is len(Domains), echoed for convenience so the UI doesn't
+	// need to re-derive it.
+	DomainCount int `json:"domainCount"`
+	// Shared is true when DomainCount > 1 — this IP is used by more than one
+	// domain (e.g. a CDN or shared hosting IP), so each domain's Bytes below
+	// double-counts the same underlying traffic to this IP. The UI must show
+	// a prominent warning when this is true (plan §0 item 3).
+	Shared bool `json:"shared"`
+	// MatchedBytes/MatchedBytesUp/MatchedBytesDown are the sum of
+	// Domains[].Bytes/BytesUp/BytesDown across every row of this response —
+	// the denominator for each row's BytesPercent (see DNSIPDomain.BytesPercent
+	// doc for why this differs from the window-wide DomainBytes used by the
+	// other DNS statistics endpoints).
+	MatchedBytes     uint64 `json:"matchedBytes"`
+	MatchedBytesUp   uint64 `json:"matchedBytesUp"`
+	MatchedBytesDown uint64 `json:"matchedBytesDown"`
+	// IPBytes/IPBytesUp/IPBytesDown are the conntrack-derived byte counters
+	// for the IP being looked up itself (not summed across domains) — the
+	// same per-destination totals TrafficHostDetail would report for this IP.
+	IPBytes     uint64 `json:"ipBytes"`
+	IPBytesUp   uint64 `json:"ipBytesUp"`
+	IPBytesDown uint64 `json:"ipBytesDown"`
+	// Series is this IP's traffic over time (GetTrafficBreakdownForDests'
+	// DestSeries for IP) — flow-relative (Orig = up, Reply = down), fixed
+	// length equal to the window's bucket count, zero-filled (never nil).
+	// Invariant: sum(Series[].Bytes) == IPBytes.
+	Series []BandwidthPoint `json:"series"`
+	// ObservedBytes/Accuracy mirror TrafficStatistics' fields of the same
+	// name for this window — the network-wide byte total and the conntrack-
+	// poll-vs-DESTROY-event accuracy signal backing IPBytes/Series above.
+	ObservedBytes uint64 `json:"observedBytes"`
+	Accuracy      string `json:"accuracy"`
+	GeneratedAt   string `json:"generatedAt"`
+}
+
 // DNSClientStat is one row of the "Top Clients" table on the DNS Query
 // Statistics tab (docs/ref/todo/dns-query-statistics-drilldown-plan.md T-01)
 // — ranked by query count, one row per source IP that issued DNS queries.
 type DNSClientStat struct {
 	IP string `json:"ip"`
 	// Hostname is resolved from a DHCP lease/reservation, same pattern as
-	// TopHost.Hostname/TopDeniedSource.Hostname above — display only, empty
-	// when unknown.
-	Hostname string  `json:"hostname"`
-	Count    uint64  `json:"count"`
-	Percent  float64 `json:"percent"`
+	// TopHost.Hostname/TopDeniedSource.Hostname above — display only. Falls
+	// back to the row's own IP (via hostnameFor(), service/traffic_stats.go)
+	// when there is no matching lease/reservation, NOT an empty string.
+	Hostname string `json:"hostname"`
+	// Domain is the domain name dnsmasq most recently answered for this IP,
+	// from the same dnsReverseCache as TopHost.Domain above
+	// (docs/ref/todo/statistics-dns-host-domain-label-plan.md T-01) —
+	// display only, empty when unknown/expired. NEVER used for firewall rule
+	// generation, policy matching, routing, or QoS decisions — the cache can
+	// be poisoned by any LAN client simply querying a name it controls.
+	// Usually empty for the rows in this table: the reverse cache is keyed
+	// by DNS *answer* IPs (mostly Internet destinations), while these rows
+	// are LAN client (source) IPs — a value only appears when a DNS answer
+	// happens to point back at a LAN IP (e.g. a local zone like
+	// nas.home.lan -> 192.168.1.50).
+	Domain  string  `json:"domain"`
+	Count   uint64  `json:"count"`
+	Percent float64 `json:"percent"`
+	// Domains is the number of distinct domains this client queried in the
+	// window, system-wide — NOT scoped to the parent DTO's own domain/client
+	// focus (docs/ref/todo/statistics-dns-review-fixes-plan.md T-06): in a
+	// domain drill-down's per-client row this is the count across every
+	// domain that client asked in the window, not just this one (which would
+	// trivially always be 1) — same "system-wide, not drill-down-scoped"
+	// convention as DNSDomainStat.Clients below.
+	Domains int `json:"domains"`
+	// Bytes/BytesUp/BytesDown: the MEANING depends on the parent DTO this
+	// row is embedded in (plan §2.2 note b) —
+	//   - DNSQueryStatistics.TopClients: this client's TOTAL observed bytes
+	//     across ALL destinations in the window (TrafficBreakdown.Hosts[ip]),
+	//     not limited to DNS-resolved traffic.
+	//   - DNSDomainDrilldown.Clients: ONLY the bytes exchanged between this
+	//     client and the drilled domain's known IPs (a conversation-level
+	//     join, plan §1.2) — a strict subset of the total above.
+	// BytesUp/BytesDown are flow-relative (Orig = up, Reply = down), the same
+	// convention as TopHost.BytesUp/BytesDown; bytesUp + bytesDown == bytes.
+	Bytes     uint64 `json:"bytes"`
+	BytesUp   uint64 `json:"bytesUp"`
+	BytesDown uint64 `json:"bytesDown"`
+	// BytesPercent is Bytes as a percent of BYTES (never query count) — same
+	// "% Vol" vs "% Query" distinction as DNSDomainStat.BytesPercent above;
+	// the denominator is specified on the parent DTO.
+	BytesPercent float64 `json:"bytesPercent"`
 }
 
 // DNSQueryStatistics is the /api/statistics/dns response backing the DNS
@@ -206,19 +447,63 @@ type DNSQueryStatistics struct {
 	// Window is one of "15m", "30m", "1h", "3h", "6h", "12h", "24h" — see the
 	// TrafficStatistics.Window comment above for the unknown-value fallback
 	// rule (identical here).
-	Window string `json:"window"` // "15m" | "30m" | "1h" | "3h" | "6h" | "12h" | "24h"
+	Window       string `json:"window"` // "15m" | "30m" | "1h" | "3h" | "6h" | "12h" | "24h"
 	Enabled      bool   `json:"enabled"`
 	TotalQueries uint64 `json:"totalQueries"`
-	// Truncated is true when the domain×client pair ring or the client ring
-	// hit its tracking cap during this window (plan §2.1 — the configurable
-	// per-bucket caps set via dns-stats-max-pairs/dns-stats-max-clients in
-	// pigate.conf, see service/dns_query_stats.go).
+	// QuerySeries is the DNS-query-count-over-time bar chart backing the
+	// Statistics DNS overview page (docs/ref/todo/
+	// statistics-dns-query-bar-chart-plan.md T-02/T-03): one DNSQueryPoint per
+	// raw 5-minute bucket. (a) Fixed length equal to the number of 5-minute
+	// buckets the window covers (3/6/12/36/72/144/288 for
+	// 15m/30m/1h/3h/6h/12h/24h respectively), zero-filled — never nil. (b)
+	// Sorted oldest -> newest; the last point is the current, still-open
+	// bucket (its Count will keep climbing until the bucket closes). (c)
+	// Invariant: sum(QuerySeries[].Count) == TotalQueries always holds, using
+	// the same carry rule as TrafficStatistics.Series (statsSeriesAxis/
+	// statsSeriesIndex in service/traffic_stats.go). (d) When Enabled is
+	// false this is an empty (non-nil) slice — no timing/count data is ever
+	// exposed while DNS query logging is switched off.
+	QuerySeries []DNSQueryPoint `json:"querySeries"`
+	// Truncated is true only when data was actually dropped: the domain×client
+	// pair ring or the client ring hit its per-bucket tracking cap during this
+	// window (the configurable caps set via dns-stats-max-pairs/
+	// dns-stats-max-clients in pigate.conf, see service/dns_query_stats.go), or
+	// the domain->IP forward index hit its own cap. Deliberately does NOT fire
+	// just because TotalDomains/TotalClients exceeds the top-50 table size
+	// below — that is normal, fully-and-accurately-tracked data that simply
+	// doesn't all fit in the table, the same distinction
+	// TrafficBreakdown.Truncated already makes.
 	Truncated bool `json:"truncated"`
-	// TopDomains reuses model.TopDomain (domain/queryType/count/percent) —
-	// no separate domain-row DTO for this endpoint (plan T-01 note).
-	TopDomains  []TopDomain     `json:"topDomains"`
-	TopClients  []DNSClientStat `json:"topClients"`
-	GeneratedAt string          `json:"generatedAt"`
+	// TopDomains is the domain-centric overview table (plan §2.2, T-01) — now
+	// []DNSDomainStat (added clients/ipCount/sharedIps/bytes/*) instead of the
+	// plain []TopDomain used before this revamp. This is an ADDITIVE JSON
+	// shape change scoped to THIS endpoint only — it must never be confused
+	// with TrafficStatistics.TopDomains above, which stays []TopDomain
+	// unchanged (plan §1.5/Caution 8).
+	TopDomains []DNSDomainStat `json:"topDomains"`
+	TopClients []DNSClientStat `json:"topClients"`
+	// ObservedBytes is the SAME network-wide conntrack-observed byte total as
+	// TrafficStatistics.ObservedBytes for this window — included so the UI
+	// can show "% of all traffic" as a second, clearly labelled denominator
+	// distinct from DomainBytes below.
+	ObservedBytes uint64 `json:"observedBytes"`
+	// DomainBytes is the sum of Bytes across all rows of TopDomains — i.e.
+	// only the portion of ObservedBytes that could be attributed to a known
+	// domain via the domain->IP join (plan §1.1 item 2: direct-IP traffic
+	// with no DNS lookup is never counted here). This is the denominator used
+	// for each TopDomains row's BytesPercent.
+	DomainBytes uint64 `json:"domainBytes"`
+	// TotalDomains/TotalClients are the number of distinct domains/clients
+	// observed in the window (before any per-response row limit is applied),
+	// so the UI can show "showing N of M" even when TopDomains/TopClients are
+	// capped.
+	TotalDomains int `json:"totalDomains"`
+	TotalClients int `json:"totalClients"`
+	// Accuracy mirrors TrafficStatistics.Accuracy ("estimated" | "near-exact")
+	// — the same conntrack-poll-vs-DESTROY-event signal, since Bytes above is
+	// derived from the same traffic breakdown.
+	Accuracy    string `json:"accuracy"`
+	GeneratedAt string `json:"generatedAt"`
 }
 
 // DNSDomainDrilldown is the /api/statistics/dns/domain response — for a
@@ -233,7 +518,41 @@ type DNSDomainDrilldown struct {
 	TotalQueries uint64          `json:"totalQueries"`
 	Truncated    bool            `json:"truncated"`
 	Clients      []DNSClientStat `json:"clients"`
-	GeneratedAt  string          `json:"generatedAt"`
+	// IPs is the "Resolved IPs" table for this domain — one row per known IP,
+	// ranked by approximate volume (plan §2.2). Never nil (empty slice when
+	// no IP is known for this domain, e.g. answer expired or never observed).
+	IPs []DNSDomainIP `json:"ips"`
+	// TotalBytes/Up/Down are the sum of IPs[].Bytes/BytesUp/BytesDown above —
+	// this domain's approximate total volume in the window (plan §1.1), and
+	// the denominator for each IPs row's BytesPercent.
+	TotalBytes     uint64 `json:"totalBytes"`
+	TotalBytesUp   uint64 `json:"totalBytesUp"`
+	TotalBytesDown uint64 `json:"totalBytesDown"`
+	// SharedIPs is true when at least one row of IPs has Shared=true (plan
+	// §1.1 item 1 — this domain's total is inflated by traffic to an IP that
+	// other domains also resolve to).
+	SharedIPs bool `json:"sharedIps"`
+	// IPsTruncated is true when the RAM-only domain->IP forward index hit its
+	// per-domain IP cap (dns-stats-max-ips-per-domain) while building IPs
+	// above — a separate truncation signal from Truncated (which covers the
+	// query-count ring), so the UI can distinguish "clients list may be
+	// incomplete" from "resolved-IP list may be incomplete".
+	IPsTruncated bool `json:"ipsTruncated"`
+	// Series is this domain's approximate volume over time — the sum of
+	// dstBytes across all of IPs[] per 5-minute bucket, flow-relative
+	// (Orig = up, Reply = down) like TrafficHostDetail.Series, NOT
+	// LAN-relative like TrafficStatistics.Series. Fixed length equal to the
+	// window's bucket count, zero-filled (never nil). Invariant:
+	// sum(Series[].Bytes) == TotalBytes.
+	Series []BandwidthPoint `json:"series"`
+	// Accuracy mirrors TrafficStatistics.Accuracy — same conntrack-poll-vs-
+	// DESTROY-event signal backing TotalBytes/Series above.
+	Accuracy string `json:"accuracy"`
+	// ObservedBytes is the same network-wide byte total as
+	// TrafficStatistics.ObservedBytes for this window, included so the UI can
+	// show TotalBytes as "% of all traffic" alongside the per-IP percentages.
+	ObservedBytes uint64 `json:"observedBytes"`
+	GeneratedAt   string `json:"generatedAt"`
 }
 
 // DNSClientDrilldown is the /api/statistics/dns/client response — for a
@@ -245,13 +564,42 @@ type DNSClientDrilldown struct {
 	Client string `json:"client"`
 	// Hostname is resolved from a DHCP lease/reservation for Client, same
 	// pattern as DNSClientStat.Hostname — display only, empty when unknown.
-	Hostname     string      `json:"hostname"`
-	Window       string      `json:"window"`
-	Enabled      bool        `json:"enabled"`
-	TotalQueries uint64      `json:"totalQueries"`
-	Truncated    bool        `json:"truncated"`
-	Domains      []TopDomain `json:"domains"`
-	GeneratedAt  string      `json:"generatedAt"`
+	Hostname     string `json:"hostname"`
+	Window       string `json:"window"`
+	Enabled      bool   `json:"enabled"`
+	TotalQueries uint64 `json:"totalQueries"`
+	Truncated    bool   `json:"truncated"`
+	// Domains is now []DNSDomainStat (added clients/ipCount/sharedIps/
+	// bytes/* per row) instead of the plain []TopDomain used before this
+	// revamp (plan §2.2). Since docs/ref/todo/statistics-dns-review-fixes-plan.md
+	// T-04 (review fix on PR 127): Clients = the number of clients,
+	// system-wide, that queried that domain in this window (NOT just this
+	// one); IPCount/SharedIPs = that domain's known IPs in the RAM-only
+	// forward index, system-wide — identical meaning to the same fields on
+	// the overview (DNSQueryStatistics.TopDomains) and domain drill-down
+	// (DNSDomainDrilldown), not scoped to Client. Bytes/BytesUp/BytesDown are
+	// still ONLY the bytes exchanged between THIS client and that domain's
+	// known IPs (see DNSClientStat.Bytes doc for the general per-DTO rule) —
+	// unlike Clients/IPCount/SharedIPs, those stay drill-down-scoped.
+	Domains []DNSDomainStat `json:"domains"`
+	// TotalBytes/Up/Down are this client's total observed bytes across ALL
+	// destinations in the window (TrafficBreakdown.Hosts[client]) — NOT
+	// limited to DNS-resolved domains, so it can exceed the sum of
+	// Domains[].Bytes (plan §1.1 item 2). Always 0 for the reserved "unknown"
+	// client bucket (no IP to join against — plan §4 item 9).
+	TotalBytes     uint64 `json:"totalBytes"`
+	TotalBytesUp   uint64 `json:"totalBytesUp"`
+	TotalBytesDown uint64 `json:"totalBytesDown"`
+	// Series is this client's traffic over time (GetTrafficBreakdownForIP's
+	// HostSeries) — flow-relative (Orig = up, Reply = down) like
+	// TrafficHostDetail.Series. Fixed length equal to the window's bucket
+	// count, zero-filled (never nil) for a known client; omitted/zero-length
+	// for the "unknown" bucket. Invariant: sum(Series[].Bytes) == TotalBytes.
+	Series []BandwidthPoint `json:"series"`
+	// Accuracy mirrors TrafficStatistics.Accuracy — same signal backing
+	// TotalBytes/Series above.
+	Accuracy    string `json:"accuracy"`
+	GeneratedAt string `json:"generatedAt"`
 }
 
 // Statistics -> Traffic page DTOs (docs/ref/todo/statistics-traffic-page-plan.md

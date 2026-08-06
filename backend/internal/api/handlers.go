@@ -445,24 +445,53 @@ func (s *Server) HandleGetStatistics(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, s.statistics.GetStatistics(window))
 }
 
-// HandleGetDNSQueryStatistics backs the DNS Query Statistics tab's two
-// top-level tables (Top Domains / Top Clients — drilldown plan T-03). No
-// client-supplied input besides the whitelisted window.
+// HandleGetDNSQueryStatistics backs the Statistics -> DNS page's two
+// top-level tables (Top Domains / Top Clients — drilldown plan T-03,
+// extended with volume/drill-down fields by
+// docs/ref/todo/statistics-dns-page-revamp-plan.md T-04/T-07). The response
+// (model.DNSQueryStatistics) now also carries, per row, distinct
+// client/domain counts and an APPROXIMATE byte volume joined in from
+// TrafficStatsService by IP (model.DNSDomainStat.Bytes/BytesUp/BytesDown/
+// BytesPercent, model.DNSClientStat.Bytes/...) — see those struct's doc
+// comments in model/statistics.go for the exact join semantics and
+// denominators (DomainBytes for domain rows, ObservedBytes for client rows).
+// No client-supplied input besides the whitelisted window: there is still no
+// sort-key parameter accepted here — ranking within each list, and any
+// re-sorting of the table beyond that, is done entirely client-side in the
+// browser (plan §1.4), never by this handler or the service it calls. The
+// response also carries querySeries (docs/ref/todo/
+// statistics-dns-query-bar-chart-plan.md T-02/T-03/T-05), a time series of
+// DNS query counts per 5-minute bucket for the Statistics -> DNS overview
+// page's bar chart — sourced from the same RAM-only ring the tables above
+// already read, with no additional input from the client.
 func (s *Server) HandleGetDNSQueryStatistics(w http.ResponseWriter, r *http.Request) {
 	window := statsWindowParam(r)
 	s.writeJSON(w, http.StatusOK, s.statistics.GetDNSQueryStatistics(window))
 }
 
-// HandleGetDNSDomainClients backs the domain -> clients drill-down dialog
-// (drilldown plan T-03). `domain` is untrusted client input: it is validated/
-// normalized via model.NormalizeQueryDomain (same rules as the DNS log
-// parser's sanitizeDomain, so the normalized value matches the ring's key)
-// before being passed to the service. On validation failure it returns 400
-// with a generic message — the raw value the caller sent is never echoed
-// back (plan §5 item 5: avoid reflecting attacker-controlled input into the
-// response body even as JSON). A domain that validates but was never queried
-// still returns 200 with an empty client list (plan T-03: "not found" is a
-// normal outcome of window/timing, not an error).
+// HandleGetDNSDomainClients backs the domain -> clients drill-down page
+// (drilldown plan T-03, extended by statistics-dns-page-revamp-plan.md
+// T-04/T-07). The response (model.DNSDomainDrilldown) now also carries the
+// domain's known resolved IPs (`ips`, ranked by APPROXIMATE per-IP byte
+// volume, with a `shared` flag when an IP is also referenced by another
+// domain) plus `totalBytes`/`totalBytesUp`/`totalBytesDown`, a `series` time
+// series, and per-client volume figures on `clients` — all derived by
+// joining the RAM-only domain->IP index against TrafficStatsService by IP,
+// never a true per-domain packet count (see model/statistics.go for the full
+// caveat list). This domain->IP mapping is display-only and MUST NEVER be
+// used for firewall rule generation, policy matching, routing, or QoS
+// decisions — it can be poisoned by any LAN client's DNS traffic. `domain` is
+// untrusted client input: it is validated/normalized via
+// model.NormalizeQueryDomain (same rules as the DNS log parser's
+// sanitizeDomain, so the normalized value matches the ring's key) before
+// being passed to the service. On validation failure it returns 400 with a
+// generic message — the raw value the caller sent is never echoed back (plan
+// §5 item 5: avoid reflecting attacker-controlled input into the response
+// body even as JSON). A domain that validates but was never queried still
+// returns 200 with an empty client list (plan T-03: "not found" is a normal
+// outcome of window/timing, not an error). No sort-key or other new
+// parameter is accepted from the client — sorting/filtering of `clients` and
+// `ips` is done entirely client-side in the browser (plan §1.4).
 func (s *Server) HandleGetDNSDomainClients(w http.ResponseWriter, r *http.Request) {
 	window := statsWindowParam(r)
 	raw := r.URL.Query().Get("domain")
@@ -478,14 +507,24 @@ func (s *Server) HandleGetDNSDomainClients(w http.ResponseWriter, r *http.Reques
 	s.writeJSON(w, http.StatusOK, s.statistics.GetDNSDomainClients(window, domain))
 }
 
-// HandleGetDNSClientDomains backs the client -> domains drill-down dialog
-// (drilldown plan T-03). `client` is untrusted client input: it must either
-// parse as an IP address (netip.ParseAddr) or equal the reserved
-// "unknown" bucket exactly. A parsed IP is re-serialized via addr.String()
-// before being passed to the service so it matches the ring's normalized key
-// (e.g. IPv6 written in a non-canonical form still resolves to the same
-// bucket — plan §5 item 5). On validation failure it returns 400 with a
-// generic message; the raw value sent is never echoed back.
+// HandleGetDNSClientDomains backs the client -> domains drill-down page
+// (drilldown plan T-03, extended by statistics-dns-page-revamp-plan.md
+// T-04/T-07). The response (model.DNSClientDrilldown) now also carries
+// `domains` as []model.DNSDomainStat (bytes exchanged with THIS client only,
+// via a conversation-level join — plan §1.2, a stricter/more accurate join
+// than the network-wide approximation used by HandleGetDNSQueryStatistics)
+// plus this client's `totalBytes`/`totalBytesUp`/`totalBytesDown` and
+// `series`. For the reserved "unknown" client bucket there is no IP to join
+// against, so no byte/series join is attempted and those fields stay zero —
+// the service never fabricates a value for it. `client` is untrusted client
+// input: it must either parse as an IP address (netip.ParseAddr) or equal
+// the reserved "unknown" bucket exactly. A parsed IP is re-serialized via
+// addr.String() before being passed to the service so it matches the ring's
+// normalized key (e.g. IPv6 written in a non-canonical form still resolves
+// to the same bucket — plan §5 item 5). On validation failure it returns 400
+// with a generic message; the raw value sent is never echoed back. No
+// sort-key or other new parameter is accepted — sorting/filtering of
+// `domains` is done entirely client-side in the browser (plan §1.4).
 func (s *Server) HandleGetDNSClientDomains(w http.ResponseWriter, r *http.Request) {
 	window := statsWindowParam(r)
 	raw := r.URL.Query().Get("client")
@@ -503,6 +542,46 @@ func (s *Server) HandleGetDNSClientDomains(w http.ResponseWriter, r *http.Reques
 		client = addr.String()
 	}
 	s.writeJSON(w, http.StatusOK, s.statistics.GetDNSClientDomains(window, client))
+}
+
+// HandleGetDNSIPDomains backs the Statistics -> DNS page's IP-filter mode
+// (docs/ref/todo/statistics-dns-ip-filter-plan.md T-04): given an IP, every
+// domain the RAM-only reverse index (service/dns_domain_ips.go's
+// DomainsForIP) remembers resolving to it — answering "this IP shows up
+// under more than one domain, which ones?" for CDN/shared-hosting IP reuse.
+// This domain<->IP mapping is display-only and derived from dnsmasq's
+// answer log, which any LAN client can influence by simply querying
+// attacker-controlled domains — it MUST NEVER be used for firewall rule
+// generation, policy matching, routing, or QoS decisions.
+//
+// 🔒 `ip` is the one REQUIRED, security-sensitive input here: it MUST parse
+// via netip.ParseAddr, and on failure this returns 400 with a generic
+// message and NEVER calls the service — the raw client-supplied string is
+// never echoed back in the response body (plan §4 item 4/Caution 4). The
+// parsed address is re-serialized via addr.String() before being passed
+// down, exactly like HandleGetTrafficHostDetail/HandleGetDNSClientDomains
+// above, so a non-canonical IPv6 literal (e.g. "2001:DB8::1") hits the same
+// index key the forward index itself uses. window is whitelisted via
+// statsWindowParam like every other statistics endpoint. No sort/limit
+// parameter is accepted — sorting/filtering of `domains` is done entirely
+// client-side in the browser, same convention as the other DNS statistics
+// endpoints.
+func (s *Server) HandleGetDNSIPDomains(w http.ResponseWriter, r *http.Request) {
+	window := statsWindowParam(r)
+
+	raw := r.URL.Query().Get("ip")
+	if raw == "" {
+		s.writeError(w, http.StatusBadRequest, "invalid ip")
+		return
+	}
+	addr, err := netip.ParseAddr(raw)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid ip")
+		return
+	}
+	ip := addr.String()
+
+	s.writeJSON(w, http.StatusOK, s.statistics.GetDNSIPDomains(window, ip))
 }
 
 // trafficTopHostsDefaultLimit/trafficTopHostsMaxLimit and

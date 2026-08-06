@@ -1820,6 +1820,94 @@ func TestHandleGetDNSClientDomains_InputValidation(t *testing.T) {
 	}
 }
 
+// TestHandleGetDNSIPDomains_InputValidation covers docs/ref/todo/statistics-
+// dns-ip-filter-plan.md T-04 (🔒): the `ip` param on GET
+// /api/statistics/dns/ip must reject anything that doesn't parse as a
+// netip.Addr with 400, never echo the raw value it rejected back in the
+// response body, never call the service on a validation failure, normalize a
+// valid-but-non-canonical IPv6 literal, and fall back window to "1h" on an
+// invalid value rather than 400.
+func TestHandleGetDNSIPDomains_InputValidation(t *testing.T) {
+	server, _ := buildTestServer(t, false)
+	server.statistics.SetDNSLoggingEnabled(true)
+	handler := RegisterRoutes(server)
+	AddSession("mock_session_id_test_token", "pigate")
+	token := "mock_session_id_test_token"
+
+	get := func(rawQuery string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/api/statistics/dns/ip?"+rawQuery, nil)
+		addSessionCookie(req, token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Missing ip -> 400.
+	if rec := get(""); rec.Code != http.StatusBadRequest {
+		t.Errorf("missing ip: expected 400, got %d", rec.Code)
+	}
+
+	badIPs := []string{
+		"1.2.3",           // incomplete
+		"abc",             // not an IP at all
+		"192.168.1.1; ls", // shell-injection-shaped payload
+		"192.168.1.256",   // out-of-range octet
+		"01.2.3.4",        // leading zero, rejected by netip.ParseAddr
+	}
+	for _, ip := range badIPs {
+		rec := get("ip=" + url.QueryEscape(ip))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("ip=%q: expected 400, got %d. Body: %s", ip, rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), ip) {
+			t.Errorf("ip=%q: rejected value was echoed back in the response body: %s", ip, rec.Body.String())
+		}
+	}
+
+	// A valid IP nothing resolved to -> 200 with an empty domains list, not 404.
+	rec := get("ip=" + url.QueryEscape("10.9.9.9"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("valid-but-unknown ip: expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var got model.DNSIPDomains
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Domains) != 0 {
+		t.Errorf("expected empty domains list for an unknown IP, got %+v", got.Domains)
+	}
+	if got.IP != "10.9.9.9" {
+		t.Errorf("expected ip echoed back as canonical form, got %q", got.IP)
+	}
+
+	// A valid, non-canonical IPv6 literal -> 200, field `ip` normalized.
+	rec = get("ip=" + url.QueryEscape("2001:DB8::1"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("non-canonical ipv6: expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var got2 model.DNSIPDomains
+	if err := json.Unmarshal(rec.Body.Bytes(), &got2); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got2.IP != "2001:db8::1" {
+		t.Errorf("expected ip normalized to canonical lowercase form, got %q", got2.IP)
+	}
+
+	// window whitelist: an unrecognized value silently falls back to "1h",
+	// never a 400.
+	rec = get("ip=10.0.0.1&window=9h")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("window=9h: expected 200, got %d", rec.Code)
+	}
+	var got3 model.DNSIPDomains
+	if err := json.Unmarshal(rec.Body.Bytes(), &got3); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got3.Window != "1h" {
+		t.Errorf("expected window=9h to fall back to 1h, got %q", got3.Window)
+	}
+}
+
 // TestHandleGetDNSQueryStatistics_WindowWhitelistAndDisabledState mirrors
 // TestHandleGetTrafficDetail_WindowWhitelist above for the new
 // /api/statistics/dns endpoint, plus the disabled-switch empty-state case

@@ -101,6 +101,7 @@ func main() {
 	log.Printf("[Main] HTTPS Port: %d (0 = HTTP only)", cfg.HTTPSPort)
 	log.Printf("[Main] DNS Stats Max Pairs/Clients per bucket: %d / %d", cfg.DNSStatsMaxPairs, cfg.DNSStatsMaxClients)
 	log.Printf("[Main] Traffic Stats Max Hosts/Dests/Conversations per bucket: %d / %d / %d", cfg.TrafficStatsMaxHosts, cfg.TrafficStatsMaxDests, cfg.TrafficStatsMaxConversations)
+	log.Printf("[Main] DNS Stats Max Domains/IPs-per-domain: %d / %d", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
 
 	// 2. Initialize in-memory forward-traffic logs circular buffer (Ring Buffer).
 	// Fed live by the TrafficLogManager watcher below (real NFLOG or mock
@@ -523,6 +524,11 @@ func main() {
 	}
 	statisticsService.SetDNSLoggingEnabled(dnsServerSettings.QueryLogging)
 	statisticsService.SetReverseCacheLimits(dnsServerSettings.DNSCacheTTLMinutes, dnsServerSettings.DNSCacheMaxEntries)
+	// Domain->IP forward index caps come from the file-only bootstrap config
+	// (dns-stats-max-domains / dns-stats-max-ips-per-domain), not the DB —
+	// same TTL as the reverse cache above so both indices stay in sync
+	// (docs/ref/todo/statistics-dns-page-revamp-plan.md §2.1/T-05).
+	statisticsService.SetDomainIPsLimits(dnsServerSettings.DNSCacheTTLMinutes, cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
 
 	log.Printf("[Main] Starting DNS query-log watcher...")
 	go func() {
