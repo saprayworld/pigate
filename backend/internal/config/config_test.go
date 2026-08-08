@@ -312,6 +312,8 @@ func TestWriteParseRoundTrip(t *testing.T) {
 	cfg.DNSStatsMaxClients = 300
 	cfg.DNSStatsMaxDomains = 2000
 	cfg.DNSStatsMaxIPsPerDomain = 24
+	cfg.DenyStatsMaxSources = 800
+	cfg.DenyStatsMaxPorts = 400
 
 	var buf bytes.Buffer
 	if err := Write(&buf, cfg); err != nil {
@@ -355,8 +357,8 @@ func TestWriteParseRoundTripDefaults(t *testing.T) {
 
 func TestKnownKeys(t *testing.T) {
 	keys := KnownKeys()
-	if len(keys) != 19 {
-		t.Fatalf("expected 19 known keys, got %d: %v", len(keys), keys)
+	if len(keys) != 21 {
+		t.Fatalf("expected 21 known keys, got %d: %v", len(keys), keys)
 	}
 	// "config" and "v" must never be treated as config-file keys.
 	for _, k := range keys {
@@ -402,4 +404,70 @@ func TestKnownKeys(t *testing.T) {
 	if !hasMaxDomains || !hasMaxIPsPerDomain {
 		t.Fatalf("expected dns-stats-max-domains/dns-stats-max-ips-per-domain in KnownKeys, got %v", keys)
 	}
+	var hasDenySources, hasDenyPorts bool
+	for _, k := range keys {
+		switch k {
+		case "deny-stats-max-sources":
+			hasDenySources = true
+		case "deny-stats-max-ports":
+			hasDenyPorts = true
+		}
+	}
+	if !hasDenySources || !hasDenyPorts {
+		t.Fatalf("expected deny-stats-max-sources/deny-stats-max-ports in KnownKeys, got %v", keys)
+	}
+}
+
+// TestResolve_DenyStatsMaxSourcesPorts covers the deny-stats-max-* keys'
+// default/override/out-of-range behavior (docs/ref/todo/
+// statistics-capacity-visibility-plan.md T-14) — same pattern as the
+// DNSStatsMaxDomains/DNSStatsMaxIPsPerDomain coverage above.
+func TestResolve_DenyStatsMaxSourcesPorts(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		cfg, warns, err := Resolve(Defaults(), nil, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.DenyStatsMaxSources != 500 || cfg.DenyStatsMaxPorts != 300 {
+			t.Fatalf("got sources=%d ports=%d, want defaults 500/300", cfg.DenyStatsMaxSources, cfg.DenyStatsMaxPorts)
+		}
+	})
+
+	t.Run("file override", func(t *testing.T) {
+		fileVals := map[string]string{"deny-stats-max-sources": "800", "deny-stats-max-ports": "400"}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.DenyStatsMaxSources != 800 || cfg.DenyStatsMaxPorts != 400 {
+			t.Fatalf("got sources=%d ports=%d, want 800/400", cfg.DenyStatsMaxSources, cfg.DenyStatsMaxPorts)
+		}
+	})
+
+	t.Run("out of range clamps to default with warning", func(t *testing.T) {
+		fileVals := map[string]string{"deny-stats-max-sources": "-1", "deny-stats-max-ports": "999999"}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 2 {
+			t.Fatalf("expected 2 warnings, got %v", warns)
+		}
+		if cfg.DenyStatsMaxSources != 500 || cfg.DenyStatsMaxPorts != 300 {
+			t.Fatalf("got sources=%d ports=%d, want defaults 500/300", cfg.DenyStatsMaxSources, cfg.DenyStatsMaxPorts)
+		}
+	})
+
+	t.Run("non-integer is a fail-fast error", func(t *testing.T) {
+		fileVals := map[string]string{"deny-stats-max-sources": "not-a-number"}
+		if _, _, err := Resolve(Defaults(), fileVals, nil); err == nil {
+			t.Fatalf("expected error for non-integer deny-stats-max-sources")
+		}
+	})
 }

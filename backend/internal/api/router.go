@@ -58,6 +58,13 @@ func RegisterRoutes(s *Server) http.Handler {
 	// (not superAdminRoute); GET, so DisableEditMiddleware never blocks it —
 	// this is a pure read.
 	authRoute("GET /api/statistics/dns/ip", s.HandleGetDNSIPDomains)
+	// Capacity visibility (docs/ref/todo/statistics-capacity-visibility-plan.md
+	// T-07, GitHub issue #123): current usage vs cap for all 9 RAM-only
+	// tracking rings/indices — authRoute (not superAdminRoute), because the
+	// response is pure counts/percentages with no domain/IP/hostname at all,
+	// a strictly LOWER sensitivity than every other /api/statistics/* route
+	// above.
+	authRoute("GET /api/statistics/capacity", s.HandleGetCapacityStatistics)
 	authRoute("GET /api/dashboard/logs", s.HandleGetRecentLogs)
 	authRoute("POST /api/dashboard/logs/clear", s.HandleClearLogs)
 	authRoute("GET /api/dashboard/logs/stream", s.HandleLogStream)

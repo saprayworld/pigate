@@ -438,7 +438,7 @@ export function DnsVolumeInfoButton() {
           <Info className="size-4" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 space-y-2 text-xs">
+      <PopoverContent align="start" className="w-80 space-y-2 text-xs">
         <p className="font-medium text-foreground">ปริมาณข้อมูล (Volume) เป็นค่าประมาณ</p>
         <p className="text-muted-foreground">
           ระบบไม่ได้นับ byte แยกตามชื่อโดเมนโดยตรง — ตัวเลขคือผลรวม byte ของ IP ที่โดเมนนั้นเคยถูก DNS

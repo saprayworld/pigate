@@ -139,6 +139,20 @@ func (c *dnsReverseCache) LookupMany(ips []string) map[string]string {
 	return out
 }
 
+// Usage returns the cache's current entry count and configured max size —
+// read-only, RLock only, NEVER performs eviction (docs/ref/todo/
+// statistics-capacity-visibility-plan.md T-05: viewing capacity must not
+// change it) — unlike Lookup/LookupMany/Put/SetLimits, which all lazily
+// evict expired entries as a side effect. size may therefore include entries
+// that are logically expired (past ttl) but not yet swept — an upper bound,
+// not an exact live count, which is an acceptable trade-off for a read-only
+// capacity view.
+func (c *dnsReverseCache) Usage() (size, max int) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.entries), c.maxSize
+}
+
 // Clear empties the cache — called when the user turns query logging off
 // (plan §5 item 1: privacy).
 func (c *dnsReverseCache) Clear() {
