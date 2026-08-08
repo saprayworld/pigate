@@ -5,10 +5,18 @@
 > ประกาศ LAN CIDR ของตัวเอง แล้ว Cloudflare route ข้าม site ให้ ต่างจากฟีเจอร์
 > `cloudflare-tunnel-plan.md` ที่เป็น remote-access tunnel ขาเดียว
 >
-> วันที่เขียน: 2026-08-08 · Branch อ้างอิง: `main` (จะแยก branch ใหม่ก่อนเริ่มโค้ด)
+> วันที่เขียน: 2026-08-08 (อัปเดต 2026-08-08 — เคาะสถาปัตยกรรม deployment แล้ว)
+> · Branch อ้างอิง: `main` (จะแยก branch ใหม่ก่อนเริ่มโค้ด)
 > สถานะใน README Feature Status: ไม่มีแถวนี้ → เป้าหมายคือเพิ่มแถวใหม่ "Cloudflare Mesh"
 > เอกสารที่ต้องอ่านคู่กัน: `docs/ref/todo/cloudflare-tunnel-plan.md` (ฟีเจอร์คู่ขนาน),
 > `docs/tech_stack_design.md` §4.3 (โครง input/forward chain), `CLAUDE.md`
+>
+> **การตัดสินใจสำคัญที่เคาะแล้ว (คุยกับเจ้าของโปรเจกต์ 2026-08-08):** mesh
+> connector รันบน **อุปกรณ์แยกจาก PiGate Gateway หลักเสมอ** เป็นสถาปัตยกรรม
+> baseline (ไม่ใช่แค่ทางเลือกใน decision B อีกต่อไป) เหตุผลคือ WARP client
+> hijack DNS ของ host ไปหา Cloudflare Gateway ซึ่งชนตรงกับ dnsmasq ที่ Gateway
+> หลักรันอยู่ และการรวมสอง service ที่กระทบ routing/firewall/DNS ไว้เครื่องเดียว
+> เพิ่ม blast radius ถ้าอย่างใดอย่างหนึ่งพัง — ดู §0.4 และ §2.3 (B) ที่ปรับปรุงแล้ว
 
 ---
 
@@ -69,6 +77,48 @@ Split Tunnel กันไม่ให้ traffic ของ tunnel วิ่ง�
   เกินขอบเขตรอบแรก)
 - ไม่เพิ่ม metric/traffic ของ mesh เข้า Dashboard (รอบแรกแสดงแค่ status)
 
+### 0.4 สถาปัตยกรรม deployment (resolved — แยกอุปกรณ์เป็น baseline)
+
+**เหตุผลที่เลือกทำผ่าน Cloudflare แทน WireGuard ล้วนๆ:** โปรเจกต์นี้ตั้งใจ
+ออกแบบให้เป็น homelab ที่ประหยัดที่สุด — WireGuard เองไม่มี NAT
+traversal/rendezvous ในตัว ถ้าทั้งสอง site อยู่หลัง NAT/CGNAT (เคสปกติของ
+home internet) ต้องมีฝั่งใดฝั่งหนึ่งเปิด public endpoint หรือไม่ก็ต้องมี relay
+กลางที่มี public IP แน่นอน (= ต้องเช่า VPS มีค่าใช้จ่ายรายเดือน) ส่วน Cloudflare
+Mesh ให้ edge network ของ Cloudflare เป็นตัวกลางฟรี ทั้งสอง site แค่ outbound
+connection ออกไปหา Cloudflare ไม่ต้องเปิด public port เลย นี่คือเหตุผลที่แผนนี้
+ยังคงเลือกกลไก Cloudflare Mesh ต่อไป แม้จะมีความซับซ้อนเรื่อง DNS/deployment
+มากกว่า tunnel เดี่ยว (ดู §2.2 ที่ยังคงบันทึก WireGuard ไว้เป็นแผนสำรอง)
+
+**สถาปัตยกรรม baseline ที่เลือก:** mesh connector (`warp-svc`) รันบน
+**อุปกรณ์แยก** (เช่น Pi ตัวที่สอง/Pi Zero ราคาถูก หรือ VM เล็กๆ) ที่วางอยู่
+**หลัง** PiGate Gateway หลักในเครือข่ายเดียวกัน (เป็นแค่ host อีกตัวหนึ่งใน LAN)
+ไม่ใช่ลงบนตัว PiGate Gateway หลักเอง:
+
+```
+        Site A                                          Site B
+  LAN 192.168.10.0/24                              LAN 192.168.20.0/24
+        │                                                    │
+  [PiGate A — Gateway หลัก]                         [PiGate B — Gateway หลัก]
+  routing / firewall / dnsmasq / DHCP               routing / firewall / dnsmasq / DHCP
+        │ (route ปกติไปหา mesh node                          │
+        │  เหมือน host อื่นใน LAN)                            │
+        │                                                    │
+  [Mesh Node A — อุปกรณ์แยก]  ←── Cloudflare edge ──→  [Mesh Node B — อุปกรณ์แยก]
+   warp-svc.service (token site A)                    warp-svc.service (token site B)
+```
+
+**ผลต่อขอบเขตแผนนี้:** PiGate Gateway หลัก **ไม่ต้องรู้จัก Cloudflare/WARP เลย**
+— แค่ต้อง route traffic ไปหา mesh node ตามปกติ (เหมือน route ไปหาเซิร์ฟเวอร์
+ตัวหนึ่งใน LAN) แล้วเปิด forward-chain policy ให้ผ่าน คำถามคือ **ฟีเจอร์นี้ควร
+เป็น subsystem ใน PiGate เอง (สำหรับติดตั้งบน mesh node ที่แยกออกไป) หรือทำเป็น
+แค่คู่มือ/สคริปต์ config แยกที่ไม่ใช่ส่วนหนึ่งของ PiGate binary?** — ดูเพิ่มเติมที่
+decision B (ปรับปรุงแล้ว) ใน §2.3 ซึ่งกระทบรูปร่างของ Step 1-13 ทั้งหมด
+
+**การอยู่ร่วมเครื่องเดียวกับ Gateway หลัก (B1 เดิม) ถูกลดสถานะเป็น "ทางเลือก
+อนาคต"** ไม่ใช่ baseline ของแผนนี้อีกต่อไป — จะพิจารณาใหม่ก็ต่อเมื่อ Step 0
+พิสูจน์ด้วยข้อมูลจริงว่าอยู่ร่วมกับ dnsmasq/routing ของ Gateway หลักได้โดยไม่
+กระทบผู้ใช้เดิม ไม่ใช่สมมติฐานตั้งต้น
+
 ---
 
 ## 1. สถานะปัจจุบัน (สำรวจโค้ดแล้ว ณ วันที่เขียน)
@@ -106,17 +156,20 @@ firewall policy + NAT" มีครบแล้วทั้งหมด งา�
 
 ## 2. แนวทางเทคนิค
 
-### 2.1 กลไกที่เลือก: Cloudflare Mesh (WARP Connector) + PiGate เป็น "host-side integrator"
+### 2.1 กลไกที่เลือก: Cloudflare Mesh (WARP Connector) บนอุปกรณ์แยก + PiGate Gateway หลักเป็นแค่ "ผู้ route ไปหา mesh node"
+
+> อัปเดตตาม §0.4 — mesh node เป็นอุปกรณ์แยกจาก Gateway หลักเสมอในแผนนี้
 
 ```
-        Site A (PiGate A)                                Site B (PiGate B)
+        Site A                                          Site B
   LAN 192.168.10.0/24                              LAN 192.168.20.0/24
         │                                                    │
-   [eth1/LAN]                                           [eth1/LAN]
-        │   nftables forward chain (default drop)             │
-        │   + policy: LAN↔mesh iface                          │
-   [mesh iface (WARP, 100.96.x.x)]  ←── Cloudflare edge ──→  [mesh iface]
+  [PiGate A — Gateway หลัก, eth1/LAN]                [PiGate B — Gateway หลัก, eth1/LAN]
+   nftables forward chain (default drop)              nftables forward chain (default drop)
+   + policy: LAN↔mesh-node-A                           + policy: LAN↔mesh-node-B
+        │ (route ปกติไปหา mesh node ใน LAN เดียวกัน)              │
         │                                                    │
+  [Mesh Node A — อุปกรณ์แยก, mesh iface 100.96.x.x] ←Cloudflare edge→ [Mesh Node B — อุปกรณ์แยก]
    warp-svc.service (token ของ site A)              warp-svc.service (token ของ site B)
 ```
 
@@ -124,7 +177,8 @@ firewall policy + NAT" มีครบแล้วทั้งหมด งา�
 ประกาศ CIDR route ของแต่ละ site, ตั้ง Split Tunnel (Include mode) ให้มี
 `100.96.0.0/12` + CIDR ของ site ปลายทาง, เปิดโหมด Traffic and DNS
 
-หน้าที่ที่ **PiGate** ทำ (ขอบเขตของแผนนี้):
+หน้าที่ที่ **PiGate** ทำ (ขอบเขตของแผนนี้ — รันบน **mesh node ที่แยกออกไป**
+ตาม §0.4, ไม่ใช่บน Gateway หลัก):
 1. lifecycle ของ `warp-svc.service` ผ่าน D-Bus (start/stop/restart/status/loaded)
 2. ตรวจ prerequisite ฝั่ง host แบบ read-only ผ่าน `/proc/sys` (`ip_forward`,
    `ipv6 forwarding`, `rp_filter`) แล้วรายงานในหน้า UI + capability probe
@@ -132,7 +186,9 @@ firewall policy + NAT" มีครบแล้วทั้งหมด งา�
 4. **ตรวจ CIDR overlap** กับ interface address, static route ใน DB และ remote site
    อื่นๆ → ปฏิเสธ/เตือนก่อนบันทึก
 5. **generate/แนะนำ firewall policy** สำหรับ traffic ข้าม site (ไม่ auto-apply เงียบๆ
-   — ดู §2.3 จุดตัดสินใจ D)
+   — ดู §2.3 จุดตัดสินใจ D) — policy นี้จะไปสร้างจริงที่ **Gateway หลัก** (ไม่ใช่
+   บน mesh node เอง) เพราะ forward chain default-drop อยู่ที่ Gateway หลัก
+   ดู decision E ด้านล่างว่ากลไกส่ง policy ข้ามสองอุปกรณ์นี้จะทำอย่างไร
 6. event log + desired state ตอน boot (`InitApplyConfig`)
 
 ### 2.2 ทางเลือกที่พิจารณาแล้วตัดทิ้ง
@@ -175,16 +231,22 @@ D-Bus / Netlink API ให้ใช้ ทางเลือก:
   ทำได้จริงหรือไม่ (ถ้าได้ นี่คือทางที่ตรงกับ pattern `cloudflared.env` ของแผน
   tunnel ที่สุด)
 
-**B. DNS ชนกัน** — เอกสาร Cloudflare เตือนตรงๆ ว่าอย่าติดตั้ง mesh node บนเครื่องที่
-รัน DNS service เพราะ WARP จะ redirect DNS query ของ host ไป Gateway ซึ่งชนกับ
-dnsmasq ของ PiGate (ฟีเจอร์ DNS Server + DHCP ที่ Completed อยู่แล้ว) ทางเลือก:
-- **B1:** ยอมรับความเสี่ยง + Step 0 ต้องพิสูจน์ว่า dnsmasq ยัง resolve upstream ได้
-  และ client ใน LAN ยังใช้ DNS ของ PiGate ได้ (พร้อม Alert ถาวรใน UI)
-- **B2:** บังคับให้ mesh node เป็น "อีกเครื่องหนึ่งในซับเน็ตเดียวกัน" ตามที่
-  Cloudflare แนะนำ → PiGate ลดบทบาทเหลือแค่ "จัดการ route/firewall ไปหา mesh node
-  ตัวนั้น" (ไม่มี service control เลย) = ฟีเจอร์คนละหน้าตากับที่คิดไว้
-- **B3:** ตัดฟีเจอร์ DNS Server ออกอัตโนมัติเมื่อเปิด mesh (mutually exclusive
-  พร้อมคำเตือน) — ตรงไปตรงมาแต่กระทบผู้ใช้เดิม
+**B. DNS ชนกัน — ✅ RESOLVED (2026-08-08): เลือก B2 เป็น baseline**
+เอกสาร Cloudflare เตือนตรงๆ ว่าอย่าติดตั้ง mesh node บนเครื่องที่รัน DNS
+service เพราะ WARP จะ redirect DNS query ของ host ไป Gateway ซึ่งชนกับ dnsmasq
+ของ PiGate (ฟีเจอร์ DNS Server + DHCP ที่ Completed อยู่แล้ว)
+- ~~B1: ยอมรับความเสี่ยง รันบนเครื่องเดียวกับ Gateway หลัก~~ — **ไม่ใช้เป็น
+  baseline อีกต่อไป** (เหตุผลตาม §0.4: ลด blast radius, เลี่ยงชน dnsmasq)
+  เก็บไว้เป็น **ทางเลือกอนาคต** ถ้า Step 0 พิสูจน์ว่าอยู่ร่วมกันได้จริงโดยไม่กระทบ
+  ผู้ใช้เดิม
+- **B2 (เลือกเป็น baseline): mesh node เป็นอุปกรณ์แยกในซับเน็ตเดียวกัน**
+  ตามที่ Cloudflare แนะนำเอง → PiGate Gateway หลัก **ไม่ต้องรู้จัก
+  Cloudflare/WARP เลย** ลดบทบาทเหลือแค่ "จัดการ route/firewall ไปหา mesh node
+  ตัวนั้นเหมือน host อื่นใน LAN" — ส่วน "PiGate" ที่ทำ lifecycle/status/CIDR ใน
+  §2.1 ข้อ 1-6 รันอยู่บน **mesh node** (คนละ instance จาก Gateway หลัก) ดู
+  decision E ที่เพิ่มใหม่ด้านล่างสำหรับผลกระทบต่อ Step 6/8/13
+- ~~B3: ตัด DNS Server ออกอัตโนมัติเมื่อเปิด mesh~~ — ไม่จำเป็นแล้วเพราะ B2
+  แยกอุปกรณ์อยู่แล้ว DNS Server ของ Gateway หลักไม่ถูกแตะเลย
 
 **C. ขอบเขต "ประกาศ CIDR"** — PiGate เก็บ CIDR ไว้เฉยๆ เพื่อ validate/สร้าง policy
 (ตามแผนนี้) หรือจะต้อง sync ขึ้น Cloudflare ด้วย (= ต้องใช้ Cloudflare API +
@@ -192,10 +254,40 @@ API token = ขัดกับ "นอกขอบเขต" ของแผน 
 ฝั่ง host เท่านั้น**
 
 **D. Firewall policy: auto-create หรือ suggest** — traffic ข้าม site จะโดน forward
-chain default drop ทันที ทางเลือก: (D1) PiGate สร้าง policy ให้อัตโนมัติเมื่อเปิด
-mesh, (D2) แสดงปุ่ม "สร้าง policy ที่แนะนำ" ให้ผู้ใช้กดยืนยัน แล้วไปแก้ต่อในหน้า
-Firewall Policy ได้ตามปกติ → **แผนนี้เสนอ D2** (การเปิดทาง L3 ข้าม LAN ต้องเป็น
-เจตนาที่ผู้ใช้กดยืนยัน ไม่ใช่ผลข้างเคียง)
+chain default drop ทันทีที่ **Gateway หลัก** (ไม่ใช่ที่ mesh node) ทางเลือก:
+(D1) สร้าง policy ให้อัตโนมัติเมื่อเปิด mesh, (D2) แสดงปุ่ม "สร้าง policy ที่
+แนะนำ" ให้ผู้ใช้กดยืนยัน แล้วไปแก้ต่อในหน้า Firewall Policy ได้ตามปกติ → **แผนนี้
+เสนอ D2** (การเปิดทาง L3 ข้าม LAN ต้องเป็นเจตนาที่ผู้ใช้กดยืนยัน ไม่ใช่ผลข้างเคียง)
+**อัปเดตตาม B2:** เพราะ mesh node กับ Gateway หลักเป็นคนละอุปกรณ์/คนละ PiGate
+instance กันแล้ว ปุ่ม "สร้าง policy ที่แนะนำ" ใน UI ของ mesh node **เรียกไม่ถึง**
+firewall service ของ Gateway หลักโดยตรงอีกต่อไป — ดู decision E
+
+**E. (เพิ่มใหม่ตาม B2) mesh node กับ Gateway หลักเป็นคนละอุปกรณ์แล้ว การ
+"แนะนำ policy" ข้ามอุปกรณ์ทำอย่างไร?**
+เดิมแผนออกแบบให้ `SuggestedPolicies()`/`ApplySuggestedPolicies()` เรียก
+firewall service ในโปรเซสเดียวกัน (Step 6) แต่ตอนนี้ mesh node กับ Gateway
+หลักเป็นคนละเครื่อง คนละ PiGate instance กัน (หรืออาจไม่มี PiGate อยู่บน mesh
+node เลยก็ได้) ทางเลือก:
+- **E1 (แนะนำ, ง่ายที่สุด, ไม่มี cross-device API):** หน้า UI ของ mesh node
+  แสดง "ข้อความ/ตัวอย่าง policy ที่ต้องไปสร้างเอง" (source = mesh CIDR,
+  destination = remote CIDR, interface = mesh iface) ให้ผู้ดูแล **ไปสร้างเองใน
+  หน้า Firewall Policy ของ Gateway หลัก** (คนละ URL/คนละเครื่อง) ไม่มีการเรียก
+  API ข้ามเครื่อง ไม่มี trust relationship ใหม่ระหว่างสอง PiGate instance ที่ต้อง
+  ดูแล security เพิ่ม → ยกเลิก endpoint `/suggested-policies/apply` (Step 8/9)
+  เหลือแค่ `/suggested-policies` (GET, แสดงข้อความ/ตัวอย่างเท่านั้น)
+- **E2:** ทำ cross-device API call (mesh node เรียก Gateway หลักผ่าน token ใหม่)
+  — เพิ่ม attack surface และ auth model ใหม่ทั้งหมด ไม่คุ้มกับประโยชน์ที่ได้
+  (ตัดทิ้ง)
+- **E3:** mesh node ไม่ต้องมี PiGate/UI เลย เป็นแค่สคริปต์ + `warp-cli` ตรงๆ ตาม
+  คู่มือ Cloudflare, PiGate เกี่ยวข้องแค่ฝั่ง Gateway หลัก (รับ CIDR ของ mesh node
+  มาเป็น "remote site" ธรรมดาแล้วสร้าง policy) — **ลดขอบเขตงานลงมาก** เพราะ
+  Step 1-2, 5-6, 12-13 ทั้งหมดยุบเหลือแค่ "จัดการ remote-site CIDR + policy" ที่
+  ฝั่ง Gateway หลักอย่างเดียว ไม่ต้องมี kernel manager คุม `warp-svc` เลย
+  ควรพิจารณาจริงจังเพราะตัดความซับซ้อน/ความเสี่ยงของแผนทั้งฉบับลงมาก
+
+> **ยังไม่เคาะ E — ต้องตัดสินใจก่อน Step 1** เพราะ E3 เปลี่ยนขนาดงานทั้งแผนอย่าง
+> มาก (จาก "subsystem เต็มรูปแบบ" เหลือ "จัดการ remote CIDR + policy เท่านั้น")
+> ในขณะที่ E1 ยังคง scope เดิมของ Step 1-15 ไว้ทั้งหมดแต่รันบนอุปกรณ์แยก
 
 ---
 
@@ -206,6 +298,14 @@ Firewall Policy ได้ตามปกติ → **แผนนี้เสน
 
 ### Step 0 — Spike/PoC บนบอร์ดจริง (ไม่แตะโค้ดโปรเจกต์) — **SENSITIVE, blocking**
 **ไฟล์:** `docs/ref/cloudflare-mesh-findings.md` (ใหม่ — บันทึกผล ไม่ใช่ผลลัพธ์โค้ด)
+
+> **หมายเหตุ (หลังเคาะ B=B2 ใน §2.3):** ทดสอบข้อ 1-3, 6-9 ด้านล่างยังจำเป็นเสมอ
+> ไม่ว่าจะเลือก E1 หรือ E3 เพราะเป็นข้อเท็จจริงของ WARP client เอง แต่ข้อ 4-5
+> (netlink monitor ping-pong / dnsmasq) จะ**เกี่ยวเฉพาะกรณีเลือก E1** (มี PiGate
+> เต็มรูปแบบรันอยู่บน mesh node เอง) — ถ้าเลือก E3 (mesh node ไม่มี PiGate เลย)
+> ข้อ 4-5 ไม่เกี่ยวเลยเพราะ routing/dnsmasq ของ PiGate ไม่เคยอยู่บนเครื่องเดียวกับ
+> WARP ตั้งแต่ต้น — ยังทดสอบทิ้งไว้เผื่อพิจารณา B1 (อยู่ร่วมเครื่องกับ Gateway
+> หลัก) เป็นทางเลือกอนาคตตาม §0.4
 
 ต้องตอบให้ครบทุกข้อ (ทำบน Pi ทดสอบ ไม่ใช่เครื่อง production):
 1. แพ็กเกจ `cloudflare-warp` ติดตั้งบน Raspberry Pi OS **arm64** ได้จริงไหม
@@ -532,7 +632,11 @@ A/B/C/D ใน §2.3 แล้ว (ถ้าข้อ 3/4/5 ผลออกม�
 ## 7. Checklist สรุป (Definition of Done)
 
 - [ ] **Step 0**: spike บนบอร์ดจริง + `docs/ref/cloudflare-mesh-findings.md` ตอบครบ 9 ข้อ
-- [ ] **จุดตัดสินใจ A/B/C/D ใน §2.3 ถูกเคาะโดยเจ้าของโปรเจกต์และบันทึกในเอกสาร**
+- [x] **B (deployment topology)**: เคาะแล้ว 2026-08-08 — mesh node แยกอุปกรณ์จาก
+      Gateway หลักเป็น baseline (ดู §0.4, §2.3-B)
+- [ ] **จุดตัดสินใจ A/C/D/E ใน §2.3 ยังเหลือให้เจ้าของโปรเจกต์เคาะก่อนเริ่ม Step 1**
+      (E สำคัญที่สุด — กำหนดว่าแผนทั้งฉบับยังเป็น subsystem เต็มรูปแบบ (E1) หรือ
+      ย่อเหลือแค่ "จัดการ remote CIDR + policy ที่ Gateway หลัก" (E3))
 - [ ] Step 1: `model/cloudflare_mesh.go` + test (token + CIDR + overlap)
 - [ ] Step 2: DB migration (`cloudflare_mesh_settings`, `cloudflare_mesh_sites`) + repo + migration test
 - [ ] Step 3: `MeshManager` interface ใน `kernel/interfaces.go`
