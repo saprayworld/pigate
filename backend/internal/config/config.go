@@ -47,6 +47,14 @@
 // the Statistics -> DNS page's domain->resolved-IP forward index
 // (service/dns_domain_ips.go) — file-only, non-integer is a fail-fast error,
 // out-of-range-but-syntactically-valid clamps to the default with a warning.
+//
+// ipinfo-enabled (docs/ref/todo/statistics-host-ipinfo-plan.md T-06) is also
+// file-only (no CLI flag, no two-tier validation needed — it's a plain bool,
+// default false) gating the Public IP Info card's backend proxy to
+// ipinfo.io: this is the ONE key in this file that decides whether the
+// daemon ever makes an outbound request to a third party at all, so it
+// defaults OFF and can only be turned on by deliberately editing the config
+// file (plan §2 "การเปิดใช้งาน").
 package config
 
 import (
@@ -99,6 +107,12 @@ type Config struct {
 	// index is a flat map, not a ring.
 	DNSStatsMaxDomains      int
 	DNSStatsMaxIPsPerDomain int
+
+	// IPInfoEnabled is also file-only (no matching CLI flag) — gates the
+	// Public IP Info card's backend proxy to ipinfo.io (docs/ref/todo/
+	// statistics-host-ipinfo-plan.md T-06). Default false; no token support
+	// in this phase.
+	IPInfoEnabled bool
 }
 
 // Defaults returns the Config populated with the exact same defaults as the
@@ -137,6 +151,9 @@ func Defaults() Config {
 		// statistics-dns-page-revamp-plan.md §2.1).
 		DNSStatsMaxDomains:      1000,
 		DNSStatsMaxIPsPerDomain: 16,
+
+		// Default OFF (docs/ref/todo/statistics-host-ipinfo-plan.md T-06).
+		IPInfoEnabled: false,
 	}
 }
 
@@ -172,6 +189,10 @@ const (
 	// CLI flag — docs/ref/todo/statistics-dns-page-revamp-plan.md T-05).
 	keyDNSStatsMaxDomains      = "dns-stats-max-domains"
 	keyDNSStatsMaxIPsPerDomain = "dns-stats-max-ips-per-domain"
+
+	// keyIPInfoEnabled is also file-only (no CLI flag — docs/ref/todo/
+	// statistics-host-ipinfo-plan.md T-06).
+	keyIPInfoEnabled = "ipinfo-enabled"
 )
 
 // maxDNSStatsPairsCap/maxDNSStatsClientsCap are RAM-guard sanity ceilings for
@@ -240,6 +261,9 @@ var orderedKeys = []string{
 	// statistics-dns-page-revamp-plan.md T-05).
 	keyDNSStatsMaxDomains,
 	keyDNSStatsMaxIPsPerDomain,
+	// Also appended at the end, after the DNS stats domain keys (docs/ref/todo/
+	// statistics-host-ipinfo-plan.md T-06).
+	keyIPInfoEnabled,
 }
 
 // KnownKeys returns the list of recognized config/flag keys, in the fixed
@@ -502,6 +526,12 @@ func applyKey(cfg *Config, key, value string) error {
 			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
 		}
 		cfg.DNSStatsMaxIPsPerDomain = n
+	case keyIPInfoEnabled:
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid bool for %q: %q: %w", key, value, err)
+		}
+		cfg.IPInfoEnabled = b
 	default:
 		// Unreachable: callers only invoke applyKey for keys that passed
 		// isKnownKey. Kept as a safety net rather than a silent no-op.
@@ -552,6 +582,8 @@ func keyValue(cfg Config, key string) string {
 		return strconv.Itoa(cfg.DNSStatsMaxDomains)
 	case keyDNSStatsMaxIPsPerDomain:
 		return strconv.Itoa(cfg.DNSStatsMaxIPsPerDomain)
+	case keyIPInfoEnabled:
+		return strconv.FormatBool(cfg.IPInfoEnabled)
 	default:
 		return ""
 	}

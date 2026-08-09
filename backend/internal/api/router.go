@@ -58,6 +58,13 @@ func RegisterRoutes(s *Server) http.Handler {
 	// (not superAdminRoute); GET, so DisableEditMiddleware never blocks it —
 	// this is a pure read.
 	authRoute("GET /api/statistics/dns/ip", s.HandleGetDNSIPDomains)
+	// Public IP Info card backend proxy to ipinfo.io (docs/ref/todo/
+	// statistics-host-ipinfo-plan.md T-07) — authRoute (not superAdminRoute):
+	// same read-only sensitivity level as the statistics endpoints above. GET
+	// only, so DisableEditMiddleware never blocks it. Opt-in/default-OFF is
+	// enforced entirely server-side by IPInfoService (ErrIPInfoDisabled ->
+	// 404), not by this route registration.
+	authRoute("GET /api/statistics/ipinfo", s.HandleGetIPInfo)
 	authRoute("GET /api/dashboard/logs", s.HandleGetRecentLogs)
 	authRoute("POST /api/dashboard/logs/clear", s.HandleClearLogs)
 	authRoute("GET /api/dashboard/logs/stream", s.HandleLogStream)

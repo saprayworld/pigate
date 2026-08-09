@@ -67,7 +67,7 @@ func buildTestServer(t *testing.T, allowDevCORS bool) (*Server, *db.Repository) 
 	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
 	systemServiceSvc := service.NewSystemServiceService(kernel.NewMockSystemServiceManager(), repo)
 	trafficStatsService := service.NewTrafficStatsService(kernel.NewMockTrafficAccounting(nil), repo, dhcp, kernel.NewMockSystemStats(), 0, 0, 0)
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, allowDevCORS, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, wifiPresetService, systemServiceSvc, nil, trafficStatsService, service.NewStatisticsService(trafficStatsService, repo, dhcp, 2400, 200)) // dns-stats-max-pairs / dns-stats-max-clients defaults
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, allowDevCORS, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, wifiPresetService, systemServiceSvc, nil, trafficStatsService, service.NewStatisticsService(trafficStatsService, repo, dhcp, 2400, 200), service.NewIPInfoService(true, service.NewMockIPInfoProvider())) // dns-stats-max-pairs / dns-stats-max-clients defaults; ipinfo enabled+mock provider for handler tests
 
 	return server, repo
 }
@@ -368,7 +368,7 @@ func TestDisableEditMode(t *testing.T) {
 
 	// Server initialized with disableEdit = true
 	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, true, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, nil, nil, nil, nil, nil)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, true, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, nil, nil, nil, nil, nil, nil)
 	handler := RegisterRoutes(server)
 
 	// Add test session token to activeSessions since IsSessionValid no longer allows mock_session_id_* bypass
@@ -558,7 +558,7 @@ func dnsStatsTestServer(t *testing.T) (http.Handler, *db.Repository, *kernel.Moc
 	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
 	systemServiceSvc := service.NewSystemServiceService(kernel.NewMockSystemServiceManager(), repo)
 	trafficStatsService := service.NewTrafficStatsService(kernel.NewMockTrafficAccounting(nil), repo, dhcp, kernel.NewMockSystemStats(), 0, 0, 0)
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, wifiPresetService, systemServiceSvc, nil, trafficStatsService, service.NewStatisticsService(trafficStatsService, repo, dhcp, 2400, 200)) // dns-stats-max-pairs / dns-stats-max-clients defaults
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, wifiPresetService, systemServiceSvc, nil, trafficStatsService, service.NewStatisticsService(trafficStatsService, repo, dhcp, 2400, 200), service.NewIPInfoService(true, service.NewMockIPInfoProvider())) // dns-stats-max-pairs / dns-stats-max-clients defaults; ipinfo enabled+mock provider for handler tests
 	handler := RegisterRoutes(server)
 	AddSession("mock_session_id_test_token", "pigate")
 	return handler, repo, dnsServer
@@ -689,7 +689,7 @@ func TestForcePasswordChangeFlow(t *testing.T) {
 	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
 
 	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, nil, nil, nil, nil, nil)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, nil, nil, nil, nil, nil, nil)
 	handler := RegisterRoutes(server)
 
 	// 1. Login with correct password
@@ -802,7 +802,7 @@ func TestCheckSessionAPI(t *testing.T) {
 	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
 
 	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, nil, nil, nil, nil, nil)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, nil, nil, nil, nil, nil, nil)
 	handler := RegisterRoutes(server)
 
 	// 1. Check session without token (should fail with 401)
@@ -1008,7 +1008,7 @@ func setupTestServerWithFirewall(t *testing.T) (http.Handler, *db.Repository, *k
 	timeService := service.NewTimeService(repo, kernel.NewMockTimeManager())
 
 	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, nil, nil, nil, nil, nil)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, nil, nil, nil, nil, nil, nil)
 	handler := RegisterRoutes(server)
 
 	AddSession("mock_session_id_test_token", "pigate")
@@ -2047,5 +2047,96 @@ func TestDNSStatisticsEndpoints_RequireAuth(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("path=%q without session: expected 401, got %d", p, rec.Code)
 		}
+	}
+}
+
+// TestHandleGetIPInfo_RequiresAuth mirrors TestDNSStatisticsEndpoints_RequireAuth
+// for the new /api/statistics/ipinfo endpoint (docs/ref/todo/
+// statistics-host-ipinfo-plan.md T-07).
+func TestHandleGetIPInfo_RequiresAuth(t *testing.T) {
+	handler, _ := setupTestServer(t)
+
+	req := httptest.NewRequest("GET", "/api/statistics/ipinfo?ip=8.8.8.8", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("without session: expected 401, got %d", rec.Code)
+	}
+}
+
+// TestHandleGetIPInfo_InputValidationAndStates covers plan T-07's acceptance
+// checklist: bad ip -> 400 without ever reaching the service, a LAN ip ->
+// 400 (isGloballyRoutable rejects it), a public ip with the feature enabled
+// (buildTestServer wires an enabled mock provider) -> 200 with the expected
+// fields, and the feature-disabled case -> 404.
+func TestHandleGetIPInfo_InputValidationAndStates(t *testing.T) {
+	server, _ := buildTestServer(t, false)
+	handler := RegisterRoutes(server)
+	AddSession("mock_session_id_test_token", "pigate")
+	token := "mock_session_id_test_token"
+
+	get := func(rawQuery string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/api/statistics/ipinfo?"+rawQuery, nil)
+		addSessionCookie(req, token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Missing ip -> 400.
+	if rec := get(""); rec.Code != http.StatusBadRequest {
+		t.Errorf("missing ip: expected 400, got %d", rec.Code)
+	}
+
+	badIPs := []string{"1.2.3", "abc", "192.168.1.1; ls", "192.168.1.256"}
+	for _, ip := range badIPs {
+		rec := get("ip=" + url.QueryEscape(ip))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("ip=%q: expected 400, got %d. Body: %s", ip, rec.Code, rec.Body.String())
+		}
+	}
+
+	// LAN IP -> 400 (ErrIPInfoNotPublic), never reaches the provider.
+	lanIPs := []string{"192.168.1.10", "10.0.0.1", "100.64.0.1", "::ffff:10.0.0.1"}
+	for _, ip := range lanIPs {
+		rec := get("ip=" + url.QueryEscape(ip))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("lan ip=%q: expected 400, got %d. Body: %s", ip, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Public IP with the feature enabled (buildTestServer's server has
+	// ipinfo-enabled=true wired to a mock provider) -> 200.
+	rec := get("ip=" + url.QueryEscape("8.8.8.8"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("public ip, feature enabled: expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var got model.IPInfoLookup
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Ip != "8.8.8.8" {
+		t.Errorf("expected ip=8.8.8.8, got %+v", got)
+	}
+}
+
+// TestHandleGetIPInfo_Disabled verifies ErrIPInfoDisabled maps to 404 (plan
+// T-07: "ไม่ใช่ 403 เพื่อไม่บอกใบ้สถานะ config"). buildTestServer wires an
+// ENABLED mock provider by default (for the other tests above), so this
+// swaps the server's ipInfo field for a disabled instance directly — same
+// package, no exported setter needed.
+func TestHandleGetIPInfo_Disabled(t *testing.T) {
+	server, _ := buildTestServer(t, false)
+	server.ipInfo = service.NewIPInfoService(false, service.NewMockIPInfoProvider())
+	handler := RegisterRoutes(server)
+	AddSession("mock_session_id_test_token", "pigate")
+	token := "mock_session_id_test_token"
+
+	req := httptest.NewRequest("GET", "/api/statistics/ipinfo?ip=8.8.8.8", nil)
+	addSessionCookie(req, token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("feature disabled: expected 404, got %d. Body: %s", rec.Code, rec.Body.String())
 	}
 }

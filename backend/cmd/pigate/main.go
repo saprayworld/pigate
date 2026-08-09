@@ -102,6 +102,7 @@ func main() {
 	log.Printf("[Main] DNS Stats Max Pairs/Clients per bucket: %d / %d", cfg.DNSStatsMaxPairs, cfg.DNSStatsMaxClients)
 	log.Printf("[Main] Traffic Stats Max Hosts/Dests/Conversations per bucket: %d / %d / %d", cfg.TrafficStatsMaxHosts, cfg.TrafficStatsMaxDests, cfg.TrafficStatsMaxConversations)
 	log.Printf("[Main] DNS Stats Max Domains/IPs-per-domain: %d / %d", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
+	log.Printf("[Main] IPInfo (Public IP Info card) Enabled: %t", cfg.IPInfoEnabled)
 
 	// 2. Initialize in-memory forward-traffic logs circular buffer (Ring Buffer).
 	// Fed live by the TrafficLogManager watcher below (real NFLOG or mock
@@ -233,6 +234,22 @@ func main() {
 	// keys dns-stats-max-pairs / dns-stats-max-clients (no CLI flag by design).
 	statisticsService := service.NewStatisticsService(trafficStatsService, repo, dhcp, cfg.DNSStatsMaxPairs, cfg.DNSStatsMaxClients)
 
+	// Public IP Info card backend proxy (docs/ref/todo/
+	// statistics-host-ipinfo-plan.md T-06) — opt-in, default OFF via the
+	// file-only ipinfo-enabled config key (no CLI flag, no UI toggle). The
+	// mock provider is selected under -mock/-mock-from-real exactly like
+	// every other kernel-adjacent dependency above, so `-mock=true` never
+	// makes an outbound request even when ipinfo-enabled=true.
+	var ipInfoProvider service.IPInfoProvider
+	if cfg.Mock || cfg.MockFromReal {
+		ipInfoProvider = service.NewMockIPInfoProvider()
+	} else {
+		// token is always "" in this phase (plan T-04 item 4 — no token
+		// support yet).
+		ipInfoProvider = service.NewIPInfoIOProvider("")
+	}
+	ipInfoService := service.NewIPInfoService(cfg.IPInfoEnabled, ipInfoProvider)
+
 	// Central event log: every subsystem funnels audit events through this one
 	// service (RAM queue + async batch writer to SQLite; see event_log.go).
 	eventLogService := service.NewEventLogService(repo)
@@ -359,7 +376,7 @@ func main() {
 		netlinkMonitor,
 	)
 
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker, wifiPresetService, systemServiceService, capabilityService, trafficStatsService, statisticsService)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker, wifiPresetService, systemServiceService, capabilityService, trafficStatsService, statisticsService, ipInfoService)
 
 	// Apply config form database to kernel
 

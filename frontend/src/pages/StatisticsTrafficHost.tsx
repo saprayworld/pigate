@@ -19,6 +19,7 @@ import {
 import { useStatsWindow, type StatsWindow } from "@/components/statistics/DnsStatsShared"
 import { TrafficTrendCard } from "@/components/statistics/TrafficTrendCard"
 import { HostHeaderCard } from "@/components/statistics/HostHeaderCard"
+import { PublicIpInfoCard } from "@/components/statistics/PublicIpInfoCard"
 import {
   HostBar,
   SortableHead,
@@ -93,6 +94,8 @@ function ConversationTable({
   window_,
   series,
   title,
+  ip,
+  hostIsPublic,
 }: {
   rows: TrafficHostConversation[]
   ownIsSrc: boolean
@@ -106,6 +109,15 @@ function ConversationTable({
   // to the page would break "Top peers follows the search box").
   series: BandwidthPoint[]
   title: string
+  // ip is the drilled-in IP itself (NOT a peer ip) — only used to pass down
+  // to PublicIpInfoCard when hostIsPublic (docs/ref/todo/
+  // statistics-host-ipinfo-plan.md T-10).
+  ip: string
+  // hostIsPublic comes straight from the backend's TrafficHostDetail.private
+  // (data.private === false) — NEVER recomputed on the frontend (plan T-10:
+  // "ห้ามคำนวณ private เองฝั่ง frontend"). true -> render PublicIpInfoCard
+  // INSTEAD of "Top peers"; false -> unchanged original behavior.
+  hostIsPublic: boolean
 }) {
   const navigate = useNavigate()
   const [query, setQuery] = useState("")
@@ -146,47 +158,61 @@ function ConversationTable({
     navigate(`/statistics/traffic/host/${encodeURIComponent(ip)}?window=${window_}&role=${nextRole}`)
   }
 
+  // showRightCard/rightCardIsPublicIpInfo decide what (if anything) renders
+  // in the grid's right-hand cell (docs/ref/todo/statistics-host-ipinfo-plan.md
+  // T-10): a public host always gets PublicIpInfoCard (which owns its own
+  // loading/disabled/error/success states, so it always renders SOMETHING,
+  // unlike Top peers which hides itself when empty); a LAN host keeps the
+  // original topPeers.length > 0 gate untouched.
+  const showRightCard = hostIsPublic || topPeers.length > 0
+
   return (
     <div className="space-y-4">
-      {/* Bandwidth (per-IP, flow-relative) + Top peers, side by side (plan
-          docs/ref/todo/statistics-traffic-bandwidth-chart-plan.md T-08) —
-          `xl` (not `lg` like the Overview page) because this grid sits
-          inside a <Card> + TabsContent with the 16rem sidebar already eating
-          into the viewport, so the chart needs more room before it gets its
-          own row (plan §5 item 6). Top peers keeps its own logic untouched
-          (computed from `filtered` above, not lifted out of this
-          component). */}
+      {/* Bandwidth (per-IP, flow-relative) + right-hand card, side by side
+          (plan docs/ref/todo/statistics-traffic-bandwidth-chart-plan.md T-08,
+          extended by statistics-host-ipinfo-plan.md T-10) — `xl` (not `lg`
+          like the Overview page) because this grid sits inside a <Card> +
+          TabsContent with the 16rem sidebar already eating into the
+          viewport, so the chart needs more room before it gets its own row
+          (plan §5 item 6). The right-hand cell is EITHER "Top peers" (LAN
+          host — untouched, still computed from `filtered` above, plan
+          Caution 4) OR PublicIpInfoCard (public host, replacing Top peers
+          entirely per plan §1), never both. */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <TrafficTrendCard
-          className={topPeers.length > 0 ? "xl:col-span-2" : "xl:col-span-3"}
+          className={showRightCard ? "xl:col-span-2" : "xl:col-span-3"}
           series={series}
           window={window_}
           subtitle="ยอดต่อ 5 นาที เฉพาะทราฟฟิกของ IP นี้ · Up/Down นับตามทิศทางของ flow เหมือนคอลัมน์ Up/Down ในตารางด้านล่าง"
         />
-        {topPeers.length > 0 && (
-          <div className="space-y-2 rounded-lg border bg-muted/20 p-3 xl:col-span-1">
-            <p className="text-xs font-medium text-muted-foreground">Top peers</p>
-            {topPeers.map((p) => (
-              <div key={p.ip} className="space-y-1">
-                <div className="flex items-center justify-between gap-3 text-xs">
-                  <span className="min-w-0">
-                    {p.domain || (p.hostname && p.hostname !== p.ip) ? (
-                      <>
-                        <span className="block truncate">{p.domain || p.hostname}</span>
-                        <span className="block truncate font-mono text-[10px] text-muted-foreground">{p.ip}</span>
-                      </>
-                    ) : (
-                      <span className="block truncate">{p.ip}</span>
-                    )}
-                  </span>
-                  <span className="shrink-0 font-mono text-muted-foreground">
-                    {fmtBytes(p.bytes)} · {p.percent}%
-                  </span>
+        {hostIsPublic ? (
+          <PublicIpInfoCard key={ip} ip={ip} />
+        ) : (
+          topPeers.length > 0 && (
+            <div className="space-y-2 rounded-lg border bg-muted/20 p-3 xl:col-span-1">
+              <p className="text-xs font-medium text-muted-foreground">Top peers</p>
+              {topPeers.map((p) => (
+                <div key={p.ip} className="space-y-1">
+                  <div className="flex items-center justify-between gap-3 text-xs">
+                    <span className="min-w-0">
+                      {p.domain || (p.hostname && p.hostname !== p.ip) ? (
+                        <>
+                          <span className="block truncate">{p.domain || p.hostname}</span>
+                          <span className="block truncate font-mono text-[10px] text-muted-foreground">{p.ip}</span>
+                        </>
+                      ) : (
+                        <span className="block truncate">{p.ip}</span>
+                      )}
+                    </span>
+                    <span className="shrink-0 font-mono text-muted-foreground">
+                      {fmtBytes(p.bytes)} · {p.percent}%
+                    </span>
+                  </div>
+                  <HostBar percent={p.percent} />
                 </div>
-                <HostBar percent={p.percent} />
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )
         )}
       </div>
 
@@ -475,10 +501,26 @@ export default function StatisticsTrafficHost() {
                   <TabsTrigger value="dst">Destination · {data.asDestination.length}</TabsTrigger>
                 </TabsList>
                 <TabsContent value="src" className="pt-3">
-                  <ConversationTable rows={data.asSource} ownIsSrc={true} window_={window_} series={data.series} title={title} />
+                  <ConversationTable
+                    rows={data.asSource}
+                    ownIsSrc={true}
+                    window_={window_}
+                    series={data.series}
+                    title={title}
+                    ip={ip}
+                    hostIsPublic={data.private === false}
+                  />
                 </TabsContent>
                 <TabsContent value="dst" className="pt-3">
-                  <ConversationTable rows={data.asDestination} ownIsSrc={false} window_={window_} series={data.series} title={title} />
+                  <ConversationTable
+                    rows={data.asDestination}
+                    ownIsSrc={false}
+                    window_={window_}
+                    series={data.series}
+                    title={title}
+                    ip={ip}
+                    hostIsPublic={data.private === false}
+                  />
                 </TabsContent>
               </Tabs>
             </CardContent>

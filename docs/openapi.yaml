@@ -531,6 +531,63 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /statistics/ipinfo:
+    get:
+      tags:
+        - Statistics
+      summary: Public IP Info lookup for the Statistics -> Traffic -> Host page's "Public IP Info" card
+      description: >
+        Backend proxy in front of ipinfo.io (docs/ref/todo/
+        statistics-host-ipinfo-plan.md) — backs the drill-down page's
+        "Public IP Info" card, which replaces "Top peers" when the drilled-in
+        IP is public. **Opt-in, default OFF**: gated entirely server-side by
+        the `ipinfo-enabled` bootstrap config key (file-only, no CLI flag, no
+        UI toggle — must be edited by hand in
+        `/var/lib/pigate/pigate.conf`). When enabled, this endpoint sends the
+        queried IP to the third-party service ipinfo.io over HTTPS (no API
+        token in the current phase); no client IP or other PiGate data is
+        ever sent. Results are cached in RAM only (24h TTL for a successful
+        lookup, 1h for a failed one) and rate-limited (~1 req/s, burst 5)
+        server-wide to protect the upstream provider from this page's own
+        10-second auto-refresh — nothing here is ever persisted to SQLite.
+      parameters:
+        - name: ip
+          in: query
+          required: true
+          schema:
+            type: string
+            example: 8.8.8.8
+          description: >
+            IP address to look up. Must parse via `net/netip`'s address
+            parser; anything else returns 400. Must also be a public,
+            globally-routable address (not RFC1918/CGNAT/loopback/link-local/
+            multicast/TEST-NET/IPv6 ULA/IPv6 documentation range, with
+            IPv4-mapped IPv6 addresses unmapped before this check) — a LAN or
+            otherwise non-routable IP also returns 400, since this endpoint
+            never sends such an address to ipinfo.io.
+      responses:
+        '200':
+          description: Public IP Info retrieved (from cache or a live ipinfo.io lookup)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IPInfoLookup'
+        '400':
+          description: Missing/invalid `ip`, or `ip` is not a public/globally-routable address
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: >-
+            The Public IP Info feature is disabled (`ipinfo-enabled=false`,
+            the default). Deliberately 404, not 403, so the response doesn't
+            hint at server configuration either way.
+        '429':
+          description: Server-wide rate limit to ipinfo.io exceeded; retry later.
+        '502':
+          description: >-
+            The ipinfo.io lookup failed or timed out. The response message is
+            generic — the raw upstream error is never relayed to the client.
+
   /statistics/dns:
     get:
       tags:
@@ -4906,6 +4963,68 @@ components:
             RFC3339 UTC timestamp currentRateBpsUp/currentRateBpsDown above
             were sampled at — same field as TrafficTopHosts.rateSampledAt,
             absent/empty when no rate sample exists yet.
+
+    IPInfoLookup:
+      type: object
+      required: [ip]
+      description: >-
+        The /statistics/ipinfo response (docs/ref/todo/
+        statistics-host-ipinfo-plan.md). Every field except `ip` is optional
+        — deliberately provider-agnostic: the current provider (ipinfo.io, no
+        API token) does not guarantee any of them will be present, and a
+        future provider swap (paid tier, or an offline MaxMind GeoLite2
+        database) may return a different subset. RAM-only, never persisted to
+        SQLite.
+      properties:
+        ip:
+          type: string
+          example: 8.8.8.8
+        hostname:
+          type: string
+          example: dns.google
+        city:
+          type: string
+          example: Mountain View
+        region:
+          type: string
+          example: California
+        country:
+          type: string
+          description: ISO 3166-1 alpha-2 country code, as returned by the provider.
+          example: US
+        countryName:
+          type: string
+          description: Full country name, when the provider returns one (not guaranteed).
+          example: United States
+        org:
+          type: string
+          description: The provider's combined ASN + organization name string, verbatim.
+          example: 'AS15169 Google LLC'
+        asn:
+          type: string
+          description: Autonomous System Number, parsed out of `org` when possible.
+          example: AS15169
+        asName:
+          type: string
+          example: Google LLC
+        timezone:
+          type: string
+          example: America/Los_Angeles
+        loc:
+          type: string
+          description: '"latitude,longitude" as returned by the provider.'
+          example: '37.4056,-122.0775'
+        source:
+          type: string
+          enum: [cache, live]
+          description: >-
+            "cache" when served from the gateway's in-memory cache without an
+            outbound request this call; "live" when a fresh ipinfo.io lookup
+            was just performed.
+        cachedAt:
+          type: string
+          format: date-time
+          description: When this entry was stored in the cache.
 
     DNSClientStat:
       type: object

@@ -151,3 +151,16 @@ dns-stats-max-domains=1000
 # Maximum number of distinct resolved IPs tracked per domain in the
 # domain->IP index.
 dns-stats-max-ips-per-domain=16
+
+# The key below controls the Statistics -> Traffic -> Host page's "Public IP
+# Info" card (docs/ref/todo/statistics-host-ipinfo-plan.md) — a backend proxy
+# in front of the third-party service ipinfo.io. When enabled, drilling into
+# a PUBLIC IP (not a LAN host) sends that IP to https://ipinfo.io over HTTPS
+# (no API token in the current phase) to show its city/region/country/org.
+# Results are cached in RAM only (never SQLite) and rate-limited server-wide
+# to protect ipinfo.io from this page's own auto-refresh.
+#
+# This is the ONE key on this page that makes pigate talk to a third party at
+# all, so it is OFF by default and file-only (no CLI flag, no UI toggle) —
+# you must opt in by hand, here, if you want it.
+ipinfo-enabled=false
