@@ -19,6 +19,7 @@ import {
   ClientStatsTable,
   DnsStatsPrivacyNote,
   DnsStatsTruncatedWarning,
+  DnsDomainIndexTruncatedWarning,
   DnsVolumeInfoButton,
   type StatsWindow,
 } from "@/components/statistics/DnsStatsShared"
@@ -237,6 +238,7 @@ export default function StatisticsDns() {
       {stats && stats.enabled && <DnsQueryTrendCard series={stats.querySeries} window={window_} />}
 
       {stats?.truncated && <DnsStatsTruncatedWarning />}
+      {stats?.domainIndexTruncated && <DnsDomainIndexTruncatedWarning />}
 
       {error && !stats && (
         <Card>
@@ -320,7 +322,7 @@ export default function StatisticsDns() {
                         {ipData?.ipsTruncated && (
                           <div className="flex items-center gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2 text-xs text-warning">
                             <TriangleAlert className="h-4 w-4 shrink-0" />
-                            ดัชนีโดเมน↔IP เต็มขีดจำกัด — ผลลัพธ์อาจไม่ครบทุกโดเมน
+                            ดัชนีโดเมน→IP เคยเต็มขีดจำกัดในช่วงที่ผ่านมา — รายชื่อโดเมนของ IP นี้อาจไม่ครบ
                           </div>
                         )}
                         {ipData && ipData.domains.length === 0 && (

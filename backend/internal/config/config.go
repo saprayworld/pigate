@@ -153,7 +153,7 @@ func Defaults() Config {
 		// internal/service/dns_domain_ips.go (docs/ref/todo/
 		// statistics-dns-page-revamp-plan.md §2.1).
 		DNSStatsMaxDomains:      1000,
-		DNSStatsMaxIPsPerDomain: 16,
+		DNSStatsMaxIPsPerDomain: 32,
 
 		// Keep in sync with the old maxTrackedDenySources/maxTrackedDenyPorts
 		// consts these keys replace (docs/ref/todo/
@@ -230,7 +230,7 @@ const maxTrafficStatsCap = 20000
 // statistics-dns-page-revamp-plan.md §2.1/T-05). Unlike the DNS query-pair
 // ring above, this index is NOT a ring — worst-case RAM is simply
 // maxDomains x maxIPsPerDomain entries (no x288-bucket multiplier) — e.g. the
-// defaults (1000 x 16 = 16000 entries, ~1 MB) or the ceiling of this range
+// defaults (1000 x 32 = 32000 entries, ~2 MB) or the ceiling of this range
 // (20000 x 64 = 1,280,000 entries) is still a bounded, single flat map.
 const (
 	minDNSStatsMaxDomains      = 100

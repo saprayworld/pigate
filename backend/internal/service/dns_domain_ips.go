@@ -28,12 +28,11 @@ import (
 // (plan §5 item 6/7) — display-only enrichment for the DNS statistics pages.
 //
 // RAM budget: worst case is maxDomains (default 1000) x maxIPsPerDomain
-// (default 16) ~= 16,000 (domain,ip) entries, same as before. ipDomains is
-// the reverse of byDomain, so in the worst case it holds the same ~16,000
-// (ip,domain) pairs again (one small set entry per domain that references an
-// IP) — RAM stays on the order of ~1-2 MB worst case, still bounded and small
-// relative to the rest of the process, same order of magnitude as
-// dnsReverseCache's own cap.
+// (default 32) ~= 32,000 (domain,ip) entries. ipDomains is the reverse of
+// byDomain, so in the worst case it holds the same ~32,000 (ip,domain) pairs
+// again (one small set entry per domain that references an IP) — RAM stays
+// on the order of ~2-4 MB worst case, still bounded and small relative to the
+// rest of the process, same order of magnitude as dnsReverseCache's own cap.
 //
 // ipDomains is what makes "IP -> every domain that resolved to it" (plan
 // docs/ref/todo/statistics-dns-ip-filter-plan.md §2.2, T-01) answerable
@@ -51,11 +50,30 @@ type dnsDomainIPs struct {
 	maxDomains      int
 	maxIPsPerDomain int
 
-	// truncated latches true the first time a Put is rejected because a cap
-	// was hit (domain cap or per-domain IP cap) — sticky until Clear/SetLimits,
-	// mirroring the "flag once, don't flap" spirit of the other stats rings'
-	// Truncated fields (dns_query_stats.go's b.pairCount >= maxPairs checks).
-	truncated bool
+	// domainCapHitAt/ipCapHitAt record the last time a Put was rejected
+	// because a cap was hit — split into two timestamps because they answer
+	// two different questions (docs/ref/todo/
+	// statistics-dns-cap-notification-fix-plan.md §2.1/§3.1): domainCapHitAt
+	// is the last time a *brand-new domain* was rejected because len(byDomain)
+	// was already at maxDomains; ipCapHitAt is the last time a *new IP within
+	// an existing domain* was rejected because that domain's own IP set was
+	// already at maxIPsPerDomain. The old code used a single `truncated bool`
+	// for both, which meant one CDN domain rotating past maxIPsPerDomain a few
+	// minutes after boot would forever flag the whole index as "truncated" to
+	// every caller, even though the domain-level index (the thing maxDomains
+	// actually guards) was nowhere near full.
+	//
+	// Both fields are zero (time.Time{}) when no rejection has happened since
+	// construction/last Clear/SetLimits. IndexTruncated()/IPCapHitRecently()
+	// (below) treat a hit as "still relevant" only within one ttl window of
+	// the hit, rather than latching forever: this index already forgets any
+	// given (domain,ip) entry after ttl, so a rejection older than one ttl
+	// describes data that has since aged out of the index anyway — using the
+	// same ttl as the expiry window means the warning self-clears exactly
+	// when the stale rejection stops being informative, without adding a new
+	// constant to tune or a ticker/goroutine to sweep it.
+	domainCapHitAt time.Time
+	ipCapHitAt     time.Time
 }
 
 // domainIPEntry is one row of IPsFor's result: a single (ip, lastSeen)
@@ -86,7 +104,7 @@ const (
 	// domain (plan T-05) — config.Defaults() must stay in sync with these two
 	// literals, same convention as defaultMaxTrackedDNSPairs above.
 	defaultMaxTrackedDomains  = 1000
-	defaultMaxIPsPerDomain    = 16
+	defaultMaxIPsPerDomain    = 32
 	dnsDomainIPsMaxDomainsMin = 100
 	dnsDomainIPsMaxDomainsMax = 20000
 	dnsDomainIPsPerDomainMin  = 2
@@ -137,6 +155,13 @@ func (d *dnsDomainIPs) SetLimits(ttlMinutes, maxDomains, maxIPsPerDomain int) {
 	d.ttl = time.Duration(ttlMinutes) * time.Minute
 	d.maxDomains = maxDomains
 	d.maxIPsPerDomain = maxIPsPerDomain
+	// Reset both cap-hit latches: a limits change (typically raising a cap)
+	// invalidates any earlier rejection, and the doc comment on
+	// domainCapHitAt/ipCapHitAt above has always promised this is sticky only
+	// "until Clear/SetLimits" — this call was previously missing, so a raised
+	// cap did not clear a still-live warning until it aged out on its own.
+	d.domainCapHitAt = time.Time{}
+	d.ipCapHitAt = time.Time{}
 }
 
 // caps returns the currently configured maxDomains/maxIPsPerDomain, so a
@@ -175,7 +200,7 @@ func (d *dnsDomainIPs) Put(domain, ip string) {
 	ips, exists := d.byDomain[domain]
 	if !exists {
 		if len(d.byDomain) >= d.maxDomains {
-			d.truncated = true
+			d.domainCapHitAt = now
 			return
 		}
 		ips = make(map[string]time.Time)
@@ -190,7 +215,7 @@ func (d *dnsDomainIPs) Put(domain, ip string) {
 			d.evictExpiredInDomainLocked(domain, ips, now)
 		}
 		if len(ips) >= d.maxIPsPerDomain {
-			d.truncated = true
+			d.ipCapHitAt = now
 			return
 		}
 		set, ok := d.ipDomains[ip]
@@ -409,28 +434,64 @@ func (d *dnsDomainIPs) Snapshot() map[string]string {
 	return out
 }
 
-// Usage returns the index's current domain count and configured caps —
+// Usage returns the index's current domain count, configured caps, and two
+// extra summary stats used by the Statistics > Capacity page's 10th ring
+// (docs/ref/todo/statistics-dns-cap-notification-fix-plan.md §3.4/T-06):
+// maxIPsUsed is the largest number of (still-tracked) IPs any single domain
+// currently holds, and domainsAtIPCap is how many domains currently hold
+// maxIPsPerDomain or more IPs. indexTruncated mirrors IndexTruncated()
+// (the maxDomains-cap signal only — see the domainCapHitAt/ipCapHitAt doc
+// comment above for why the two signals are kept separate).
+//
 // read-only, RLock only, NEVER performs eviction (docs/ref/todo/
 // statistics-capacity-visibility-plan.md T-05: viewing capacity must not
 // change it) — unlike Put/IPsFor/DomainsForIP/Snapshot, which all lazily
-// evict expired entries as a side effect. domains is therefore an UPPER
-// BOUND, not an exact live count: it can include domains whose IP entries
-// are all logically expired (past ttl) but not yet swept by a Put/read that
-// happens to touch them.
-func (d *dnsDomainIPs) Usage() (domains, maxDomains, maxIPsPerDomain int, truncated bool) {
+// evict expired entries as a side effect. domains/maxIPsUsed/domainsAtIPCap
+// are therefore UPPER BOUNDS, not exact live counts: they can include
+// domains/IPs that are all logically expired (past ttl) but not yet swept by
+// a Put/read that happens to touch them. This walks the whole byDomain map
+// (O(domains), bounded by maxDomains <= 20000) — accepted cost because this
+// is only called from the low-frequency GET /api/statistics/capacity
+// endpoint, never from a hot path.
+func (d *dnsDomainIPs) Usage() (domains, maxDomains, maxIPsPerDomain, maxIPsUsed, domainsAtIPCap int, indexTruncated bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	return len(d.byDomain), d.maxDomains, d.maxIPsPerDomain, d.truncated
+	for _, ips := range d.byDomain {
+		n := len(ips)
+		if n > maxIPsUsed {
+			maxIPsUsed = n
+		}
+		if n >= d.maxIPsPerDomain {
+			domainsAtIPCap++
+		}
+	}
+	indexTruncated = !d.domainCapHitAt.IsZero() && time.Since(d.domainCapHitAt) <= d.ttl
+	return len(d.byDomain), d.maxDomains, d.maxIPsPerDomain, maxIPsUsed, domainsAtIPCap, indexTruncated
 }
 
-// Truncated reports whether at least one Put has been rejected since
-// construction/last Clear/SetLimits because a cap (maxDomains or
-// maxIPsPerDomain) was hit — surfaced to the API response so the UI can warn
-// the user the index is incomplete (plan T-04's IPsTruncated field).
-func (d *dnsDomainIPs) Truncated() bool {
+// IndexTruncated reports whether a brand-new domain was rejected because the
+// index was at maxDomains within the last ttl window — surfaced to the API
+// response so the UI can warn the user the domain->IP index itself is
+// incomplete (docs/ref/todo/statistics-dns-cap-notification-fix-plan.md
+// §3.1/T-04's DomainIndexTruncated field). This is deliberately NOT the same
+// signal as IPCapHitRecently() below — see the domainCapHitAt/ipCapHitAt doc
+// comment for why the two are kept separate.
+func (d *dnsDomainIPs) IndexTruncated() bool {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	return d.truncated
+	return !d.domainCapHitAt.IsZero() && time.Since(d.domainCapHitAt) <= d.ttl
+}
+
+// IPCapHitRecently reports whether some domain's per-domain IP set was
+// rejected an admission because it was at maxIPsPerDomain within the last
+// ttl window. Callers that need to know if one *specific* domain is at its
+// own IP cap should NOT use this (it is index-wide, "some domain, possibly
+// not this one") — compute that per-domain instead (len(ips) >= maxIPs from
+// caps(), see statistics_dns.go's GetDNSDomainDetail).
+func (d *dnsDomainIPs) IPCapHitRecently() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return !d.ipCapHitAt.IsZero() && time.Since(d.ipCapHitAt) <= d.ttl
 }
 
 // Clear empties the index — called when the user turns query logging off
@@ -440,7 +501,8 @@ func (d *dnsDomainIPs) Clear() {
 	defer d.mu.Unlock()
 	d.byDomain = make(map[string]map[string]time.Time)
 	d.ipDomains = make(map[string]map[string]struct{})
-	d.truncated = false
+	d.domainCapHitAt = time.Time{}
+	d.ipCapHitAt = time.Time{}
 }
 
 // sweepExpired does one full eviction pass over the index. NOTE: nothing in

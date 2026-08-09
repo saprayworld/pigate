@@ -339,12 +339,16 @@ type DNSIPDomains struct {
 	// per-bucket tracking caps while computing Count/Percent for the rows
 	// below — same signal as DNSDomainDrilldown.Truncated.
 	Truncated bool `json:"truncated"`
-	// IPsTruncated is true when the RAM-only domain->IP forward index hit one
-	// of its caps (dns-stats-max-domains / dns-stats-max-ips-per-domain) at
-	// some point — meaning the reverse index this endpoint reads from may be
-	// missing some domain<->IP associations, so Domains below could be
-	// incomplete. Same signal as DNSDomainDrilldown.IPsTruncated, but reported
-	// at the index level (it is not scoped to one domain).
+	// IPsTruncated is true when EITHER (a) the domain->IP forward index
+	// rejected a brand-new domain because dns-stats-max-domains was hit
+	// within the last TTL window (index-wide — the same signal as
+	// DNSQueryStatistics.DomainIndexTruncated), OR (b) at least one of the
+	// domains actually returned in Domains below currently holds
+	// dns-stats-max-ips-per-domain or more IPs (scoped to this result's own
+	// rows, computed fresh on every read — not a sticky index-wide latch).
+	// Either way it means Domains below may be missing some domain<->IP
+	// associations for at least one of the rows shown. (docs/ref/todo/
+	// statistics-dns-cap-notification-fix-plan.md §3.3 T-04 item 4.)
 	IPsTruncated bool `json:"ipsTruncated"`
 	// Domains is every domain known to have resolved to IP, sorted by Bytes
 	// desc, then Count desc, then Domain asc for a deterministic order. Never
@@ -467,13 +471,30 @@ type DNSQueryStatistics struct {
 	// Truncated is true only when data was actually dropped: the domain×client
 	// pair ring or the client ring hit its per-bucket tracking cap during this
 	// window (the configurable caps set via dns-stats-max-pairs/
-	// dns-stats-max-clients in pigate.conf, see service/dns_query_stats.go), or
-	// the domain->IP forward index hit its own cap. Deliberately does NOT fire
-	// just because TotalDomains/TotalClients exceeds the top-50 table size
-	// below — that is normal, fully-and-accurately-tracked data that simply
-	// doesn't all fit in the table, the same distinction
-	// TrafficBreakdown.Truncated already makes.
+	// dns-stats-max-clients in pigate.conf, see service/dns_query_stats.go).
+	// Deliberately does NOT fire just because TotalDomains/TotalClients
+	// exceeds the top-50 table size below — that is normal, fully-and-
+	// accurately-tracked data that simply doesn't all fit in the table, the
+	// same distinction TrafficBreakdown.Truncated already makes. As of
+	// docs/ref/todo/statistics-dns-cap-notification-fix-plan.md §3.3/T-04,
+	// this field NO LONGER reflects the domain->IP forward index's own cap
+	// (dns-stats-max-domains) — see DomainIndexTruncated below for that,
+	// which is a deliberately separate signal so the UI can tell "the
+	// (domain,client) pair ring is full" apart from "the domain->IP index is
+	// full" instead of one warning covering both unrelated causes.
 	Truncated bool `json:"truncated"`
+	// DomainIndexTruncated is true when the RAM-only domain->IP forward index
+	// (service/dns_domain_ips.go) rejected a brand-new domain because it was
+	// already at dns-stats-max-domains, within the last TTL window (the
+	// warning self-clears once a full TTL has passed with no further
+	// rejection, or immediately after SetDomainIPsLimits raises the cap — it
+	// does NOT latch forever). This is a completely separate signal from
+	// Truncated above: Truncated is about the (domain,client) pair ring;
+	// DomainIndexTruncated is about the domain->IP index hitting its DOMAIN
+	// count cap specifically — it says nothing about any single domain's
+	// resolved-IP list being incomplete (see DNSDomainDrilldown.IPsTruncated
+	// for that, which is per-domain).
+	DomainIndexTruncated bool `json:"domainIndexTruncated"`
 	// TopDomains is the domain-centric overview table (plan §2.2, T-01) — now
 	// []DNSDomainStat (added clients/ipCount/sharedIps/bytes/*) instead of the
 	// plain []TopDomain used before this revamp. This is an ADDITIVE JSON
@@ -532,11 +553,15 @@ type DNSDomainDrilldown struct {
 	// §1.1 item 1 — this domain's total is inflated by traffic to an IP that
 	// other domains also resolve to).
 	SharedIPs bool `json:"sharedIps"`
-	// IPsTruncated is true when the RAM-only domain->IP forward index hit its
-	// per-domain IP cap (dns-stats-max-ips-per-domain) while building IPs
-	// above — a separate truncation signal from Truncated (which covers the
-	// query-count ring), so the UI can distinguish "clients list may be
-	// incomplete" from "resolved-IP list may be incomplete".
+	// IPsTruncated is true when THIS domain's own IP set (IPs above) is
+	// currently at dns-stats-max-ips-per-domain — computed fresh from
+	// len(IPs) each time this endpoint is read, scoped to this domain only
+	// (never any other domain in the index) — a separate truncation signal
+	// from Truncated (which covers the query-count ring), so the UI can
+	// distinguish "clients list may be incomplete" from "this domain's
+	// resolved-IP list may be incomplete". A domain with only one known IP
+	// can never report IPsTruncated=true, regardless of what any other
+	// domain in the index is doing.
 	IPsTruncated bool `json:"ipsTruncated"`
 	// Series is this domain's approximate volume over time — the sum of
 	// dstBytes across all of IPs[] per 5-minute bucket, flow-relative
@@ -569,6 +594,10 @@ type DNSClientDrilldown struct {
 	Enabled      bool   `json:"enabled"`
 	TotalQueries uint64 `json:"totalQueries"`
 	Truncated    bool   `json:"truncated"`
+	// DomainIndexTruncated mirrors DNSQueryStatistics.DomainIndexTruncated —
+	// see that field's doc comment for the full explanation. Separate from
+	// Truncated above for the same reason.
+	DomainIndexTruncated bool `json:"domainIndexTruncated"`
 	// Domains is now []DNSDomainStat (added clients/ipCount/sharedIps/
 	// bytes/* per row) instead of the plain []TopDomain used before this
 	// revamp (plan §2.2). Since docs/ref/todo/statistics-dns-review-fixes-plan.md
@@ -850,11 +879,16 @@ type RingCapacity struct {
 	FullBuckets int `json:"fullBuckets"`
 	// Truncated mirrors the existing per-response truncated signal for this
 	// ring/index (e.g. TrafficStatistics.Truncated's hosts/dests/
-	// conversations component, or dnsDomainIPs.Truncated()) — true once at
-	// least one admission has actually been rejected because this cap was
-	// hit. This is the SAME after-the-fact signal that already exists
-	// elsewhere; CurrentPercent/PeakPercent above are the NEW early-warning
-	// signal this endpoint adds on top of it (plan §0/issue #123).
+	// conversations component, or dnsDomainIPs.IndexTruncated()/
+	// IPCapHitRecently()) — true once at least one admission has actually
+	// been rejected because this cap was hit. This is the SAME after-the-fact
+	// signal that already exists elsewhere; CurrentPercent/PeakPercent above
+	// are the NEW early-warning signal this endpoint adds on top of it (plan
+	// §0/issue #123). The frontend's ringStatus() (lib/capacityStatus.ts)
+	// reads this field FIRST and forces "danger" whenever it is true —
+	// otherwise a "flat" index (FullBuckets always 0, no bucket dimension)
+	// would have no way to ever show red even at 100% (docs/ref/todo/
+	// statistics-dns-cap-notification-fix-plan.md §2.3/T-10).
 	Truncated bool `json:"truncated"`
 	// EstimatedBytes is an APPROXIMATION of this ring/index's RAM footprint —
 	// computed as (entries currently held in RAM across the WHOLE structure,
@@ -883,10 +917,15 @@ type RingCapacity struct {
 }
 
 // CapacityStatistics is the GET /api/statistics/capacity response — current
-// usage vs configured cap for all 9 RAM-only tracking structures, always in
+// usage vs configured cap for all 10 RAM-only tracking structures, always in
 // the SAME fixed order (traffic.hosts, traffic.dests, traffic.conversations,
 // firewall.denySources, firewall.denyPorts, dns.pairs, dns.clients,
-// dns.reverseCache, dns.domainIps — service/statistics_capacity.go). Contains
+// dns.reverseCache, dns.domainIps, dns.domainIpsPerDomain —
+// service/statistics_capacity.go). dns.domainIpsPerDomain was added by
+// docs/ref/todo/statistics-dns-cap-notification-fix-plan.md §3.4/T-06 — it is
+// a flat ring (no series) that reports the per-domain IP cap
+// (dns-stats-max-ips-per-domain) separately from dns.domainIps' domain count
+// (dns-stats-max-domains). Contains
 // ONLY counts/percentages — no domain name, IP address, or hostname ever
 // appears in this response (unlike TrafficStatistics/DNSQueryStatistics
 // above), which is why this endpoint is authRoute rather than
@@ -905,7 +944,7 @@ type CapacityStatistics struct {
 	// need to re-derive it, and so len(Rings[i].Series) == BucketCount always
 	// holds for every "bucket"-kind ring when Series is present.
 	BucketCount int `json:"bucketCount"`
-	// Rings is always exactly 9 entries, in the fixed order documented above
+	// Rings is always exactly 10 entries, in the fixed order documented above
 	// — never omitted, never reordered, never partial (even a ring with zero
 	// data still appears with Current=0).
 	Rings       []RingCapacity `json:"rings"`

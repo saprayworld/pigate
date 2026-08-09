@@ -9,7 +9,9 @@ import (
 // Statistics -> Capacity pipeline (docs/ref/todo/
 // statistics-capacity-visibility-plan.md T-06, GitHub issue #123) — composes
 // the GET /api/statistics/capacity response by calling the read-only capacity
-// readers added to each of the 9 RAM-only tracking structures (T-02..T-05):
+// readers added to each of the 10 RAM-only tracking structures (T-02..T-05;
+// the 10th ring, dns.domainIpsPerDomain, was added by docs/ref/todo/
+// statistics-dns-cap-notification-fix-plan.md §3.4/T-06):
 // TrafficStatsService.CapacityUsage (traffic.hosts/dests/conversations),
 // StatisticsService.denyCapacity (firewall.denySources/denyPorts),
 // StatisticsService.dnsRingCapacity (dns.pairs/dns.clients), and the
@@ -25,7 +27,7 @@ import (
 // lock at a time (each reader above already fully drains its own lock before
 // returning).
 
-// capacityRingMeta is this file's single metadata table for the 9 rings —
+// capacityRingMeta is this file's single metadata table for the 10 rings —
 // id/group/label/kind/capSource/entryBytes never come from anywhere else.
 type capacityRingMeta struct {
 	id         string
@@ -98,20 +100,41 @@ var (
 	}
 	capacityMetaDNSDomainIPs = capacityRingMeta{
 		id: "dns.domainIps", group: "dns", label: "DNS domain -> resolved IP index",
-		kind: "flat", capSource: "dns-stats-max-domains / dns-stats-max-ips-per-domain",
-		// this ring's Current/Cap below are counted in DOMAINS, but each
+		kind: "flat", capSource: "dns-stats-max-domains",
+		// this ring's Current/Cap are counted in DOMAINS only (maxDomains) —
+		// the per-domain IP cap (maxIPsPerDomain) has its own dedicated row
+		// now, capacityMetaDNSDomainIPsPerDomain below (docs/ref/todo/
+		// statistics-dns-cap-notification-fix-plan.md §3.4/T-06), so this
+		// row's capSource no longer needs to reference both keys. Each
 		// domain holds up to maxIPsPerDomain (ip -> time.Time) entries plus a
 		// reverse ipDomains set entry per IP — averaged, each domain costs
 		// roughly maxIPsPerDomain x (~15-char IP key + 24B time.Time + map
-		// overhead ≈ 55B) + its own map-of-maps overhead ≈ 1000B per domain
-		// at the default maxIPsPerDomain=16 (mirrors dns_domain_ips.go's own
-		// "~1-2 MB worst case at defaults" comment: 1000 domains x ~1000B ≈ 1MB).
-		entryBytes: 1000,
+		// overhead ≈ 55B) + its own map-of-maps overhead ≈ 2000B per domain
+		// at the default maxIPsPerDomain=32 (mirrors dns_domain_ips.go's own
+		// "~2-4 MB worst case at defaults" comment: 1000 domains x ~2000B ≈ 2MB).
+		entryBytes: 2000,
+	}
+	// capacityMetaDNSDomainIPsPerDomain is the 10th ring: unlike
+	// capacityMetaDNSDomainIPs above (which counts domains against
+	// maxDomains), this row counts the largest per-domain IP count seen
+	// against maxIPsPerDomain — the cap that was previously tracked
+	// internally (dns_domain_ips.go's per-Put admission check) but never
+	// surfaced anywhere the user could see it hit 100% (docs/ref/todo/
+	// statistics-dns-cap-notification-fix-plan.md §2.3/§3.4/T-06: this is
+	// the row that lets the Capacity page confirm the exact cause of a
+	// "resolved-IP list may be incomplete" warning on the DNS page).
+	capacityMetaDNSDomainIPsPerDomain = capacityRingMeta{
+		id: "dns.domainIpsPerDomain", group: "dns", label: "DNS resolved IPs ต่อโดเมน (สูงสุด)",
+		kind: "flat", capSource: "dns-stats-max-ips-per-domain",
+		// same per-entry estimate as capacityMetaTrafficHosts (~15-char IP
+		// key + time.Time (24B) + map overhead ≈ 55B) — this ring's "entry"
+		// is one (ip, lastSeen) pair within the single most-loaded domain.
+		entryBytes: 55,
 	}
 )
 
 // GetCapacityStatistics composes the GET /api/statistics/capacity response —
-// all 9 rings, in the fixed order documented on model.CapacityStatistics.
+// all 10 rings, in the fixed order documented on model.CapacityStatistics.
 // window must already be whitelisted by the caller (the API handler); this
 // method only re-validates defensively (normalizeStatsWindow), same
 // convention as every other Get*Statistics method in this package.
@@ -130,7 +153,7 @@ func (s *StatisticsService) GetCapacityStatistics(window string, withSeries bool
 	_ = dnsEnabled // dnsRingCapacity already zeroes everything when disabled (privacy) — no extra branching needed here
 
 	reverseCacheSize, reverseCacheMax := s.dns.reverseCache.Usage()
-	domainIPsDomains, domainIPsMaxDomains, domainIPsMaxIPsPerDomain, domainIPsTruncated := s.dns.domainIPs.Usage()
+	domainIPsDomains, domainIPsMaxDomains, domainIPsMaxIPsPerDomain, domainIPsMaxIPsUsed, domainIPsDomainsAtIPCap, domainIPsIndexTruncated := s.dns.domainIPs.Usage()
 
 	rings := []model.RingCapacity{
 		bucketRing(capacityMetaTrafficHosts, traffic.Hosts, s.traffic.maxTrackedHosts, withSeries),
@@ -141,16 +164,15 @@ func (s *StatisticsService) GetCapacityStatistics(window string, withSeries bool
 		bucketRing(capacityMetaDNSPairs, dns.First, s.dns.maxPairs, withSeries),
 		bucketRing(capacityMetaDNSClients, dns.Second, s.dns.maxClients, withSeries),
 		flatRing(capacityMetaDNSReverseCache, reverseCacheSize, reverseCacheMax, reverseCacheSize >= reverseCacheMax && reverseCacheMax > 0),
-		flatRing(capacityMetaDNSDomainIPs, domainIPsDomains, domainIPsMaxDomains, domainIPsTruncated),
+		flatRing(capacityMetaDNSDomainIPs, domainIPsDomains, domainIPsMaxDomains, domainIPsIndexTruncated),
+		// 10th ring: the per-domain IP cap (maxIPsPerDomain), which used to be
+		// silently discarded here (see the removed `_ = domainIPsMaxIPsPerDomain`
+		// this replaced) — Current is the largest per-domain IP count seen
+		// anywhere in the index right now, Truncated is true when at least one
+		// domain is AT the cap (docs/ref/todo/
+		// statistics-dns-cap-notification-fix-plan.md §3.4/T-06).
+		flatRing(capacityMetaDNSDomainIPsPerDomain, domainIPsMaxIPsUsed, domainIPsMaxIPsPerDomain, domainIPsDomainsAtIPCap > 0),
 	}
-	// dns.domainIps' Cap field is documented (capSource comment above) as
-	// covering BOTH maxDomains and maxIPsPerDomain, but RingCapacity.Cap is a
-	// single int — Current/Cap are domain-counted (maxDomains) here; the
-	// per-domain IP cap (maxIPsPerDomain) has no separate row since this
-	// index isn't a per-IP ring. Left as domainIPsMaxIPsPerDomain-independent
-	// on purpose (plan T-06: "current/peak/fullBuckets/percent" only needs
-	// one denominator per ring).
-	_ = domainIPsMaxIPsPerDomain
 
 	return model.CapacityStatistics{
 		Window:      window,

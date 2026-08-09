@@ -7,7 +7,9 @@ import (
 )
 
 // capacityRingByID is a small test helper — GetCapacityStatistics always
-// returns exactly 9 rings in a fixed order (plan §6/T-08 case 1), so tests
+// returns exactly 10 rings in a fixed order (plan §6/T-08 case 1; the 10th,
+// dns.domainIpsPerDomain, added by docs/ref/todo/
+// statistics-dns-cap-notification-fix-plan.md §3.4/T-06), so tests
 // look up the one they care about by ID rather than hardcoding indices,
 // keeping them resilient to (deliberate, documented) reordering.
 func capacityRingByID(t *testing.T, rings []model.RingCapacity, id string) model.RingCapacity {
@@ -22,7 +24,7 @@ func capacityRingByID(t *testing.T, rings []model.RingCapacity, id string) model
 }
 
 // TestGetCapacityStatistics_Empty is plan T-08 case 1: an empty service must
-// still return all 9 rings, every count zero, and len(series) == bucket
+// still return all 10 rings, every count zero, and len(series) == bucket
 // count for every window.
 func TestGetCapacityStatistics_Empty(t *testing.T) {
 	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
@@ -31,13 +33,13 @@ func TestGetCapacityStatistics_Empty(t *testing.T) {
 		"traffic.hosts", "traffic.dests", "traffic.conversations",
 		"firewall.denySources", "firewall.denyPorts",
 		"dns.pairs", "dns.clients",
-		"dns.reverseCache", "dns.domainIps",
+		"dns.reverseCache", "dns.domainIps", "dns.domainIpsPerDomain",
 	}
 
 	for _, window := range []string{"15m", "30m", "1h", "3h", "6h", "12h", "24h"} {
 		got := s.GetCapacityStatistics(window, true)
-		if len(got.Rings) != 9 {
-			t.Fatalf("window %s: expected 9 rings, got %d", window, len(got.Rings))
+		if len(got.Rings) != 10 {
+			t.Fatalf("window %s: expected 10 rings, got %d", window, len(got.Rings))
 		}
 		for i, id := range wantIDs {
 			if got.Rings[i].ID != id {

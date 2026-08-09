@@ -230,13 +230,15 @@ func TestResolve(t *testing.T) {
 		if len(warns) != 0 {
 			t.Fatalf("unexpected warnings: %v", warns)
 		}
-		if cfg.DNSStatsMaxDomains != 1000 || cfg.DNSStatsMaxIPsPerDomain != 16 {
-			t.Fatalf("got domains=%d ipsPerDomain=%d, want 1000/16", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
+		if cfg.DNSStatsMaxDomains != 1000 || cfg.DNSStatsMaxIPsPerDomain != 32 {
+			t.Fatalf("got domains=%d ipsPerDomain=%d, want 1000/32", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
 		}
 	})
 
 	t.Run("file overrides dns stats domain-ip keys", func(t *testing.T) {
-		fileVals := map[string]string{"dns-stats-max-domains": "5000", "dns-stats-max-ips-per-domain": "32"}
+		// Use 40 here (not 32, the new default) so this test can't pass by
+		// accident just because the file value happens to equal the default.
+		fileVals := map[string]string{"dns-stats-max-domains": "5000", "dns-stats-max-ips-per-domain": "40"}
 		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -244,8 +246,8 @@ func TestResolve(t *testing.T) {
 		if len(warns) != 0 {
 			t.Fatalf("unexpected warnings: %v", warns)
 		}
-		if cfg.DNSStatsMaxDomains != 5000 || cfg.DNSStatsMaxIPsPerDomain != 32 {
-			t.Fatalf("got domains=%d ipsPerDomain=%d, want 5000/32", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
+		if cfg.DNSStatsMaxDomains != 5000 || cfg.DNSStatsMaxIPsPerDomain != 40 {
+			t.Fatalf("got domains=%d ipsPerDomain=%d, want 5000/40", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
 		}
 	})
 
@@ -266,8 +268,8 @@ func TestResolve(t *testing.T) {
 		if len(warns) != 2 {
 			t.Fatalf("expected 2 warnings, got %v", warns)
 		}
-		if cfg.DNSStatsMaxDomains != 1000 || cfg.DNSStatsMaxIPsPerDomain != 16 {
-			t.Fatalf("got domains=%d ipsPerDomain=%d, want defaults 1000/16", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
+		if cfg.DNSStatsMaxDomains != 1000 || cfg.DNSStatsMaxIPsPerDomain != 32 {
+			t.Fatalf("got domains=%d ipsPerDomain=%d, want defaults 1000/32", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
 		}
 	})
 
@@ -280,8 +282,8 @@ func TestResolve(t *testing.T) {
 		if len(warns) != 2 {
 			t.Fatalf("expected 2 warnings, got %v", warns)
 		}
-		if cfg.DNSStatsMaxDomains != 1000 || cfg.DNSStatsMaxIPsPerDomain != 16 {
-			t.Fatalf("got domains=%d ipsPerDomain=%d, want defaults 1000/16", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
+		if cfg.DNSStatsMaxDomains != 1000 || cfg.DNSStatsMaxIPsPerDomain != 32 {
+			t.Fatalf("got domains=%d ipsPerDomain=%d, want defaults 1000/32", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
 		}
 	})
 
@@ -294,8 +296,8 @@ func TestResolve(t *testing.T) {
 		if len(warns) != 2 {
 			t.Fatalf("expected 2 warnings, got %v", warns)
 		}
-		if cfg.DNSStatsMaxDomains != 1000 || cfg.DNSStatsMaxIPsPerDomain != 16 {
-			t.Fatalf("got domains=%d ipsPerDomain=%d, want defaults 1000/16", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
+		if cfg.DNSStatsMaxDomains != 1000 || cfg.DNSStatsMaxIPsPerDomain != 32 {
+			t.Fatalf("got domains=%d ipsPerDomain=%d, want defaults 1000/32", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
 		}
 	})
 }

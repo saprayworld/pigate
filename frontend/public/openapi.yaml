@@ -772,10 +772,10 @@ paths:
         Backs the Statistics -> Capacity page and the small "capacity"
         indicator pills on the Overview/Traffic/DNS pages (docs/ref/todo/
         statistics-capacity-visibility-plan.md, GitHub issue #123). Returns
-        exactly 9 rings, always in the same fixed order (traffic.hosts,
+        exactly 10 rings, always in the same fixed order (traffic.hosts,
         traffic.dests, traffic.conversations, firewall.denySources,
         firewall.denyPorts, dns.pairs, dns.clients, dns.reverseCache,
-        dns.domainIps) — the current/peak size of each of the RAM-only
+        dns.domainIps, dns.domainIpsPerDomain) — the current/peak size of each of the RAM-only
         in-memory tracking structures backing `/statistics/traffic` and
         `/statistics/dns`, relative to its configured cap. This is an
         EARLY-WARNING signal (percent full, before data is dropped) on top
@@ -810,11 +810,12 @@ paths:
             Whether to include each bucket-kind ring's per-bucket `series`
             array. Strict whitelist: exactly "1" or "true" means true;
             anything else (omitted, "0", "false", garbage) means false —
-            never a 400. Flat-kind rings (`dns.reverseCache`, `dns.domainIps`)
-            never carry a `series`, regardless of this parameter.
+            never a 400. Flat-kind rings (`dns.reverseCache`, `dns.domainIps`,
+            `dns.domainIpsPerDomain`) never carry a `series`, regardless of
+            this parameter.
       responses:
         '200':
-          description: Capacity usage for all 9 tracking rings/indices
+          description: Capacity usage for all 10 tracking rings/indices
           content:
             application/json:
               schema:
@@ -5312,10 +5313,15 @@ components:
         ipsTruncated:
           type: boolean
           description: >-
-            True when the RAM-only domain->IP forward index hit one of its
-            caps at some point — meaning the reverse index this endpoint
-            reads from may be missing some domain<->IP associations, so
-            domains below could be incomplete.
+            True when EITHER (a) the domain->IP forward index rejected a
+            brand-new domain because dns-stats-max-domains was hit within the
+            last TTL window (index-wide — the same signal as
+            DNSQueryStatistics.domainIndexTruncated), OR (b) at least one of
+            the domains actually returned in domains below currently holds
+            dns-stats-max-ips-per-domain or more IPs (scoped to this result's
+            own rows, computed fresh on every read — not a sticky index-wide
+            latch). Either way it means domains below may be missing some
+            domain<->IP associations for at least one of the rows shown.
         domains:
           type: array
           description: >-
@@ -5396,6 +5402,7 @@ components:
         - totalQueries
         - querySeries
         - truncated
+        - domainIndexTruncated
         - topDomains
         - topClients
         - observedBytes
@@ -5449,11 +5456,29 @@ components:
           type: boolean
           description: >-
             True only when data was actually dropped: the domain×client
-            pair ring, the per-bucket client tracking cap, or the domain->IP
-            forward index cap was hit during this window. Deliberately does
-            NOT fire just because totalDomains/totalClients exceeds the
-            top-50 table size — that is normal, fully-and-accurately-tracked
-            data that simply doesn't all fit in the table.
+            pair ring or the per-bucket client tracking cap was hit during
+            this window. Deliberately does NOT fire just because
+            totalDomains/totalClients exceeds the top-50 table size — that
+            is normal, fully-and-accurately-tracked data that simply doesn't
+            all fit in the table. As of docs/ref/todo/
+            statistics-dns-cap-notification-fix-plan.md §3.3, this field no
+            longer reflects the domain->IP forward index's own cap
+            (dns-stats-max-domains) — see domainIndexTruncated below for that,
+            a deliberately separate signal.
+        domainIndexTruncated:
+          type: boolean
+          description: >-
+            True when the RAM-only domain->IP forward index
+            (service/dns_domain_ips.go) rejected a brand-new domain because
+            it was already at dns-stats-max-domains, within the last TTL
+            window (self-clears once a full TTL has passed with no further
+            rejection, or immediately after the cap is raised — it does NOT
+            latch forever). Completely separate from truncated above:
+            truncated is about the (domain,client) pair ring;
+            domainIndexTruncated is about the domain->IP index hitting its
+            DOMAIN count cap specifically — it says nothing about any single
+            domain's resolved-IP list being incomplete (see
+            DNSDomainDrilldown.ipsTruncated for that, which is per-domain).
         topDomains:
           type: array
           description: >-
@@ -5557,11 +5582,11 @@ components:
           type: boolean
           description: >-
             True only when data was actually dropped: the domain×client pair
-            ring, the per-bucket client tracking cap, or the domain->IP
-            forward index cap was hit during this window. Deliberately does
-            NOT fire just because totalDomains/totalClients exceeds the
-            top-50 table size — that is normal, fully-and-accurately-tracked
-            data that simply doesn't all fit in the table.
+            ring or the per-bucket client tracking cap was hit during this
+            window. Deliberately does NOT fire just because
+            totalDomains/totalClients exceeds the top-50 table size — that
+            is normal, fully-and-accurately-tracked data that simply doesn't
+            all fit in the table.
         clients:
           type: array
           description: >-
@@ -5609,12 +5634,15 @@ components:
         ipsTruncated:
           type: boolean
           description: >-
-            True when the RAM-only domain->IP forward index hit its
-            per-domain IP cap (dns-stats-max-ips-per-domain) while building
-            ips above — a separate truncation signal from truncated (which
-            covers the query-count ring), so the UI can distinguish "clients
-            list may be incomplete" from "resolved-IP list may be
-            incomplete".
+            True when THIS domain's own IP set (ips above) is currently at
+            dns-stats-max-ips-per-domain — computed fresh from len(ips) each
+            time this endpoint is read, scoped to THIS domain only (never any
+            other domain in the index) — a separate truncation signal from
+            truncated (which covers the query-count ring), so the UI can
+            distinguish "clients list may be incomplete" from "this domain's
+            resolved-IP list may be incomplete". A domain with only one known
+            IP can never report ipsTruncated=true, regardless of what any
+            other domain in the index is doing.
         series:
           type: array
           description: >-
@@ -5654,6 +5682,7 @@ components:
         - enabled
         - totalQueries
         - truncated
+        - domainIndexTruncated
         - domains
         - totalBytes
         - totalBytesUp
@@ -5695,11 +5724,17 @@ components:
           type: boolean
           description: >-
             True only when data was actually dropped: the domain×client pair
-            ring, the per-bucket client tracking cap, or the domain->IP
-            forward index cap was hit during this window. Deliberately does
-            NOT fire just because totalDomains/totalClients exceeds the
-            top-50 table size — that is normal, fully-and-accurately-tracked
-            data that simply doesn't all fit in the table.
+            ring or the per-bucket client tracking cap was hit during this
+            window. Deliberately does NOT fire just because
+            totalDomains/totalClients exceeds the top-50 table size — that
+            is normal, fully-and-accurately-tracked data that simply doesn't
+            all fit in the table.
+        domainIndexTruncated:
+          type: boolean
+          description: >-
+            Mirrors DNSQueryStatistics.domainIndexTruncated — see that
+            field's description. Separate from truncated above for the same
+            reason.
         domains:
           type: array
           description: >-
@@ -5859,7 +5894,12 @@ components:
             True once at least one admission has actually been rejected
             because this cap was hit — the SAME after-the-fact signal
             already exposed elsewhere; currentPercent/peakPercent are the
-            NEW early-warning signal this endpoint adds.
+            NEW early-warning signal this endpoint adds. The frontend's
+            ringStatus() reads this field FIRST and forces "danger" whenever
+            it is true — otherwise a "flat" ring (fullBuckets always 0, no
+            bucket dimension) would have no way to ever show red even at
+            100% (docs/ref/todo/statistics-dns-cap-notification-fix-plan.md
+            §2.3/T-10).
         estimatedBytes:
           type: integer
           format: int64
@@ -5890,9 +5930,11 @@ components:
         - generatedAt
       description: >-
         The GET /statistics/capacity response — current usage vs configured
-        cap for all 9 RAM-only tracking structures, always in the same fixed
+        cap for all 10 RAM-only tracking structures, always in the same fixed
         order (docs/ref/todo/statistics-capacity-visibility-plan.md T-01,
-        GitHub issue #123). Contains ONLY counts/percentages — no domain
+        GitHub issue #123; the 10th ring, dns.domainIpsPerDomain, was added
+        by docs/ref/todo/statistics-dns-cap-notification-fix-plan.md
+        §3.4/T-06). Contains ONLY counts/percentages — no domain
         name, IP address, or hostname ever appears here.
       properties:
         window:
@@ -5905,10 +5947,10 @@ components:
         rings:
           type: array
           description: >-
-            Always exactly 9 entries, in the fixed order: traffic.hosts,
+            Always exactly 10 entries, in the fixed order: traffic.hosts,
             traffic.dests, traffic.conversations, firewall.denySources,
             firewall.denyPorts, dns.pairs, dns.clients, dns.reverseCache,
-            dns.domainIps.
+            dns.domainIps, dns.domainIpsPerDomain.
           items:
             $ref: '#/components/schemas/RingCapacity'
         generatedAt:

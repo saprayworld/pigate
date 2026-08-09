@@ -45,9 +45,10 @@ export interface RingCapacity {
 export interface CapacityStatistics {
   window: StatsWindow
   bucketCount: number
-  // Always exactly 9 entries, in a fixed order (traffic.hosts, traffic.dests,
+  // Always exactly 10 entries, in a fixed order (traffic.hosts, traffic.dests,
   // traffic.conversations, firewall.denySources, firewall.denyPorts,
-  // dns.pairs, dns.clients, dns.reverseCache, dns.domainIps).
+  // dns.pairs, dns.clients, dns.reverseCache, dns.domainIps,
+  // dns.domainIpsPerDomain).
   rings: RingCapacity[]
   generatedAt: string
 }
@@ -83,7 +84,8 @@ const mockRingSpecs: {
   { id: "dns.pairs", group: "dns", label: "DNS (domain, client) pairs", kind: "bucket", capSource: "dns-stats-max-pairs", entryBytes: 110, cap: 2400, currentPercent: 74, peakPercent: 82, truncated: false },
   { id: "dns.clients", group: "dns", label: "DNS distinct clients", kind: "bucket", capSource: "dns-stats-max-clients", entryBytes: 47, cap: 200, currentPercent: 18, peakPercent: 25, truncated: false },
   { id: "dns.reverseCache", group: "dns", label: "DNS reverse cache (IP -> domain)", kind: "flat", capSource: "DNS Server > Settings (DNS Cache Max Entries)", entryBytes: 90, cap: 1000, currentPercent: 41, peakPercent: 41, truncated: false },
-  { id: "dns.domainIps", group: "dns", label: "DNS domain -> resolved IP index", kind: "flat", capSource: "dns-stats-max-domains / dns-stats-max-ips-per-domain", entryBytes: 1000, cap: 1000, currentPercent: 27, peakPercent: 27, truncated: false },
+  { id: "dns.domainIps", group: "dns", label: "DNS domain -> resolved IP index", kind: "flat", capSource: "dns-stats-max-domains", entryBytes: 2000, cap: 1000, currentPercent: 27, peakPercent: 27, truncated: false },
+  { id: "dns.domainIpsPerDomain", group: "dns", label: "DNS resolved IPs ต่อโดเมน (สูงสุด)", kind: "flat", capSource: "dns-stats-max-ips-per-domain", entryBytes: 55, cap: 32, currentPercent: 50, peakPercent: 50, truncated: false },
 ]
 
 function mockSeries(window: StatsWindow, current: number, peak: number): CapacityPoint[] {

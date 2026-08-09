@@ -10,12 +10,22 @@ import type { RingCapacity } from "@/services/capacityService"
 
 export type CapacityStatus = "ok" | "warn" | "danger"
 
-// ringStatus: danger when fullBuckets > 0 (this ring has ACTUALLY dropped
-// data at least once) OR peakPercent >= 90; warn at peakPercent >= 70; ok
-// otherwise. peakPercent (not currentPercent) drives the color — a ring that
-// spiked earlier in the window and has since calmed down should still read
-// as a warning, not ok.
+// ringStatus: danger when ring.truncated is true (checked FIRST), OR
+// fullBuckets > 0 (this ring has ACTUALLY dropped data at least once), OR
+// peakPercent >= 90; warn at peakPercent >= 70; ok otherwise. peakPercent
+// (not currentPercent) drives the color — a ring that spiked earlier in the
+// window and has since calmed down should still read as a warning, not ok.
+//
+// The `ring.truncated` check must come first because a "flat" ring (no
+// bucket dimension — dns.reverseCache, dns.domainIps, dns.domainIpsPerDomain)
+// always reports fullBuckets=0, so before this check was added a flat ring
+// had NO WAY to ever reach "danger" even while sitting at 100% with real
+// admissions being rejected — this was the root cause of the Statistics ->
+// Capacity page never being able to confirm a "resolved-IP list may be
+// incomplete" warning shown elsewhere on the DNS page (docs/ref/todo/
+// statistics-dns-cap-notification-fix-plan.md §2.3/T-10).
 export function ringStatus(ring: RingCapacity): CapacityStatus {
+  if (ring.truncated) return "danger"
   if (ring.fullBuckets > 0 || ring.peakPercent >= 90) return "danger"
   if (ring.peakPercent >= 70) return "warn"
   return "ok"

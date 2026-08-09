@@ -2054,7 +2054,7 @@ func TestDNSStatisticsEndpoints_RequireAuth(t *testing.T) {
 // TestCapacityStatisticsEndpoint is docs/ref/todo/
 // statistics-capacity-visibility-plan.md T-08 (API portion): the new
 // /api/statistics/capacity route must require auth (like every other
-// /api/statistics/* route), return exactly 9 rings with no PII, and treat
+// /api/statistics/* route), return exactly 10 rings with no PII, and treat
 // `series` as a strict "1"/"true" whitelist (anything else, including
 // missing, means false — never a 400).
 func TestCapacityStatisticsEndpoint(t *testing.T) {
@@ -2077,7 +2077,7 @@ func TestCapacityStatisticsEndpoint(t *testing.T) {
 		t.Errorf("without session: expected 401, got %d", rec.Code)
 	}
 
-	// Default (no series param): 9 rings, every series omitted.
+	// Default (no series param): 10 rings, every series omitted.
 	rec = get("/api/statistics/capacity")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
@@ -2087,8 +2087,8 @@ func TestCapacityStatisticsEndpoint(t *testing.T) {
 		t.Fatalf("decode failed: %v", err)
 	}
 	rings, _ := body["rings"].([]any)
-	if len(rings) != 9 {
-		t.Fatalf("expected 9 rings, got %d: %s", len(rings), rec.Body.String())
+	if len(rings) != 10 {
+		t.Fatalf("expected 10 rings, got %d: %s", len(rings), rec.Body.String())
 	}
 	for _, raw := range rings {
 		row, _ := raw.(map[string]any)

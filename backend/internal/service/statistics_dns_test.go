@@ -480,6 +480,57 @@ func TestGetDNSQueryStatistics_ManyDomainsNotTruncated(t *testing.T) {
 	}
 }
 
+// TestGetDNSQueryStatistics_PerDomainIPCapDoesNotSetTruncated is the
+// regression test for docs/ref/todo/
+// statistics-dns-cap-notification-fix-plan.md bug B: before this fix,
+// s.dns.domainIPs.Truncated() (which OR'd together the maxDomains cap AND
+// the per-domain IP cap) was OR'd straight into the (domain,client) pair
+// ring's own `truncated` — so a single domain rotating past
+// dns-stats-max-ips-per-domain made this whole page warn about the pair ring
+// being full, even though it was nowhere near its cap. Domain A here churns
+// well past its per-domain IP cap; Domain B has exactly one known IP.
+// Truncated/DomainIndexTruncated must both stay false (the pair ring never
+// filled and maxDomains was never hit), and Domain B's own drilldown must
+// report IPsTruncated=false.
+func TestGetDNSQueryStatistics_PerDomainIPCapDoesNotSetTruncated(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+	s.SetDNSLoggingEnabled(true)
+	// A tiny per-domain IP cap so the test doesn't need 32+ answer events.
+	s.SetDomainIPsLimits(60, 1000, 2)
+
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogQuery, Domain: "a.example.com", QueryType: "A", ClientIP: "192.168.1.10"})
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogAnswer, Domain: "a.example.com", AnswerIP: "10.0.0.1"})
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogAnswer, Domain: "a.example.com", AnswerIP: "10.0.0.2"})
+	// This third distinct IP is rejected: a.example.com is already at its
+	// per-domain IP cap (2).
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogAnswer, Domain: "a.example.com", AnswerIP: "10.0.0.3"})
+
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogQuery, Domain: "b.example.com", QueryType: "A", ClientIP: "192.168.1.11"})
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogAnswer, Domain: "b.example.com", AnswerIP: "10.10.10.10"})
+
+	if !s.dns.domainIPs.IPCapHitRecently() {
+		t.Fatalf("setup: expected the per-domain IP cap to have actually been hit")
+	}
+
+	stats := s.GetDNSQueryStatistics("1h")
+	if stats.Truncated {
+		t.Errorf("expected Truncated=false — the (domain,client) pair ring never hit its own cap (bug B regression)")
+	}
+	if stats.DomainIndexTruncated {
+		t.Errorf("expected DomainIndexTruncated=false — maxDomains was never hit, only the per-domain IP cap (bug B regression)")
+	}
+
+	domainB := s.GetDNSDomainClients("1h", "b.example.com")
+	if domainB.IPsTruncated {
+		t.Errorf("expected b.example.com IPsTruncated=false — it has exactly 1 known IP, its own cap was never hit (bug B regression)")
+	}
+
+	domainA := s.GetDNSDomainClients("1h", "a.example.com")
+	if !domainA.IPsTruncated {
+		t.Errorf("expected a.example.com IPsTruncated=true — it IS at its own per-domain IP cap")
+	}
+}
+
 // TestGetDNSIPDomains_SharedIP covers docs/ref/todo/statistics-dns-ip-filter-
 // plan.md T-03: an IP shared by 2 domains (10.0.0.3 -> b.example.com,
 // c.example.com in seedDNSVolumeFixture) returns both rows, Shared=true, and
