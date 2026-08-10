@@ -53,6 +53,7 @@ type Server struct {
 	capabilityService *service.SystemCapabilityService
 	trafficStats      *service.TrafficStatsService
 	statistics        *service.StatisticsService
+	ipInfo            *service.IPInfoService
 }
 
 func NewServer(
@@ -85,6 +86,7 @@ func NewServer(
 	capabilityService *service.SystemCapabilityService,
 	trafficStats *service.TrafficStatsService,
 	statistics *service.StatisticsService,
+	ipInfo *service.IPInfoService,
 ) *Server {
 	return &Server{
 		repo:              repo,
@@ -116,6 +118,7 @@ func NewServer(
 		capabilityService: capabilityService,
 		trafficStats:      trafficStats,
 		statistics:        statistics,
+		ipInfo:            ipInfo,
 	}
 }
 
@@ -683,6 +686,53 @@ func (s *Server) HandleGetTrafficHostDetail(w http.ResponseWriter, r *http.Reque
 	ip := addr.String()
 
 	s.writeJSON(w, http.StatusOK, s.statistics.GetTrafficHostDetail(window, ip, limit))
+}
+
+// HandleGetIPInfo backs the Statistics -> Traffic -> Host page's "Public IP
+// Info" card (docs/ref/todo/statistics-host-ipinfo-plan.md T-07) — modeled
+// on HandleGetTrafficHostDetail above: `ip` MUST parse via netip.ParseAddr,
+// and on failure this returns 400 and NEVER calls the service (same rule as
+// every other IP-taking statistics endpoint in this file). The parsed
+// address is re-serialized via addr.String() before being passed down.
+//
+// Error mapping is deliberately opaque about *why* something failed beyond
+// what the client needs to render a state:
+//   - ErrIPInfoDisabled  -> 404 (not 403 — doesn't hint at server config)
+//   - ErrIPInfoNotPublic -> 400 (same class as an invalid `ip` — client sent
+//     something this endpoint will never serve)
+//   - ErrIPInfoRateLimited -> 429
+//   - anything else (provider failure/timeout) -> 502 with a generic
+//     message; the raw upstream error is deliberately never sent to the
+//     client.
+func (s *Server) HandleGetIPInfo(w http.ResponseWriter, r *http.Request) {
+	raw := r.URL.Query().Get("ip")
+	if raw == "" {
+		s.writeError(w, http.StatusBadRequest, "invalid ip")
+		return
+	}
+	addr, err := netip.ParseAddr(raw)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid ip")
+		return
+	}
+	ip := addr.String()
+
+	result, err := s.ipInfo.Lookup(r.Context(), ip)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrIPInfoDisabled):
+			s.writeError(w, http.StatusNotFound, "not found")
+		case errors.Is(err, service.ErrIPInfoNotPublic):
+			s.writeError(w, http.StatusBadRequest, "invalid ip")
+		case errors.Is(err, service.ErrIPInfoRateLimited):
+			s.writeError(w, http.StatusTooManyRequests, "rate limited, try again later")
+		default:
+			s.writeError(w, http.StatusBadGateway, "ip info lookup failed")
+		}
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, result)
 }
 
 // dnsUnknownClientParam is the one non-IP value HandleGetDNSClientDomains

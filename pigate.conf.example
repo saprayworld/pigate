@@ -152,3 +152,31 @@ dns-stats-max-domains=1000
 # Maximum number of distinct resolved IPs tracked per domain in the
 # domain->IP index.
 dns-stats-max-ips-per-domain=32
+
+# The key below controls the Statistics -> Traffic -> Host page's "Public IP
+# Info" card (docs/ref/todo/statistics-host-ipinfo-plan.md) — a backend proxy
+# in front of the third-party service ipinfo.io. When enabled, drilling into
+# a PUBLIC IP (not a LAN host) sends that IP to https://ipinfo.io over HTTPS
+# (no API token in the current phase) to show its city/region/country/org.
+# Results are cached in RAM only (never SQLite) and rate-limited server-wide
+# to protect ipinfo.io from this page's own auto-refresh.
+#
+# This is the ONE key on this page that makes pigate talk to a third party at
+# all, so it is OFF by default and file-only (no CLI flag, no UI toggle) —
+# you must opt in by hand, here, if you want it.
+ipinfo-enabled=false
+
+# The two keys below bound the firewall deny ring's per-bucket caps (backend/
+# internal/service/statistics.go — docs/ref/todo/
+# statistics-capacity-visibility-plan.md T-14), promoted from the old
+# maxTrackedDenySources/maxTrackedDenyPorts consts so they're editable without
+# a rebuild. Same 5-minute/288-bucket (24h) ring and clamp+warn (not fatal)
+# out-of-range validation as the traffic-stats-max-* keys above.
+
+# Maximum number of distinct source IPs tracked per 5-minute bucket in the
+# firewall deny ring.
+deny-stats-max-sources=500
+
+# Maximum number of distinct destination ports tracked per 5-minute bucket in
+# the firewall deny ring.
+deny-stats-max-ports=300

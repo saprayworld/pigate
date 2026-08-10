@@ -48,6 +48,14 @@
 // (service/dns_domain_ips.go) — file-only, non-integer is a fail-fast error,
 // out-of-range-but-syntactically-valid clamps to the default with a warning.
 //
+// ipinfo-enabled (docs/ref/todo/statistics-host-ipinfo-plan.md T-06) is also
+// file-only (no CLI flag, no two-tier validation needed — it's a plain bool,
+// default false) gating the Public IP Info card's backend proxy to
+// ipinfo.io: this is the ONE key in this file that decides whether the
+// daemon ever makes an outbound request to a third party at all, so it
+// defaults OFF and can only be turned on by deliberately editing the config
+// file (plan §2 "การเปิดใช้งาน").
+//
 // deny-stats-max-sources / deny-stats-max-ports (docs/ref/todo/
 // statistics-capacity-visibility-plan.md T-14) mirror the exact same pattern
 // for the firewall deny ring's per-bucket caps (service/statistics.go),
@@ -108,6 +116,12 @@ type Config struct {
 	DNSStatsMaxDomains      int
 	DNSStatsMaxIPsPerDomain int
 
+	// IPInfoEnabled is also file-only (no matching CLI flag) — gates the
+	// Public IP Info card's backend proxy to ipinfo.io (docs/ref/todo/
+	// statistics-host-ipinfo-plan.md T-06). Default false; no token support
+	// in this phase.
+	IPInfoEnabled bool
+
 	// DenyStatsMaxSources/DenyStatsMaxPorts are also file-only (no matching
 	// CLI flag) — the firewall deny ring's per-bucket caps (docs/ref/todo/
 	// statistics-capacity-visibility-plan.md T-14), promoted from consts
@@ -155,6 +169,9 @@ func Defaults() Config {
 		DNSStatsMaxDomains:      1000,
 		DNSStatsMaxIPsPerDomain: 32,
 
+		// Default OFF (docs/ref/todo/statistics-host-ipinfo-plan.md T-06).
+		IPInfoEnabled: false,
+
 		// Keep in sync with the old maxTrackedDenySources/maxTrackedDenyPorts
 		// consts these keys replace (docs/ref/todo/
 		// statistics-capacity-visibility-plan.md T-14).
@@ -195,6 +212,10 @@ const (
 	// CLI flag — docs/ref/todo/statistics-dns-page-revamp-plan.md T-05).
 	keyDNSStatsMaxDomains      = "dns-stats-max-domains"
 	keyDNSStatsMaxIPsPerDomain = "dns-stats-max-ips-per-domain"
+
+	// keyIPInfoEnabled is also file-only (no CLI flag — docs/ref/todo/
+	// statistics-host-ipinfo-plan.md T-06).
+	keyIPInfoEnabled = "ipinfo-enabled"
 
 	// keyDenyStatsMaxSources/keyDenyStatsMaxPorts are also file-only (no CLI
 	// flag — docs/ref/todo/statistics-capacity-visibility-plan.md T-14).
@@ -275,8 +296,11 @@ var orderedKeys = []string{
 	// statistics-dns-page-revamp-plan.md T-05).
 	keyDNSStatsMaxDomains,
 	keyDNSStatsMaxIPsPerDomain,
-	// Also appended at the end, after the DNS domain->IP index keys
-	// (docs/ref/todo/statistics-capacity-visibility-plan.md T-14).
+	// Also appended at the end, after the DNS stats domain keys (docs/ref/todo/
+	// statistics-host-ipinfo-plan.md T-06).
+	keyIPInfoEnabled,
+	// Also appended at the end, after the ipinfo-enabled key (docs/ref/todo/
+	// statistics-capacity-visibility-plan.md T-14).
 	keyDenyStatsMaxSources,
 	keyDenyStatsMaxPorts,
 }
@@ -553,6 +577,12 @@ func applyKey(cfg *Config, key, value string) error {
 			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
 		}
 		cfg.DNSStatsMaxIPsPerDomain = n
+	case keyIPInfoEnabled:
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid bool for %q: %q: %w", key, value, err)
+		}
+		cfg.IPInfoEnabled = b
 	case keyDenyStatsMaxSources:
 		n, err := strconv.Atoi(value)
 		if err != nil {
@@ -617,6 +647,8 @@ func keyValue(cfg Config, key string) string {
 		return strconv.Itoa(cfg.DNSStatsMaxDomains)
 	case keyDNSStatsMaxIPsPerDomain:
 		return strconv.Itoa(cfg.DNSStatsMaxIPsPerDomain)
+	case keyIPInfoEnabled:
+		return strconv.FormatBool(cfg.IPInfoEnabled)
 	case keyDenyStatsMaxSources:
 		return strconv.Itoa(cfg.DenyStatsMaxSources)
 	case keyDenyStatsMaxPorts:

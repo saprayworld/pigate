@@ -314,6 +314,7 @@ func TestWriteParseRoundTrip(t *testing.T) {
 	cfg.DNSStatsMaxClients = 300
 	cfg.DNSStatsMaxDomains = 2000
 	cfg.DNSStatsMaxIPsPerDomain = 24
+	cfg.IPInfoEnabled = true
 	cfg.DenyStatsMaxSources = 800
 	cfg.DenyStatsMaxPorts = 400
 
@@ -359,8 +360,8 @@ func TestWriteParseRoundTripDefaults(t *testing.T) {
 
 func TestKnownKeys(t *testing.T) {
 	keys := KnownKeys()
-	if len(keys) != 21 {
-		t.Fatalf("expected 21 known keys, got %d: %v", len(keys), keys)
+	if len(keys) != 22 {
+		t.Fatalf("expected 22 known keys, got %d: %v", len(keys), keys)
 	}
 	// "config" and "v" must never be treated as config-file keys.
 	for _, k := range keys {
@@ -406,6 +407,15 @@ func TestKnownKeys(t *testing.T) {
 	if !hasMaxDomains || !hasMaxIPsPerDomain {
 		t.Fatalf("expected dns-stats-max-domains/dns-stats-max-ips-per-domain in KnownKeys, got %v", keys)
 	}
+	var hasIPInfoEnabled bool
+	for _, k := range keys {
+		if k == "ipinfo-enabled" {
+			hasIPInfoEnabled = true
+		}
+	}
+	if !hasIPInfoEnabled {
+		t.Fatalf("expected ipinfo-enabled in KnownKeys, got %v", keys)
+	}
 	var hasDenySources, hasDenyPorts bool
 	for _, k := range keys {
 		switch k {
@@ -417,6 +427,34 @@ func TestKnownKeys(t *testing.T) {
 	}
 	if !hasDenySources || !hasDenyPorts {
 		t.Fatalf("expected deny-stats-max-sources/deny-stats-max-ports in KnownKeys, got %v", keys)
+	}
+}
+
+// TestIPInfoEnabledDefaultFalse locks in plan T-06's explicit requirement
+// that this key defaults to false and requires no config to run.
+func TestIPInfoEnabledDefaultFalse(t *testing.T) {
+	if Defaults().IPInfoEnabled != false {
+		t.Fatalf("expected ipinfo-enabled to default to false")
+	}
+	got, warns, err := Resolve(Defaults(), map[string]string{}, nil)
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+	if len(warns) != 0 {
+		t.Fatalf("unexpected warnings: %v", warns)
+	}
+	if got.IPInfoEnabled != false {
+		t.Fatalf("expected ipinfo-enabled to stay false with no file value set")
+	}
+}
+
+func TestIPInfoEnabledFileValue(t *testing.T) {
+	got, _, err := Resolve(Defaults(), map[string]string{"ipinfo-enabled": "true"}, nil)
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+	if !got.IPInfoEnabled {
+		t.Fatalf("expected ipinfo-enabled=true from file to be applied")
 	}
 }
 
