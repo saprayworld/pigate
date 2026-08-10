@@ -23,7 +23,8 @@ export interface TrafficLog {
   action: TrafficAction;
   src: string;
   dest: string;
-  port: string;
+  srcPort: string; // "-" for non-TCP/UDP or if unknown
+  port: string; // destination port; "-" for non-TCP/UDP or if unknown
   proto: string;
   inIface: string; // ingress interface name ("-" if unknown)
   outIface: string; // egress interface name ("-" if unknown)
@@ -71,19 +72,19 @@ export interface TrafficLogQuery {
 //   4. no rule id / name at all (row 6)
 //   5. system token (structural log point, not a user rule) (row 10)
 const MOCK_SAMPLES: Array<Omit<TrafficLog, "id" | "time">> = [
-  { chain: "forward", action: "PASS", src: "192.168.1.105", dest: "8.8.8.8", port: "53", proto: "UDP", inIface: "eth0", outIface: "eth1", reason: "Allowed (forward)", ruleId: "rule-allow-dns", ruleName: "Allow DNS", destDomain: "dns.google" },
-  { chain: "forward", action: "PASS", src: "192.168.1.112", dest: "142.250.80.46", port: "443", proto: "TCP", inIface: "eth0", outIface: "eth1", reason: "Allowed (forward)", ruleId: "rule-allow-web", ruleName: "Allow Web Browsing", destDomain: "www.google.com" },
-  { chain: "forward", action: "DROP", src: "192.168.1.133", dest: "185.220.101.4", port: "23", proto: "TCP", inIface: "eth0", outIface: "eth1", reason: "Blocked (forward)", ruleId: "rule-deleted-demo" },
-  { chain: "forward", action: "PASS", src: "192.168.1.108", dest: "1.1.1.1", port: "443", proto: "TCP", inIface: "wlan0", outIface: "eth1", reason: "Allowed (forward)", ruleId: "rule-allow-web", ruleName: "Allow Web Browsing", destDomain: "one.one.one.one" },
-  { chain: "forward", action: "DROP", src: "192.168.1.140", dest: "45.13.104.9", port: "3389", proto: "TCP", inIface: "wlan0", outIface: "eth1", reason: "Blocked (forward)", ruleId: "rule-block-rdp", ruleName: "Block RDP" },
-  { chain: "forward", action: "PASS", src: "192.168.1.101", dest: "140.82.113.3", port: "22", proto: "TCP", inIface: "eth0", outIface: "eth1", reason: "Allowed (forward)" },
-  { chain: "input", action: "PASS", src: "192.168.1.10", dest: "192.168.1.1", port: "443", proto: "TCP", inIface: "eth1", outIface: "-", reason: "Allowed (local-in)", ruleId: "sys-admin-https", ruleName: "System: Admin Access (HTTPS)", srcHostname: "laptop-office" },
-  { chain: "input", action: "PASS", src: "192.168.1.20", dest: "192.168.1.1", port: "22", proto: "TCP", inIface: "eth1", outIface: "-", reason: "Allowed (local-in)", ruleId: "sys-admin-ssh", ruleName: "System: Admin Access (SSH)", srcHostname: "admin-desktop" },
-  { chain: "input", action: "PASS", src: "192.168.1.15", dest: "192.168.1.1", port: "-", proto: "ICMP", inIface: "eth1", outIface: "-", reason: "Allowed (local-in)", ruleId: "sys-admin-ping", ruleName: "System: Admin Access (Ping)" },
-  { chain: "input", action: "DROP", src: "203.0.113.77", dest: "203.0.113.1", port: "23", proto: "TCP", inIface: "eth0", outIface: "-", reason: "Blocked (local-in)", ruleId: "sys-input-defaultdrop", ruleName: "System: Default Drop (Local-In)" },
-  { chain: "input", action: "DROP", src: "198.51.100.5", dest: "203.0.113.1", port: "3389", proto: "TCP", inIface: "eth0", outIface: "-", reason: "Blocked (local-in)", ruleId: "sys-input-defaultdrop", ruleName: "System: Default Drop (Local-In)" },
-  { chain: "output", action: "PASS", src: "203.0.113.1", dest: "8.8.8.8", port: "53", proto: "UDP", inIface: "-", outIface: "eth0", reason: "Allowed (local-out)", destDomain: "dns.google" },
-  { chain: "output", action: "PASS", src: "203.0.113.1", dest: "129.6.15.28", port: "123", proto: "UDP", inIface: "-", outIface: "eth0", reason: "Allowed (local-out)" },
+  { chain: "forward", action: "PASS", src: "192.168.1.105", dest: "8.8.8.8", srcPort: "51423", port: "53", proto: "UDP", inIface: "eth0", outIface: "eth1", reason: "Allowed (forward)", ruleId: "rule-allow-dns", ruleName: "Allow DNS", destDomain: "dns.google" },
+  { chain: "forward", action: "PASS", src: "192.168.1.112", dest: "142.250.80.46", srcPort: "54871", port: "443", proto: "TCP", inIface: "eth0", outIface: "eth1", reason: "Allowed (forward)", ruleId: "rule-allow-web", ruleName: "Allow Web Browsing", destDomain: "www.google.com" },
+  { chain: "forward", action: "DROP", src: "192.168.1.133", dest: "185.220.101.4", srcPort: "49301", port: "23", proto: "TCP", inIface: "eth0", outIface: "eth1", reason: "Blocked (forward)", ruleId: "rule-deleted-demo" },
+  { chain: "forward", action: "PASS", src: "192.168.1.108", dest: "1.1.1.1", srcPort: "60102", port: "443", proto: "TCP", inIface: "wlan0", outIface: "eth1", reason: "Allowed (forward)", ruleId: "rule-allow-web", ruleName: "Allow Web Browsing", destDomain: "one.one.one.one" },
+  { chain: "forward", action: "DROP", src: "192.168.1.140", dest: "45.13.104.9", srcPort: "52117", port: "3389", proto: "TCP", inIface: "wlan0", outIface: "eth1", reason: "Blocked (forward)", ruleId: "rule-block-rdp", ruleName: "Block RDP" },
+  { chain: "forward", action: "PASS", src: "192.168.1.101", dest: "140.82.113.3", srcPort: "58221", port: "22", proto: "TCP", inIface: "eth0", outIface: "eth1", reason: "Allowed (forward)" },
+  { chain: "input", action: "PASS", src: "192.168.1.10", dest: "192.168.1.1", srcPort: "51422", port: "443", proto: "TCP", inIface: "eth1", outIface: "-", reason: "Allowed (local-in)", ruleId: "sys-admin-https", ruleName: "System: Admin Access (HTTPS)", srcHostname: "laptop-office" },
+  { chain: "input", action: "PASS", src: "192.168.1.20", dest: "192.168.1.1", srcPort: "58311", port: "22", proto: "TCP", inIface: "eth1", outIface: "-", reason: "Allowed (local-in)", ruleId: "sys-admin-ssh", ruleName: "System: Admin Access (SSH)", srcHostname: "admin-desktop" },
+  { chain: "input", action: "PASS", src: "192.168.1.15", dest: "192.168.1.1", srcPort: "-", port: "-", proto: "ICMP", inIface: "eth1", outIface: "-", reason: "Allowed (local-in)", ruleId: "sys-admin-ping", ruleName: "System: Admin Access (Ping)" },
+  { chain: "input", action: "DROP", src: "203.0.113.77", dest: "203.0.113.1", srcPort: "44502", port: "23", proto: "TCP", inIface: "eth0", outIface: "-", reason: "Blocked (local-in)", ruleId: "sys-input-defaultdrop", ruleName: "System: Default Drop (Local-In)" },
+  { chain: "input", action: "DROP", src: "198.51.100.5", dest: "203.0.113.1", srcPort: "60123", port: "3389", proto: "TCP", inIface: "eth0", outIface: "-", reason: "Blocked (local-in)", ruleId: "sys-input-defaultdrop", ruleName: "System: Default Drop (Local-In)" },
+  { chain: "output", action: "PASS", src: "203.0.113.1", dest: "8.8.8.8", srcPort: "51234", port: "53", proto: "UDP", inIface: "-", outIface: "eth0", reason: "Allowed (local-out)", destDomain: "dns.google" },
+  { chain: "output", action: "PASS", src: "203.0.113.1", dest: "129.6.15.28", srcPort: "123", port: "123", proto: "UDP", inIface: "-", outIface: "eth0", reason: "Allowed (local-out)" },
 ];
 
 let mockLogs: TrafficLog[] | null = null;
@@ -147,7 +148,7 @@ export const trafficLogService = {
           (!wantAction || l.action === wantAction) &&
           chainMatches(l.chain, chain) &&
           (!needle ||
-            [l.src, l.dest, l.port, l.proto, l.inIface, l.outIface, l.reason, l.chain].some((s) =>
+            [l.src, l.dest, l.srcPort, l.port, l.proto, l.inIface, l.outIface, l.reason, l.chain].some((s) =>
               s.toLowerCase().includes(needle)
             ))
       );

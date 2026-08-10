@@ -388,7 +388,8 @@ type FirewallLog struct {
 	Action   string `json:"action"` // "PASS", "DROP"
 	Src      string `json:"src"`
 	Dest     string `json:"dest"`
-	Port     string `json:"port"`
+	SrcPort  string `json:"srcPort"`
+	Port     string `json:"port"` // destination port
 	Proto    string `json:"proto"`
 	InIface  string `json:"inIface"`  // ingress interface name (NFLOG indev), "-" if unknown
 	OutIface string `json:"outIface"` // egress interface name (NFLOG outdev), "-" if unknown

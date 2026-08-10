@@ -6084,6 +6084,7 @@ components:
         - action
         - src
         - dest
+        - srcPort
         - port
         - proto
         - inIface
@@ -6107,8 +6108,13 @@ components:
         dest:
           type: string
           example: 10.0.0.45
+        srcPort:
+          type: string
+          description: Source port (TCP/UDP only); "-" for other protocols or if unknown.
+          example: "51422"
         port:
           type: string
+          description: Destination port (TCP/UDP only); "-" for other protocols or if unknown.
           example: "445"
         proto:
           type: string

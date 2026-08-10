@@ -43,8 +43,8 @@ const ACTION_OPTIONS = [
 
 /* Client-side mirror of the server's traffic-log filter (handlers.go
  * HandleGetTrafficLogs): chain equality/group + action equality + a
- * case-insensitive substring across src/dest/port/proto/inIface/outIface/
- * reason/chain. Kept in lockstep so a row pushed over SSE is shown only when
+ * case-insensitive substring across src/dest/srcPort/port/proto/inIface/
+ * outIface/reason/chain. Kept in lockstep so a row pushed over SSE is shown only when
  * it would also pass the server filter — including chain, otherwise input/
  * output entries would leak into the Forward Traffic page via the live
  * stream and vice versa (plan §6 Caution 6). */
@@ -65,7 +65,7 @@ function matchesFilter(
     }
   }
   if (needle) {
-    const hay = [l.src, l.dest, l.port, l.proto, l.inIface ?? "", l.outIface ?? "", l.reason, entryChain]
+    const hay = [l.src, l.dest, l.srcPort, l.port, l.proto, l.inIface ?? "", l.outIface ?? "", l.reason, entryChain]
       .join(" ")
       .toLowerCase()
     if (!hay.includes(needle.toLowerCase())) return false
@@ -353,7 +353,7 @@ export function TrafficLogPage({
                     <TableHead className="w-24">Action</TableHead>
                     <TableHead>Src</TableHead>
                     <TableHead>Dest</TableHead>
-                    <TableHead className="w-20">Port</TableHead>
+                    <TableHead className="w-28">Port</TableHead>
                     <TableHead className="w-20">Proto</TableHead>
                     <TableHead className="w-32">Interface</TableHead>
                     <TableHead className="w-40">Rule</TableHead>
@@ -378,7 +378,11 @@ export function TrafficLogPage({
                       <TableCell>
                         <IpCell ip={l.dest} domain={l.destDomain} hostname={l.destHostname} />
                       </TableCell>
-                      <TableCell className="font-mono text-xs">{l.port}</TableCell>
+                      <TableCell className="whitespace-nowrap font-mono text-xs">
+                        {l.srcPort}
+                        <span className="mx-1 text-muted-foreground">→</span>
+                        {l.port}
+                      </TableCell>
                       <TableCell className="text-xs">{l.proto}</TableCell>
                       <TableCell className="whitespace-nowrap font-mono text-xs">
                         {l.inIface}

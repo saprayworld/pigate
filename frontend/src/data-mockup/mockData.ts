@@ -5,6 +5,7 @@ export interface FirewallLog {
   action: "PASS" | "DROP"
   src: string
   dest: string
+  srcPort?: string
   port: string
   proto: string
   reason: string

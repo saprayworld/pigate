@@ -61,36 +61,40 @@ func tcpUDPHeader(srcPort, dstPort uint16) []byte {
 
 func TestParsePacketHeader(t *testing.T) {
 	tests := []struct {
-		name      string
-		pkt       []byte
-		wantSrc   string
-		wantDest  string
-		wantProto string
-		wantPort  string
+		name        string
+		pkt         []byte
+		wantSrc     string
+		wantDest    string
+		wantProto   string
+		wantSrcPort string
+		wantPort    string
 	}{
 		{
-			name:      "IPv4 TCP dport 443",
-			pkt:       ipv4Packet(6, [4]byte{192, 168, 1, 10}, [4]byte{8, 8, 8, 8}, tcpUDPHeader(51000, 443)),
-			wantSrc:   "192.168.1.10",
-			wantDest:  "8.8.8.8",
-			wantProto: "TCP",
-			wantPort:  "443",
+			name:        "IPv4 TCP dport 443",
+			pkt:         ipv4Packet(6, [4]byte{192, 168, 1, 10}, [4]byte{8, 8, 8, 8}, tcpUDPHeader(51000, 443)),
+			wantSrc:     "192.168.1.10",
+			wantDest:    "8.8.8.8",
+			wantProto:   "TCP",
+			wantSrcPort: "51000",
+			wantPort:    "443",
 		},
 		{
-			name:      "IPv4 UDP dport 53",
-			pkt:       ipv4Packet(17, [4]byte{192, 168, 1, 20}, [4]byte{1, 1, 1, 1}, tcpUDPHeader(40000, 53)),
-			wantSrc:   "192.168.1.20",
-			wantDest:  "1.1.1.1",
-			wantProto: "UDP",
-			wantPort:  "53",
+			name:        "IPv4 UDP dport 53",
+			pkt:         ipv4Packet(17, [4]byte{192, 168, 1, 20}, [4]byte{1, 1, 1, 1}, tcpUDPHeader(40000, 53)),
+			wantSrc:     "192.168.1.20",
+			wantDest:    "1.1.1.1",
+			wantProto:   "UDP",
+			wantSrcPort: "40000",
+			wantPort:    "53",
 		},
 		{
-			name:      "IPv4 ICMP no port",
-			pkt:       ipv4Packet(1, [4]byte{10, 0, 0, 1}, [4]byte{10, 0, 0, 2}, nil),
-			wantSrc:   "10.0.0.1",
-			wantDest:  "10.0.0.2",
-			wantProto: "ICMP",
-			wantPort:  "-",
+			name:        "IPv4 ICMP no port",
+			pkt:         ipv4Packet(1, [4]byte{10, 0, 0, 1}, [4]byte{10, 0, 0, 2}, nil),
+			wantSrc:     "10.0.0.1",
+			wantDest:    "10.0.0.2",
+			wantProto:   "ICMP",
+			wantSrcPort: "-",
+			wantPort:    "-",
 		},
 		{
 			name: "IPv6 TCP dport 80",
@@ -98,42 +102,47 @@ func TestParsePacketHeader(t *testing.T) {
 				[16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01},
 				[16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02},
 				tcpUDPHeader(52000, 80)),
-			wantSrc:   "2001:db8::1",
-			wantDest:  "2001:db8::2",
-			wantProto: "TCP",
-			wantPort:  "80",
+			wantSrc:     "2001:db8::1",
+			wantDest:    "2001:db8::2",
+			wantProto:   "TCP",
+			wantSrcPort: "52000",
+			wantPort:    "80",
 		},
 		{
-			name:      "Truncated IPv4 header (payload shorter than 20 bytes)",
-			pkt:       []byte{0x45, 0x00, 0x00},
-			wantSrc:   "-",
-			wantDest:  "-",
-			wantProto: "-",
-			wantPort:  "-",
+			name:        "Truncated IPv4 header (payload shorter than 20 bytes)",
+			pkt:         []byte{0x45, 0x00, 0x00},
+			wantSrc:     "-",
+			wantDest:    "-",
+			wantProto:   "-",
+			wantSrcPort: "-",
+			wantPort:    "-",
 		},
 		{
-			name:      "IPv4 TCP but transport truncated by snaplen",
-			pkt:       ipv4Packet(6, [4]byte{192, 168, 1, 30}, [4]byte{9, 9, 9, 9}, []byte{0x01}),
-			wantSrc:   "192.168.1.30",
-			wantDest:  "9.9.9.9",
-			wantProto: "TCP",
-			wantPort:  "-", // not enough bytes for the port field → left as "-"
+			name:        "IPv4 TCP but transport truncated by snaplen",
+			pkt:         ipv4Packet(6, [4]byte{192, 168, 1, 30}, [4]byte{9, 9, 9, 9}, []byte{0x01}),
+			wantSrc:     "192.168.1.30",
+			wantDest:    "9.9.9.9",
+			wantProto:   "TCP",
+			wantSrcPort: "-", // not enough bytes for the port fields → left as "-"
+			wantPort:    "-",
 		},
 		{
-			name:      "Empty payload",
-			pkt:       []byte{},
-			wantSrc:   "-",
-			wantDest:  "-",
-			wantProto: "-",
-			wantPort:  "-",
+			name:        "Empty payload",
+			pkt:         []byte{},
+			wantSrc:     "-",
+			wantDest:    "-",
+			wantProto:   "-",
+			wantSrcPort: "-",
+			wantPort:    "-",
 		},
 		{
-			name:      "Unknown IP version nibble",
-			pkt:       []byte{0x70, 0x00, 0x00, 0x00},
-			wantSrc:   "-",
-			wantDest:  "-",
-			wantProto: "-",
-			wantPort:  "-",
+			name:        "Unknown IP version nibble",
+			pkt:         []byte{0x70, 0x00, 0x00, 0x00},
+			wantSrc:     "-",
+			wantDest:    "-",
+			wantProto:   "-",
+			wantSrcPort: "-",
+			wantPort:    "-",
 		},
 	}
 
@@ -148,6 +157,9 @@ func TestParsePacketHeader(t *testing.T) {
 			}
 			if got.Proto != tt.wantProto {
 				t.Errorf("Proto = %q, want %q", got.Proto, tt.wantProto)
+			}
+			if got.SrcPort != tt.wantSrcPort {
+				t.Errorf("SrcPort = %q, want %q", got.SrcPort, tt.wantSrcPort)
 			}
 			if got.Port != tt.wantPort {
 				t.Errorf("Port = %q, want %q", got.Port, tt.wantPort)

@@ -915,7 +915,7 @@ func (s *Server) HandleGetTrafficLogs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if needle != "" {
-			hay := strings.ToLower(entry.Src + " " + entry.Dest + " " + entry.Port + " " + entry.Proto + " " + entry.InIface + " " + entry.OutIface + " " + entry.Reason + " " + entry.Chain)
+			hay := strings.ToLower(entry.Src + " " + entry.Dest + " " + entry.SrcPort + " " + entry.Port + " " + entry.Proto + " " + entry.InIface + " " + entry.OutIface + " " + entry.Reason + " " + entry.Chain)
 			if !strings.Contains(hay, needle) {
 				continue
 			}
