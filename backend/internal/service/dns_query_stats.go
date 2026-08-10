@@ -240,6 +240,28 @@ func (s *StatisticsService) SetDomainIPsLimits(ttlMinutes, maxDomains, maxIPsPer
 	s.dns.domainIPs.SetLimits(ttlMinutes, maxDomains, maxIPsPerDomain)
 }
 
+// LookupDomains resolves a batch of IPs to their most recently observed DNS
+// answer domain (docs/ref/todo/traffic-log-rule-name-and-domain-plan.md T-06)
+// — a thin wrapper around the same dnsReverseCache.LookupMany already used
+// by the Statistics pages (statistics.go/statistics_dns.go/
+// statistics_traffic.go). Callers (the traffic-log API enrichment) MUST call
+// this once per response with every IP they need, never once per row — see
+// dnsReverseCache.LookupMany's own doc comment for why (it takes a full
+// mutex, not RLock, because of lazy eviction). Read-only, resolved fresh on
+// every call — nothing here is cached/snapshotted beyond what
+// dnsReverseCache itself already does, which is what keeps this consistent
+// with the "domain disappears immediately when DNS Query Logging is turned
+// off" privacy contract (ClearDNSStats wipes the same cache).
+func (s *StatisticsService) LookupDomains(ips []string) map[string]string {
+	return s.dns.reverseCache.LookupMany(ips)
+}
+
+// LookupDomain resolves a single IP the same way LookupDomains does. Prefer
+// LookupDomains for anything iterating over multiple rows.
+func (s *StatisticsService) LookupDomain(ip string) string {
+	return s.dns.reverseCache.Lookup(ip)
+}
+
 // dnsWindowBuckets selects the trailing statsWindowBucketCount(window)
 // buckets, mirroring denySnapshot/domainSnapshot's bucket-selection logic.
 // Callers must hold at least s.dns.mu.RLock(). window is normalized here too

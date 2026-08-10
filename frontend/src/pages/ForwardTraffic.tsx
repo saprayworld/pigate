@@ -18,6 +18,13 @@ export default function ForwardTraffic() {
           <span className="font-medium text-foreground"> เปิด connection ใหม่</span> บน policy ที่เปิด Log ไว้
           และแพ็กเก็ตที่ <span className="font-medium text-foreground">ถูก DROP</span>; ทราฟฟิกของ connection
           ที่เปิดค้างไว้แล้ว (established) จะไม่ปรากฏโดยตั้งใจ
+          <br />
+          คอลัมน์ <span className="font-medium text-foreground">Rule</span> เป็น
+          <span className="font-medium text-foreground"> ชื่อกฎ ณ ตอนที่บันทึก log</span> (snapshot) —
+          ถ้ากฎนั้นถูกลบหรือเปลี่ยนชื่อภายหลัง แถวเก่าจะยังแสดงชื่อเดิมไว้ ส่วน
+          <span className="font-medium text-foreground"> โดเมน/ชื่อเครื่อง</span> ที่แสดงใต้ IP
+          เป็นข้อมูลประกอบเท่านั้น (จาก DNS query cache และ DHCP lease) คำนวณสดทุกครั้งที่โหลด
+          ไม่ได้บันทึกไว้ถาวร — ถ้าปิด DNS Query Logging โดเมนจะหายไปทันทีแม้แถวเก่าก็ตาม
         </>
       }
     />

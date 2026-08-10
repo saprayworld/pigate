@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"pigate/internal/model"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -14,6 +15,63 @@ import (
 	"github.com/google/nftables/userdata"
 	"golang.org/x/sys/unix"
 )
+
+// --- Rule-match log tagging (docs/ref/todo/traffic-log-rule-name-and-domain-plan.md) ---
+//
+// Every nftables log point (per-rule accept/drop as well as structural
+// points like admin-access/default-drop) gets an "r=<token> " marker
+// appended to its log prefix Data. The NFLOG reader (real_traffic_log.go)
+// extracts the token back out and the service layer resolves it to a
+// display name — per-rule tokens are PolicyRule.ID (resolved dynamically,
+// snapshot-on-write), system tokens are the SysToken* constants below
+// (resolved via a static table, never change). This only changes the Data
+// byte-string of expr.Log nodes; it never adds/removes/reorders rules or
+// changes verdicts (tech_stack_design.md §4.3, Caution: do not touch the 4
+// section structure).
+const (
+	SysTokenNotLocalDrop       = "sys-notlocal-drop"
+	SysTokenDhcpServerAccept   = "sys-dhcp-server-accept"
+	SysTokenDhcpClientAccept   = "sys-dhcp-client-accept"
+	SysTokenDockerAccept       = "sys-docker-accept"
+	SysTokenInputDefaultDrop   = "sys-input-defaultdrop"
+	SysTokenForwardDefaultDrop = "sys-forward-defaultdrop"
+	SysTokenAdminPing          = "sys-admin-ping"
+	SysTokenAdminHTTP          = "sys-admin-http"
+	SysTokenAdminHTTPS         = "sys-admin-https"
+	SysTokenAdminSSH           = "sys-admin-ssh"
+	SysTokenDNSServerAccept    = "sys-dns-server-accept"
+)
+
+// logTokenPattern is a strict whitelist for anything allowed into an
+// nftables log prefix as a "r=<token>" marker. PolicyRule.ID is never
+// validated anywhere upstream — model.ValidatePolicyRule skips the ID
+// field entirely, and a restored config backup can write an arbitrary
+// string into it — so this is the only gate between untrusted DB content
+// and the kernel log prefix. Deliberately whitelist-only (no
+// escaping/truncation of bad input): 1-32 bytes of ASCII
+// letters/digits/underscore/hyphen, matching the token shape PiGate itself
+// generates for rule/object IDs.
+var logTokenPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
+
+// maxLogPrefixBytes bounds the combined "<base><r=token> " log prefix so it
+// stays well under nftables/NFLOG's own log-prefix limit (128 bytes).
+const maxLogPrefixBytes = 120
+
+// withRuleToken appends a sanitized "r=<token> " marker to base. If token
+// fails the whitelist, or the combined prefix would exceed
+// maxLogPrefixBytes, the token is silently dropped and base is returned
+// unchanged — callers must not treat that as an error, just "no rule name
+// available for this log line".
+func withRuleToken(base, token string) string {
+	if !logTokenPattern.MatchString(token) {
+		return base
+	}
+	tagged := base + "r=" + token + " "
+	if len(tagged) > maxLogPrefixBytes {
+		return base
+	}
+	return tagged
+}
 
 // RealFirewall implements FirewallManager using Netlink and github.com/google/nftables
 type RealFirewall struct {
@@ -111,7 +169,7 @@ func (rf *RealFirewall) ApplyRules(
 		Chain: notLocalChain,
 		Exprs: []expr.Any{
 			&expr.Limit{Type: expr.LimitTypePkts, Rate: 3, Unit: expr.LimitTimeMinute, Burst: 10, Over: false},
-			localLogExpr("[PiGate]  INP DROP  : "),
+			localLogExpr(withRuleToken("[PiGate]  INP DROP  : ", SysTokenNotLocalDrop)),
 		},
 	})
 
@@ -200,7 +258,7 @@ func (rf *RealFirewall) ApplyRules(
 				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{17}}, // UDP
 				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
 				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{byte(67 >> 8), byte(67 & 0xFF)}},
-				localLogExpr("[PiGate] INP ACCEPT: "),
+				localLogExpr(withRuleToken("[PiGate] INP ACCEPT: ", SysTokenDhcpServerAccept)),
 				&expr.Verdict{Kind: expr.VerdictAccept},
 			},
 		})
@@ -225,7 +283,7 @@ func (rf *RealFirewall) ApplyRules(
 				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{17}}, // UDP
 				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
 				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{byte(68 >> 8), byte(68 & 0xFF)}},
-				localLogExpr("[PiGate] INP ACCEPT: "),
+				localLogExpr(withRuleToken("[PiGate] INP ACCEPT: ", SysTokenDhcpClientAccept)),
 				&expr.Verdict{Kind: expr.VerdictAccept},
 			},
 		})
@@ -345,7 +403,7 @@ func (rf *RealFirewall) ApplyRules(
 			Exprs: []expr.Any{
 				&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
 				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName("docker0")},
-				localLogExpr("[PiGate] INP ACCEPT: "),
+				localLogExpr(withRuleToken("[PiGate] INP ACCEPT: ", SysTokenDockerAccept)),
 				&expr.Verdict{Kind: expr.VerdictAccept},
 			},
 		})
@@ -363,7 +421,7 @@ func (rf *RealFirewall) ApplyRules(
 					Xor:            make([]byte, 16),
 				},
 				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: append([]byte("br-"), make([]byte, 13)...)},
-				localLogExpr("[PiGate] INP ACCEPT: "),
+				localLogExpr(withRuleToken("[PiGate] INP ACCEPT: ", SysTokenDockerAccept)),
 				&expr.Verdict{Kind: expr.VerdictAccept},
 			},
 		})
@@ -398,7 +456,7 @@ func (rf *RealFirewall) ApplyRules(
 		Chain: inputChain,
 		Exprs: []expr.Any{
 			&expr.Limit{Type: expr.LimitTypePkts, Rate: 10, Unit: expr.LimitTimeSecond, Burst: 20, Over: false},
-			localLogExpr("[PiGate] INP DROP  : "),
+			localLogExpr(withRuleToken("[PiGate] INP DROP  : ", SysTokenInputDefaultDrop)),
 		},
 	})
 
@@ -501,7 +559,7 @@ func (rf *RealFirewall) ApplyRules(
 		Table: table,
 		Chain: forwardChain,
 		Exprs: []expr.Any{
-			forwardLogExpr("[PiGate] FWD DROP  : "),
+			forwardLogExpr(withRuleToken("[PiGate] FWD DROP  : ", SysTokenForwardDefaultDrop)),
 		},
 	})
 
@@ -1089,6 +1147,11 @@ func addUserChainRules(
 						if r.Action == "DROP" {
 							logPrefix = dropLogPrefix
 						}
+						// Tag the log prefix with this DB rule's id, so a matching NFLOG
+						// entry can be traced back to the exact PolicyRule that produced
+						// it (see withRuleToken doc comment above). Omitted silently if
+						// r.ID fails the whitelist or the prefix would overflow.
+						logPrefix = withRuleToken(logPrefix, r.ID)
 						ruleSets, err := buildRuleExpressions(
 							chainName,
 							r.InInterface, r.OutInterface,
@@ -1337,7 +1400,7 @@ func addAdminAccessRules(
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{1}}, // ICMP
 					&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1},
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{8}}, // Echo request
-					localLogExpr("[PiGate] INP ACCEPT: "),
+					localLogExpr(withRuleToken("[PiGate] INP ACCEPT: ", SysTokenAdminPing)),
 					&expr.Verdict{Kind: expr.VerdictAccept},
 				},
 			})
@@ -1356,7 +1419,7 @@ func addAdminAccessRules(
 						&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{6}}, // TCP
 						&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
 						&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: portBytes},
-						localLogExpr("[PiGate] INP ACCEPT: "),
+						localLogExpr(withRuleToken("[PiGate] INP ACCEPT: ", SysTokenAdminHTTP)),
 						&expr.Verdict{Kind: expr.VerdictAccept},
 					},
 				})
@@ -1374,7 +1437,7 @@ func addAdminAccessRules(
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{6}}, // TCP
 					&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: portBytes},
-					localLogExpr("[PiGate] INP ACCEPT: "),
+					localLogExpr(withRuleToken("[PiGate] INP ACCEPT: ", SysTokenAdminHTTPS)),
 					&expr.Verdict{Kind: expr.VerdictAccept},
 				},
 			})
@@ -1391,7 +1454,7 @@ func addAdminAccessRules(
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{6}}, // TCP
 					&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: portBytes},
-					localLogExpr("[PiGate] INP ACCEPT: "),
+					localLogExpr(withRuleToken("[PiGate] INP ACCEPT: ", SysTokenAdminSSH)),
 					&expr.Verdict{Kind: expr.VerdictAccept},
 				},
 			})
@@ -1420,7 +1483,7 @@ func addDNSServerAccessRules(
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{protoVal}},
 					&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
 					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: portBytes},
-					localLogExpr("[PiGate] INP ACCEPT: "),
+					localLogExpr(withRuleToken("[PiGate] INP ACCEPT: ", SysTokenDNSServerAccept)),
 					&expr.Verdict{Kind: expr.VerdictAccept},
 				},
 			})

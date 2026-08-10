@@ -34,6 +34,13 @@ export default function LocalTraffic() {
           <span className="font-medium text-foreground">บอร์ดส่งออกเอง</span> (เช่น การ query DNS/NTP ของบอร์ด)
           — connection ที่เปิดค้างไว้แล้ว (established) จะไม่ปรากฏ และจะเห็นเฉพาะกฎที่เปิด Log ไว้
           (ยกเว้นกฎโครงสร้างบางจุดที่ log เสมอ เช่น final drop)
+          <br />
+          คอลัมน์ <span className="font-medium text-foreground">Rule</span> เป็น
+          <span className="font-medium text-foreground"> ชื่อกฎ ณ ตอนที่บันทึก log</span> (snapshot) —
+          ถ้ากฎนั้นถูกลบหรือเปลี่ยนชื่อภายหลัง แถวเก่าจะยังแสดงชื่อเดิมไว้ ส่วน
+          <span className="font-medium text-foreground"> โดเมน/ชื่อเครื่อง</span> ที่แสดงใต้ IP
+          เป็นข้อมูลประกอบเท่านั้น (จาก DNS query cache และ DHCP lease) คำนวณสดทุกครั้งที่โหลด
+          ไม่ได้บันทึกไว้ถาวร — ถ้าปิด DNS Query Logging โดเมนจะหายไปทันทีแม้แถวเก่าก็ตาม
         </>
       }
     />

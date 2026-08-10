@@ -225,6 +225,15 @@ func parseNflogAttr(attr nflog.Attribute, resolveIface func(*uint32) string, def
 			case "ACCEPT", "DROP", "AUDIT":
 				verb = strings.TrimSuffix(f, ":")
 			}
+			// "r=<token>" carries the matched PolicyRule id (or a "sys-*"
+			// system token for structural log points) — see
+			// withRuleToken/logTokenPattern in real_firewall.go. Re-validate
+			// against the same whitelist here: even though the writer side
+			// already sanitizes, never trust raw kernel/NFLOG bytes without
+			// re-checking on the read side too.
+			if rid, ok := strings.CutPrefix(f, "r="); ok && logTokenPattern.MatchString(rid) {
+				entry.RuleID = rid
+			}
 		}
 		if info, ok := nflogPrefixTable[token+":"+verb]; ok {
 			chain, action, reason = info.chain, info.action, info.reason

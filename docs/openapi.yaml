@@ -6135,6 +6135,55 @@ components:
             originates (e.g. its own DNS/NTP lookups). Empty string means
             unknown (defensive default; should not normally occur).
           example: forward
+        ruleId:
+          type: string
+          description: |
+            Internal token captured from the nftables log prefix at the
+            moment this entry was logged: either the id of the matching
+            PolicyRule, or a fixed "sys-*" token for a structural log point
+            (default drop, admin access, docker-compat bypass, etc — not
+            tied to a single user-configured rule). Omitted when the log
+            prefix carried no recognizable token (e.g. it predates this
+            feature). Not intended for display on its own — see ruleName.
+          example: rule-1a2b3c4d
+        ruleName:
+          type: string
+          description: |
+            Human-readable name resolved from ruleId. Snapshot-on-write: it
+            is resolved once, when the entry was logged, and never updated
+            afterwards — if the matching PolicyRule is later renamed or
+            deleted, this entry keeps showing the name as it was at match
+            time. Omitted if ruleId is empty or could not be resolved yet
+            (e.g. logged in the brief window before the first snapshot
+            refresh after startup).
+          example: Block Telnet
+        srcDomain:
+          type: string
+          description: |
+            Domain name most recently observed answering to src, from the
+            local DNS query-log cache (same cache the Statistics pages use).
+            Resolved fresh on every read, never stored — turning off DNS
+            Query Logging clears it immediately, including for already
+            logged entries. Omitted when unavailable (logging disabled, no
+            matching cache entry, or its TTL expired).
+          example: dns.google
+        destDomain:
+          type: string
+          description: Same as srcDomain, but for dest.
+          example: dns.google
+        srcHostname:
+          type: string
+          description: |
+            Hostname for src resolved from an active DHCP lease or
+            reservation, used as a fallback for LAN addresses when
+            srcDomain is unavailable. Resolved fresh on every read, never
+            stored. Omitted when src has a domain, or no lease/reservation
+            matches.
+          example: laptop-office
+        destHostname:
+          type: string
+          description: Same as srcHostname, but for dest.
+          example: laptop-office
 
     # --- Network Interface Schemas ---
     NetworkInterface:

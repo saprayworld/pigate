@@ -760,7 +760,73 @@ func (s *Server) HandleGetRecentLogs(w http.ResponseWriter, r *http.Request) {
 	if limit > len(all) {
 		limit = len(all)
 	}
-	s.writeJSON(w, http.StatusOK, all[:limit])
+	page := all[:limit]
+	s.enrichTrafficLogs(page)
+	s.writeJSON(w, http.StatusOK, page)
+}
+
+// enrichTrafficLogs fills SrcDomain/DestDomain/SrcHostname/DestHostname on
+// every entry of logs, in place, as a read-time enrichment step
+// (docs/ref/todo/traffic-log-rule-name-and-domain-plan.md T-09). Callers
+// must pass a slice they own a copy of (never the ring buffer's internal
+// storage) — see RingBuffer.GetAll, which already copies.
+//
+// Exactly one batch domain lookup and one batch hostname lookup happen for
+// the whole slice, never per row (both StatisticsService.LookupDomains and
+// TrafficStatsService.LookupHostnames document why: the reverse-DNS cache
+// takes a full mutex per call, and the hostname cache re-reads DHCP
+// state on a cache miss). This is why callers must cap the slice they pass
+// in — see the ≤1000-row limit enforced by HandleGetTrafficLogs and the
+// ≤500-row limit in HandleGetRecentLogs — enriching the whole 10,000-entry
+// ring buffer is never done.
+//
+// RuleName/RuleID are NOT touched here: RuleName is a snapshot captured once
+// at write time (cmd/pigate/main.go stampAndPush), never re-resolved on
+// read — see model.FirewallLog's doc comment for the snapshot-on-write vs
+// enrich-on-read distinction this whole feature hinges on.
+func (s *Server) enrichTrafficLogs(logs []model.FirewallLog) {
+	if len(logs) == 0 {
+		return
+	}
+	ipSet := make(map[string]struct{}, len(logs)*2)
+	for _, entry := range logs {
+		if entry.Src != "" && entry.Src != "-" {
+			ipSet[entry.Src] = struct{}{}
+		}
+		if entry.Dest != "" && entry.Dest != "-" {
+			ipSet[entry.Dest] = struct{}{}
+		}
+	}
+	if len(ipSet) == 0 {
+		return
+	}
+	ips := make([]string, 0, len(ipSet))
+	for ip := range ipSet {
+		ips = append(ips, ip)
+	}
+
+	var domains map[string]string
+	if s.statistics != nil {
+		domains = s.statistics.LookupDomains(ips)
+	}
+	var hostnames map[string]string
+	if s.trafficStats != nil {
+		hostnames = s.trafficStats.LookupHostnames(ips)
+	}
+
+	for i := range logs {
+		logs[i].SrcDomain = domains[logs[i].Src]
+		logs[i].DestDomain = domains[logs[i].Dest]
+		// DHCP hostname is only a fallback for when the DNS reverse cache
+		// has nothing for that IP (plan design decision 5) — an entry never
+		// carries both a domain and a hostname for the same address.
+		if logs[i].SrcDomain == "" {
+			logs[i].SrcHostname = hostnames[logs[i].Src]
+		}
+		if logs[i].DestDomain == "" {
+			logs[i].DestHostname = hostnames[logs[i].Dest]
+		}
+	}
 }
 
 func (s *Server) HandleClearLogs(w http.ResponseWriter, r *http.Request) {
@@ -898,6 +964,7 @@ func (s *Server) HandleGetTrafficLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	result := make([]model.FirewallLog, len(page))
 	copy(result, page)
+	s.enrichTrafficLogs(result)
 	s.writeJSON(w, http.StatusOK, result)
 }
 
@@ -3043,7 +3110,12 @@ func (s *Server) HandleLogStream(w http.ResponseWriter, r *http.Request) {
 		case ev := <-events:
 			switch ev.Kind {
 			case "log":
-				data, err := json.Marshal(ev.Entry)
+				// Enrich this single pushed entry the same way the snapshot
+				// fetch handlers do, so a live SSE row and a page-load row
+				// for the same event look identical (plan T-09 acceptance).
+				rows := []model.FirewallLog{ev.Entry}
+				s.enrichTrafficLogs(rows)
+				data, err := json.Marshal(rows[0])
 				if err != nil {
 					continue
 				}

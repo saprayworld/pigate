@@ -26,6 +26,23 @@ type FirewallService struct {
 	mu           sync.RWMutex
 	lastApplyErr error
 	lastApplyAt  time.Time
+
+	// ruleNames is optional (nil until SetRuleNameResolver is called by
+	// main.go) so this stays additive — NewFirewallService's signature is
+	// unchanged. When set, recordApply triggers a synchronous snapshot
+	// refresh right after every successful SyncFirewallRules, so a
+	// brand-new rule that immediately sees traffic already resolves a name
+	// instead of waiting for the resolver's background ticker (see
+	// docs/ref/todo/traffic-log-rule-name-and-domain-plan.md).
+	ruleNames *RuleNameResolver
+}
+
+// SetRuleNameResolver wires an optional RuleNameResolver into the service so
+// its snapshot gets refreshed immediately after every successful firewall
+// apply. Additive — safe to call after construction, and safe to never call
+// at all (ruleNames stays nil, recordApply just skips the refresh).
+func (s *FirewallService) SetRuleNameResolver(r *RuleNameResolver) {
+	s.ruleNames = r
 }
 
 // var _ compiles away to nothing at runtime; it just proves FirewallService
@@ -211,9 +228,19 @@ func (s *FirewallService) SyncFirewallRules() (err error) {
 // finished (err may be nil), under mu, for ApplyHealth to read.
 func (s *FirewallService) recordApply(err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.lastApplyErr = err
 	s.lastApplyAt = time.Now()
+	s.mu.Unlock()
+
+	// Refresh the rule-name snapshot right after a successful apply, on
+	// every return path of SyncFirewallRules (recordApply runs via defer),
+	// so newly created/renamed rules resolve a name immediately rather than
+	// waiting up to ruleNameRefreshInterval for the background ticker.
+	if err == nil && s.ruleNames != nil {
+		if refreshErr := s.ruleNames.Refresh(); refreshErr != nil {
+			log.Printf("[FirewallService] rule-name snapshot refresh after apply failed: %v", refreshErr)
+		}
+	}
 }
 
 // ApplyHealth implements service.ApplyHealthReporter: it reports whether the
