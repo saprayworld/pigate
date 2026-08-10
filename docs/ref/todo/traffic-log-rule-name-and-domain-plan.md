@@ -2,7 +2,7 @@
 
 โจทย์: หน้า Log & Report > Forward Traffic และ Local Traffic ปัจจุบันไม่สามารถบอกได้ว่าแต่ละ log entry ตรงกับ firewall rule ข้อไหน และคอลัมน์ IP ก็ไม่มีข้อมูลกำกับว่าเป็นโดเมน/เครื่องอะไร ทั้งที่ระบบมีข้อมูลนี้อยู่แล้วบางส่วน (DNS reverse cache ที่ใช้ในหน้า Statistics)
 
-สถานะ: วางแผนเสร็จ (โดย ai-tech-lead) รอ ai-developer เริ่มลงมือ
+สถานะ: วางแผนเสร็จ + ตรวจสอบทานกับโค้ดจริงบน main แล้ว (หลัง PR #128, PR #131 merge) รอ ai-developer เริ่มลงมือ ดู "การตรวจสอบซ้ำ" ท้ายเอกสารสำหรับรายละเอียดที่ปรับ
 
 ## สภาพปัจจุบัน (ข้อเท็จจริงจากโค้ด ณ วันที่วางแผน)
 
@@ -77,4 +77,18 @@
 1. หน้าต่างเวลาสั้นๆ ที่ชื่อกฎอาจว่าง (ก่อน refresh รอบแรก) แทบไม่เกิดเพราะ refresh ทันทีหลัง apply ruleset — ai-developer ต้องตรวจว่าทุก mutation ของ policy จบที่ `SyncFirewallRules` จริง
 2. RAM เพิ่มจาก snapshot ชื่อกฎ ~0.5MB worst case บน ring buffer 10,000 entries — รับได้
 3. Domain/hostname resolve ตอนอ่านเสมอ (ไม่ snapshot) ตาม privacy contract — TTL ของ `dnsReverseCache` หมดอายุแล้ว log เก่าจะกลับไปแสดงแค่ IP (ตั้งใจ) มีคำอธิบายใน T-13 แล้ว
-4. **Rebase note**: PR #128 (`feat/statistics-capacity-visibility`, merged เข้า main หลังวางแผนนี้) แก้ไฟล์ที่ทับซ้อนกับแผนนี้ (`dns_reverse_cache.go`, `traffic_stats.go`, `dns_query_stats.go`) — ai-developer ต้อง sync กับ main ล่าสุดและ re-verify line number/signature ก่อนเริ่ม T-06/T-07 (เดิมอ้างอิงจาก commit ก่อน PR #128)
+4. **Rebase note**: PR #128 (`feat/statistics-capacity-visibility`) และ PR #131 (`feat/statistics-host-ipinfo`) merged เข้า main หลังวางแผนนี้ แก้ไฟล์ที่ทับซ้อนกับแผนนี้ (`dns_reverse_cache.go`, `traffic_stats.go`, `dns_query_stats.go`, `statistics.go`, `handlers.go`, `router.go`, `main.go`) — ดูหัวข้อ "การตรวจสอบซ้ำ" ด้านล่างสำหรับรายละเอียดที่ปรับหลัง re-verify
+
+## การตรวจสอบซ้ำกับ main ล่าสุด (โดย ai-tech-lead, หลัง PR #128/#131 merge)
+
+สรุป: แผนยังใช้ได้เกือบทั้งฉบับ ไม่มี task ไหนต้องออกแบบใหม่ทั้งอัน — T-01/T-03/T-04/T-05/T-06/T-10/T-11/T-12/T-13 ตรงตามแผน มี 4 task ที่ต้องปรับ/ระบุเพิ่มก่อนให้ ai-developer เริ่ม:
+
+- **T-02 (kernel, SENSITIVE)** — พบข้อเท็จจริงใหม่: `r.ID` ถูกฝังลง nft rule `UserData` อยู่แล้ว (`real_firewall.go:1056`, `userdata.AppendString(nil, userdata.TypeComment, r.ID)`) ใช้โดย Top Rules accounting (`real_traffic_account.go:189`) แต่ **NFLOG ก็ยังไม่ส่ง UserData มาที่ userspace** เหมือนเดิม — ข้อสรุปหลักของแผน (ต้องฝัง token ผ่าน log prefix) ยังถูกต้อง ไม่มีอะไรให้ reuse (sanitizer ของ T-02 เป็นตัวใหม่ทั้งหมด) แต่ต้องเพิ่ม acceptance: การเปลี่ยน log prefix ต้องไม่กระทบ `UserData`/จำนวน-ลำดับกฎ ไม่งั้น Top Rules counters จะพัง จุดอ้างอิงในโค้ดยังตรง: `forwardLogExpr`/`localLogExpr` (:653/:668), `buildChainRules(..., acceptLogPrefix, dropLogPrefix string, ...)` (:1043), `buildRuleExpressions(..., logPrefix string, ...)` (:1118-1129)
+- **T-05 (service, ไฟล์ใหม่)** — จุดแทรก "refresh ทันทีหลัง sync สำเร็จ" ควรเกาะที่ `FirewallService.recordApply()` (firewall.go, เรียกจาก `defer` ต้นๆ ของ `SyncFirewallRules`) แทนที่จะแทรกท้าย `SyncFirewallRules` เอง — ครอบทุก return path ได้ปลอดภัยกว่า และตอบข้อกังวลข้อ 1 ด้านบนโดยตรง อย่าขยาย `NewFirewallService(repo, firewall, ifaceService)` (3 params) ใช้ setter/`StartRuleNameRefresher` แบบ additive แทน
+- **T-06** — ยืนยันหลัง PR #128: `dns_reverse_cache.go` API เดิม (`Lookup`, `LookupMany`) **ไม่เปลี่ยน** (PR128 แค่เพิ่ม `Usage()` แยกต่างหาก) แต่ `LookupMany` ใช้ `mu.Lock()` (ไม่ใช่ RLock เพราะ lazy-evict) — ต้องเรียก **1 batch ต่อ 1 response เท่านั้น** ห้ามเรียกต่อแถว (ตรงกับ convention ที่ใช้อยู่แล้วใน `statistics.go`/`statistics_dns.go`/`statistics_traffic.go`)
+- **T-07** — `hostLookup()` เลื่อนไปอยู่ `traffic_stats.go:1739` (เดิมอ้างอิง ~1605) signature ไม่เปลี่ยน แต่ตอนนี้ถูกเรียกจาก **9 จุด** ใน Statistics แล้วโดยไม่มี cache เลย (สร้างขึ้นทีละ request) **ตัดสินใจแล้ว (เจ้าของโปรเจกต์)**: T-07 สร้าง `cachedHostLookup` แยกเฉพาะสำหรับ traffic log ตามแผนเดิม (Option A) — ไม่แตะ/ไม่ใส่ cache ให้ 9 จุดเดิมใน Statistics เพื่อคุม scope ของ issue #132 ให้แคบ (การเพิ่ม cache ให้ `hostLookup()` เองเป็นการตัดสินใจแยกต่างหาก นอกขอบเขตนี้)
+- **T-08** — `stampAndPush` ยังอยู่ที่ `main.go:428-437` รูปแบบเดิม (`entry.Time` → `entry.ID` → `ringBuffer.Add(entry)` → `statisticsService.RecordFirewallLog(entry)`) แทรก resolve ได้ตามแผน แต่ต้องระบุลำดับให้ชัด: `monitorCtx` ถูกสร้างที่ `main.go:416-417` (หลังประกอบ service ทั้งหมด) → `StartRuleNameRefresher(monitorCtx)` ต้องเรียก**หลัง** :417 และ**ก่อน**ที่ traffic-log watcher จะเริ่มที่ :443/:455 พร้อม prime snapshot แบบ synchronous ครั้งแรกก่อนเริ่ม watcher (ไม่งั้น log ชุดแรกสุดจะได้ ruleName ว่างเพราะยังไม่มี snapshot). ไม่ต้องแตะ `NewStatisticsService(...)` (ตอนนี้ 7 params) หรือ `ipInfoService` ที่ PR131 เพิ่มเข้ามาที่ :238-254
+- **T-09** — `Server` struct มี `trafficStats`/`statistics` fields อยู่แล้ว (handlers.go:54-55) → **ไม่ต้องแก้ `NewServer` signature เลย** (เพิ่งถูก PR131 เพิ่ม `ipInfo` param ไป ยิ่งไม่ควรไปแตะซ้ำ) จุดอ้างอิงที่เลื่อน: `HandleGetRecentLogs` :750, `HandleGetTrafficLogs` :813 (`q` haystack ที่ :852 ยืนยันว่ายังเป็น src/dest/port/proto/iface/reason/chain ตามแผน ห้ามขยาย), `HandleLogStream` :2989 (marshal ที่ :3046). `router.go` ไม่ต้องเพิ่ม route ใหม่ (`/api/statistics/ipinfo` :67 และ `/api/statistics/capacity` :74 ของ PR อื่น ไม่ชนกับแผนนี้)
+- **T-11** — แก้ path: mock อยู่ที่ `frontend/src/data-mockup/mockData.ts` (ไม่ใช่ `services/mockData.ts`) และเพิ่ม `frontend/src/pages/Dashboard.tsx` เป็นไฟล์ที่ต้องเช็คด้วย (บริโภค `FirewallLog` type เดียวกัน — ต้องยังคอมไพล์ผ่านหลังเพิ่ม field ใหม่แบบ optional)
+
+ยืนยันแล้วว่า `model.ValidatePolicyRule` (`policy_rule_validate.go:13-38`) และ `Repository.CreatePolicy` (`repository.go:725-745`) ยังไม่ตรวจ field `ID` เลย — สมมติฐานที่ T-02 อ้างอิง (backup import เขียน ID ผิดรูปแบบเข้ามาได้ ต้องมี sanitizer ที่ kernel layer) ยังจริง 100%
