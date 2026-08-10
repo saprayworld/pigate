@@ -181,7 +181,7 @@ func TestStatisticsService_DNSPairCap(t *testing.T) {
 // TotalQueries must still count every event unconditionally.
 func TestStatisticsService_DNSPairCap_Configurable(t *testing.T) {
 	traffic := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
-	s := NewStatisticsService(traffic, traffic.repo, traffic.dhcp, 10, 3)
+	s := NewStatisticsService(traffic, traffic.repo, traffic.dhcp, 10, 3, defaultMaxTrackedDenySources, defaultMaxTrackedDenyPorts)
 	s.SetDNSLoggingEnabled(true)
 
 	const total = 100

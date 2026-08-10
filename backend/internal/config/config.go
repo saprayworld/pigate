@@ -55,6 +55,14 @@
 // daemon ever makes an outbound request to a third party at all, so it
 // defaults OFF and can only be turned on by deliberately editing the config
 // file (plan §2 "การเปิดใช้งาน").
+//
+// deny-stats-max-sources / deny-stats-max-ports (docs/ref/todo/
+// statistics-capacity-visibility-plan.md T-14) mirror the exact same pattern
+// for the firewall deny ring's per-bucket caps (service/statistics.go),
+// which used to be hardcoded consts (maxTrackedDenySources=500,
+// maxTrackedDenyPorts=300) — promoted to file-only config keys so their
+// capSource on the new GET /api/statistics/capacity response points at a
+// real, editable config key like every other ring's cap does.
 package config
 
 import (
@@ -113,6 +121,15 @@ type Config struct {
 	// statistics-host-ipinfo-plan.md T-06). Default false; no token support
 	// in this phase.
 	IPInfoEnabled bool
+
+	// DenyStatsMaxSources/DenyStatsMaxPorts are also file-only (no matching
+	// CLI flag) — the firewall deny ring's per-bucket caps (docs/ref/todo/
+	// statistics-capacity-visibility-plan.md T-14), promoted from consts
+	// (service/statistics.go's old maxTrackedDenySources/maxTrackedDenyPorts)
+	// so an operator can raise them without a rebuild, same rationale as
+	// TrafficStatsMax* above.
+	DenyStatsMaxSources int
+	DenyStatsMaxPorts   int
 }
 
 // Defaults returns the Config populated with the exact same defaults as the
@@ -150,10 +167,16 @@ func Defaults() Config {
 		// internal/service/dns_domain_ips.go (docs/ref/todo/
 		// statistics-dns-page-revamp-plan.md §2.1).
 		DNSStatsMaxDomains:      1000,
-		DNSStatsMaxIPsPerDomain: 16,
+		DNSStatsMaxIPsPerDomain: 32,
 
 		// Default OFF (docs/ref/todo/statistics-host-ipinfo-plan.md T-06).
 		IPInfoEnabled: false,
+
+		// Keep in sync with the old maxTrackedDenySources/maxTrackedDenyPorts
+		// consts these keys replace (docs/ref/todo/
+		// statistics-capacity-visibility-plan.md T-14).
+		DenyStatsMaxSources: 500,
+		DenyStatsMaxPorts:   300,
 	}
 }
 
@@ -193,6 +216,11 @@ const (
 	// keyIPInfoEnabled is also file-only (no CLI flag — docs/ref/todo/
 	// statistics-host-ipinfo-plan.md T-06).
 	keyIPInfoEnabled = "ipinfo-enabled"
+
+	// keyDenyStatsMaxSources/keyDenyStatsMaxPorts are also file-only (no CLI
+	// flag — docs/ref/todo/statistics-capacity-visibility-plan.md T-14).
+	keyDenyStatsMaxSources = "deny-stats-max-sources"
+	keyDenyStatsMaxPorts   = "deny-stats-max-ports"
 )
 
 // maxDNSStatsPairsCap/maxDNSStatsClientsCap are RAM-guard sanity ceilings for
@@ -223,7 +251,7 @@ const maxTrafficStatsCap = 20000
 // statistics-dns-page-revamp-plan.md §2.1/T-05). Unlike the DNS query-pair
 // ring above, this index is NOT a ring — worst-case RAM is simply
 // maxDomains x maxIPsPerDomain entries (no x288-bucket multiplier) — e.g. the
-// defaults (1000 x 16 = 16000 entries, ~1 MB) or the ceiling of this range
+// defaults (1000 x 32 = 32000 entries, ~2 MB) or the ceiling of this range
 // (20000 x 64 = 1,280,000 entries) is still a bounded, single flat map.
 const (
 	minDNSStatsMaxDomains      = 100
@@ -231,6 +259,13 @@ const (
 	minDNSStatsMaxIPsPerDomain = 2
 	maxDNSStatsMaxIPsPerDomain = 64
 )
+
+// maxDenyStatsCap is the shared RAM-guard sanity ceiling for both
+// deny-stats-max-* keys (docs/ref/todo/statistics-capacity-visibility-plan.md
+// T-14) — same per-bucket-x-288-buckets reasoning as maxTrafficStatsCap
+// above (this ring shares denyBucketMax=288 with the traffic ring), so it
+// reuses the identical ceiling.
+const maxDenyStatsCap = maxTrafficStatsCap
 
 // orderedKeys is the fixed key order used by Write (and reused by KnownKeys)
 // so the generated file is stable/diffable across runs.
@@ -264,6 +299,10 @@ var orderedKeys = []string{
 	// Also appended at the end, after the DNS stats domain keys (docs/ref/todo/
 	// statistics-host-ipinfo-plan.md T-06).
 	keyIPInfoEnabled,
+	// Also appended at the end, after the ipinfo-enabled key (docs/ref/todo/
+	// statistics-capacity-visibility-plan.md T-14).
+	keyDenyStatsMaxSources,
+	keyDenyStatsMaxPorts,
 }
 
 // KnownKeys returns the list of recognized config/flag keys, in the fixed
@@ -406,6 +445,18 @@ func Resolve(defaults Config, fileVals, explicit map[string]string) (Config, []s
 			cfg.DNSStatsMaxIPsPerDomain, minDNSStatsMaxIPsPerDomain, maxDNSStatsMaxIPsPerDomain, defaults.DNSStatsMaxIPsPerDomain))
 		cfg.DNSStatsMaxIPsPerDomain = defaults.DNSStatsMaxIPsPerDomain
 	}
+	if cfg.DenyStatsMaxSources <= 0 || cfg.DenyStatsMaxSources > maxDenyStatsCap {
+		warnings = append(warnings, fmt.Sprintf(
+			"deny-stats-max-sources=%d out of range (1..%d), using default %d",
+			cfg.DenyStatsMaxSources, maxDenyStatsCap, defaults.DenyStatsMaxSources))
+		cfg.DenyStatsMaxSources = defaults.DenyStatsMaxSources
+	}
+	if cfg.DenyStatsMaxPorts <= 0 || cfg.DenyStatsMaxPorts > maxDenyStatsCap {
+		warnings = append(warnings, fmt.Sprintf(
+			"deny-stats-max-ports=%d out of range (1..%d), using default %d",
+			cfg.DenyStatsMaxPorts, maxDenyStatsCap, defaults.DenyStatsMaxPorts))
+		cfg.DenyStatsMaxPorts = defaults.DenyStatsMaxPorts
+	}
 
 	return cfg, warnings, nil
 }
@@ -532,6 +583,20 @@ func applyKey(cfg *Config, key, value string) error {
 			return fmt.Errorf("invalid bool for %q: %q: %w", key, value, err)
 		}
 		cfg.IPInfoEnabled = b
+	case keyDenyStatsMaxSources:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		// Range-checking is deliberately NOT done here — see Resolve's
+		// post-processing pass (clamp + warn, not fail-fast).
+		cfg.DenyStatsMaxSources = n
+	case keyDenyStatsMaxPorts:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		cfg.DenyStatsMaxPorts = n
 	default:
 		// Unreachable: callers only invoke applyKey for keys that passed
 		// isKnownKey. Kept as a safety net rather than a silent no-op.
@@ -584,6 +649,10 @@ func keyValue(cfg Config, key string) string {
 		return strconv.Itoa(cfg.DNSStatsMaxIPsPerDomain)
 	case keyIPInfoEnabled:
 		return strconv.FormatBool(cfg.IPInfoEnabled)
+	case keyDenyStatsMaxSources:
+		return strconv.Itoa(cfg.DenyStatsMaxSources)
+	case keyDenyStatsMaxPorts:
+		return strconv.Itoa(cfg.DenyStatsMaxPorts)
 	default:
 		return ""
 	}

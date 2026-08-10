@@ -180,7 +180,7 @@ export function AccuracyInfoButton({ accuracy }: { accuracy?: "estimated" | "nea
           <Info className="size-4" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 space-y-2 text-xs">
+      <PopoverContent align="start" className="w-80 space-y-2 text-xs">
         <p className={cn("font-medium", isNearExact ? "text-primary" : "text-muted-foreground")}>
           {isNearExact ? "ใกล้เคียงจริง" : "ประมาณการ"}
         </p>

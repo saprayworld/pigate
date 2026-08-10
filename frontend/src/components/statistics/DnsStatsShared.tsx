@@ -438,7 +438,7 @@ export function DnsVolumeInfoButton() {
           <Info className="size-4" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 space-y-2 text-xs">
+      <PopoverContent align="start" className="w-80 space-y-2 text-xs">
         <p className="font-medium text-foreground">ปริมาณข้อมูล (Volume) เป็นค่าประมาณ</p>
         <p className="text-muted-foreground">
           ระบบไม่ได้นับ byte แยกตามชื่อโดเมนโดยตรง — ตัวเลขคือผลรวม byte ของ IP ที่โดเมนนั้นเคยถูก DNS
@@ -473,6 +473,22 @@ export function DnsStatsTruncatedWarning() {
     <div className="flex items-center gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2 text-xs text-warning">
       <TriangleAlert className="h-4 w-4 shrink-0" />
       อันดับอาจไม่ครบ เนื่องจากจำนวนคู่ (โดเมน, เครื่อง) ในช่วงเวลานี้เกินขีดจำกัดการติดตาม
+    </div>
+  )
+}
+
+// DnsDomainIndexTruncatedWarning is a SEPARATE warning from
+// DnsStatsTruncatedWarning above (docs/ref/todo/
+// statistics-dns-cap-notification-fix-plan.md §3.3/T-09): the (domain,client)
+// pair ring being full and the domain->IP forward index being full are two
+// unrelated conditions with two unrelated causes — before this fix they were
+// OR'd into one flag and this warning's text always talked about the pair
+// ring even when the real cause was the domain->IP index.
+export function DnsDomainIndexTruncatedWarning() {
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2 text-xs text-warning">
+      <TriangleAlert className="h-4 w-4 shrink-0" />
+      ดัชนีโดเมน→IP เก็บโดเมนครบขีดจำกัดแล้ว (dns-stats-max-domains) — โดเมนใหม่บางส่วนอาจไม่ถูกจับคู่กับปริมาณข้อมูล
     </div>
   )
 }

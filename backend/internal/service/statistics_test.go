@@ -13,7 +13,7 @@ import (
 func newTestStatisticsService(t *testing.T, acct *fakeTrafficAccounting) *StatisticsService {
 	t.Helper()
 	traffic := newTestTrafficStatsService(t, acct, nil)
-	return NewStatisticsService(traffic, traffic.repo, traffic.dhcp, defaultMaxTrackedDNSPairs, defaultMaxTrackedDNSClients)
+	return NewStatisticsService(traffic, traffic.repo, traffic.dhcp, defaultMaxTrackedDNSPairs, defaultMaxTrackedDNSClients, defaultMaxTrackedDenySources, defaultMaxTrackedDenyPorts)
 }
 
 // TestStatisticsService_RecordFirewallLog_OnlyCountsDrop is plan T-04 case 5:

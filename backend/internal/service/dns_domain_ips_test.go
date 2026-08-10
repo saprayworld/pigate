@@ -9,7 +9,11 @@ import (
 )
 
 // TestDNSDomainIPs_DomainCap covers plan §2.1: a brand-new domain is
-// rejected once len(byDomain) >= maxDomains, and Truncated() latches true.
+// rejected once len(byDomain) >= maxDomains, and IndexTruncated() latches
+// true (within the TTL window). IPCapHitRecently() must stay false — this is
+// the regression test for bug A (docs/ref/todo/
+// statistics-dns-cap-notification-fix-plan.md §2.1): a domain-cap rejection
+// must never be reported as a per-domain IP-cap rejection or vice versa.
 func TestDNSDomainIPs_DomainCap(t *testing.T) {
 	d := newDNSDomainIPs()
 	d.SetLimits(60, 100, 16) // min allowed maxDomains
@@ -23,7 +27,7 @@ func TestDNSDomainIPs_DomainCap(t *testing.T) {
 	if size != 100 {
 		t.Fatalf("expected 100 domains admitted, got %d", size)
 	}
-	if d.Truncated() {
+	if d.IndexTruncated() {
 		t.Fatalf("expected not truncated yet, filled exactly to cap")
 	}
 
@@ -39,21 +43,28 @@ func TestDNSDomainIPs_DomainCap(t *testing.T) {
 	if overflowExists {
 		t.Errorf("expected overflow domain to be rejected once maxDomains is hit")
 	}
-	if !d.Truncated() {
-		t.Errorf("expected Truncated()=true after a domain was rejected")
+	if !d.IndexTruncated() {
+		t.Errorf("expected IndexTruncated()=true after a domain was rejected")
+	}
+	if d.IPCapHitRecently() {
+		t.Errorf("expected IPCapHitRecently()=false — this was a maxDomains rejection, not a per-domain IP cap rejection (bug A regression)")
 	}
 }
 
 // TestDNSDomainIPs_PerDomainIPCap covers plan §2.1: a new IP within an
 // existing domain is rejected once maxIPsPerDomain is hit, but an existing
 // IP must still get its lastSeen refreshed even while the domain is "full".
+// This is also the regression test for bug A's other half: hitting the
+// per-domain IP cap must NOT make IndexTruncated() (the maxDomains signal)
+// true — before this fix a single CDN domain rotating past maxIPsPerDomain
+// would latch a permanent "index truncated" warning across the whole page.
 func TestDNSDomainIPs_PerDomainIPCap(t *testing.T) {
 	d := newDNSDomainIPs()
 	d.SetLimits(60, 1000, 2) // min allowed maxIPsPerDomain
 
 	d.Put("example.com", "1.1.1.1")
 	d.Put("example.com", "2.2.2.2")
-	if d.Truncated() {
+	if d.IPCapHitRecently() {
 		t.Fatalf("expected not truncated after exactly filling the per-domain cap")
 	}
 
@@ -68,8 +79,11 @@ func TestDNSDomainIPs_PerDomainIPCap(t *testing.T) {
 			t.Errorf("expected 3.3.3.3 to be rejected once maxIPsPerDomain is hit")
 		}
 	}
-	if !d.Truncated() {
-		t.Errorf("expected Truncated()=true after a per-domain IP was rejected")
+	if !d.IPCapHitRecently() {
+		t.Errorf("expected IPCapHitRecently()=true after a per-domain IP was rejected")
+	}
+	if d.IndexTruncated() {
+		t.Errorf("expected IndexTruncated()=false — this was a per-domain IP cap rejection, not a maxDomains rejection (bug A regression)")
 	}
 
 	// An existing IP must still refresh lastSeen even while "full".
@@ -197,10 +211,10 @@ func TestDNSDomainIPs_Clear(t *testing.T) {
 	d.mu.Unlock()
 	d.Put("a.example.com", "1.1.1.1")
 	d.Put("b.example.com", "2.2.2.2")
-	d.Put("c.example.com", "3.3.3.3") // rejected, sets truncated
+	d.Put("c.example.com", "3.3.3.3") // rejected, sets domainCapHitAt
 
-	if !d.Truncated() {
-		t.Fatalf("setup: expected truncated=true before Clear")
+	if !d.IndexTruncated() {
+		t.Fatalf("setup: expected IndexTruncated()=true before Clear")
 	}
 
 	d.Clear()
@@ -212,8 +226,11 @@ func TestDNSDomainIPs_Clear(t *testing.T) {
 	if domains != 0 || refs != 0 {
 		t.Errorf("expected Clear to empty byDomain/ipDomains, got domains=%d refs=%d", domains, refs)
 	}
-	if d.Truncated() {
-		t.Errorf("expected Truncated()=false after Clear")
+	if d.IndexTruncated() {
+		t.Errorf("expected IndexTruncated()=false after Clear")
+	}
+	if d.IPCapHitRecently() {
+		t.Errorf("expected IPCapHitRecently()=false after Clear")
 	}
 	if got := d.IPsFor("a.example.com"); got != nil {
 		t.Errorf("expected IPsFor to return nil after Clear, got %+v", got)
@@ -371,6 +388,108 @@ func TestDNSDomainIPs_IPsForMany(t *testing.T) {
 	bIPs := out["b.example.com"]
 	if len(bIPs) != 1 || bIPs[0].IP != "198.51.100.1" || !bIPs[0].Shared {
 		t.Errorf("expected b.example.com to have 1 shared IP, got %+v", bIPs)
+	}
+}
+
+// TestDNSDomainIPs_SetLimitsResetsLatches covers docs/ref/todo/
+// statistics-dns-cap-notification-fix-plan.md §3.1/T-03 item 4 (bug A2): the
+// old doc comment on the truncated field claimed it was "sticky until
+// Clear/SetLimits" but SetLimits never actually reset it — this proves
+// SetLimits now zeroes both domainCapHitAt and ipCapHitAt.
+func TestDNSDomainIPs_SetLimitsResetsLatches(t *testing.T) {
+	d := newDNSDomainIPs()
+	d.SetLimits(60, 100, 2)
+
+	for i := 0; i < 100; i++ {
+		d.Put("domain-"+ipFromInt(i)+".example.com", "9.9.9.9")
+	}
+	d.Put("overflow.example.com", "9.9.9.9") // rejected: hits maxDomains(100)
+
+	d.Put("domain-"+ipFromInt(0)+".example.com", "8.8.8.1")
+	d.Put("domain-"+ipFromInt(0)+".example.com", "8.8.8.2") // rejected: this domain is already at maxIPsPerDomain(2) (9.9.9.9 + 8.8.8.1)
+
+	if !d.IndexTruncated() {
+		t.Fatalf("setup: expected IndexTruncated()=true before SetLimits")
+	}
+	if !d.IPCapHitRecently() {
+		t.Fatalf("setup: expected IPCapHitRecently()=true before SetLimits")
+	}
+
+	// Raising both caps should immediately clear both latches, without
+	// waiting for a TTL window to elapse.
+	d.SetLimits(60, 200, 8)
+
+	if d.IndexTruncated() {
+		t.Errorf("expected IndexTruncated()=false immediately after SetLimits raised the cap")
+	}
+	if d.IPCapHitRecently() {
+		t.Errorf("expected IPCapHitRecently()=false immediately after SetLimits raised the cap")
+	}
+}
+
+// TestDNSDomainIPs_IndexTruncatedExpiresWithTTL covers docs/ref/todo/
+// statistics-dns-cap-notification-fix-plan.md §3.1: a cap-hit warning must
+// self-clear once a full TTL window has elapsed with no further rejection —
+// it must never latch forever (the other half of bug A).
+func TestDNSDomainIPs_IndexTruncatedExpiresWithTTL(t *testing.T) {
+	d := newDNSDomainIPs()
+	d.SetLimits(model.DNSCacheTTLMin, dnsDomainIPsMaxDomainsMin, 16)
+	// maxDomains below dnsDomainIPsMaxDomainsMin is clamped by SetLimits, so
+	// set it directly (same workaround TestDNSDomainIPs_Clear uses) to
+	// exercise a tiny domain cap deterministically.
+	d.mu.Lock()
+	d.maxDomains = 1
+	d.mu.Unlock()
+
+	d.Put("a.example.com", "1.1.1.1")
+	d.Put("overflow.example.com", "2.2.2.2") // rejected: hits maxDomains(1)
+
+	if !d.IndexTruncated() {
+		t.Fatalf("setup: expected IndexTruncated()=true right after the rejection")
+	}
+
+	// Simulate the TTL window having fully elapsed since the rejection,
+	// without waiting in real time.
+	d.mu.Lock()
+	d.domainCapHitAt = time.Now().Add(-d.ttl - time.Second)
+	d.mu.Unlock()
+
+	if d.IndexTruncated() {
+		t.Errorf("expected IndexTruncated()=false once the rejection is older than one TTL window")
+	}
+}
+
+// TestDNSDomainIPs_Usage covers docs/ref/todo/
+// statistics-dns-cap-notification-fix-plan.md §3.4/T-06: Usage()'s
+// maxIPsUsed/domainsAtIPCap must reflect the busiest domain when one domain
+// is at its per-domain IP cap and another is not.
+func TestDNSDomainIPs_Usage(t *testing.T) {
+	d := newDNSDomainIPs()
+	d.SetLimits(60, 1000, 2)
+
+	d.Put("busy.example.com", "1.1.1.1")
+	d.Put("busy.example.com", "1.1.1.2") // busy.example.com is now at cap (2)
+
+	d.Put("quiet.example.com", "2.2.2.1") // quiet.example.com has just 1 IP, under cap
+
+	domains, maxDomains, maxIPsPerDomain, maxIPsUsed, domainsAtIPCap, indexTruncated := d.Usage()
+	if domains != 2 {
+		t.Errorf("expected domains=2, got %d", domains)
+	}
+	if maxDomains != 1000 {
+		t.Errorf("expected maxDomains=1000, got %d", maxDomains)
+	}
+	if maxIPsPerDomain != 2 {
+		t.Errorf("expected maxIPsPerDomain=2, got %d", maxIPsPerDomain)
+	}
+	if maxIPsUsed != 2 {
+		t.Errorf("expected maxIPsUsed=2 (busy.example.com's IP count), got %d", maxIPsUsed)
+	}
+	if domainsAtIPCap != 1 {
+		t.Errorf("expected domainsAtIPCap=1 (only busy.example.com is at cap), got %d", domainsAtIPCap)
+	}
+	if indexTruncated {
+		t.Errorf("expected indexTruncated=false — maxDomains was never hit in this test")
 	}
 }
 

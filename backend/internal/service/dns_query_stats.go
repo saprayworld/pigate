@@ -319,6 +319,76 @@ func buildTopDomains(totals map[string]uint64, typeByDomain map[string]string, t
 // as its base ranking/sort before decorating rows with the byte-volume
 // fields.
 
+// dnsRingCapacity is the read-only capacity reader behind the
+// "dns.pairs"/"dns.clients" rows of GET /api/statistics/capacity (docs/ref/
+// todo/statistics-capacity-visibility-plan.md T-04) — mirrors
+// denyCapacity/CapacityUsage's RLock/bucket-selection/axis-before-lock
+// structure, reading b.pairCount and len(b.clientCount) per bucket.
+//
+// PRIVACY (plan T-04 mandatory rule): when DNS query logging is disabled,
+// this returns a Series of all-zero points and Current/Peak/FullBuckets all
+// 0 — no timing/count data about past activity is ever exposed while the
+// opt-in switch is off, exactly like GetDNSQueryStatistics's own
+// enabled=false branch. Never touches domainIPs/reverseCache/traffic
+// breakdown (not relevant to this reader) and never called from the hot path
+// (RecordDNSEvent/recordDomainQuery) — this is a request-time-only reader.
+func (s *StatisticsService) dnsRingCapacity(window string) (usage pairRingUsage, enabled bool) {
+	window = normalizeStatsWindow(window)
+
+	axisStart, n := statsSeriesAxis(window)
+	pairSeries := make([]model.CapacityPoint, n)
+	clientSeries := make([]model.CapacityPoint, n)
+	for i := 0; i < n; i++ {
+		ts := axisStart.Add(time.Duration(i) * domainBucketSpan).Format(time.RFC3339)
+		pairSeries[i].Ts = ts
+		clientSeries[i].Ts = ts
+	}
+
+	var pairs, clients ringUsage
+
+	s.dns.mu.RLock()
+	enabled = s.dns.enabled
+	if !enabled {
+		s.dns.mu.RUnlock()
+		pairs.Series, clients.Series = pairSeries, clientSeries
+		return pairRingUsage{First: pairs, Second: clients}, false
+	}
+
+	for _, b := range s.dns.buckets {
+		pairs.TotalEntries += int64(b.pairCount)
+		clients.TotalEntries += int64(len(b.clientCount))
+	}
+
+	windowBuckets := s.dnsWindowBuckets(window)
+	for i, b := range windowBuckets {
+		pLen, cLen := b.pairCount, len(b.clientCount)
+
+		idx := statsSeriesIndex(b.ts, axisStart, n)
+		pairSeries[idx].Count += pLen
+		clientSeries[idx].Count += cLen
+
+		if pLen > pairs.Peak {
+			pairs.Peak = pLen
+		}
+		if cLen > clients.Peak {
+			clients.Peak = cLen
+		}
+		if pLen >= s.dns.maxPairs {
+			pairs.FullBuckets++
+		}
+		if cLen >= s.dns.maxClients {
+			clients.FullBuckets++
+		}
+		if i == len(windowBuckets)-1 {
+			pairs.Current, clients.Current = pLen, cLen
+		}
+	}
+	s.dns.mu.RUnlock()
+
+	pairs.Series, clients.Series = pairSeries, clientSeries
+	return pairRingUsage{First: pairs, Second: clients}, true
+}
+
 // rankTopDomains is buildTopDomains with a caller-supplied row cap, used by
 // the DNS Query Statistics tab (dnsStatsTopN) instead of the card-sized
 // statsTopN. buildTopDomains itself is left untouched (fixed at statsTopN)

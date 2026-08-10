@@ -33,14 +33,24 @@ const (
 	denyBucketSpan = 5 * time.Minute
 	denyBucketMax  = 288
 
-	// maxTrackedDenySources/maxTrackedDenyPorts bound the deny ring's
-	// per-bucket maps the same way maxTrackedHosts/maxTrackedDests bound the
-	// byte buckets (plan §2 T-03) — a scan/flood can't grow either map
-	// without limit. eventsCount (below) is tracked unconditionally
-	// (uncapped) so DeniedEvents always reflects the true number of DROP
-	// entries seen, even once a bucket's src/port maps have hit their caps.
-	maxTrackedDenySources = 500
-	maxTrackedDenyPorts   = 300
+	// defaultMaxTrackedDenySources/defaultMaxTrackedDenyPorts are the
+	// fallback values used when NewStatisticsService is passed a <=0 value
+	// (defense-in-depth for direct callers — tests, future call sites —
+	// mirroring dns_query_stats.go's defaultMaxTrackedDNSPairs pattern). The
+	// authoritative range validation for the config-file-sourced production
+	// values lives in config.Resolve, not here. Kept in sync with
+	// config.Defaults()'s DenyStatsMaxSources/DenyStatsMaxPorts (docs/ref/todo/
+	// statistics-capacity-visibility-plan.md T-14 — these used to be the
+	// maxTrackedDenySources/maxTrackedDenyPorts consts directly; promoted to
+	// per-service fields so an operator can raise them via
+	// deny-stats-max-sources/-ports without a rebuild, same pattern
+	// TrafficStatsService's maxTrackedHosts/etc. already follows).
+	//
+	// eventsCount (below) is tracked unconditionally (uncapped) so
+	// DeniedEvents always reflects the true number of DROP entries seen, even
+	// once a bucket's src/port maps have hit their caps.
+	defaultMaxTrackedDenySources = 500
+	defaultMaxTrackedDenyPorts   = 300
 )
 
 // deniedBucket is one 5-minute bucket of DROP-event counts, keyed by source
@@ -64,6 +74,16 @@ type StatisticsService struct {
 	mu          sync.RWMutex
 	denyBuckets []deniedBucket
 
+	// maxTrackedDenySources/maxTrackedDenyPorts are the effective per-bucket
+	// caps, set once at construction from the file-only
+	// deny-stats-max-sources/-ports config keys (or
+	// defaultMaxTrackedDenySources/defaultMaxTrackedDenyPorts when the caller
+	// passes <=0 — see NewStatisticsService). Read-only after construction,
+	// so no mutex guards these (same pattern as
+	// TrafficStatsService.maxTrackedHosts/dnsQueryStats.maxPairs).
+	maxTrackedDenySources int
+	maxTrackedDenyPorts   int
+
 	// dns holds the "Top Queried Domains" ring + reverse cache (docs/ref/todo/
 	// statistics-dns-top-domain-plan.md T-07/T-08) — see dns_query_stats.go /
 	// dns_reverse_cache.go. Never nil (always constructed in
@@ -85,17 +105,30 @@ type StatisticsService struct {
 // defense-in-depth for direct callers (tests, future call sites) and falls
 // back to defaultMaxTrackedDNSPairs/defaultMaxTrackedDNSClients; the
 // authoritative range validation lives in config.Resolve, not here.
-func NewStatisticsService(traffic *TrafficStatsService, repo *db.Repository, dhcp kernel.DhcpManager, maxDNSPairs, maxDNSClients int) *StatisticsService {
+//
+// maxDenySources/maxDenyPorts are the deny ring's per-bucket caps (docs/ref/
+// todo/statistics-capacity-visibility-plan.md T-14) — same <=0 fallback
+// convention (defaultMaxTrackedDenySources/defaultMaxTrackedDenyPorts),
+// sourced in production from deny-stats-max-sources/-ports.
+func NewStatisticsService(traffic *TrafficStatsService, repo *db.Repository, dhcp kernel.DhcpManager, maxDNSPairs, maxDNSClients, maxDenySources, maxDenyPorts int) *StatisticsService {
 	if maxDNSPairs <= 0 {
 		maxDNSPairs = defaultMaxTrackedDNSPairs
 	}
 	if maxDNSClients <= 0 {
 		maxDNSClients = defaultMaxTrackedDNSClients
 	}
+	if maxDenySources <= 0 {
+		maxDenySources = defaultMaxTrackedDenySources
+	}
+	if maxDenyPorts <= 0 {
+		maxDenyPorts = defaultMaxTrackedDenyPorts
+	}
 	return &StatisticsService{
-		traffic: traffic,
-		repo:    repo,
-		dhcp:    dhcp,
+		traffic:               traffic,
+		repo:                  repo,
+		dhcp:                  dhcp,
+		maxTrackedDenySources: maxDenySources,
+		maxTrackedDenyPorts:   maxDenyPorts,
 		dns: &dnsQueryStats{
 			reverseCache: newDNSReverseCache(),
 			domainIPs:    newDNSDomainIPs(),
@@ -137,10 +170,10 @@ func (s *StatisticsService) RecordFirewallLog(entry model.FirewallLog) {
 	}
 
 	b.events++
-	if _, exists := b.srcCount[entry.Src]; exists || len(b.srcCount) < maxTrackedDenySources {
+	if _, exists := b.srcCount[entry.Src]; exists || len(b.srcCount) < s.maxTrackedDenySources {
 		b.srcCount[entry.Src]++
 	}
-	if _, exists := b.portCount[portKey]; exists || len(b.portCount) < maxTrackedDenyPorts {
+	if _, exists := b.portCount[portKey]; exists || len(b.portCount) < s.maxTrackedDenyPorts {
 		b.portCount[portKey]++
 	}
 }
@@ -166,11 +199,70 @@ func (s *StatisticsService) denySnapshot(window string) (srcTotals, portTotals m
 			portTotals[k] += v
 		}
 		totalEvents += b.events
-		if len(b.srcCount) >= maxTrackedDenySources || len(b.portCount) >= maxTrackedDenyPorts {
+		if len(b.srcCount) >= s.maxTrackedDenySources || len(b.portCount) >= s.maxTrackedDenyPorts {
 			truncated = true
 		}
 	}
 	return
+}
+
+// denyCapacity is the read-only capacity reader behind the
+// "firewall.denySources"/"firewall.denyPorts" rows of GET
+// /api/statistics/capacity (docs/ref/todo/
+// statistics-capacity-visibility-plan.md T-03) — mirrors denySnapshot's
+// RLock/bucket-selection/axis-before-lock structure exactly, but reads
+// per-bucket map LENGTHS instead of aggregating event counts. denySnapshot
+// itself is left completely untouched (regression guard: it backs
+// /api/statistics/traffic's DeniedSources/DeniedPorts, must stay
+// byte-for-byte unchanged).
+func (s *StatisticsService) denyCapacity(window string) pairRingUsage {
+	window = normalizeStatsWindow(window)
+
+	axisStart, n := statsSeriesAxis(window)
+	srcSeries := make([]model.CapacityPoint, n)
+	portSeries := make([]model.CapacityPoint, n)
+	for i := 0; i < n; i++ {
+		ts := axisStart.Add(time.Duration(i) * denyBucketSpan).Format(time.RFC3339)
+		srcSeries[i].Ts = ts
+		portSeries[i].Ts = ts
+	}
+
+	var src, port ringUsage
+
+	s.mu.RLock()
+	for _, b := range s.denyBuckets {
+		src.TotalEntries += int64(len(b.srcCount))
+		port.TotalEntries += int64(len(b.portCount))
+	}
+
+	windowBuckets := lastNBuckets(s.denyBuckets, n)
+	for i, b := range windowBuckets {
+		sLen, pLen := len(b.srcCount), len(b.portCount)
+
+		idx := statsSeriesIndex(b.ts, axisStart, n)
+		srcSeries[idx].Count += sLen
+		portSeries[idx].Count += pLen
+
+		if sLen > src.Peak {
+			src.Peak = sLen
+		}
+		if pLen > port.Peak {
+			port.Peak = pLen
+		}
+		if sLen >= s.maxTrackedDenySources {
+			src.FullBuckets++
+		}
+		if pLen >= s.maxTrackedDenyPorts {
+			port.FullBuckets++
+		}
+		if i == len(windowBuckets)-1 {
+			src.Current, port.Current = sLen, pLen
+		}
+	}
+	s.mu.RUnlock()
+
+	src.Series, port.Series = srcSeries, portSeries
+	return pairRingUsage{First: src, Second: port}
 }
 
 // GetStatistics composes the /api/statistics/traffic response for the given

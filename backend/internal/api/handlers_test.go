@@ -67,7 +67,7 @@ func buildTestServer(t *testing.T, allowDevCORS bool) (*Server, *db.Repository) 
 	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
 	systemServiceSvc := service.NewSystemServiceService(kernel.NewMockSystemServiceManager(), repo)
 	trafficStatsService := service.NewTrafficStatsService(kernel.NewMockTrafficAccounting(nil), repo, dhcp, kernel.NewMockSystemStats(), 0, 0, 0)
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, allowDevCORS, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, wifiPresetService, systemServiceSvc, nil, trafficStatsService, service.NewStatisticsService(trafficStatsService, repo, dhcp, 2400, 200), service.NewIPInfoService(true, service.NewMockIPInfoProvider())) // dns-stats-max-pairs / dns-stats-max-clients defaults; ipinfo enabled+mock provider for handler tests
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, allowDevCORS, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, wifiPresetService, systemServiceSvc, nil, trafficStatsService, service.NewStatisticsService(trafficStatsService, repo, dhcp, 2400, 200, 500, 300), service.NewIPInfoService(true, service.NewMockIPInfoProvider())) // dns-stats-max-pairs / dns-stats-max-clients defaults; deny-stats defaults; ipinfo enabled+mock provider for handler tests
 
 	return server, repo
 }
@@ -558,7 +558,7 @@ func dnsStatsTestServer(t *testing.T) (http.Handler, *db.Repository, *kernel.Moc
 	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
 	systemServiceSvc := service.NewSystemServiceService(kernel.NewMockSystemServiceManager(), repo)
 	trafficStatsService := service.NewTrafficStatsService(kernel.NewMockTrafficAccounting(nil), repo, dhcp, kernel.NewMockSystemStats(), 0, 0, 0)
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, wifiPresetService, systemServiceSvc, nil, trafficStatsService, service.NewStatisticsService(trafficStatsService, repo, dhcp, 2400, 200), service.NewIPInfoService(true, service.NewMockIPInfoProvider())) // dns-stats-max-pairs / dns-stats-max-clients defaults; ipinfo enabled+mock provider for handler tests
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, false, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, wifiPresetService, systemServiceSvc, nil, trafficStatsService, service.NewStatisticsService(trafficStatsService, repo, dhcp, 2400, 200, 500, 300), service.NewIPInfoService(true, service.NewMockIPInfoProvider())) // dns-stats-max-pairs / dns-stats-max-clients defaults; deny-stats defaults; ipinfo enabled+mock provider for handler tests
 	handler := RegisterRoutes(server)
 	AddSession("mock_session_id_test_token", "pigate")
 	return handler, repo, dnsServer
@@ -1997,6 +1997,7 @@ func TestStatsWindowParam_AllEndpoints_SevenValuesAndFallback(t *testing.T) {
 		{"statistics/dns/client", func(w string) string {
 			return "/api/statistics/dns/client?client=unknown&window=" + url.QueryEscape(w)
 		}},
+		{"statistics/capacity", func(w string) string { return "/api/statistics/capacity?window=" + url.QueryEscape(w) }},
 	}
 
 	for _, ep := range endpoints {
@@ -2138,5 +2139,84 @@ func TestHandleGetIPInfo_Disabled(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("feature disabled: expected 404, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCapacityStatisticsEndpoint is docs/ref/todo/
+// statistics-capacity-visibility-plan.md T-08 (API portion): the new
+// /api/statistics/capacity route must require auth (like every other
+// /api/statistics/* route), return exactly 10 rings with no PII, and treat
+// `series` as a strict "1"/"true" whitelist (anything else, including
+// missing, means false — never a 400).
+func TestCapacityStatisticsEndpoint(t *testing.T) {
+	handler, _ := setupTestServer(t)
+	token := "mock_session_id_test_token"
+
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		addSessionCookie(req, token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Requires auth.
+	req := httptest.NewRequest("GET", "/api/statistics/capacity", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("without session: expected 401, got %d", rec.Code)
+	}
+
+	// Default (no series param): 10 rings, every series omitted.
+	rec = get("/api/statistics/capacity")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	rings, _ := body["rings"].([]any)
+	if len(rings) != 10 {
+		t.Fatalf("expected 10 rings, got %d: %s", len(rings), rec.Body.String())
+	}
+	for _, raw := range rings {
+		row, _ := raw.(map[string]any)
+		if _, hasSeries := row["series"]; hasSeries {
+			t.Errorf("ring %v: expected series to be omitted when series param is absent", row["id"])
+		}
+		// No PII: none of these keys should ever be present on a capacity row.
+		for _, forbidden := range []string{"domain", "ip", "hostname", "client", "src", "mac"} {
+			if _, ok := row[forbidden]; ok {
+				t.Errorf("ring %v: unexpected PII-shaped field %q in response", row["id"], forbidden)
+			}
+		}
+	}
+
+	// series=1 must include series arrays.
+	rec = get("/api/statistics/capacity?series=1")
+	body = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	rings, _ = body["rings"].([]any)
+	foundBucketSeries := false
+	for _, raw := range rings {
+		row, _ := raw.(map[string]any)
+		if row["kind"] == "bucket" {
+			if _, hasSeries := row["series"]; hasSeries {
+				foundBucketSeries = true
+			}
+		}
+	}
+	if !foundBucketSeries {
+		t.Errorf("series=1: expected at least one bucket-kind ring to carry a series array")
+	}
+
+	// series=garbage falls back to false, never a 400.
+	rec = get("/api/statistics/capacity?series=garbage")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("series=garbage: expected 200 (graceful fallback), got %d", rec.Code)
 	}
 }

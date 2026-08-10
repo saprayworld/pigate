@@ -141,16 +141,17 @@ traffic-stats-max-conversations=600
 # forward index (backend/internal/service/dns_domain_ips.go — docs/ref/todo/
 # statistics-dns-page-revamp-plan.md §2.1/T-05). Unlike the ring-based keys
 # above, this index is NOT a 288-bucket ring — it's a flat RAM-only map, so
-# worst-case RAM is simply maxDomains x maxIPsPerDomain entries (~1 MB at the
-# defaults below), not multiplied by any bucket count. Same clamp+warn (not
-# fatal) out-of-range validation as the other file-only keys on this page.
+# worst-case RAM is simply maxDomains x maxIPsPerDomain entries (1000 x 32 ≈
+# 32,000 entries ≈ ~2 MB at the defaults below), not multiplied by any bucket
+# count. Same clamp+warn (not fatal) out-of-range validation as the other
+# file-only keys on this page.
 
 # Maximum number of distinct domains tracked by the domain->IP index.
 dns-stats-max-domains=1000
 
 # Maximum number of distinct resolved IPs tracked per domain in the
 # domain->IP index.
-dns-stats-max-ips-per-domain=16
+dns-stats-max-ips-per-domain=32
 
 # The key below controls the Statistics -> Traffic -> Host page's "Public IP
 # Info" card (docs/ref/todo/statistics-host-ipinfo-plan.md) — a backend proxy

@@ -13,6 +13,8 @@ import { useStatsWindow, StatsWindowTabs, type StatsWindow } from "@/components/
 import { HostLabel } from "@/components/statistics/HostCells"
 import { TrafficTrendCard } from "@/components/statistics/TrafficTrendCard"
 import { TopHostsShareCard } from "@/components/statistics/TopHostsShareCard"
+import { CapacityIndicator } from "@/components/statistics/CapacityIndicator"
+import { capacityService, type RingCapacity } from "@/services/capacityService"
 import {
   AccuracyInfoButton,
   SortableHead,
@@ -176,6 +178,10 @@ export default function StatisticsTraffic() {
   const [data, setData] = useState<TrafficTopHosts | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Capacity indicator pill (docs/ref/todo/statistics-capacity-visibility-plan.md
+  // T-12) — same poll cycle as `data` below, no extra interval; a failed
+  // fetch here just hides CapacityIndicator, never surfaces its own error.
+  const [capacityRings, setCapacityRings] = useState<RingCapacity[] | undefined>(undefined)
 
   const load = useCallback(async (win: StatsWindow, showLoading: boolean) => {
     if (showLoading) setIsLoading(true)
@@ -194,14 +200,31 @@ export default function StatisticsTraffic() {
     }
   }, [])
 
+  const loadCapacity = useCallback(async (win: StatsWindow) => {
+    try {
+      const result = await capacityService.getCapacityStatistics(win, { series: false })
+      setCapacityRings(result.rings)
+    } catch {
+      // Swallowed on purpose (plan T-12) — see comment on capacityRings above.
+    }
+  }, [])
+
   const loadRef = useRef(load)
   useEffect(() => {
     loadRef.current = load
   })
+  const loadCapacityRef = useRef(loadCapacity)
+  useEffect(() => {
+    loadCapacityRef.current = loadCapacity
+  })
 
   useEffect(() => {
     loadRef.current(window_, true)
-    const id = setInterval(() => loadRef.current(window_, false), REFRESH_INTERVAL)
+    loadCapacityRef.current(window_)
+    const id = setInterval(() => {
+      loadRef.current(window_, false)
+      loadCapacityRef.current(window_)
+    }, REFRESH_INTERVAL)
     return () => clearInterval(id)
   }, [window_])
 
@@ -238,6 +261,7 @@ export default function StatisticsTraffic() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <CapacityIndicator rings={capacityRings} group={["traffic", "firewall"]} window={window_} />
           {data && <AccuracyInfoButton accuracy={data.accuracy} />}
           <StatsWindowTabs value={window_} onChange={setWindow} />
           <Button

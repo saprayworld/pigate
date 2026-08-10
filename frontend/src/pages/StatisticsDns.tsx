@@ -19,11 +19,14 @@ import {
   ClientStatsTable,
   DnsStatsPrivacyNote,
   DnsStatsTruncatedWarning,
+  DnsDomainIndexTruncatedWarning,
   DnsVolumeInfoButton,
   type StatsWindow,
 } from "@/components/statistics/DnsStatsShared"
 import { TrafficStatCard } from "@/components/statistics/TrafficStatsShared"
 import { DnsQueryTrendCard } from "@/components/statistics/DnsQueryTrendCard"
+import { CapacityIndicator } from "@/components/statistics/CapacityIndicator"
+import { capacityService, type RingCapacity } from "@/services/capacityService"
 
 // DNS Statistics page (docs/ref/todo/statistics-nav-restructure-plan.md T-02)
 // — promoted from the DNS Server page's former "สถิติ" tab
@@ -56,6 +59,10 @@ export default function StatisticsDns() {
   const [stats, setStats] = useState<DNSQueryStatistics | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Capacity indicator pill (docs/ref/todo/statistics-capacity-visibility-plan.md
+  // T-12) — same poll cycle as `stats` below, no extra interval; a failed
+  // fetch here just hides CapacityIndicator, never surfaces its own error.
+  const [capacityRings, setCapacityRings] = useState<RingCapacity[] | undefined>(undefined)
 
   const [searchParams, setSearchParams] = useSearchParams()
   const [query, setQuery] = useState(() => searchParams.get("ip") ?? "")
@@ -101,14 +108,31 @@ export default function StatisticsDns() {
     }
   }, [])
 
+  const loadCapacity = useCallback(async (win: StatsWindow) => {
+    try {
+      const result = await capacityService.getCapacityStatistics(win, { series: false })
+      setCapacityRings(result.rings)
+    } catch {
+      // Swallowed on purpose (plan T-12) — see comment on capacityRings above.
+    }
+  }, [])
+
   const loadRef = useRef(load)
   useEffect(() => {
     loadRef.current = load
   })
+  const loadCapacityRef = useRef(loadCapacity)
+  useEffect(() => {
+    loadCapacityRef.current = loadCapacity
+  })
 
   useEffect(() => {
     loadRef.current(window_, true)
-    const id = setInterval(() => loadRef.current(window_, false), REFRESH_INTERVAL_MS)
+    loadCapacityRef.current(window_)
+    const id = setInterval(() => {
+      loadRef.current(window_, false)
+      loadCapacityRef.current(window_)
+    }, REFRESH_INTERVAL_MS)
     return () => clearInterval(id)
   }, [window_])
 
@@ -177,6 +201,7 @@ export default function StatisticsDns() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <CapacityIndicator rings={capacityRings} group="dns" window={window_} />
           <DnsVolumeInfoButton />
           <StatsWindowTabs value={window_} onChange={setWindow} />
           <Button
@@ -213,6 +238,7 @@ export default function StatisticsDns() {
       {stats && stats.enabled && <DnsQueryTrendCard series={stats.querySeries} window={window_} />}
 
       {stats?.truncated && <DnsStatsTruncatedWarning />}
+      {stats?.domainIndexTruncated && <DnsDomainIndexTruncatedWarning />}
 
       {error && !stats && (
         <Card>
@@ -296,7 +322,7 @@ export default function StatisticsDns() {
                         {ipData?.ipsTruncated && (
                           <div className="flex items-center gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2 text-xs text-warning">
                             <TriangleAlert className="h-4 w-4 shrink-0" />
-                            ดัชนีโดเมน↔IP เต็มขีดจำกัด — ผลลัพธ์อาจไม่ครบทุกโดเมน
+                            ดัชนีโดเมน→IP เคยเต็มขีดจำกัดในช่วงที่ผ่านมา — รายชื่อโดเมนของ IP นี้อาจไม่ครบ
                           </div>
                         )}
                         {ipData && ipData.domains.length === 0 && (

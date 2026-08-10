@@ -587,6 +587,30 @@ func (s *Server) HandleGetDNSIPDomains(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, s.statistics.GetDNSIPDomains(window, ip))
 }
 
+// HandleGetCapacityStatistics backs the Statistics -> Capacity page and the
+// CapacityIndicator pills on Overview/Traffic/DNS (docs/ref/todo/
+// statistics-capacity-visibility-plan.md T-07, GitHub issue #123): current
+// usage vs configured cap for all 9 RAM-only tracking rings/indices. window
+// is whitelisted via statsWindowParam exactly like every other statistics
+// endpoint. `series` is the only other input, read as a strict whitelist —
+// "1" or "true" (case-sensitive, matching the convention every other
+// boolean-ish query param in this file follows: no client-supplied string
+// ever reaches service logic unvalidated) means true, literally anything
+// else (missing, empty, "0", "false", garbage) means false — never a 400,
+// mirroring the graceful-fallback rule statsWindowParam/clampQueryLimit
+// already use for their own inputs.
+//
+// 🔒 The response (model.CapacityStatistics) contains ONLY counts and
+// percentages — no domain name, IP address, or hostname ever appears in it,
+// which is why this route is authRoute rather than superAdminRoute (see
+// router.go). Nothing from the request is ever echoed back.
+func (s *Server) HandleGetCapacityStatistics(w http.ResponseWriter, r *http.Request) {
+	window := statsWindowParam(r)
+	seriesRaw := r.URL.Query().Get("series")
+	withSeries := seriesRaw == "1" || seriesRaw == "true"
+	s.writeJSON(w, http.StatusOK, s.statistics.GetCapacityStatistics(window, withSeries))
+}
+
 // trafficTopHostsDefaultLimit/trafficTopHostsMaxLimit and
 // trafficHostDetailDefaultLimit/trafficHostDetailMaxLimit mirror the same
 // constants in service/statistics_traffic.go — duplicated here (rather than

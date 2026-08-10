@@ -1512,6 +1512,140 @@ func (s *TrafficStatsService) getTrafficBreakdown(window, focusIP string, dstSet
 	}
 }
 
+// ringUsage is the raw per-ring capacity reading a single map-typed field of
+// trafficDetailBucket (hostBytes/dstBytes/convBytes) produces for
+// CapacityUsage below — deliberately a service-internal type (not
+// model.RingCapacity itself), so this file stays free of any knowledge of
+// the API DTO's json tags/field naming; statistics_capacity.go (T-06) maps
+// this into model.RingCapacity, filling in Cap/CapSource/Label/EntryBytes
+// from its own metadata table (docs/ref/todo/
+// statistics-capacity-visibility-plan.md T-02).
+type ringUsage struct {
+	// Current is the most recent (current, possibly still-open) bucket's
+	// tracked-key count within the requested window.
+	Current int
+	// Peak is the highest tracked-key count seen across the buckets the
+	// requested window covers.
+	Peak int
+	// FullBuckets is how many of those buckets had their tracked-key count at
+	// or above cap at least once (mirrors the existing `len(b.x) >= cap`
+	// truncation check already used by getTrafficBreakdown's Truncated
+	// field).
+	FullBuckets int
+	// TotalEntries is the sum of tracked-key counts across EVERY bucket
+	// CURRENTLY HELD in the whole ring (up to trafficDetailBucketMax == 288,
+	// i.e. up to 24h of history) — NOT scoped to the requested window. This
+	// is what statistics_capacity.go multiplies by EntryBytes to estimate
+	// RAM usage (plan Caution 3 — deliberately whole-ring, not
+	// window-scoped).
+	TotalEntries int64
+	// Series is one point per 5-minute bucket the requested window covers,
+	// same fixed-length/zero-filled/axis convention as
+	// TrafficBreakdown.Series above — always populated (callers that don't
+	// want it, e.g. withSeries=false, simply don't copy it into the
+	// response).
+	Series []model.CapacityPoint
+}
+
+// TrafficCapacityUsage is CapacityUsage's return value — the 3 traffic-ring
+// dimensions (Top Source Hosts / Top Destinations / Top Conversations) in one
+// snapshot, so the composer never has to call CapacityUsage more than once
+// per request.
+type TrafficCapacityUsage struct {
+	Hosts, Dests, Convs ringUsage
+}
+
+// pairRingUsage is the 2-dimension sibling of TrafficCapacityUsage, reused by
+// statistics.go's denyCapacity (sources/ports) and dns_query_stats.go's
+// dnsRingCapacity (pairs/clients) — a generically-named pair rather than two
+// separate near-identical structs, since both readers share the exact same
+// "RLock, sum whole-ring TotalEntries, walk window buckets for
+// Current/Peak/FullBuckets/Series" shape as CapacityUsage above, just with 2
+// dimensions instead of 3 (docs/ref/todo/statistics-capacity-visibility-plan.md
+// T-03/T-04).
+type pairRingUsage struct {
+	First, Second ringUsage
+}
+
+// CapacityUsage is the read-only capacity reader behind the
+// "traffic.hosts"/"traffic.dests"/"traffic.conversations" rows of GET
+// /api/statistics/capacity (docs/ref/todo/
+// statistics-capacity-visibility-plan.md T-02). It deliberately mirrors
+// getTrafficBreakdown's structure (compute the series axis BEFORE taking
+// s.mu.RLock, reuse the same n/axisStart for both the axis and the ring's
+// lastNBuckets selection — see statsSeriesAxis's doc comment for why this
+// order matters) but is otherwise a SEPARATE, simpler read path: it never
+// calls getTrafficBreakdown itself (this is pure per-bucket map-length
+// accounting, not a byte aggregation), takes no focus IP/dstSet, and never
+// aliases any map/slice held by the bucket ring — every value returned is
+// copied out under the lock (mirrors the race-safety note on
+// trafficDetailBucket above: a caller must never retain a pointer into
+// s.buckets after RUnlock).
+func (s *TrafficStatsService) CapacityUsage(window string) TrafficCapacityUsage {
+	window = normalizeStatsWindow(window)
+
+	axisStart, n := statsSeriesAxis(window)
+	hostsSeries := make([]model.CapacityPoint, n)
+	destsSeries := make([]model.CapacityPoint, n)
+	convsSeries := make([]model.CapacityPoint, n)
+	for i := 0; i < n; i++ {
+		ts := axisStart.Add(time.Duration(i) * trafficDetailBucketSpan).Format(time.RFC3339)
+		hostsSeries[i].Ts = ts
+		destsSeries[i].Ts = ts
+		convsSeries[i].Ts = ts
+	}
+
+	var hosts, dests, convs ringUsage
+
+	s.mu.RLock()
+	// TotalEntries sums across the WHOLE ring currently held (up to 288
+	// buckets / 24h), independent of window — plan Caution 3.
+	for _, b := range s.buckets {
+		hosts.TotalEntries += int64(len(b.hostBytes))
+		dests.TotalEntries += int64(len(b.dstBytes))
+		convs.TotalEntries += int64(len(b.convBytes))
+	}
+
+	windowBuckets := lastNBuckets(s.buckets, n)
+	for i, b := range windowBuckets {
+		hLen, dLen, cLen := len(b.hostBytes), len(b.dstBytes), len(b.convBytes)
+
+		idx := statsSeriesIndex(b.ts, axisStart, n)
+		hostsSeries[idx].Count += hLen
+		destsSeries[idx].Count += dLen
+		convsSeries[idx].Count += cLen
+
+		if hLen > hosts.Peak {
+			hosts.Peak = hLen
+		}
+		if dLen > dests.Peak {
+			dests.Peak = dLen
+		}
+		if cLen > convs.Peak {
+			convs.Peak = cLen
+		}
+		if hLen >= s.maxTrackedHosts {
+			hosts.FullBuckets++
+		}
+		if dLen >= s.maxTrackedDests {
+			dests.FullBuckets++
+		}
+		if cLen >= s.maxTrackedConversations {
+			convs.FullBuckets++
+		}
+		// Current: the newest bucket in the window (windowBuckets is
+		// oldest-to-newest, same order as s.buckets) — overwritten on every
+		// iteration so the last one wins.
+		if i == len(windowBuckets)-1 {
+			hosts.Current, dests.Current, convs.Current = hLen, dLen, cLen
+		}
+	}
+	s.mu.RUnlock()
+
+	hosts.Series, dests.Series, convs.Series = hostsSeries, destsSeries, convsSeries
+	return TrafficCapacityUsage{Hosts: hosts, Dests: dests, Convs: convs}
+}
+
 func buildCategorySlices(catTotals map[string]uint64, observed uint64) []model.TrafficCategorySlice {
 	out := make([]model.TrafficCategorySlice, 0, len(catTotals))
 	for name, bytes := range catTotals {
