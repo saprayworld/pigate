@@ -102,6 +102,7 @@ func main() {
 	log.Printf("[Main] DNS Stats Max Pairs/Clients per bucket: %d / %d", cfg.DNSStatsMaxPairs, cfg.DNSStatsMaxClients)
 	log.Printf("[Main] Traffic Stats Max Hosts/Dests/Conversations per bucket: %d / %d / %d", cfg.TrafficStatsMaxHosts, cfg.TrafficStatsMaxDests, cfg.TrafficStatsMaxConversations)
 	log.Printf("[Main] DNS Stats Max Domains/IPs-per-domain: %d / %d", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
+	log.Printf("[Main] Deny Stats Max Sources/Ports per bucket: %d / %d", cfg.DenyStatsMaxSources, cfg.DenyStatsMaxPorts)
 
 	// 2. Initialize in-memory forward-traffic logs circular buffer (Ring Buffer).
 	// Fed live by the TrafficLogManager watcher below (real NFLOG or mock
@@ -231,7 +232,9 @@ func main() {
 	// below as NFLOG events arrive.
 	// DNSStatsMaxPairs/DNSStatsMaxClients come from the file-only bootstrap
 	// keys dns-stats-max-pairs / dns-stats-max-clients (no CLI flag by design).
-	statisticsService := service.NewStatisticsService(trafficStatsService, repo, dhcp, cfg.DNSStatsMaxPairs, cfg.DNSStatsMaxClients)
+	// DenyStatsMaxSources/DenyStatsMaxPorts come from deny-stats-max-sources/
+	// -ports (docs/ref/todo/statistics-capacity-visibility-plan.md T-14).
+	statisticsService := service.NewStatisticsService(trafficStatsService, repo, dhcp, cfg.DNSStatsMaxPairs, cfg.DNSStatsMaxClients, cfg.DenyStatsMaxSources, cfg.DenyStatsMaxPorts)
 
 	// Central event log: every subsystem funnels audit events through this one
 	// service (RAM queue + async batch writer to SQLite; see event_log.go).

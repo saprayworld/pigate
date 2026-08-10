@@ -140,7 +140,18 @@ export interface DNSQueryStatistics {
   // last point is the current, still-open bucket. Invariant:
   // sum(querySeries[].count) === totalQueries always holds.
   querySeries: DNSQueryPoint[]
+  // True only when the (domain,client) pair ring or the client ring hit its
+  // own per-bucket tracking cap. Deliberately does NOT reflect the domain->IP
+  // forward index's own cap anymore — see domainIndexTruncated below, a
+  // separate signal (docs/ref/todo/statistics-dns-cap-notification-fix-plan.md
+  // §3.3).
   truncated: boolean
+  // True when the RAM-only domain->IP forward index rejected a brand-new
+  // domain because it was at dns-stats-max-domains, within the last TTL
+  // window (self-clears — never latches forever). Unlike truncated above,
+  // this says nothing about a single domain's resolved-IP list being
+  // incomplete (see DNSDomainDrilldown.ipsTruncated for that, per-domain).
+  domainIndexTruncated: boolean
   topDomains: DNSDomainStat[]
   topClients: DNSClientStat[]
   // Same network-wide conntrack-observed byte total as
@@ -179,9 +190,10 @@ export interface DNSDomainDrilldown {
   totalBytesDown: number
   // True when at least one row of ips has shared=true.
   sharedIps: boolean
-  // True when the RAM-only domain->IP forward index hit its per-domain IP
-  // cap while building ips above — separate from truncated (which covers
-  // the query-count ring).
+  // True when THIS domain's own IP set (ips above) is currently at
+  // dns-stats-max-ips-per-domain — computed fresh from ips.length, scoped to
+  // this domain only (never any other domain in the index) — separate from
+  // truncated (which covers the query-count ring).
   ipsTruncated: boolean
   // This domain's approximate volume over time — sum of dstBytes across all
   // of ips[] per 5-minute bucket, flow-relative (orig = up, reply = down).
@@ -202,6 +214,9 @@ export interface DNSClientDrilldown {
   enabled: boolean
   totalQueries: number
   truncated: boolean
+  // Mirrors DNSQueryStatistics.domainIndexTruncated — see that field's
+  // comment. Separate from truncated above for the same reason.
+  domainIndexTruncated: boolean
   // Since docs/ref/todo/statistics-dns-review-fixes-plan.md T-04 (review fix
   // on PR 127): clients = the number of clients, system-wide, that queried
   // that domain in this window (NOT just this one); ipCount/sharedIps =
@@ -261,8 +276,12 @@ export interface DNSIPDomains {
   // percent.
   totalQueries: number
   truncated: boolean
-  // True when the RAM-only domain->IP forward index hit one of its caps at
-  // some point — domains below could be incomplete.
+  // True when EITHER the domain->IP forward index rejected a brand-new
+  // domain within the last TTL window (index-wide, same signal as
+  // domainIndexTruncated), OR at least one of the domains actually returned
+  // in domains below currently holds dns-stats-max-ips-per-domain or more
+  // IPs (scoped to this result's own rows) — domains below could be
+  // incomplete either way.
   ipsTruncated: boolean
   // Every domain known to have resolved to ip, sorted by bytes desc, then
   // count desc, then domain asc. Never undefined — an empty array means no
@@ -567,6 +586,7 @@ export const dnsStatisticsService = {
         totalQueries,
         querySeries,
         truncated: false,
+        domainIndexTruncated: false,
         topDomains,
         topClients,
         observedBytes,
@@ -727,6 +747,7 @@ export const dnsStatisticsService = {
         enabled: true,
         totalQueries,
         truncated: false,
+        domainIndexTruncated: false,
         domains,
         totalBytes: clientTotals.bytes,
         totalBytesUp: clientTotals.bytesUp,

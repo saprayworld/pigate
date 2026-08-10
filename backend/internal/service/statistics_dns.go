@@ -114,9 +114,14 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 	}
 	s.dns.mu.RUnlock() // ring lock released before touching domainIPs/traffic below (plan Caution 3)
 
-	if s.dns.domainIPs.Truncated() {
-		truncated = true
-	}
+	// domainIndexTruncated is a SEPARATE signal from truncated above — it only
+	// reflects the domain->IP forward index rejecting a brand-new domain
+	// because dns-stats-max-domains was hit, never the per-domain IP cap
+	// (docs/ref/todo/statistics-dns-cap-notification-fix-plan.md §2.2/§3.3:
+	// the two used to be OR'd into one field here, which meant one CDN domain
+	// rotating past its per-domain IP cap made this whole page warn about the
+	// (domain,client) pair ring being full, which was frequently untrue).
+	domainIndexTruncated := s.dns.domainIPs.IndexTruncated()
 
 	// Exactly ONE traffic-breakdown call and ONE hostLookup call for this
 	// whole request (plan T-04 mandatory rule).
@@ -209,19 +214,20 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 	// top-50 table.
 
 	return model.DNSQueryStatistics{
-		Window:        window,
-		Enabled:       true,
-		TotalQueries:  totalQueries,
-		QuerySeries:   querySeries,
-		Truncated:     truncated,
-		TopDomains:    topDomains,
-		TopClients:    topClients,
-		ObservedBytes: breakdown.Observed,
-		DomainBytes:   domainBytesDenominator,
-		TotalDomains:  len(domainTotals),
-		TotalClients:  len(clientTotals),
-		Accuracy:      breakdown.Accuracy,
-		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+		Window:               window,
+		Enabled:              true,
+		TotalQueries:         totalQueries,
+		QuerySeries:          querySeries,
+		Truncated:            truncated,
+		DomainIndexTruncated: domainIndexTruncated,
+		TopDomains:           topDomains,
+		TopClients:           topClients,
+		ObservedBytes:        breakdown.Observed,
+		DomainBytes:          domainBytesDenominator,
+		TotalDomains:         len(domainTotals),
+		TotalClients:         len(clientTotals),
+		Accuracy:             breakdown.Accuracy,
+		GeneratedAt:          time.Now().UTC().Format(time.RFC3339),
 	}
 }
 
@@ -290,7 +296,14 @@ func (s *StatisticsService) GetDNSDomainClients(window, domain string) model.DNS
 	s.dns.mu.RUnlock() // ring lock released before touching domainIPs/traffic below (plan Caution 3)
 
 	ips := s.dns.domainIPs.IPsFor(domain)
-	ipsTruncated := s.dns.domainIPs.Truncated()
+	// ipsTruncated is computed for THIS domain only — len(ips) reaching the
+	// per-domain cap is the only way this domain's IP list can be incomplete
+	// (docs/ref/todo/statistics-dns-cap-notification-fix-plan.md §2.2/§3.2).
+	// Previously this used the whole index's latch, which meant opening a
+	// domain that has exactly one known IP could still show "IP list may be
+	// incomplete" just because some OTHER domain had hit the cap.
+	_, maxIPs := s.dns.domainIPs.caps()
+	ipsTruncated := maxIPs > 0 && len(ips) >= maxIPs
 
 	ipStrs := make([]string, len(ips))
 	for i, e := range ips {
@@ -488,9 +501,9 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 	}
 	s.dns.mu.RUnlock() // ring lock released before touching domainIPs/traffic below (plan Caution 3)
 
-	if s.dns.domainIPs.Truncated() {
-		truncated = true
-	}
+	// domainIndexTruncated is a separate signal from truncated — see the
+	// identical comment in GetDNSQueryStatistics above.
+	domainIndexTruncated := s.dns.domainIPs.IndexTruncated()
 
 	baseDomains := rankTopDomains(domainTotals, typeByDomain, totalQueries, dnsStatsTopN)
 	// NOTE: deliberately NOT setting truncated when len(domainTotals) >
@@ -523,14 +536,15 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 			}
 		}
 		return model.DNSClientDrilldown{
-			Client:       client,
-			Window:       window,
-			Enabled:      true,
-			TotalQueries: totalQueries,
-			Truncated:    truncated,
-			Domains:      domains,
-			Series:       []model.BandwidthPoint{},
-			GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
+			Client:               client,
+			Window:               window,
+			Enabled:              true,
+			TotalQueries:         totalQueries,
+			Truncated:            truncated,
+			DomainIndexTruncated: domainIndexTruncated,
+			Domains:              domains,
+			Series:               []model.BandwidthPoint{},
+			GeneratedAt:          time.Now().UTC().Format(time.RFC3339),
 		}
 	}
 
@@ -596,19 +610,20 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 	}
 
 	return model.DNSClientDrilldown{
-		Client:         client,
-		Hostname:       hostname,
-		Window:         window,
-		Enabled:        true,
-		TotalQueries:   totalQueries,
-		Truncated:      truncated,
-		Domains:        domains,
-		TotalBytes:     clientTotalBytes,
-		TotalBytesUp:   clientTotal.Orig,
-		TotalBytesDown: clientTotal.Reply,
-		Series:         breakdown.HostSeries,
-		Accuracy:       breakdown.Accuracy,
-		GeneratedAt:    time.Now().UTC().Format(time.RFC3339),
+		Client:               client,
+		Hostname:             hostname,
+		Window:               window,
+		Enabled:              true,
+		TotalQueries:         totalQueries,
+		Truncated:            truncated,
+		DomainIndexTruncated: domainIndexTruncated,
+		Domains:              domains,
+		TotalBytes:           clientTotalBytes,
+		TotalBytesUp:         clientTotal.Orig,
+		TotalBytesDown:       clientTotal.Reply,
+		Series:               breakdown.HostSeries,
+		Accuracy:             breakdown.Accuracy,
+		GeneratedAt:          time.Now().UTC().Format(time.RFC3339),
 	}
 }
 
@@ -670,13 +685,29 @@ func (s *StatisticsService) GetDNSIPDomains(window, ip string) model.DNSIPDomain
 	s.dns.mu.RUnlock() // ring lock released before touching domainIPs/traffic below (plan Caution 3)
 
 	matches := s.dns.domainIPs.DomainsForIP(ip)
-	ipsTruncated := s.dns.domainIPs.Truncated()
 
 	domainNames := make([]string, len(matches))
 	for i, m := range matches {
 		domainNames[i] = m.Domain
 	}
 	ipsByDomain := s.dns.domainIPs.IPsForMany(domainNames)
+	_, maxIPs := s.dns.domainIPs.caps()
+
+	// ipsTruncated is index-wide truncation (a brand-new domain was rejected
+	// recently, docs §3.3 T-04 item 4) OR at least one of the domains in
+	// THIS result hit its own per-domain IP cap — reuses ipsByDomain (already
+	// fetched above via IPsForMany) instead of calling into domainIPs again,
+	// keeping this to the same single lock acquisition per subsystem call the
+	// header comment mandates.
+	ipsTruncated := s.dns.domainIPs.IndexTruncated()
+	if !ipsTruncated && maxIPs > 0 {
+		for _, ips := range ipsByDomain {
+			if len(ips) >= maxIPs {
+				ipsTruncated = true
+				break
+			}
+		}
+	}
 
 	// Exactly ONE traffic-breakdown call and ONE hostLookup call for this
 	// request (plan Caution 2 / T-03).

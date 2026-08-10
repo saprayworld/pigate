@@ -33,6 +33,7 @@ import StatisticsTrafficHost from "@/pages/StatisticsTrafficHost"
 import StatisticsDns from "@/pages/StatisticsDns"
 import StatisticsDnsDomain from "@/pages/StatisticsDnsDomain"
 import StatisticsDnsClient from "@/pages/StatisticsDnsClient"
+import StatisticsCapacity from "@/pages/StatisticsCapacity"
 import { SizeIndicatorSystem } from "./components/tailwindIndicator"
 
 // A simple authentication route guard
@@ -160,6 +161,7 @@ export default function App() {
                     <Route path="dns" element={<StatisticsDns />} />
                     <Route path="dns/domain/:domain" element={<StatisticsDnsDomain />} />
                     <Route path="dns/client/:client" element={<StatisticsDnsClient />} />
+                    <Route path="capacity" element={<StatisticsCapacity />} />
                   </Route>
 
                   {/* Network Routes */}
