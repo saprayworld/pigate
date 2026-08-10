@@ -165,3 +165,18 @@ dns-stats-max-ips-per-domain=32
 # all, so it is OFF by default and file-only (no CLI flag, no UI toggle) —
 # you must opt in by hand, here, if you want it.
 ipinfo-enabled=false
+
+# The two keys below bound the firewall deny ring's per-bucket caps (backend/
+# internal/service/statistics.go — docs/ref/todo/
+# statistics-capacity-visibility-plan.md T-14), promoted from the old
+# maxTrackedDenySources/maxTrackedDenyPorts consts so they're editable without
+# a rebuild. Same 5-minute/288-bucket (24h) ring and clamp+warn (not fatal)
+# out-of-range validation as the traffic-stats-max-* keys above.
+
+# Maximum number of distinct source IPs tracked per 5-minute bucket in the
+# firewall deny ring.
+deny-stats-max-sources=500
+
+# Maximum number of distinct destination ports tracked per 5-minute bucket in
+# the firewall deny ring.
+deny-stats-max-ports=300
