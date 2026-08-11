@@ -16,7 +16,9 @@ import {
   Loader2,
   ListChecks,
   ShieldX,
-  Ban
+  Ban,
+  Activity,
+  CircleSlash,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -27,9 +29,13 @@ import { policyService } from "@/services/policyService"
 import { addressService } from "@/services/addressService"
 import { serviceObjectService } from "@/services/serviceObjectService"
 import { interfaceService } from "@/services/interfaceService"
+import { policyStatsService, type PolicyRuleStat, type PolicyRuleStats } from "@/services/policyStatsService"
+import RuleStatsDrawer from "@/components/policy/RuleStatsDrawer"
 import { useAlert } from "@/hooks/useAlert"
 import { cn } from "@/lib/utils"
 import { formatIfaceLabel } from "@/lib/ifaceLabel"
+import { fmtBytes } from "@/lib/formatBytes"
+import { fmtRelativeTime } from "@/lib/relativeTime"
 
 // shadcn UI component imports
 import {
@@ -124,19 +130,51 @@ function ifaceLabel(val: string | undefined, interfaces: NetworkInterface[]) {
   return formatIfaceLabel(v, interfaces)
 }
 
+// UsageCell renders the "Usage" column for one rule: "—" for disabled rules
+// (never created in nftables, no counter to show — plan Final acceptance),
+// a loading placeholder while stats haven't loaded yet, an "Unused" badge for
+// enabled rules with no traffic since the last apply, or bytes/percent plus a
+// relative "last matched" time otherwise.
+function UsageCell({ rule, stat, statsAvailable }: { rule: PolicyRule; stat?: PolicyRuleStat; statsAvailable: boolean }) {
+  if (!rule.status) {
+    return <span className="text-xs text-muted-foreground">—</span>
+  }
+  if (!statsAvailable || !stat) {
+    return <span className="text-xs text-muted-foreground">...</span>
+  }
+  if (stat.unused) {
+    return (
+      <Badge variant="secondary" className="rounded px-1.5 py-0.5 text-[10px] font-semibold">
+        Unused
+      </Badge>
+    )
+  }
+  return (
+    <div className="space-y-0.5">
+      <div className="text-xs font-medium text-foreground">
+        {fmtBytes(stat.bytes)} <span className="text-muted-foreground">({stat.percent.toLocaleString()}%)</span>
+      </div>
+      <div className="text-[11px] text-muted-foreground">{fmtRelativeTime(stat.lastMatchedAt)}</div>
+    </div>
+  )
+}
+
 // Props for Sortable Row component
 interface SortableRowProps {
   rule: PolicyRule
   index: number
   interfaces: NetworkInterface[]
+  stat?: PolicyRuleStat
+  statsAvailable: boolean
   onEdit: (rule: PolicyRule) => void
   onDelete: (id: string) => void
   onToggleStatus: (id: string) => void
   onToggleLog: (id: string) => void
+  onViewStats: (rule: PolicyRule) => void
 }
 
 // Drag & Drop Row component
-function SortableRow({ rule, index, interfaces, onEdit, onDelete, onToggleStatus, onToggleLog }: SortableRowProps) {
+function SortableRow({ rule, index, interfaces, stat, statsAvailable, onEdit, onDelete, onToggleStatus, onToggleLog, onViewStats }: SortableRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: rule.id })
 
   const style = {
@@ -274,9 +312,23 @@ function SortableRow({ rule, index, interfaces, onEdit, onDelete, onToggleStatus
         </div>
       </TableCell>
 
+      {/* 8.5 Usage (bytes/percent/last matched since last Apply Settings) */}
+      <TableCell className="py-3">
+        <UsageCell rule={rule} stat={stat} statsAvailable={statsAvailable} />
+      </TableCell>
+
       {/* 9. Action Buttons */}
       <TableCell className="py-3 text-right">
         <div className="flex items-center justify-end gap-2">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            onClick={() => onViewStats(rule)}
+            className="cursor-pointer text-muted-foreground hover:text-foreground"
+            title="ดูสถิติการใช้งาน"
+          >
+            <Activity className="h-4 w-4" />
+          </Button>
           <Button
             variant="outline"
             size="icon-sm"
@@ -323,6 +375,19 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
   const [serviceObjects, setServiceObjects] = useState<ServiceObject[]>([])
   const [interfaces, setInterfaces] = useState<NetworkInterface[]>([])
   const [isLoading, setIsLoading] = useState(true)
+
+  // --- Per-rule usage statistics (docs/ref/todo/firewall-policy-rule-usage-
+  // stats-plan.md T-12) — polled independently every ~10s, on its own
+  // "available" flag, so a slow/failed stats fetch never blocks or resets
+  // the main rules table (no shared isLoading, no touching `rules`).
+  const [policyStats, setPolicyStats] = useState<PolicyRuleStats | null>(null)
+  const statsById = useMemo(() => {
+    const m = new Map<string, PolicyRuleStat>()
+    policyStats?.rules.forEach((s) => m.set(s.ruleId, s))
+    return m
+  }, [policyStats])
+  const [statsRule, setStatsRule] = useState<PolicyRule | null>(null)
+  const [isStatsDrawerOpen, setIsStatsDrawerOpen] = useState(false)
 
   // --- Search and Filters State ---
   const [searchQuery, setSearchQuery] = useState<string>("")
@@ -410,6 +475,32 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
     }
     initialLoad()
   }, [alert, chain])
+
+  // Poll per-rule usage stats every ~10s (matches the backend poller's own
+  // flowPollInterval — no point polling faster). Failures are swallowed
+  // (logged only) so a transient network hiccup never surfaces an alert
+  // dialog on top of the table; the Usage column just keeps showing its last
+  // known values until the next successful tick. Cleaned up on unmount/chain
+  // change so no request/timer is left running after leaving the page.
+  useEffect(() => {
+    let cancelled = false
+
+    const fetchStats = async () => {
+      try {
+        const stats = await policyStatsService.getStats(chain)
+        if (!cancelled) setPolicyStats(stats)
+      } catch (err) {
+        console.error("Failed to fetch policy usage statistics:", err)
+      }
+    }
+
+    fetchStats()
+    const interval = setInterval(fetchStats, 10_000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [chain])
 
   const handleApplySettings = async () => {
     setIsApplying(true)
@@ -551,6 +642,11 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
     }
   }
 
+  const handleViewStats = (rule: PolicyRule) => {
+    setStatsRule(rule)
+    setIsStatsDrawerOpen(true)
+  }
+
   const handleDeleteRule = async (id: string) => {
     if (await confirm("ยืนยันการลบ", "คุณแน่ใจหรือไม่ที่จะลบนโยบายความปลอดภัยนี้?")) {
       try {
@@ -616,19 +712,24 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
     const active = rules.filter((r) => r.status).length
     const disabled = rules.filter((r) => !r.status).length
     const deny = rules.filter((r) => r.action === "DROP").length
-    return { total, active, disabled, deny }
-  }, [rules])
+    // unused counts only enabled rules with no traffic since the last Apply
+    // Settings (policyStats.rules already excludes disabled rules) — 0 while
+    // stats haven't loaded yet rather than showing a misleading count.
+    const unused = policyStats?.rules.filter((s) => s.unused).length ?? 0
+    return { total, active, disabled, deny, unused }
+  }, [rules, policyStats])
 
   return (
     <div className="space-y-4">
       <CapabilityBanner id="firewall" />
 
       {/* 1. Stats overview */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <StatCard icon={ListChecks} title="Total Policies" value={stats.total} />
         <StatCard icon={ShieldCheck} title="Active Rules" value={stats.active} />
         <StatCard icon={Ban} title="Disabled Rules" value={stats.disabled} />
         <StatCard icon={ShieldX} title="Deny (DROP) Rules" value={stats.deny} />
+        <StatCard icon={CircleSlash} title="Unused Rules" value={stats.unused} />
       </div>
 
       {/* 1.5 Chain-specific guidance */}
@@ -746,13 +847,14 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
                   <TableHead className="w-[6%] text-xs font-medium text-muted-foreground">NAT</TableHead>
                   <TableHead className="w-[6%] text-xs font-medium text-muted-foreground">Log</TableHead>
                   <TableHead className="w-[10%] text-xs font-medium text-muted-foreground">Status</TableHead>
+                  <TableHead className="w-[10%] text-xs font-medium text-muted-foreground">Usage</TableHead>
                   <TableHead className="w-[8%] text-right text-xs font-medium text-muted-foreground"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={12} className="py-12 text-center text-xs text-muted-foreground">
+                    <TableCell colSpan={13} className="py-12 text-center text-xs text-muted-foreground">
                       <div className="flex flex-col items-center justify-center gap-2 py-4">
                         <Loader2 className="h-6 w-6 animate-spin text-primary" />
                         <span>กำลังโหลดข้อมูล...</span>
@@ -761,7 +863,7 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
                   </TableRow>
                 ) : filteredRules.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={12} className="py-8 text-center text-xs text-muted-foreground">
+                    <TableCell colSpan={13} className="py-8 text-center text-xs text-muted-foreground">
                       ไม่พบนโยบายไฟร์วอลล์ที่ค้นหา
                     </TableCell>
                   </TableRow>
@@ -779,10 +881,13 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
                           rule={rule}
                           index={idx}
                           interfaces={interfaces}
+                          stat={statsById.get(rule.id)}
+                          statsAvailable={policyStats?.available ?? false}
                           onEdit={openEditModal}
                           onDelete={handleDeleteRule}
                           onToggleStatus={handleToggleStatus}
                           onToggleLog={handleToggleLog}
+                          onViewStats={handleViewStats}
                         />
                       ))}
                     </SortableContext>
@@ -824,6 +929,7 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
                       System
                     </Badge>
                   </TableCell>
+                  <TableCell className="py-3 italic text-xs">—</TableCell>
                   <TableCell></TableCell>
                 </TableRow>
               </TableBody>
@@ -842,6 +948,19 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
           หลังจากเพิ่ม แก้ไข หรือจัดเรียงกฎใหม่เรียบร้อยแล้ว จำเป็นต้องกดปุ่ม{" "}
           <strong className="font-semibold text-primary">"Apply Settings"</strong> เพื่ออัปโหลดนโยบายเข้าสู่ระบบ Kernel `nftables` จริง
           (การกด Apply จากหน้าไหนก็ตาม จะปรับใช้ทั้ง 3 chain — Firewall Policy, Local-In และ Local-Out — พร้อมกันเสมอ)
+        </span>
+      </div>
+
+      {/* 4.5 Usage stats limitations note (docs/ref/todo/
+          firewall-policy-rule-usage-stats-plan.md T-12) */}
+      <div className="flex gap-2 rounded-lg border border-border bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
+        <Activity className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          <strong className="text-foreground">เกี่ยวกับคอลัมน์ "Usage":</strong>{" "}
+          ตัวเลข bytes/packets/% เป็นค่า "ตั้งแต่ Apply Settings ล่าสุด" เท่านั้น (nftables รีเซ็ต counter ทุกครั้งที่ Apply แม้แก้แค่กฎเดียว)
+          ไม่ใช่สะสมตลอดชีพของกฎ, % คำนวณเทียบกับทราฟฟิกทุก chain รวมกันเสมอ ไม่ใช่เฉพาะหน้าที่กำลังดู,
+          "ใช้งานล่าสุดเมื่อ" มาจาก Traffic Log (แม่นยำ ต้องเปิด Log) หรือ nft counter poll ทุก 10 วินาที (คลาดเคลื่อน ±10 วินาที) เป็นค่าสำรอง
+          และกฎที่ปิดใช้งาน (Disabled) จะแสดง "—" เสมอเพราะไม่ถูกสร้างในระบบ nftables
         </span>
       </div>
 
@@ -1125,6 +1244,15 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
           </div>
         </DrawerContent>
       </Drawer>
+
+      <RuleStatsDrawer
+        open={isStatsDrawerOpen}
+        onOpenChange={setIsStatsDrawerOpen}
+        rule={statsRule}
+        stat={statsRule ? statsById.get(statsRule.id) : undefined}
+        countersSince={policyStats?.countersSince}
+        available={policyStats?.available ?? false}
+      />
     </div>
   )
 }

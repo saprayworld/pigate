@@ -414,6 +414,7 @@ func (m *MockDNSServerManager) ClearCache() error {
 //   - netflix.com is queried from 2 distinct clients (.101/.102).
 //   - line-apps.com and cdn.jsdelivr.net are each queried from a single
 //     client, to exercise the single-row drill-down edge case.
+//
 // Weights keep the same few LAN clients MockDhcp/mockFlowTemplates already
 // use, at different relative frequencies so the "Top Queried Domains" card
 // ranking visibly differs row to row.
@@ -946,16 +947,16 @@ type mockFlowTemplate struct {
 // into the "Other" category, so both matched and unmatched Protocol
 // Breakdown segments are exercised in dev.
 var mockFlowTemplates = []mockFlowTemplate{
-	{"192.168.1.101", "142.250.80.46", 6, 443, 9000, 3, 0.08},    // iPhone-13: HTTPS video/streaming (mostly download)
-	{"192.168.1.101", "1.1.1.1", 17, 53, 40, 2, 0.45},            // iPhone-13: DNS (roughly balanced)
-	{"192.168.1.102", "173.194.76.94", 6, 443, 26000, 3, 0.08},   // Android-SmartTV: HTTPS video (dominant talker, mostly download)
-	{"192.168.1.102", "64.233.166.127", 17, 5060, 1200, 2, 0.5},  // Android-SmartTV: VoIP/SIP (symmetric)
-	{"192.168.1.102", "8.8.8.8", 17, 53, 35, 2, 0.45},            // Android-SmartTV: DNS
-	{"192.168.1.105", "151.101.1.69", 6, 80, 3000, 3, 0.15},      // iPad-Pro: HTTP browsing (mostly download)
-	{"192.168.1.105", "151.101.1.69", 6, 443, 4500, 3, 0.15},     // iPad-Pro: HTTPS browsing (mostly download)
-	{"192.168.1.105", "203.0.113.55", 6, 51820, 800, 2, 0.5},     // iPad-Pro: unmatched port -> "Other" (VPN, roughly symmetric)
-	{"192.168.1.101", "45.33.32.156", 17, 6881, 500, 2, 0.35},    // iPhone-13: unmatched port -> "Other" (P2P, upload-heavy)
-	{"192.168.1.102", "198.51.100.9", 6, 22, 150, 2, 0.6},        // Android-SmartTV: unmatched port -> "Other" (SSH, upload-leaning)
+	{"192.168.1.101", "142.250.80.46", 6, 443, 9000, 3, 0.08},   // iPhone-13: HTTPS video/streaming (mostly download)
+	{"192.168.1.101", "1.1.1.1", 17, 53, 40, 2, 0.45},           // iPhone-13: DNS (roughly balanced)
+	{"192.168.1.102", "173.194.76.94", 6, 443, 26000, 3, 0.08},  // Android-SmartTV: HTTPS video (dominant talker, mostly download)
+	{"192.168.1.102", "64.233.166.127", 17, 5060, 1200, 2, 0.5}, // Android-SmartTV: VoIP/SIP (symmetric)
+	{"192.168.1.102", "8.8.8.8", 17, 53, 35, 2, 0.45},           // Android-SmartTV: DNS
+	{"192.168.1.105", "151.101.1.69", 6, 80, 3000, 3, 0.15},     // iPad-Pro: HTTP browsing (mostly download)
+	{"192.168.1.105", "151.101.1.69", 6, 443, 4500, 3, 0.15},    // iPad-Pro: HTTPS browsing (mostly download)
+	{"192.168.1.105", "203.0.113.55", 6, 51820, 800, 2, 0.5},    // iPad-Pro: unmatched port -> "Other" (VPN, roughly symmetric)
+	{"192.168.1.101", "45.33.32.156", 17, 6881, 500, 2, 0.35},   // iPhone-13: unmatched port -> "Other" (P2P, upload-heavy)
+	{"192.168.1.102", "198.51.100.9", 6, 22, 150, 2, 0.6},       // Android-SmartTV: unmatched port -> "Other" (SSH, upload-leaning)
 }
 
 // MockTrafficAccounting implements TrafficAccountingManager for local/mock
@@ -1025,8 +1026,14 @@ func (m *MockTrafficAccounting) DumpRuleCounters() (map[string]model.RuleCounter
 			continue
 		}
 		// Vary the synthetic rate per rule so the Top Rules ranking isn't a
-		// flat tie in dev mode.
+		// flat tie in dev mode. Every 4th rule (deterministic on its position
+		// in the DB-ordered id list, never random) gets a rate of 0 so
+		// -mock=true can exercise the "Unused" status in the per-rule usage
+		// stats UI (docs/ref/todo/firewall-policy-rule-usage-stats-plan.md T-08).
 		ratePerSec := 300.0 + float64(i%5)*450.0
+		if i%4 == 3 {
+			ratePerSec = 0
+		}
 		bytes := uint64(ratePerSec * elapsed)
 		out[id] = model.RuleCounter{Bytes: bytes, Packets: bytes / 512}
 	}

@@ -692,6 +692,55 @@ type TopRule struct {
 	Percent float64 `json:"percent"`
 }
 
+// PolicyRuleStat is one row of the /api/policies/stats response — per-rule
+// usage since the last successful SyncFirewallRules apply (see
+// docs/ref/todo/firewall-policy-rule-usage-stats-plan.md, Design decision 1).
+// Deliberately NOT merged into PolicyRule (also used by create/update/backup
+// import-export — adding runtime fields there would leak into those paths).
+type PolicyRuleStat struct {
+	RuleID  string `json:"ruleId"`
+	Name    string `json:"name"`
+	Chain   string `json:"chain"`
+	Action  string `json:"action"`
+	Log     bool   `json:"log"`
+	Status  bool   `json:"status"`
+	Bytes   uint64 `json:"bytes"`
+	Packets uint64 `json:"packets"`
+	// Percent is always computed against the total across every chain (Design
+	// decision 2), regardless of the ?chain= filter applied to the response.
+	Percent float64 `json:"percent"`
+	// Unused is true when the rule is enabled but has not matched any traffic
+	// since the last successful apply (Bytes==0 && Packets==0). Always false
+	// for disabled rules — they show "—" client-side instead, not "Unused".
+	Unused bool `json:"unused"`
+	// LastMatchedAt is an RFC3339(Nano) timestamp string, or "" if unknown
+	// (never matched since apply, or the evidence fell out of the ring
+	// buffer/poll baseline). See LastMatchedSource for how it was derived.
+	LastMatchedAt string `json:"lastMatchedAt,omitempty"`
+	// LastMatchedSource is "log" (resolved from a ring-buffer traffic log
+	// entry — precise, requires the rule's Log flag to be on), "counter"
+	// (fallback: the 10s nft-counter poller observed a delta — ±10s accuracy),
+	// or "" when LastMatchedAt is empty.
+	LastMatchedSource string `json:"lastMatchedSource,omitempty"`
+}
+
+// PolicyRuleStats is the full /api/policies/stats response. TotalBytes is the
+// sum across every chain (used as the Percent denominator for every rule,
+// including when ?chain= filters Rules to one chain — Design decision 2).
+// CountersSince is the last successful firewall apply time (RFC3339 UTC, or
+// "" before the first apply); nftables counters reset to 0 on every apply
+// (Design decision 1), so it doubles as "stats collected since".
+type PolicyRuleStats struct {
+	Rules         []PolicyRuleStat `json:"rules"`
+	TotalBytes    uint64           `json:"totalBytes"`
+	TotalPackets  uint64           `json:"totalPackets"`
+	CountersSince string           `json:"countersSince,omitempty"`
+	// Available is false when the underlying kernel counter dump has never
+	// succeeded yet (e.g. very first poll tick after startup) — the UI shows
+	// a "not available yet" state instead of a misleading all-zero table.
+	Available bool `json:"available"`
+}
+
 // TrafficDetail is the /api/dashboard/traffic-detail response backing the
 // Dashboard "Detailed" tab's Protocol Breakdown / Top Talkers / Top Rules
 // cards. ObservedBytes is the total the conntrack-based collector actually

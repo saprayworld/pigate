@@ -163,3 +163,24 @@ table inet pigate_firewall {
 | [`backend/internal/api/handlers.go`](../../../backend/internal/api/handlers.go) | ตัวประมวลผล request ของ endpoints `/api/policies` ทั้งหมด |
 | [`backend/internal/kernel/interfaces.go`](../../../backend/internal/kernel/interfaces.go) | `FirewallManager` interface ที่ใช้ประกาศเมธอด `ApplyRules` |
 | [`backend/internal/kernel/mock.go`](../../../backend/internal/kernel/mock.go) | ตัวจำลองสถานะ FirewallManager สำหรับสภาพแวดล้อมจำลอง |
+
+---
+
+## 9. Per-Rule Usage Statistics (`GET /api/policies/stats`)
+
+ไฟล์หลัก: `backend/internal/service/policy_stats.go`, `backend/internal/service/traffic_stats.go`, `backend/internal/logs/ringbuffer.go`, `frontend/src/services/policyStatsService.ts`, `frontend/src/components/policy/PolicyChainPage.tsx`, `frontend/src/components/policy/RuleStatsDrawer.tsx`
+
+หน้ารายการกฎ (Firewall/Local-In/Local-Out Policy) มีคอลัมน์ "Usage" และปุ่มดูรายละเอียดสถิติต่อกฎ (ดู `docs/ref/todo/firewall-policy-rule-usage-stats-plan.md` สำหรับ work plan เต็ม) โดย `PolicyStatsService.GetPolicyRuleStats(chain)` รวม 3 แหล่งข้อมูลที่มีอยู่แล้วเข้าด้วยกัน (ไม่เพิ่ม goroutine/kernel call ใหม่):
+
+1. **nft counter snapshot** — จาก `TrafficStatsService.RuleCounterSnapshot()` (ตัวเลข cumulative นับตั้งแต่ poller เห็นกฎนั้นครั้งแรก, reset ทุกครั้งที่มีการ `Apply Settings` เพราะ `RealFirewall.ApplyRules` ทำ `FlushTable` แล้วสร้างกฎใหม่ทั้งหมด)
+2. **Traffic log ring buffer** — `RingBuffer.LastMatchedByRule()` สแกนรอบเดียว หา "ใช้งานล่าสุดเมื่อ" ที่แม่นยำสำหรับกฎที่เปิด `Log`
+3. **Poll-based fallback** — `TrafficStatsService.RuleLastHits()` (บันทึกเวลาที่ delta > 0 ในรอบ poll ทุก ~10 วินาทีเดิม) สำหรับกฎที่ไม่เปิด `Log`
+
+ข้อจำกัดสำคัญ (ต้องอ่านก่อนตีความตัวเลข):
+- เป็น **snapshot ตั้งแต่ Apply ล่าสุด** ไม่ใช่สะสมตลอดชีพของกฎ — ดู `countersSince` ในผลลัพธ์
+- `percent`/`totalBytes`/`totalPackets` คำนวณข้าม **ทุก chain รวมกันเสมอ** แม้ใช้ `?chain=` กรองผลลัพธ์
+- `lastMatchedSource` เป็น `"log"` หรือ `"counter"` ตามแหล่งที่ resolve ได้ (ดูข้อ 2/3 ด้านบน) ความคลาดเคลื่อนของแหล่ง `"counter"` อยู่ที่ ±10 วินาที
+- กฎที่ `status = false` (Disabled) จะไม่ปรากฏใน `rules` เลย เพราะไม่ถูกสร้างใน nftables — ฝั่งหน้าบ้านแสดง "—" แทน 0/Unused
+- Endpoint นี้เป็น `authRoute` (ทุก role ที่ล็อกอินเรียกได้) เหมือนกลุ่ม `/api/statistics/*` เพราะข้อมูลอ่อนไหวต่ำ (มีแค่ rule id + byte count)
+
+ฝั่งหน้าบ้าน `PolicyChainPage.tsx` เรียก `policyStatsService.getStats(chain)` (ผ่าน `frontend/src/services/policyStatsService.ts`) ทุก ~10 วินาทีอิสระจากการโหลดตารางหลัก (ไม่ทำให้ตารางกระพริบ/รีเซ็ต scroll) และแสดงรายละเอียดครบทุก field ผ่าน `RuleStatsDrawer.tsx` เมื่อกดปุ่มไอคอน (`Activity`) ในแต่ละแถว

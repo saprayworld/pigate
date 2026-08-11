@@ -2,7 +2,7 @@
 
 โจทย์: หน้า Firewall Policy / Local-In Policy / Local-Out Policy (รายการกฎ) อยากให้เห็นสถิติการใช้งานของแต่ละกฎในรายการเลย (ใช้ไปเท่าไหร่ กฎไหนไม่เคยถูกใช้) และตอนกดดูรายละเอียดกฎ ให้เห็นเพิ่ม เช่น bytes/packets, % ของทราฟฟิกทั้งหมด, ใช้ล่าสุดเมื่อไหร่
 
-สถานะ: วางแผนเสร็จ (โดย ai-tech-lead) — **รอ PR #133 (`feat/traffic-log-rule-and-domain`) merge เข้า main ก่อน** จึงจะเริ่ม implement ได้ เพราะแผนนี้พึ่งพา `model.FirewallLog.RuleID` ที่เพิ่มใน PR นั้น เมื่อ #133 merge แล้วให้แตก branch ใหม่จาก main (เช่น `feat/policy-rule-usage-stats`)
+สถานะ: **พร้อม implement** — PR #133 merge เข้า main แล้ว (commit `5105466`), verify แล้วว่า `model.FirewallLog.RuleID`/`RuleName` มีอยู่จริงที่ `backend/internal/model/types.go:411-412` ตรงกับที่แผนนี้อ้างอิง ให้แตก branch ใหม่จาก main (เช่น `feat/policy-rule-usage-stats`) แล้วเริ่มทำได้เลย
 
 ## Design decisions (ยืนยันกับเจ้าของโปรเจกต์แล้ว)
 
@@ -36,8 +36,8 @@
 | Task | Layer | ไฟล์หลัก | สรุป |
 |---|---|---|---|
 | T-01 | model | `backend/internal/model/types.go` | เพิ่ม DTO `PolicyRuleStat`/`PolicyRuleStats` (ไม่แตะ `PolicyRule`/`TopRule` เดิม) |
-| T-02 | logs | `backend/internal/logs/ringbuffer.go` | เพิ่ม `LastMatchedByRule() map[string]string` สแกนรอบเดียวจากท้ายมาหน้า ไม่ copy ทั้งก้อน + `Size()` |
-| T-03 | service | `backend/internal/service/traffic_stats.go` | บันทึก `lastRuleHit` เมื่อ delta > 0 ใน `processRuleCounters` (ไม่เพิ่ม goroutine/kernel call) + accessor `RuleCounterSnapshot()`/`RuleLastHits()` (คืนสำเนาเสมอ, อ่านใต้ ruleMu) |
+| T-02 | logs | `backend/internal/logs/ringbuffer.go` | เพิ่ม `LastMatchedByRule() map[string]string` สแกนรอบเดียวจากท้ายมาหน้า ไม่ copy ทั้งก้อน + `Size()`. `FirewallLog.Time` เป็น `string` (RFC3339 หรือ RFC3339Nano ปนกันในโค้ด/เทสต์) — ใช้ค่า string ตามที่มีตรงๆ เป็น `lastMatchedAt`, การเทียบ "ใหม่กว่ากัน" ระหว่าง log กับ counter (ทำใน T-05) ต้อง parse ด้วย `time.Parse` ที่ลองทั้งสอง layout |
+| T-03 | service | `backend/internal/service/traffic_stats.go` | บันทึก `lastRuleHit` เมื่อ delta > 0 ใน `processRuleCounters` (ไม่เพิ่ม goroutine/kernel call) + accessor `RuleCounterSnapshot()`/`RuleLastHits()` (คืนสำเนาเสมอ, อ่านใต้ `ruleMu` ซึ่งเป็น `sync.Mutex` ธรรมดา ไม่ใช่ `RWMutex` — ใช้ `Lock()`/`Unlock()` เท่านั้น ห้ามใช้ `RLock`) |
 | T-04 | service | `backend/internal/service/firewall.go` | เพิ่ม `lastApplyOKAt` + `LastAppliedAt()` — **แก้ให้น้อยที่สุด ไฟล์นี้เป็น security-sensitive (firewall rule generation path)** |
 | T-05 | service | `backend/internal/service/policy_stats.go` (ใหม่) | `PolicyStatsService.GetPolicyRuleStats(chain)` merge 3 source (nft counter snapshot / ring buffer log / poll last-hit), คำนวณ %/Unused, sort by bytes |
 | T-06 | api | `backend/internal/api/handlers.go`, `router.go` | Handler + route `GET /api/policies/stats` (authRoute) ผ่าน setter `SetPolicyStatsService` (ห้ามแก้ `NewServer` signature) |
@@ -46,7 +46,7 @@
 | T-09 | docs | `docs/openapi.yaml`, `frontend/public/openapi.yaml` | เพิ่ม path/schema ให้ตรงกับ DTO ของ T-01 พร้อม description ข้อจำกัด 4 ข้อ |
 | T-10 | frontend | `frontend/src/services/policyStatsService.ts` (ใหม่) | API client + mock-mode synthesis (deterministic ต่อ rule id, มีทั้ง unused/log-source/counter-source) |
 | T-11 | frontend | `frontend/src/lib/relativeTime.ts` (ใหม่) | `fmtRelativeTime`/`fmtAbsoluteTime` (ไทย, ไม่พึ่ง dependency ใหม่) |
-| T-12 | frontend | `frontend/src/components/policy/PolicyChainPage.tsx` | คอลัมน์ "Usage" ใหม่ (13 คอลัมน์รวม, แก้ colSpan + แถว Implicit Deny ด้วย) + StatCard "Unused Rules" ใบที่ 5 + note ท้ายหน้า + poll ทุก 10s (ไม่กระพริบตาราง) |
+| T-12 | frontend | `frontend/src/components/policy/PolicyChainPage.tsx` | คอลัมน์ "Usage" ใหม่ แทรกหลังคอลัมน์ "Status" (13 คอลัมน์รวม) — ต้องแก้ **`colSpan={12}` ทั้ง 2 จุด** (empty-state และ no-result) เป็น 13, แก้แถว "Implicit Deny" (เป็น `<TableCell>` เรียงมือ ไม่ใช่ colSpan) โดยเพิ่ม cell "—" 1 ช่องให้ตรงตำแหน่งคอลัมน์ Usage ใหม่ + เพิ่ม StatCard "Unused Rules" ใบที่ 5 (grid ปัจจุบัน `grid-cols-2 lg:grid-cols-4` ต้องแก้เป็น `lg:grid-cols-5` ด้วย) + note ท้ายหน้า + poll ทุก 10s (ไม่กระพริบตาราง) |
 | T-13 | frontend | `frontend/src/components/policy/RuleStatsDrawer.tsx` (ใหม่) | Drawer รายละเอียดสถิติต่อกฎ (read-only) เปิดจากปุ่มไอคอนใหม่ในแถว |
 | T-14 | docs | `docs/data/firewall.md` | อัปเดตเอกสารอ้างอิงสั้นๆ อธิบาย endpoint/แหล่งข้อมูล/ข้อจำกัด |
 
@@ -72,7 +72,7 @@
 
 ## หมายเหตุ/ความเสี่ยงที่เหลือ
 
-1. **Sequencing**: พึ่ง `model.FirewallLog.RuleID` จาก PR #133 — ห้ามเริ่ม implement จนกว่า #133 merge ถ้า #133 ถูกแก้ระหว่าง review จนชื่อ field เปลี่ยน ต้อง re-verify T-02/T-05 ก่อนเริ่ม
+1. ~~**Sequencing**: พึ่ง `model.FirewallLog.RuleID` จาก PR #133~~ — **Resolved**: #133 merge เข้า main แล้ว (`5105466`), verify แล้วว่า `RuleID`/`RuleName` อยู่ที่ `types.go:411-412` ตรงตามแผน
 2. **T-04 เป็นจุด sensitive**: แก้ `service/firewall.go` (firewall rule generation path) ต้อง diff ให้น้อยที่สุด ห้ามแตะ `SyncFirewallRules`/`ApplyRules` logic เดิม
 3. **T-03 เป็น hot path ของ poller ที่มี data-race caution เดิมอยู่แล้ว** — ต้องรัน `go test -race` ให้ผ่าน
 4. **`countersSince` เพี้ยนได้ถ้ามีคน `nft flush` นอกระบบ** (ตัดสินใจแล้วว่ายังไม่ทำ auto-detect ในเฟสนี้ — ทราบความเสี่ยงนี้ไว้)

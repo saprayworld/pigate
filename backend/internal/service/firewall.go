@@ -27,6 +27,13 @@ type FirewallService struct {
 	lastApplyErr error
 	lastApplyAt  time.Time
 
+	// lastApplyOKAt is like lastApplyAt but only updated on a SUCCESSFUL
+	// SyncFirewallRules — used as the "countersSince" anchor for per-rule
+	// usage stats (nftables counters reset to 0 on every ApplyRules, so a
+	// failed apply must not move this timestamp). See LastAppliedAt and
+	// docs/ref/todo/firewall-policy-rule-usage-stats-plan.md T-04.
+	lastApplyOKAt time.Time
+
 	// ruleNames is optional (nil until SetRuleNameResolver is called by
 	// main.go) so this stays additive — NewFirewallService's signature is
 	// unchanged. When set, recordApply triggers a synchronous snapshot
@@ -230,6 +237,9 @@ func (s *FirewallService) recordApply(err error) {
 	s.mu.Lock()
 	s.lastApplyErr = err
 	s.lastApplyAt = time.Now()
+	if err == nil {
+		s.lastApplyOKAt = s.lastApplyAt
+	}
 	s.mu.Unlock()
 
 	// Refresh the rule-name snapshot right after a successful apply, on
@@ -258,6 +268,15 @@ func (s *FirewallService) ApplyHealth() (bool, string, time.Time) {
 		return false, s.lastApplyErr.Error(), s.lastApplyAt
 	}
 	return true, "", s.lastApplyAt
+}
+
+// LastAppliedAt returns the timestamp of the last SUCCESSFUL SyncFirewallRules
+// call (zero Time if none has ever succeeded), for use as the "countersSince"
+// anchor by PolicyStatsService.
+func (s *FirewallService) LastAppliedAt() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastApplyOKAt
 }
 
 // InitApplyConfig executes firewall sync at startup.

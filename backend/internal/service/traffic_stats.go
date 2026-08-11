@@ -331,9 +331,16 @@ type TrafficStatsService struct {
 	flowState  map[string]*flowSampleState
 
 	// Rule-counter baseline (nftables), with reset detection (plan Caution 2).
+	// lastRuleHit records, per DB rule id, the wall-clock time processRuleCounters
+	// last observed a positive delta for it — the poll-based fallback source for
+	// "Last matched at" on rules that don't have Log enabled (see
+	// docs/ref/todo/firewall-policy-rule-usage-stats-plan.md Design decision 3;
+	// ±flowPollInterval accuracy, no extra goroutine/kernel call). All three
+	// fields share ruleMu.
 	ruleMu       sync.Mutex
 	ruleSeeded   bool
 	ruleBaseline map[string]model.RuleCounter
+	lastRuleHit  map[string]time.Time
 
 	// Service Objects categorization cache (plan §2.2, Caution 9).
 	svcMu       sync.RWMutex
@@ -440,6 +447,7 @@ func NewTrafficStatsService(acct kernel.TrafficAccountingManager, repo *db.Repos
 		maxTrackedConversations: maxConversations,
 		flowState:               make(map[string]*flowSampleState),
 		ruleBaseline:            make(map[string]model.RuleCounter),
+		lastRuleHit:             make(map[string]time.Time),
 		rateAcc:                 newRateAccumulator(),
 		lastRate:                newRateAccumulator(),
 	}
@@ -921,6 +929,7 @@ func (s *TrafficStatsService) processRuleCounters(counters map[string]model.Rule
 	defer s.ruleMu.Unlock()
 
 	firstPoll := !s.ruleSeeded
+	now := time.Now()
 
 	for id, cur := range counters {
 		base, existed := s.ruleBaseline[id]
@@ -934,6 +943,7 @@ func (s *TrafficStatsService) processRuleCounters(counters map[string]model.Rule
 			s.ruleBaseline[id] = cur
 			if !firstPoll && (cur.Bytes > 0 || cur.Packets > 0) {
 				ruleDeltas[id] = cur
+				s.lastRuleHit[id] = now
 			}
 		case firstPoll:
 			s.ruleBaseline[id] = cur
@@ -943,11 +953,51 @@ func (s *TrafficStatsService) processRuleCounters(counters map[string]model.Rule
 			s.ruleBaseline[id] = cur
 			if deltaBytes > 0 || deltaPackets > 0 {
 				ruleDeltas[id] = model.RuleCounter{Bytes: deltaBytes, Packets: deltaPackets}
+				s.lastRuleHit[id] = now
 			}
 		}
 	}
 
 	s.ruleSeeded = true
+}
+
+// RuleCounterSnapshot returns a copy of the cumulative-since-last-apply
+// counter for every DB rule id observed so far (the same baseline
+// processRuleCounters maintains). Safe to call from an HTTP handler — it
+// never touches the kernel itself (plan Caution 6), it only reads state the
+// background poller already collected.
+func (s *TrafficStatsService) RuleCounterSnapshot() map[string]model.RuleCounter {
+	s.ruleMu.Lock()
+	defer s.ruleMu.Unlock()
+	out := make(map[string]model.RuleCounter, len(s.ruleBaseline))
+	for id, c := range s.ruleBaseline {
+		out[id] = c
+	}
+	return out
+}
+
+// RuleCountersReady reports whether processRuleCounters has completed at
+// least one poll tick — used by PolicyStatsService to distinguish "never
+// polled yet" (very first tick after startup) from "polled, genuinely all
+// zero" so the /api/policies/stats response's Available flag isn't
+// misleadingly true before any real data exists.
+func (s *TrafficStatsService) RuleCountersReady() bool {
+	s.ruleMu.Lock()
+	defer s.ruleMu.Unlock()
+	return s.ruleSeeded
+}
+
+// RuleLastHits returns a copy of the last-observed-delta time per DB rule id,
+// as recorded by processRuleCounters — the poll-based fallback "Last matched
+// at" source for rules without Log enabled (±flowPollInterval accuracy).
+func (s *TrafficStatsService) RuleLastHits() map[string]time.Time {
+	s.ruleMu.Lock()
+	defer s.ruleMu.Unlock()
+	out := make(map[string]time.Time, len(s.lastRuleHit))
+	for id, t := range s.lastRuleHit {
+		out[id] = t
+	}
+	return out
 }
 
 // categorize maps one flow's (proto, dstPort) to a Service-Object-defined
