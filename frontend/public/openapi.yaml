@@ -1745,6 +1745,58 @@ paths:
               schema:
                 $ref: '#/components/schemas/PolicyRule'
 
+  /policies/stats:
+    get:
+      tags:
+        - Firewall Policies
+      summary: Per-rule usage statistics (bytes/packets/percent/last matched)
+      description: >
+        Backs the "Usage" column on the Firewall/Local-In/Local-Out Policy
+        list pages and the per-rule details drawer (docs/ref/todo/
+        firewall-policy-rule-usage-stats-plan.md). Four important
+        limitations:
+
+        (1) SNAPSHOT, NOT CUMULATIVE — nftables' own counters reset to 0 on
+        every full ruleset sync (Apply Settings), even when only one rule
+        changed, so every number here is "since `countersSince`", not
+        lifetime-of-the-rule. (2) `percent` on every rule, and
+        `totalBytes`/`totalPackets`, are always computed across EVERY chain
+        combined, never scoped to just the `chain` query filter — a rule's
+        percentage does not change depending on which policy page it's
+        viewed from. (3) `lastMatchedAt`/`lastMatchedSource` is a hybrid: for
+        rules with `log` enabled it is resolved from the live traffic-log
+        ring buffer (precise, but only as far back as the buffer still holds
+        the entry); for rules without `log` (or once the log evidence has
+        aged out of the buffer) it falls back to the background 10-second nft
+        counter poll (`lastMatchedSource: "counter"`, accurate to roughly
+        ±10s). (4) Disabled rules are never created in nftables at all and
+        are therefore OMITTED from `rules` entirely — the frontend renders
+        "—" for them rather than 0/Unused.
+      parameters:
+        - name: chain
+          in: query
+          required: false
+          description: >-
+            Filter the `rules` array to one chain (forward/input/output).
+            Omitted or empty returns every chain. Does NOT affect
+            `totalBytes`/`totalPackets`/each rule's `percent` (see above).
+          schema:
+            type: string
+            enum: [forward, input, output]
+      responses:
+        '200':
+          description: Per-rule usage statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyRuleStats'
+        '400':
+          description: Invalid chain query parameter
+        '401':
+          description: No active session
+        '503':
+          description: Statistics service not wired up (should not happen in a normal build)
+
   /policies/{id}:
     put:
       tags:
@@ -6510,6 +6562,110 @@ components:
           example: false
         status:
           type: boolean
+          example: true
+
+    PolicyRuleStat:
+      type: object
+      description: >-
+        One row of PolicyRuleStats.rules. See GET /policies/stats for the 4
+        limitations (snapshot-not-cumulative, percent-across-all-chains,
+        hybrid lastMatchedAt, disabled rules omitted).
+      required:
+        - ruleId
+        - name
+        - chain
+        - action
+        - log
+        - status
+        - bytes
+        - packets
+        - percent
+        - unused
+      properties:
+        ruleId:
+          type: string
+          example: rule-a1b2
+        name:
+          type: string
+          example: Block_Malicious
+        chain:
+          type: string
+          enum: [forward, input, output]
+          example: forward
+        action:
+          type: string
+          enum: [ACCEPT, DROP]
+          example: DROP
+        log:
+          type: boolean
+        status:
+          type: boolean
+          description: Always true — disabled rules are omitted from the rules array entirely.
+          example: true
+        bytes:
+          type: integer
+          format: uint64
+          example: 15420
+        packets:
+          type: integer
+          format: uint64
+          example: 132
+        percent:
+          type: number
+          format: double
+          description: Share of totalBytes across EVERY chain, not just the ?chain= filter.
+          example: 12.4
+        unused:
+          type: boolean
+          description: true when the (enabled) rule has matched no traffic since countersSince.
+          example: false
+        lastMatchedAt:
+          type: string
+          format: date-time
+          description: RFC3339(Nano) timestamp, omitted if unknown.
+        lastMatchedSource:
+          type: string
+          enum: [log, counter]
+          description: >-
+            "log" = resolved from the traffic-log ring buffer (rule has
+            Log enabled); "counter" = fallback from the 10s nft counter
+            poll (±10s accuracy). Omitted when lastMatchedAt is omitted.
+
+    PolicyRuleStats:
+      type: object
+      required:
+        - rules
+        - totalBytes
+        - totalPackets
+        - available
+      properties:
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyRuleStat'
+        totalBytes:
+          type: integer
+          format: uint64
+          description: Sum across every chain, used as the denominator for every rule's percent.
+          example: 124300
+        totalPackets:
+          type: integer
+          format: uint64
+          example: 980
+        countersSince:
+          type: string
+          format: date-time
+          description: >-
+            Timestamp of the last successful Apply Settings (RFC3339 UTC);
+            omitted if no apply has ever succeeded. nftables counters reset
+            to 0 on every apply, so this doubles as "stats collected since".
+        available:
+          type: boolean
+          description: >-
+            false only before the background traffic-stats poller has ever
+            completed a tick (e.g. immediately after startup) — the UI
+            should show a "not available yet" state rather than a
+            misleading all-zero table.
           example: true
 
     PolicyRuleInput:

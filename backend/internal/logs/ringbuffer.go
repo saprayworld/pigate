@@ -60,6 +60,42 @@ func (r *RingBuffer) GetAll() []model.FirewallLog {
 	return copyLogs
 }
 
+// Size returns the current number of entries held (<= Capacity), so callers
+// don't need to call GetAll (which copies the whole buffer) just to check how
+// much data exists.
+func (r *RingBuffer) Size() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.logs)
+}
+
+// LastMatchedByRule scans the buffer once, newest entry first, and returns
+// the most recent Time (as-stored string, RFC3339 or RFC3339Nano — see
+// FirewallLog.Time) for every distinct non-empty RuleID seen. Unlike GetAll,
+// it does not copy every entry — only allocates the resulting small map — so
+// it is cheap enough to call from an HTTP handler (see
+// docs/ref/todo/firewall-policy-rule-usage-stats-plan.md T-02). Because the
+// scan is newest-first and only the first occurrence of each RuleID is kept,
+// the returned times are already the most recent one.
+func (r *RingBuffer) LastMatchedByRule() map[string]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make(map[string]string)
+	n := len(r.logs)
+	for i := n - 1; i >= 0; i-- {
+		entry := r.logs[i]
+		if entry.RuleID == "" {
+			continue
+		}
+		if _, ok := out[entry.RuleID]; ok {
+			continue
+		}
+		out[entry.RuleID] = entry.Time
+	}
+	return out
+}
+
 // Capacity returns the buffer's fixed maximum size, so callers (e.g. the API
 // layer capping a query's limit param) don't need to hardcode the number
 // configured in main.go.

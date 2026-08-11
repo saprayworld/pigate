@@ -106,3 +106,49 @@ func TestCancelStopsDelivery(t *testing.T) {
 		// expected: no delivery
 	}
 }
+
+// LastMatchedByRule (docs/ref/todo/firewall-policy-rule-usage-stats-plan.md
+// T-02) returns the most recent Time per distinct RuleID, ignoring entries
+// with no RuleID, and Size reports the current entry count.
+func TestLastMatchedByRule(t *testing.T) {
+	rb := NewRingBuffer(10)
+	rb.Add(model.FirewallLog{ID: "1", RuleID: "rule-a", Time: "2026-01-01T00:00:00Z"})
+	rb.Add(model.FirewallLog{ID: "2", RuleID: "", Time: "2026-01-01T00:00:01Z"}) // no RuleID — must be ignored
+	rb.Add(model.FirewallLog{ID: "3", RuleID: "rule-b", Time: "2026-01-01T00:00:02Z"})
+	rb.Add(model.FirewallLog{ID: "4", RuleID: "rule-a", Time: "2026-01-01T00:00:03Z"}) // newer rule-a hit
+
+	if got := rb.Size(); got != 4 {
+		t.Fatalf("expected Size()=4, got %d", got)
+	}
+
+	got := rb.LastMatchedByRule()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 distinct rule ids, got %d: %+v", len(got), got)
+	}
+	if got["rule-a"] != "2026-01-01T00:00:03Z" {
+		t.Errorf("expected rule-a's most recent (newest) time, got %q", got["rule-a"])
+	}
+	if got["rule-b"] != "2026-01-01T00:00:02Z" {
+		t.Errorf("expected rule-b time %q, got %q", "2026-01-01T00:00:02Z", got["rule-b"])
+	}
+	if _, ok := got[""]; ok {
+		t.Errorf("expected empty RuleID entries to be excluded")
+	}
+}
+
+// LastMatchedByRule on an empty buffer must return an empty (non-nil) map,
+// never panic — the "clear ring buffer" path exercised by
+// PolicyStatsService.
+func TestLastMatchedByRule_Empty(t *testing.T) {
+	rb := NewRingBuffer(10)
+	got := rb.LastMatchedByRule()
+	if got == nil {
+		t.Fatalf("expected non-nil empty map")
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty map, got %+v", got)
+	}
+	if rb.Size() != 0 {
+		t.Fatalf("expected Size()=0")
+	}
+}

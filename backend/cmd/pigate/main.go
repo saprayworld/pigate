@@ -390,6 +390,13 @@ func main() {
 
 	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker, wifiPresetService, systemServiceService, capabilityService, trafficStatsService, statisticsService, ipInfoService)
 
+	// SetPolicyStatsService wires the optional per-rule usage stats service
+	// (docs/ref/todo/firewall-policy-rule-usage-stats-plan.md T-07) — additive,
+	// after NewServer, exactly like FirewallService.SetRuleNameResolver above,
+	// so NewServer's signature stays unchanged.
+	policyStatsService := service.NewPolicyStatsService(repo, firewallService, trafficStatsService, ringBuffer)
+	server.SetPolicyStatsService(policyStatsService)
+
 	// Apply config form database to kernel
 
 	// 6.0 Apply Time (timezone / NTP) configuration first. Correct time makes

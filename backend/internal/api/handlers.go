@@ -54,6 +54,19 @@ type Server struct {
 	trafficStats      *service.TrafficStatsService
 	statistics        *service.StatisticsService
 	ipInfo            *service.IPInfoService
+
+	// policyStats is optional (nil until SetPolicyStatsService is called by
+	// main.go) — additive, like SetRuleNameResolver on FirewallService, so
+	// NewServer's already-30-parameter signature stays unchanged (docs/ref/
+	// todo/firewall-policy-rule-usage-stats-plan.md T-06).
+	policyStats *service.PolicyStatsService
+}
+
+// SetPolicyStatsService wires the optional per-rule usage stats service into
+// the server. Safe to call once after NewServer, and safe to never call at
+// all (HandleGetPolicyStats then reports 503).
+func (s *Server) SetPolicyStatsService(p *service.PolicyStatsService) {
+	s.policyStats = p
 }
 
 func NewServer(
@@ -1594,6 +1607,35 @@ func (s *Server) HandleGetPolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, list)
+}
+
+// HandleGetPolicyStats serves GET /api/policies/stats — per-rule usage
+// statistics (bytes/packets/percent/last-matched) since the last successful
+// firewall apply. authRoute (see router.go), not superAdminRoute: the
+// payload is only rule id + byte/packet counts, same sensitivity level as
+// the existing /api/statistics/* endpoints (docs/ref/todo/
+// firewall-policy-rule-usage-stats-plan.md Design decision 5). Read-only, so
+// it stays reachable under -disable-edit=true like every other GET route.
+func (s *Server) HandleGetPolicyStats(w http.ResponseWriter, r *http.Request) {
+	chain := r.URL.Query().Get("chain")
+	switch chain {
+	case "", model.PolicyChainForward, model.PolicyChainInput, model.PolicyChainOutput:
+	default:
+		s.writeError(w, http.StatusBadRequest, "Invalid chain query parameter")
+		return
+	}
+
+	if s.policyStats == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Policy usage statistics are not available")
+		return
+	}
+
+	stats, err := s.policyStats.GetPolicyRuleStats(chain)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, stats)
 }
 
 func (s *Server) HandleCreatePolicy(w http.ResponseWriter, r *http.Request) {
