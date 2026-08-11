@@ -23,12 +23,28 @@ export interface TrafficLog {
   action: TrafficAction;
   src: string;
   dest: string;
-  port: string;
+  srcPort: string; // "-" for non-TCP/UDP or if unknown
+  port: string; // destination port; "-" for non-TCP/UDP or if unknown
   proto: string;
   inIface: string; // ingress interface name ("-" if unknown)
   outIface: string; // egress interface name ("-" if unknown)
   reason: string;
   chain: TrafficChain;
+  // ruleId/ruleName: snapshot-on-write (docs/ref/todo/
+  // traffic-log-rule-name-and-domain-plan.md) — resolved once when the
+  // entry was logged and never updated afterwards, so a rule rename/delete
+  // never changes what an already-fetched row shows. Both omitted when the
+  // matching rule/system token couldn't be resolved.
+  ruleId?: string;
+  ruleName?: string;
+  // srcDomain/destDomain/srcHostname/destHostname: enrich-on-read, resolved
+  // fresh by the backend on every request from the DNS query cache
+  // (domain) with a DHCP lease/reservation fallback (hostname) — never
+  // cached/snapshotted client-side either. Omitted when nothing resolves.
+  srcDomain?: string;
+  destDomain?: string;
+  srcHostname?: string;
+  destHostname?: string;
 }
 
 export interface TrafficLogQuery {
@@ -47,20 +63,28 @@ export interface TrafficLogQuery {
 // against -mock without a real kernel.
 // ---------------------------------------------------------------------------
 
+// Rule/domain/hostname fields below deliberately cover the 5 cases the UI
+// (TrafficLogPage) needs to render correctly:
+//   1. resolved rule name + resolved domain (row 1)
+//   2. resolved rule name + resolved hostname, no domain (row 7 — LAN dest)
+//   3. ruleId present but not resolved (deleted/renamed rule — muted display)
+//      (row 3)
+//   4. no rule id / name at all (row 6)
+//   5. system token (structural log point, not a user rule) (row 10)
 const MOCK_SAMPLES: Array<Omit<TrafficLog, "id" | "time">> = [
-  { chain: "forward", action: "PASS", src: "192.168.1.105", dest: "8.8.8.8", port: "53", proto: "UDP", inIface: "eth0", outIface: "eth1", reason: "Allowed (forward)" },
-  { chain: "forward", action: "PASS", src: "192.168.1.112", dest: "142.250.80.46", port: "443", proto: "TCP", inIface: "eth0", outIface: "eth1", reason: "Allowed (forward)" },
-  { chain: "forward", action: "DROP", src: "192.168.1.133", dest: "185.220.101.4", port: "23", proto: "TCP", inIface: "eth0", outIface: "eth1", reason: "Blocked (forward)" },
-  { chain: "forward", action: "PASS", src: "192.168.1.108", dest: "1.1.1.1", port: "443", proto: "TCP", inIface: "wlan0", outIface: "eth1", reason: "Allowed (forward)" },
-  { chain: "forward", action: "DROP", src: "192.168.1.140", dest: "45.13.104.9", port: "3389", proto: "TCP", inIface: "wlan0", outIface: "eth1", reason: "Blocked (forward)" },
-  { chain: "forward", action: "PASS", src: "192.168.1.101", dest: "140.82.113.3", port: "22", proto: "TCP", inIface: "eth0", outIface: "eth1", reason: "Allowed (forward)" },
-  { chain: "input", action: "PASS", src: "192.168.1.10", dest: "192.168.1.1", port: "443", proto: "TCP", inIface: "eth1", outIface: "-", reason: "Allowed (local-in)" },
-  { chain: "input", action: "PASS", src: "192.168.1.20", dest: "192.168.1.1", port: "22", proto: "TCP", inIface: "eth1", outIface: "-", reason: "Allowed (local-in)" },
-  { chain: "input", action: "PASS", src: "192.168.1.15", dest: "192.168.1.1", port: "-", proto: "ICMP", inIface: "eth1", outIface: "-", reason: "Allowed (local-in)" },
-  { chain: "input", action: "DROP", src: "203.0.113.77", dest: "203.0.113.1", port: "23", proto: "TCP", inIface: "eth0", outIface: "-", reason: "Blocked (local-in)" },
-  { chain: "input", action: "DROP", src: "198.51.100.5", dest: "203.0.113.1", port: "3389", proto: "TCP", inIface: "eth0", outIface: "-", reason: "Blocked (local-in)" },
-  { chain: "output", action: "PASS", src: "203.0.113.1", dest: "8.8.8.8", port: "53", proto: "UDP", inIface: "-", outIface: "eth0", reason: "Allowed (local-out)" },
-  { chain: "output", action: "PASS", src: "203.0.113.1", dest: "129.6.15.28", port: "123", proto: "UDP", inIface: "-", outIface: "eth0", reason: "Allowed (local-out)" },
+  { chain: "forward", action: "PASS", src: "192.168.1.105", dest: "8.8.8.8", srcPort: "51423", port: "53", proto: "UDP", inIface: "eth0", outIface: "eth1", reason: "Allowed (forward)", ruleId: "rule-allow-dns", ruleName: "Allow DNS", destDomain: "dns.google" },
+  { chain: "forward", action: "PASS", src: "192.168.1.112", dest: "142.250.80.46", srcPort: "54871", port: "443", proto: "TCP", inIface: "eth0", outIface: "eth1", reason: "Allowed (forward)", ruleId: "rule-allow-web", ruleName: "Allow Web Browsing", destDomain: "www.google.com" },
+  { chain: "forward", action: "DROP", src: "192.168.1.133", dest: "185.220.101.4", srcPort: "49301", port: "23", proto: "TCP", inIface: "eth0", outIface: "eth1", reason: "Blocked (forward)", ruleId: "rule-deleted-demo" },
+  { chain: "forward", action: "PASS", src: "192.168.1.108", dest: "1.1.1.1", srcPort: "60102", port: "443", proto: "TCP", inIface: "wlan0", outIface: "eth1", reason: "Allowed (forward)", ruleId: "rule-allow-web", ruleName: "Allow Web Browsing", destDomain: "one.one.one.one" },
+  { chain: "forward", action: "DROP", src: "192.168.1.140", dest: "45.13.104.9", srcPort: "52117", port: "3389", proto: "TCP", inIface: "wlan0", outIface: "eth1", reason: "Blocked (forward)", ruleId: "rule-block-rdp", ruleName: "Block RDP" },
+  { chain: "forward", action: "PASS", src: "192.168.1.101", dest: "140.82.113.3", srcPort: "58221", port: "22", proto: "TCP", inIface: "eth0", outIface: "eth1", reason: "Allowed (forward)" },
+  { chain: "input", action: "PASS", src: "192.168.1.10", dest: "192.168.1.1", srcPort: "51422", port: "443", proto: "TCP", inIface: "eth1", outIface: "-", reason: "Allowed (local-in)", ruleId: "sys-admin-https", ruleName: "System: Admin Access (HTTPS)", srcHostname: "laptop-office" },
+  { chain: "input", action: "PASS", src: "192.168.1.20", dest: "192.168.1.1", srcPort: "58311", port: "22", proto: "TCP", inIface: "eth1", outIface: "-", reason: "Allowed (local-in)", ruleId: "sys-admin-ssh", ruleName: "System: Admin Access (SSH)", srcHostname: "admin-desktop" },
+  { chain: "input", action: "PASS", src: "192.168.1.15", dest: "192.168.1.1", srcPort: "-", port: "-", proto: "ICMP", inIface: "eth1", outIface: "-", reason: "Allowed (local-in)", ruleId: "sys-admin-ping", ruleName: "System: Admin Access (Ping)" },
+  { chain: "input", action: "DROP", src: "203.0.113.77", dest: "203.0.113.1", srcPort: "44502", port: "23", proto: "TCP", inIface: "eth0", outIface: "-", reason: "Blocked (local-in)", ruleId: "sys-input-defaultdrop", ruleName: "System: Default Drop (Local-In)" },
+  { chain: "input", action: "DROP", src: "198.51.100.5", dest: "203.0.113.1", srcPort: "60123", port: "3389", proto: "TCP", inIface: "eth0", outIface: "-", reason: "Blocked (local-in)", ruleId: "sys-input-defaultdrop", ruleName: "System: Default Drop (Local-In)" },
+  { chain: "output", action: "PASS", src: "203.0.113.1", dest: "8.8.8.8", srcPort: "51234", port: "53", proto: "UDP", inIface: "-", outIface: "eth0", reason: "Allowed (local-out)", destDomain: "dns.google" },
+  { chain: "output", action: "PASS", src: "203.0.113.1", dest: "129.6.15.28", srcPort: "123", port: "123", proto: "UDP", inIface: "-", outIface: "eth0", reason: "Allowed (local-out)" },
 ];
 
 let mockLogs: TrafficLog[] | null = null;
@@ -88,17 +112,10 @@ function advanceMockLogs() {
   const logs = seedMockLogs();
   const s = MOCK_SAMPLES[Math.floor(Math.random() * MOCK_SAMPLES.length)];
   logs.unshift({
+    ...s,
     id: `mock-traffic-${mockCounter++}`,
     time: new Date().toISOString(),
     src: s.chain === "output" ? s.src : `192.168.1.${100 + Math.floor(Math.random() * 50)}`,
-    dest: s.dest,
-    port: s.port,
-    proto: s.proto,
-    inIface: s.inIface,
-    outIface: s.outIface,
-    action: s.action,
-    reason: s.reason,
-    chain: s.chain,
   });
   // Cap generously — this is an in-memory dev feed, not the real 10,000-entry
   // ring buffer, but should comfortably outlast a manual scroll test.
@@ -131,7 +148,7 @@ export const trafficLogService = {
           (!wantAction || l.action === wantAction) &&
           chainMatches(l.chain, chain) &&
           (!needle ||
-            [l.src, l.dest, l.port, l.proto, l.inIface, l.outIface, l.reason, l.chain].some((s) =>
+            [l.src, l.dest, l.srcPort, l.port, l.proto, l.inIface, l.outIface, l.reason, l.chain].some((s) =>
               s.toLowerCase().includes(needle)
             ))
       );

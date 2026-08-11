@@ -43,8 +43,8 @@ const ACTION_OPTIONS = [
 
 /* Client-side mirror of the server's traffic-log filter (handlers.go
  * HandleGetTrafficLogs): chain equality/group + action equality + a
- * case-insensitive substring across src/dest/port/proto/inIface/outIface/
- * reason/chain. Kept in lockstep so a row pushed over SSE is shown only when
+ * case-insensitive substring across src/dest/srcPort/port/proto/inIface/
+ * outIface/reason/chain. Kept in lockstep so a row pushed over SSE is shown only when
  * it would also pass the server filter — including chain, otherwise input/
  * output entries would leak into the Forward Traffic page via the live
  * stream and vice versa (plan §6 Caution 6). */
@@ -65,7 +65,7 @@ function matchesFilter(
     }
   }
   if (needle) {
-    const hay = [l.src, l.dest, l.port, l.proto, l.inIface ?? "", l.outIface ?? "", l.reason, entryChain]
+    const hay = [l.src, l.dest, l.srcPort, l.port, l.proto, l.inIface ?? "", l.outIface ?? "", l.reason, entryChain]
       .join(" ")
       .toLowerCase()
     if (!hay.includes(needle.toLowerCase())) return false
@@ -105,6 +105,35 @@ function ChainBadge({ chain }: { chain: string }) {
     <Badge variant="outline" className={CHAIN_STYLE[chain] ?? "bg-muted text-muted-foreground border-transparent"}>
       {CHAIN_LABEL[chain] ?? chain.toUpperCase() ?? "-"}
     </Badge>
+  )
+}
+
+/* Rule column: shows the resolved rule name (snapshot-on-write, see
+ * model.FirewallLog doc comment) when available; if the log carries a
+ * ruleId but the name couldn't be resolved (e.g. the rule was deleted
+ * after this entry was logged), show the raw id muted so the row still
+ * carries *some* identifying detail; otherwise a plain "-". */
+function RuleCell({ ruleId, ruleName }: { ruleId?: string; ruleName?: string }) {
+  if (ruleName) {
+    return <span className="text-xs">{ruleName}</span>
+  }
+  if (ruleId) {
+    return <span className="font-mono text-xs text-muted-foreground">{ruleId}</span>
+  }
+  return <span className="text-xs text-muted-foreground">-</span>
+}
+
+/* IP cell: the address itself, plus an optional muted subtext line showing
+ * the domain (from the DNS query cache) or, failing that, a DHCP hostname
+ * — both resolved fresh on every fetch (enrich-on-read), never cached
+ * client-side. */
+function IpCell({ ip, domain, hostname }: { ip: string; domain?: string; hostname?: string }) {
+  const sub = domain || hostname
+  return (
+    <div className="font-mono text-xs">
+      <div>{ip}</div>
+      {sub && <div className="font-sans text-[10px] text-muted-foreground">{sub}</div>}
+    </div>
   )
 }
 
@@ -324,9 +353,10 @@ export function TrafficLogPage({
                     <TableHead className="w-24">Action</TableHead>
                     <TableHead>Src</TableHead>
                     <TableHead>Dest</TableHead>
-                    <TableHead className="w-20">Port</TableHead>
+                    <TableHead className="w-28">Port</TableHead>
                     <TableHead className="w-20">Proto</TableHead>
                     <TableHead className="w-32">Interface</TableHead>
+                    <TableHead className="w-40">Rule</TableHead>
                     <TableHead>Reason</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -342,14 +372,25 @@ export function TrafficLogPage({
                       <TableCell>
                         <ActionBadge action={l.action} />
                       </TableCell>
-                      <TableCell className="font-mono text-xs">{l.src}</TableCell>
-                      <TableCell className="font-mono text-xs">{l.dest}</TableCell>
-                      <TableCell className="font-mono text-xs">{l.port}</TableCell>
+                      <TableCell>
+                        <IpCell ip={l.src} domain={l.srcDomain} hostname={l.srcHostname} />
+                      </TableCell>
+                      <TableCell>
+                        <IpCell ip={l.dest} domain={l.destDomain} hostname={l.destHostname} />
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap font-mono text-xs">
+                        {l.srcPort}
+                        <span className="mx-1 text-muted-foreground">→</span>
+                        {l.port}
+                      </TableCell>
                       <TableCell className="text-xs">{l.proto}</TableCell>
                       <TableCell className="whitespace-nowrap font-mono text-xs">
                         {l.inIface}
                         <span className="mx-1 text-muted-foreground">→</span>
                         {l.outIface}
+                      </TableCell>
+                      <TableCell>
+                        <RuleCell ruleId={l.ruleId} ruleName={l.ruleName} />
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">{l.reason}</TableCell>
                     </TableRow>

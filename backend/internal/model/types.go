@@ -388,7 +388,8 @@ type FirewallLog struct {
 	Action   string `json:"action"` // "PASS", "DROP"
 	Src      string `json:"src"`
 	Dest     string `json:"dest"`
-	Port     string `json:"port"`
+	SrcPort  string `json:"srcPort"`
+	Port     string `json:"port"` // destination port
 	Proto    string `json:"proto"`
 	InIface  string `json:"inIface"`  // ingress interface name (NFLOG indev), "-" if unknown
 	OutIface string `json:"outIface"` // egress interface name (NFLOG outdev), "-" if unknown
@@ -397,6 +398,29 @@ type FirewallLog struct {
 	// PolicyChainForward/PolicyChainInput/PolicyChainOutput (see constants
 	// above). Empty string means "unknown" and the UI must tolerate that.
 	Chain string `json:"chain"`
+
+	// RuleID/RuleName are captured once at write time ("snapshot-on-write"):
+	// resolved from the nftables log prefix at the moment the log entry is
+	// created (see cmd/pigate/main.go stampAndPush) and never updated again.
+	// If the matching policy rule is later renamed or deleted, entries
+	// already in the ring buffer keep showing the name as it was at match
+	// time. Both fields are empty for structural log points (e.g. default
+	// drop, anti-spoof) that are not tied to a single user-configured rule,
+	// or when the rule id couldn't be resolved yet (before the first
+	// rule-name snapshot refresh).
+	RuleID   string `json:"ruleId,omitempty"`
+	RuleName string `json:"ruleName,omitempty"`
+
+	// SrcDomain/DestDomain/SrcHostname/DestHostname are enrich-on-read: the
+	// API layer resolves them fresh from the DNS query cache (domain) and
+	// DHCP lease table (hostname) every time a log entry is served, they are
+	// never persisted in the ring buffer. This preserves the existing
+	// privacy contract - turning off DNS Query Logging clears domain names
+	// immediately, including for already-buffered log entries.
+	SrcDomain    string `json:"srcDomain,omitempty"`
+	DestDomain   string `json:"destDomain,omitempty"`
+	SrcHostname  string `json:"srcHostname,omitempty"`
+	DestHostname string `json:"destHostname,omitempty"`
 }
 
 // SystemEvent is a single audit/event log entry, persisted to SQLite via the

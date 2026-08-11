@@ -5,9 +5,21 @@ export interface FirewallLog {
   action: "PASS" | "DROP"
   src: string
   dest: string
+  srcPort?: string
   port: string
   proto: string
   reason: string
+  // Optional traffic-log enrichment fields (docs/ref/todo/
+  // traffic-log-rule-name-and-domain-plan.md) — ruleId/ruleName are a
+  // snapshot captured when the entry was logged, srcDomain/destDomain/
+  // srcHostname/destHostname are resolved fresh on every read. All
+  // optional: older/un-enriched entries simply omit them.
+  ruleId?: string
+  ruleName?: string
+  srcDomain?: string
+  destDomain?: string
+  srcHostname?: string
+  destHostname?: string
 }
 
 // Initial mockup logs for Dashboard

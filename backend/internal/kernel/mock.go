@@ -815,14 +815,22 @@ func (m *MockTrafficLog) WatchForwardTraffic(ctx context.Context, cb func(model.
 		in     string
 		out    string
 		reason string
+		// ruleID exercises the three cases the ruleName resolver has to
+		// handle (docs/ref/todo/traffic-log-rule-name-and-domain-plan.md):
+		// an id that resolves against a real DB policy, one that doesn't
+		// (rule was deleted/never existed — resolver falls back to a muted
+		// "unknown rule" display), and empty (structural drop, no single
+		// rule to blame).
+		ruleID string
 	}
 	samples := []sample{
-		{"PASS", "8.8.8.8", "53", "UDP", "eth0", "eth1", "Allowed (forward)"},
-		{"PASS", "142.250.80.46", "443", "TCP", "eth0", "eth1", "Allowed (forward)"},
-		{"PASS", "1.1.1.1", "443", "TCP", "wlan0", "eth1", "Allowed (forward)"},
-		{"DROP", "185.220.101.4", "23", "TCP", "eth0", "eth1", "Blocked (forward)"},
-		{"DROP", "45.13.104.9", "3389", "TCP", "wlan0", "eth1", "Blocked (forward)"},
-		{"PASS", "140.82.113.3", "22", "TCP", "eth0", "eth1", "Allowed (forward)"},
+		{"PASS", "8.8.8.8", "53", "UDP", "eth0", "eth1", "Allowed (forward)", "rule-allow-dns"},
+		{"PASS", "142.250.80.46", "443", "TCP", "eth0", "eth1", "Allowed (forward)", "rule-allow-web"},
+		{"PASS", "1.1.1.1", "443", "TCP", "wlan0", "eth1", "Allowed (forward)", "rule-allow-web"},
+		{"DROP", "185.220.101.4", "23", "TCP", "eth0", "eth1", "Blocked (forward)", "rule-block-telnet"},
+		{"DROP", "45.13.104.9", "3389", "TCP", "wlan0", "eth1", "Blocked (forward)", "rule-deleted-demo"},
+		{"PASS", "140.82.113.3", "22", "TCP", "eth0", "eth1", "Allowed (forward)", ""},
+		{"DROP", "203.0.113.99", "443", "TCP", "eth0", "eth1", "Blocked (forward)", "sys-forward-defaultdrop"},
 	}
 
 	for {
@@ -834,6 +842,7 @@ func (m *MockTrafficLog) WatchForwardTraffic(ctx context.Context, cb func(model.
 			cb(model.FirewallLog{
 				Action:   s.action,
 				Src:      fmt.Sprintf("192.168.1.%d", 100+rng.Intn(50)),
+				SrcPort:  fmt.Sprintf("%d", 32768+rng.Intn(28232)), // ephemeral range
 				Dest:     s.dest,
 				Port:     s.port,
 				Proto:    s.proto,
@@ -841,6 +850,7 @@ func (m *MockTrafficLog) WatchForwardTraffic(ctx context.Context, cb func(model.
 				OutIface: s.out,
 				Reason:   s.reason,
 				Chain:    model.PolicyChainForward,
+				RuleID:   s.ruleID,
 			})
 		}
 	}
@@ -857,26 +867,31 @@ func (m *MockTrafficLog) WatchLocalTraffic(ctx context.Context, cb func(model.Fi
 	defer ticker.Stop()
 
 	type sample struct {
-		chain  string
-		action string
-		src    string
-		dest   string
-		port   string
-		proto  string
-		in     string
-		out    string
-		reason string
+		chain   string
+		action  string
+		src     string
+		dest    string
+		srcPort string
+		port    string
+		proto   string
+		in      string
+		out     string
+		reason  string
+		// ruleID: see the matching comment in WatchForwardTraffic — mixes a
+		// system token (admin-access/default-drop, always resolvable via
+		// the static table), a plausible DB rule id, and empty.
+		ruleID string
 	}
 	samples := []sample{
 		// input: traffic destined to the board itself.
-		{model.PolicyChainInput, "PASS", "192.168.1.10", "192.168.1.1", "443", "TCP", "eth1", "-", "Allowed (local-in)"},
-		{model.PolicyChainInput, "PASS", "192.168.1.20", "192.168.1.1", "22", "TCP", "eth1", "-", "Allowed (local-in)"},
-		{model.PolicyChainInput, "PASS", "192.168.1.15", "192.168.1.1", "-", "ICMP", "eth1", "-", "Allowed (local-in)"},
-		{model.PolicyChainInput, "DROP", "203.0.113.77", "203.0.113.1", "23", "TCP", "eth0", "-", "Blocked (local-in)"},
-		{model.PolicyChainInput, "DROP", "198.51.100.5", "203.0.113.1", "3389", "TCP", "eth0", "-", "Blocked (local-in)"},
+		{model.PolicyChainInput, "PASS", "192.168.1.10", "192.168.1.1", "51422", "443", "TCP", "eth1", "-", "Allowed (local-in)", "sys-admin-https"},
+		{model.PolicyChainInput, "PASS", "192.168.1.20", "192.168.1.1", "58311", "22", "TCP", "eth1", "-", "Allowed (local-in)", "sys-admin-ssh"},
+		{model.PolicyChainInput, "PASS", "192.168.1.15", "192.168.1.1", "-", "-", "ICMP", "eth1", "-", "Allowed (local-in)", "sys-admin-ping"},
+		{model.PolicyChainInput, "DROP", "203.0.113.77", "203.0.113.1", "44502", "23", "TCP", "eth0", "-", "Blocked (local-in)", "sys-input-defaultdrop"},
+		{model.PolicyChainInput, "DROP", "198.51.100.5", "203.0.113.1", "60123", "3389", "TCP", "eth0", "-", "Blocked (local-in)", "sys-input-defaultdrop"},
 		// output: traffic the board itself originates.
-		{model.PolicyChainOutput, "PASS", "203.0.113.1", "8.8.8.8", "53", "UDP", "-", "eth0", "Allowed (local-out)"},
-		{model.PolicyChainOutput, "PASS", "203.0.113.1", "129.6.15.28", "123", "UDP", "-", "eth0", "Allowed (local-out)"},
+		{model.PolicyChainOutput, "PASS", "203.0.113.1", "8.8.8.8", "51234", "53", "UDP", "-", "eth0", "Allowed (local-out)", "rule-allow-dns-out"},
+		{model.PolicyChainOutput, "PASS", "203.0.113.1", "129.6.15.28", "123", "123", "UDP", "-", "eth0", "Allowed (local-out)", ""},
 	}
 
 	for {
@@ -890,11 +905,13 @@ func (m *MockTrafficLog) WatchLocalTraffic(ctx context.Context, cb func(model.Fi
 				Action:   s.action,
 				Src:      s.src,
 				Dest:     s.dest,
+				SrcPort:  s.srcPort,
 				Port:     s.port,
 				Proto:    s.proto,
 				InIface:  s.in,
 				OutIface: s.out,
 				Reason:   s.reason,
+				RuleID:   s.ruleID,
 			})
 		}
 	}

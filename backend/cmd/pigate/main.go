@@ -205,6 +205,15 @@ func main() {
 	routingService := service.NewRoutingService(repo, rt)
 	routingService.SetEnableEditSystemRoute(cfg.EnableEditSystemRoute)
 	firewallService := service.NewFirewallService(repo, fw, ifaceService)
+	// Rule-matched-name snapshot for the traffic log (docs/ref/todo/
+	// traffic-log-rule-name-and-domain-plan.md T-05/T-08): an O(1),
+	// I/O-free lookup used from the NFLOG hot path in stampAndPush below.
+	// SetRuleNameResolver wires it so every successful SyncFirewallRules
+	// also refreshes the snapshot immediately (see FirewallService.
+	// recordApply) — the resolver's own background ticker (started later,
+	// once monitorCtx exists) is only the fallback cadence.
+	ruleNameResolver := service.NewRuleNameResolver(repo)
+	firewallService.SetRuleNameResolver(ruleNameResolver)
 	dnsService := service.NewDNSService(repo, dns)
 	qosService := service.NewQosService(repo, qos)
 	dhcpServerService := service.NewDhcpServerService(repo, dhcp)
@@ -416,6 +425,14 @@ func main() {
 	monitorCtx, cancelMonitor := context.WithCancel(context.Background())
 	defer cancelMonitor()
 
+	// Prime the rule-name snapshot and start its background refresher now,
+	// BEFORE either traffic-log watcher below starts consuming NFLOG events:
+	// StartRuleNameRefresher does one synchronous Refresh() first, so the
+	// very first log entries stamped by stampAndPush can already resolve a
+	// rule name instead of getting an empty RuleName until the first ticker
+	// tick (docs/ref/todo/traffic-log-rule-name-and-domain-plan.md T-08).
+	ruleNameResolver.StartRuleNameRefresher(monitorCtx)
+
 	// stampAndPush is the shared callback for both traffic-log watchers below:
 	// it stamps a unique id + timestamp then pushes into the one shared ring
 	// buffer (see docs/ref/todo/traffic-log-pagination-and-local-traffic-plan.md
@@ -428,6 +445,11 @@ func main() {
 	stampAndPush := func(entry model.FirewallLog) {
 		entry.Time = time.Now().UTC().Format(time.RFC3339Nano)
 		entry.ID = uuid.NewString()
+		// Snapshot-on-write rule name (plan design decision 3): resolve
+		// once, here, from the current ruleNameResolver snapshot, and never
+		// touch it again — a later rename/delete of the matching policy
+		// must not change what already-buffered entries display.
+		entry.RuleName = ruleNameResolver.Resolve(entry.RuleID)
 		ringBuffer.Add(entry)
 		// Feeds the Statistics page's deny ring (Top Denied Sources/Ports —
 		// docs/ref/todo/statistics-page-plan.md T-06). Must stay after

@@ -292,6 +292,14 @@ type TrafficStatsService struct {
 	maxTrackedDests         int
 	maxTrackedConversations int
 
+	// hostCache backs LookupHostnames/LookupHostname (T-07,
+	// docs/ref/todo/traffic-log-rule-name-and-domain-plan.md) — a short-TTL
+	// cache dedicated to the traffic-log enrichment path, deliberately
+	// separate from hostLookup() itself (which stays uncached, as used by
+	// the 9 existing Statistics call sites — out of scope here, see the
+	// plan's re-verification note on T-07).
+	hostCache hostLookupCache
+
 	// Bucket ring — the aggregated deltas GetTrafficDetail reads from.
 	mu      sync.RWMutex
 	buckets []trafficDetailBucket
@@ -1754,6 +1762,70 @@ func (s *TrafficStatsService) hostLookup() (map[string]model.ActiveDhcpLease, ma
 		}
 	}
 	return leaseByIP, resByIP
+}
+
+// hostLookupCacheTTL bounds how often cachedHostLookup re-reads DHCP
+// leases/reservations. Traffic-log enrichment (LookupHostnames/
+// LookupHostname) can be called once per page load and once per SSE event,
+// so without a cache a busy Local/Forward Traffic page could re-read the
+// dnsmasq lease file far more often than the DHCP data actually changes;
+// this trades a few seconds of staleness for that.
+const hostLookupCacheTTL = 5 * time.Second
+
+// hostLookupCache memoizes one hostLookup() snapshot for hostLookupCacheTTL.
+// Deliberately its own small struct/mutex, scoped only to
+// LookupHostnames/LookupHostname — see the TrafficStatsService.hostCache
+// field doc comment for why this is not shared with hostLookup()'s other 9
+// callers in Statistics.
+type hostLookupCache struct {
+	mu        sync.Mutex
+	expiresAt time.Time
+	leaseByIP map[string]model.ActiveDhcpLease
+	resByIP   map[string]model.DhcpReservation
+}
+
+// cachedHostLookup returns hostLookup()'s result, reusing the last snapshot
+// if it is still within hostLookupCacheTTL.
+func (s *TrafficStatsService) cachedHostLookup() (map[string]model.ActiveDhcpLease, map[string]model.DhcpReservation) {
+	s.hostCache.mu.Lock()
+	defer s.hostCache.mu.Unlock()
+	if time.Now().Before(s.hostCache.expiresAt) {
+		return s.hostCache.leaseByIP, s.hostCache.resByIP
+	}
+	leaseByIP, resByIP := s.hostLookup()
+	s.hostCache.leaseByIP = leaseByIP
+	s.hostCache.resByIP = resByIP
+	s.hostCache.expiresAt = time.Now().Add(hostLookupCacheTTL)
+	return leaseByIP, resByIP
+}
+
+// LookupHostnames resolves a batch of (typically LAN) IPs to a DHCP
+// lease/reservation hostname, for the traffic-log domain/hostname
+// enrich-on-read step (docs/ref/todo/traffic-log-rule-name-and-domain-plan.md
+// T-07/T-09). Call once per API response with every IP that still needs a
+// hostname after the DNS reverse-cache lookup (StatisticsService.
+// LookupDomains) came up empty — never once per row. IPs that don't resolve
+// to a known lease/reservation (hostnameFor falls back to returning the IP
+// itself) are simply omitted from the result map.
+func (s *TrafficStatsService) LookupHostnames(ips []string) map[string]string {
+	leaseByIP, resByIP := s.cachedHostLookup()
+	out := make(map[string]string, len(ips))
+	for _, ip := range ips {
+		if name, _ := hostnameFor(ip, leaseByIP, resByIP); name != "" && name != ip {
+			out[ip] = name
+		}
+	}
+	return out
+}
+
+// LookupHostname resolves a single IP the same way LookupHostnames does.
+// Prefer LookupHostnames for anything iterating over multiple rows.
+func (s *TrafficStatsService) LookupHostname(ip string) string {
+	leaseByIP, resByIP := s.cachedHostLookup()
+	if name, _ := hostnameFor(ip, leaseByIP, resByIP); name != "" && name != ip {
+		return name
+	}
+	return ""
 }
 
 func hostnameFor(ip string, leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation) (hostname, mac string) {

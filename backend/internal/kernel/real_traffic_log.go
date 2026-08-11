@@ -225,6 +225,15 @@ func parseNflogAttr(attr nflog.Attribute, resolveIface func(*uint32) string, def
 			case "ACCEPT", "DROP", "AUDIT":
 				verb = strings.TrimSuffix(f, ":")
 			}
+			// "r=<token>" carries the matched PolicyRule id (or a "sys-*"
+			// system token for structural log points) — see
+			// withRuleToken/logTokenPattern in real_firewall.go. Re-validate
+			// against the same whitelist here: even though the writer side
+			// already sanitizes, never trust raw kernel/NFLOG bytes without
+			// re-checking on the read side too.
+			if rid, ok := strings.CutPrefix(f, "r="); ok && logTokenPattern.MatchString(rid) {
+				entry.RuleID = rid
+			}
 		}
 		if info, ok := nflogPrefixTable[token+":"+verb]; ok {
 			chain, action, reason = info.chain, info.action, info.reason
@@ -241,7 +250,7 @@ func parseNflogAttr(attr nflog.Attribute, resolveIface func(*uint32) string, def
 // packet): any field it can't read is left as "-". The version nibble of the
 // first byte selects IPv4 vs IPv6 (inet family — payload can be either).
 func parsePacketHeader(pkt []byte) model.FirewallLog {
-	entry := model.FirewallLog{Src: "-", Dest: "-", Port: "-", Proto: "-"}
+	entry := model.FirewallLog{Src: "-", Dest: "-", SrcPort: "-", Port: "-", Proto: "-"}
 	if len(pkt) < 1 {
 		return entry
 	}
@@ -290,8 +299,10 @@ func parsePacketHeader(pkt []byte) model.FirewallLog {
 		entry.Proto = fmt.Sprintf("proto-%d", proto)
 	}
 
-	// Destination port for TCP/UDP only (offset 2 in the transport header).
+	// Source/destination ports for TCP/UDP only (offsets 0 and 2 in the
+	// transport header, respectively).
 	if (proto == 6 || proto == 17) && len(transport) >= 4 {
+		entry.SrcPort = fmt.Sprintf("%d", binary.BigEndian.Uint16(transport[0:2]))
 		entry.Port = fmt.Sprintf("%d", binary.BigEndian.Uint16(transport[2:4]))
 	}
 
