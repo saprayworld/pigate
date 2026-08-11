@@ -223,3 +223,82 @@ func TestHandleGetTrafficLogs_BackwardCompatible(t *testing.T) {
 		t.Fatalf("expected legacy action+limit query to still work, got %+v", page)
 	}
 }
+
+// TestHandleGetTrafficLogUsage covers GET /api/logs/traffic/usage (docs/ref/
+// todo/firewall-log-buffer-capacity-plan.md T-04/T-06, issue #134): auth
+// required, empty-buffer defaults, and a populated buffer's used/capacity/
+// oldest/newest/evicted numbers.
+func TestHandleGetTrafficLogUsage(t *testing.T) {
+	server, _ := buildTestServer(t, false)
+	handler := RegisterRoutes(server)
+	AddSession("mock_session_id_test_token", "pigate")
+
+	// Requires auth.
+	req := httptest.NewRequest("GET", "/api/logs/traffic/usage", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("without session: expected 401, got %d", rec.Code)
+	}
+
+	get := func() model.TrafficLogBufferUsage {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/api/logs/traffic/usage", nil)
+		addSessionCookie(req, "mock_session_id_test_token")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var out model.TrafficLogBufferUsage
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("failed to unmarshal response %s: %v", rec.Body.String(), err)
+		}
+		return out
+	}
+
+	// Empty buffer: used=0, capacity from buildTestServer's ring (50), oldest/
+	// newest empty, evicted=0.
+	usage := get()
+	if usage.Used != 0 || usage.Capacity != 50 || usage.OldestEntry != "" || usage.NewestEntry != "" || usage.Evicted != 0 {
+		t.Fatalf("empty buffer: unexpected usage %+v", usage)
+	}
+	if usage.UsedPercent != 0 {
+		t.Fatalf("empty buffer: expected usedPercent=0, got %v", usage.UsedPercent)
+	}
+
+	base := time.Now().Add(-1 * time.Hour)
+	seedTrafficLogEntry(t, server, "a", base.Add(1*time.Second), model.PolicyChainForward, "DROP", "Blocked (forward)")
+	seedTrafficLogEntry(t, server, "b", base.Add(2*time.Second), model.PolicyChainInput, "PASS", "Allowed (local-in)")
+
+	usage = get()
+	if usage.Used != 2 {
+		t.Fatalf("expected used=2 after seeding 2 entries, got %d", usage.Used)
+	}
+	if usage.Capacity != 50 {
+		t.Fatalf("expected capacity=50, got %d", usage.Capacity)
+	}
+	if usage.OldestEntry != base.Add(1*time.Second).Format(time.RFC3339Nano) {
+		t.Fatalf("expected oldestEntry to be the first-seeded entry's time, got %q", usage.OldestEntry)
+	}
+	if usage.NewestEntry != base.Add(2*time.Second).Format(time.RFC3339Nano) {
+		t.Fatalf("expected newestEntry to be the last-seeded entry's time, got %q", usage.NewestEntry)
+	}
+	if usage.Evicted != 0 {
+		t.Fatalf("expected evicted=0 (buffer nowhere near full), got %d", usage.Evicted)
+	}
+
+	// POST /api/dashboard/logs/clear must zero everything out.
+	clearReq := httptest.NewRequest("POST", "/api/dashboard/logs/clear", nil)
+	addSessionCookie(clearReq, "mock_session_id_test_token")
+	clearRec := httptest.NewRecorder()
+	handler.ServeHTTP(clearRec, clearReq)
+	if clearRec.Code != http.StatusOK {
+		t.Fatalf("clear: expected 200, got %d", clearRec.Code)
+	}
+
+	usage = get()
+	if usage.Used != 0 || usage.OldestEntry != "" || usage.NewestEntry != "" || usage.Evicted != 0 {
+		t.Fatalf("after clear: expected all-zero usage, got %+v", usage)
+	}
+}

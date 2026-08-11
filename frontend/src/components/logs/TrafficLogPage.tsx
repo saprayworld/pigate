@@ -30,10 +30,17 @@ import {
   trafficLogService,
   type TrafficChainFilter,
   type TrafficLog,
+  type TrafficLogBufferUsage,
 } from "@/services/trafficLogService"
 
 const PAGE_SIZE = 500
 const MAX_ROWS = 5000
+
+// How often the buffer usage summary bar polls GET /api/logs/traffic/usage
+// (docs/ref/todo/firewall-log-buffer-capacity-plan.md T-09, issue #134) —
+// same cadence as the Statistics -> Capacity page's own polling
+// (StatisticsCapacity.tsx REFRESH_INTERVAL_MS).
+const USAGE_POLL_INTERVAL_MS = 10_000
 
 const ACTION_OPTIONS = [
   { value: "all", label: "All verdicts" },
@@ -144,6 +151,16 @@ function formatLogTime(iso: string): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
+// Formats the buffer usage bar's "oldest entry" timestamp as a local
+// date+time string; falls back to the raw as-stored string if it fails to
+// parse (backend's Time field may be RFC3339 or RFC3339Nano — design
+// decision 5, docs/ref/todo/firewall-log-buffer-capacity-plan.md).
+function formatOldestEntryTime(iso: string): string {
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso
+  return d.toLocaleString()
+}
+
 export interface TrafficLogPageProps {
   /** Page title shown in the header (e.g. "Forward Traffic"). */
   title: string
@@ -239,6 +256,35 @@ export function TrafficLogPage({
     return () => observer.disconnect()
   }, [hasMore, loadMore, logs.length])
 
+  // Buffer usage summary bar (docs/ref/todo/
+  // firewall-log-buffer-capacity-plan.md T-09, issue #134) — a small,
+  // separate poll from GET /api/logs/traffic/usage, independent of the
+  // page's own log rows/pagination. Numbers are for the WHOLE shared ring
+  // buffer (all three chains), not just this page's filtered rows — the
+  // label below says so explicitly to avoid the user misreading it as a
+  // per-page count.
+  const [usage, setUsage] = useState<TrafficLogBufferUsage | null>(null)
+  useEffect(() => {
+    if (isPaused) return
+    let cancelled = false
+    const load = () => {
+      trafficLogService
+        .getTrafficLogUsage()
+        .then((u) => {
+          if (!cancelled) setUsage(u)
+        })
+        .catch(() => {
+          /* transient failure: keep showing the last known usage */
+        })
+    }
+    load()
+    const id = setInterval(load, USAGE_POLL_INTERVAL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [isPaused, clearNonce])
+
   const handleClear = async () => {
     const ok = await confirm(clearConfirmTitle, clearConfirmMessage)
     if (!ok) return
@@ -293,6 +339,21 @@ export function TrafficLogPage({
           <CardTitle className="text-sm font-medium text-muted-foreground">
             {logs.length} entries {isPaused && <span className="text-warning">(paused)</span>}
           </CardTitle>
+          {/* Buffer usage summary — the WHOLE shared ring buffer's fill
+             state (all chains combined), not just this page's rows above.
+             capacity always comes from the API response, never hardcoded. */}
+          {usage && (
+            <p className="text-xs text-muted-foreground">
+              ใช้ไป {usage.used.toLocaleString()} / {usage.capacity.toLocaleString()} รายการ (
+              {usage.usedPercent.toFixed(1)}%) ของบัฟเฟอร์ log ทั้งหมด (รวมทุก chain)
+              {usage.oldestEntry && (
+                <>
+                  {" "}
+                  · log เก่าสุดที่ยังอยู่ในระบบ: {formatOldestEntryTime(usage.oldestEntry)}
+                </>
+              )}
+            </p>
+          )}
           {/* Filter bar */}
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative w-full sm:w-64">

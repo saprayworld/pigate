@@ -9,25 +9,30 @@ import (
 // Statistics -> Capacity pipeline (docs/ref/todo/
 // statistics-capacity-visibility-plan.md T-06, GitHub issue #123) — composes
 // the GET /api/statistics/capacity response by calling the read-only capacity
-// readers added to each of the 10 RAM-only tracking structures (T-02..T-05;
+// readers added to each of the 11 RAM-only tracking structures (T-02..T-05;
 // the 10th ring, dns.domainIpsPerDomain, was added by docs/ref/todo/
-// statistics-dns-cap-notification-fix-plan.md §3.4/T-06):
+// statistics-dns-cap-notification-fix-plan.md §3.4/T-06; the 11th ring,
+// firewall.logBuffer, was added by docs/ref/todo/
+// firewall-log-buffer-capacity-plan.md T-03, issue #134):
 // TrafficStatsService.CapacityUsage (traffic.hosts/dests/conversations),
 // StatisticsService.denyCapacity (firewall.denySources/denyPorts),
-// StatisticsService.dnsRingCapacity (dns.pairs/dns.clients), and the
+// StatisticsService.dnsRingCapacity (dns.pairs/dns.clients), the
 // dnsReverseCache/dnsDomainIPs Usage() accessors (dns.reverseCache/
-// dns.domainIps). Every ring/index metadata literal (id/group/label/
-// capSource/entryBytes) lives HERE, in one place, so it can never drift from
-// the readers it decorates.
+// dns.domainIps), and StatisticsService.logBuffer.Usage() (firewall.logBuffer,
+// injected via SetLogBuffer — see statistics.go). Every ring/index metadata
+// literal (id/group/label/capSource/entryBytes) lives HERE, in one place, so
+// it can never drift from the readers it decorates.
 //
-// This file never mutates any of the 9 structures — every reader it calls is
+// This file never mutates any of the 11 structures — every reader it calls is
 // read-only (RLock only, no eviction) — and never calls GetTrafficBreakdown/
 // hostLookup (that would be needless work: capacity is purely about map
 // sizes, not byte totals or hostnames), and never holds more than one ring's
 // lock at a time (each reader above already fully drains its own lock before
-// returning).
+// returning). This file never imports internal/config — the firewall.logBuffer
+// ring's Cap is read live from the ring buffer itself (logBuffer.Usage()),
+// which was already sized from config at startup by main.go.
 
-// capacityRingMeta is this file's single metadata table for the 10 rings —
+// capacityRingMeta is this file's single metadata table for the 11 rings —
 // id/group/label/kind/capSource/entryBytes never come from anywhere else.
 type capacityRingMeta struct {
 	id         string
@@ -131,6 +136,23 @@ var (
 		// is one (ip, lastSeen) pair within the single most-loaded domain.
 		entryBytes: 55,
 	}
+	// capacityMetaLogBuffer is the 11th ring: the traffic log ring buffer
+	// (internal/logs/ringbuffer.go) shared by the Forward/Local Traffic log
+	// pages — forward/input/output chains all share this one buffer, so
+	// Current/Cap here are for the WHOLE buffer, not per-chain (docs/ref/todo/
+	// firewall-log-buffer-capacity-plan.md T-03, issue #134). CapSource points
+	// at the real, editable config key (traffic-log-buffer-capacity) that
+	// sizes this ring at startup — unlike the compile-time const it used to be.
+	capacityMetaLogBuffer = capacityRingMeta{
+		id: "firewall.logBuffer", group: "firewall", label: "Firewall Traffic Log Buffer",
+		kind: "flat", capSource: "traffic-log-buffer-capacity",
+		// model.FirewallLog entry: several short strings (id/time/action/src/
+		// dest/ports/proto/ifaces/reason/chain, mostly <20 chars each) plus Go
+		// struct/string-header overhead — estimated ~300-550B/entry per the
+		// original comment in cmd/pigate/main.go; 400 is the mid-range pick
+		// used for EstimatedBytes here.
+		entryBytes: 400,
+	}
 )
 
 // GetCapacityStatistics composes the GET /api/statistics/capacity response —
@@ -143,6 +165,16 @@ var (
 // numbers (e.g. the CapacityIndicator pill polled alongside a page's main
 // data) should always pass false to avoid building series arrays nobody
 // reads.
+func (s *StatisticsService) logBufferRing() model.RingCapacity {
+	if s.logBuffer == nil {
+		return flatRing(capacityMetaLogBuffer, 0, 0, false)
+	}
+	used, cap, oldest, _, evicted := s.logBuffer.Usage()
+	r := flatRing(capacityMetaLogBuffer, used, cap, evicted > 0)
+	r.OldestEntry = oldest
+	return r
+}
+
 func (s *StatisticsService) GetCapacityStatistics(window string, withSeries bool) model.CapacityStatistics {
 	window = normalizeStatsWindow(window)
 	bucketCount := statsWindowBucketCount(window)
@@ -172,6 +204,12 @@ func (s *StatisticsService) GetCapacityStatistics(window string, withSeries bool
 		// domain is AT the cap (docs/ref/todo/
 		// statistics-dns-cap-notification-fix-plan.md §3.4/T-06).
 		flatRing(capacityMetaDNSDomainIPsPerDomain, domainIPsMaxIPsUsed, domainIPsMaxIPsPerDomain, domainIPsDomainsAtIPCap > 0),
+		// 11th ring: the traffic log ring buffer. s.logBuffer is nil unless
+		// SetLogBuffer was called (main.go wires it after construction, mirroring
+		// SetPolicyStatsService) — degrade gracefully to an all-zero row rather
+		// than panicking if some caller (e.g. a unit test) built StatisticsService
+		// without it.
+		s.logBufferRing(),
 	}
 
 	return model.CapacityStatistics{

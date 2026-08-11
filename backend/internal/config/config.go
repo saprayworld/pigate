@@ -63,6 +63,16 @@
 // maxTrackedDenyPorts=300) — promoted to file-only config keys so their
 // capSource on the new GET /api/statistics/capacity response points at a
 // real, editable config key like every other ring's cap does.
+//
+// traffic-log-buffer-capacity (docs/ref/todo/firewall-log-buffer-capacity-plan.md
+// T-00, issue #134) is also file-only and uses the same two-tier validation
+// as the *-max-* keys above. It differs from every other key in this file in
+// one important way: it is not re-read continuously — it is consumed exactly
+// once, at process startup, to size internal/logs.RingBuffer via
+// logs.NewRingBuffer() in cmd/pigate/main.go, before the ring is handed to
+// any subscriber. There is no live re-sizing path, so changing this key only
+// takes effect after a `sudo systemctl restart pigate` (or equivalent
+// restart of the process) — never while the process is running.
 package config
 
 import (
@@ -130,6 +140,16 @@ type Config struct {
 	// TrafficStatsMax* above.
 	DenyStatsMaxSources int
 	DenyStatsMaxPorts   int
+
+	// TrafficLogBufferCapacity is also file-only (no matching CLI flag) — it
+	// sizes the traffic log ring buffer (backend/internal/logs/ringbuffer.go)
+	// that main.go creates for the Forward/Local Traffic log pages and the
+	// Statistics -> Capacity firewall.logBuffer ring (docs/ref/todo/
+	// firewall-log-buffer-capacity-plan.md T-00, issue #134). Unlike the
+	// other file-only keys above, this one is only read once at startup to
+	// construct the ring buffer — changing it takes effect only after a
+	// service restart, never live.
+	TrafficLogBufferCapacity int
 }
 
 // Defaults returns the Config populated with the exact same defaults as the
@@ -177,6 +197,11 @@ func Defaults() Config {
 		// statistics-capacity-visibility-plan.md T-14).
 		DenyStatsMaxSources: 500,
 		DenyStatsMaxPorts:   300,
+
+		// Keep in sync with the old trafficLogBufferCapacity const this key
+		// replaces in cmd/pigate/main.go (docs/ref/todo/
+		// firewall-log-buffer-capacity-plan.md T-00).
+		TrafficLogBufferCapacity: 10000,
 	}
 }
 
@@ -221,6 +246,10 @@ const (
 	// flag — docs/ref/todo/statistics-capacity-visibility-plan.md T-14).
 	keyDenyStatsMaxSources = "deny-stats-max-sources"
 	keyDenyStatsMaxPorts   = "deny-stats-max-ports"
+
+	// keyTrafficLogBufferCapacity is also file-only (no CLI flag — docs/ref/
+	// todo/firewall-log-buffer-capacity-plan.md T-00, issue #134).
+	keyTrafficLogBufferCapacity = "traffic-log-buffer-capacity"
 )
 
 // maxDNSStatsPairsCap/maxDNSStatsClientsCap are RAM-guard sanity ceilings for
@@ -267,6 +296,19 @@ const (
 // reuses the identical ceiling.
 const maxDenyStatsCap = maxTrafficStatsCap
 
+// minTrafficLogBufferCapacity/maxTrafficLogBufferCapacity are the accepted
+// range for traffic-log-buffer-capacity (docs/ref/todo/
+// firewall-log-buffer-capacity-plan.md T-00, issue #134). At an estimated
+// ~300-550 bytes/entry (from the original comment in cmd/pigate/main.go):
+// the floor (500) guarantees at least one full page of the Log pages (500
+// rows/page) and rejects zero/negative values; the ceiling (100000) is
+// roughly 30-55 MB worst case, which is still acceptable RAM on a Pi 5 —
+// anything higher risks starving other services on the board.
+const (
+	minTrafficLogBufferCapacity = 500
+	maxTrafficLogBufferCapacity = 100000
+)
+
 // orderedKeys is the fixed key order used by Write (and reused by KnownKeys)
 // so the generated file is stable/diffable across runs.
 var orderedKeys = []string{
@@ -303,6 +345,12 @@ var orderedKeys = []string{
 	// statistics-capacity-visibility-plan.md T-14).
 	keyDenyStatsMaxSources,
 	keyDenyStatsMaxPorts,
+	// Appended at the very end, after deny-stats-max-ports, per docs/ref/todo/
+	// firewall-log-buffer-capacity-plan.md T-00 — this is the newest file-only
+	// key, and keeping new keys strictly appended (rather than alphabetized
+	// among the existing ones) keeps already-generated pigate.conf files
+	// diffing cleanly across upgrades.
+	keyTrafficLogBufferCapacity,
 }
 
 // KnownKeys returns the list of recognized config/flag keys, in the fixed
@@ -457,6 +505,12 @@ func Resolve(defaults Config, fileVals, explicit map[string]string) (Config, []s
 			cfg.DenyStatsMaxPorts, maxDenyStatsCap, defaults.DenyStatsMaxPorts))
 		cfg.DenyStatsMaxPorts = defaults.DenyStatsMaxPorts
 	}
+	if cfg.TrafficLogBufferCapacity < minTrafficLogBufferCapacity || cfg.TrafficLogBufferCapacity > maxTrafficLogBufferCapacity {
+		warnings = append(warnings, fmt.Sprintf(
+			"traffic-log-buffer-capacity=%d out of range (%d..%d), using default %d",
+			cfg.TrafficLogBufferCapacity, minTrafficLogBufferCapacity, maxTrafficLogBufferCapacity, defaults.TrafficLogBufferCapacity))
+		cfg.TrafficLogBufferCapacity = defaults.TrafficLogBufferCapacity
+	}
 
 	return cfg, warnings, nil
 }
@@ -597,6 +651,14 @@ func applyKey(cfg *Config, key, value string) error {
 			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
 		}
 		cfg.DenyStatsMaxPorts = n
+	case keyTrafficLogBufferCapacity:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		// Range-checking is deliberately NOT done here — see Resolve's
+		// post-processing pass (clamp + warn, not fail-fast).
+		cfg.TrafficLogBufferCapacity = n
 	default:
 		// Unreachable: callers only invoke applyKey for keys that passed
 		// isKnownKey. Kept as a safety net rather than a silent no-op.
@@ -653,6 +715,8 @@ func keyValue(cfg Config, key string) string {
 		return strconv.Itoa(cfg.DenyStatsMaxSources)
 	case keyDenyStatsMaxPorts:
 		return strconv.Itoa(cfg.DenyStatsMaxPorts)
+	case keyTrafficLogBufferCapacity:
+		return strconv.Itoa(cfg.TrafficLogBufferCapacity)
 	default:
 		return ""
 	}

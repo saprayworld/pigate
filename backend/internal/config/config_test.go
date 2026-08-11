@@ -317,6 +317,7 @@ func TestWriteParseRoundTrip(t *testing.T) {
 	cfg.IPInfoEnabled = true
 	cfg.DenyStatsMaxSources = 800
 	cfg.DenyStatsMaxPorts = 400
+	cfg.TrafficLogBufferCapacity = 20000
 
 	var buf bytes.Buffer
 	if err := Write(&buf, cfg); err != nil {
@@ -360,8 +361,8 @@ func TestWriteParseRoundTripDefaults(t *testing.T) {
 
 func TestKnownKeys(t *testing.T) {
 	keys := KnownKeys()
-	if len(keys) != 22 {
-		t.Fatalf("expected 22 known keys, got %d: %v", len(keys), keys)
+	if len(keys) != 23 {
+		t.Fatalf("expected 23 known keys, got %d: %v", len(keys), keys)
 	}
 	// "config" and "v" must never be treated as config-file keys.
 	for _, k := range keys {
@@ -427,6 +428,18 @@ func TestKnownKeys(t *testing.T) {
 	}
 	if !hasDenySources || !hasDenyPorts {
 		t.Fatalf("expected deny-stats-max-sources/deny-stats-max-ports in KnownKeys, got %v", keys)
+	}
+	var hasTrafficLogBufferCapacity bool
+	for _, k := range keys {
+		if k == "traffic-log-buffer-capacity" {
+			hasTrafficLogBufferCapacity = true
+		}
+	}
+	if !hasTrafficLogBufferCapacity {
+		t.Fatalf("expected traffic-log-buffer-capacity in KnownKeys, got %v", keys)
+	}
+	if keys[len(keys)-1] != "traffic-log-buffer-capacity" {
+		t.Fatalf("expected traffic-log-buffer-capacity to be the last key, got %v", keys)
 	}
 }
 
@@ -508,6 +521,82 @@ func TestResolve_DenyStatsMaxSourcesPorts(t *testing.T) {
 		fileVals := map[string]string{"deny-stats-max-sources": "not-a-number"}
 		if _, _, err := Resolve(Defaults(), fileVals, nil); err == nil {
 			t.Fatalf("expected error for non-integer deny-stats-max-sources")
+		}
+	})
+}
+
+// TestResolve_TrafficLogBufferCapacity covers traffic-log-buffer-capacity's
+// default/override/out-of-range/non-integer behavior (docs/ref/todo/
+// firewall-log-buffer-capacity-plan.md T-00/T-06, issue #134) — same pattern
+// as TestResolve_DenyStatsMaxSourcesPorts above.
+func TestResolve_TrafficLogBufferCapacity(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		cfg, warns, err := Resolve(Defaults(), nil, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.TrafficLogBufferCapacity != 10000 {
+			t.Fatalf("got %d, want default 10000", cfg.TrafficLogBufferCapacity)
+		}
+	})
+
+	t.Run("file override", func(t *testing.T) {
+		fileVals := map[string]string{"traffic-log-buffer-capacity": "20000"}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.TrafficLogBufferCapacity != 20000 {
+			t.Fatalf("got %d, want 20000", cfg.TrafficLogBufferCapacity)
+		}
+	})
+
+	t.Run("out of range clamps to default with warning", func(t *testing.T) {
+		for _, v := range []string{"0", "-1", "499", "100001"} {
+			fileVals := map[string]string{"traffic-log-buffer-capacity": v}
+			cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+			if err != nil {
+				t.Fatalf("Resolve(%q) failed: %v", v, err)
+			}
+			if len(warns) != 1 {
+				t.Fatalf("Resolve(%q): expected 1 warning, got %v", v, warns)
+			}
+			if cfg.TrafficLogBufferCapacity != 10000 {
+				t.Fatalf("Resolve(%q): got %d, want default 10000", v, cfg.TrafficLogBufferCapacity)
+			}
+		}
+	})
+
+	t.Run("boundary values pass without warning", func(t *testing.T) {
+		for _, v := range []string{"500", "100000"} {
+			fileVals := map[string]string{"traffic-log-buffer-capacity": v}
+			cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+			if err != nil {
+				t.Fatalf("Resolve(%q) failed: %v", v, err)
+			}
+			if len(warns) != 0 {
+				t.Fatalf("Resolve(%q): unexpected warnings: %v", v, warns)
+			}
+			want := 500
+			if v == "100000" {
+				want = 100000
+			}
+			if cfg.TrafficLogBufferCapacity != want {
+				t.Fatalf("Resolve(%q): got %d, want %d", v, cfg.TrafficLogBufferCapacity, want)
+			}
+		}
+	})
+
+	t.Run("non-integer is a fail-fast error", func(t *testing.T) {
+		fileVals := map[string]string{"traffic-log-buffer-capacity": "abc"}
+		if _, _, err := Resolve(Defaults(), fileVals, nil); err == nil {
+			t.Fatalf("expected error for non-integer traffic-log-buffer-capacity")
 		}
 	})
 }

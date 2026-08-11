@@ -180,3 +180,18 @@ deny-stats-max-sources=500
 # Maximum number of distinct destination ports tracked per 5-minute bucket in
 # the firewall deny ring.
 deny-stats-max-ports=300
+
+# The key below sizes the traffic log ring buffer (backend/internal/logs/
+# ringbuffer.go) that backs the Forward Traffic / Local Traffic log pages and
+# the Statistics -> Capacity "Firewall Traffic Log Buffer" card (docs/ref/todo/
+# firewall-log-buffer-capacity-plan.md, issue #134). One ring buffer is shared
+# across the forward/input/output chains — this is NOT a per-page limit.
+# Accepted range 500-100000 (out-of-range values clamp back to the default
+# with a warning, never a fatal error); estimated RAM cost is roughly 300-550
+# bytes per entry (so ~3-30 MB at the default/mid-range, up to ~55 MB at the
+# ceiling).
+#
+# IMPORTANT: this value is only read ONCE, at process startup, to allocate the
+# ring buffer — changing it here has NO effect until you restart the service
+# (`sudo systemctl restart pigate`).
+traffic-log-buffer-capacity=10000

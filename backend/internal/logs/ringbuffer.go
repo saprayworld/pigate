@@ -22,6 +22,7 @@ type RingBuffer struct {
 	mu       sync.RWMutex
 	logs     []model.FirewallLog
 	capacity int
+	evicted  uint64                   // cumulative count of entries pushed out since boot/last Clear()
 	subs     map[*subscriber]struct{} // live SSE listeners; notified non-blocking
 }
 
@@ -40,6 +41,7 @@ func (r *RingBuffer) Add(log model.FirewallLog) {
 	// If capacity is reached, slice out the oldest
 	if len(r.logs) >= r.capacity {
 		r.logs = append(r.logs[1:], log)
+		r.evicted++
 	} else {
 		r.logs = append(r.logs, log)
 	}
@@ -109,8 +111,38 @@ func (r *RingBuffer) Capacity() int {
 func (r *RingBuffer) Clear() {
 	r.mu.Lock()
 	r.logs = r.logs[:0]
+	r.evicted = 0
 	r.notifyLocked(LogEvent{Kind: "clear"})
 	r.mu.Unlock()
+}
+
+// Usage reports a point-in-time snapshot of the buffer's fill state in a
+// single O(1) read under one RLock — it never calls GetAll (which copies the
+// whole buffer, ~2.5 MB worst case) and never loops over the buffer, so it is
+// cheap enough to call from an HTTP handler on every poll.
+//
+// oldest/newest are the as-stored Time string (RFC3339 or RFC3339Nano — see
+// model.FirewallLog.Time's doc comment; this package never normalizes it) of
+// the oldest and newest entries currently held. Because Add() only ever
+// appends to the tail and evicts from the head, the oldest entry is always
+// r.logs[0] and the newest is always the last element — no scan needed. Both
+// are returned as "" when the buffer is empty.
+//
+// evicted is the cumulative number of entries pushed out of the buffer since
+// boot or the last Clear() call — a non-zero value means the buffer has
+// filled up at least once and is now dropping old entries to admit new ones.
+func (r *RingBuffer) Usage() (used int, capacity int, oldest string, newest string, evicted uint64) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	used = len(r.logs)
+	capacity = r.capacity
+	evicted = r.evicted
+	if used > 0 {
+		oldest = r.logs[0].Time
+		newest = r.logs[used-1].Time
+	}
+	return used, capacity, oldest, newest, evicted
 }
 
 // Subscribe registers a listener and returns its receive channel plus a cancel
