@@ -2,7 +2,7 @@
 
 โจทย์: หน้า Firewall Policy / Local-In Policy / Local-Out Policy (รายการกฎ) อยากให้เห็นสถิติการใช้งานของแต่ละกฎในรายการเลย (ใช้ไปเท่าไหร่ กฎไหนไม่เคยถูกใช้) และตอนกดดูรายละเอียดกฎ ให้เห็นเพิ่ม เช่น bytes/packets, % ของทราฟฟิกทั้งหมด, ใช้ล่าสุดเมื่อไหร่
 
-สถานะ: **พร้อม implement** — PR #133 merge เข้า main แล้ว (commit `5105466`), verify แล้วว่า `model.FirewallLog.RuleID`/`RuleName` มีอยู่จริงที่ `backend/internal/model/types.go:411-412` ตรงกับที่แผนนี้อ้างอิง ให้แตก branch ใหม่จาก main (เช่น `feat/policy-rule-usage-stats`) แล้วเริ่มทำได้เลย
+สถานะ: **เสร็จสิ้น** — implement ครบ T-01–T-14 บน branch `feat/policy-rule-usage-stats`, ai-qa ตรวจผ่านทั้งชุด (build/vet/test/lint ผ่านหมด, `-race` รันไม่ได้ในแซนด์บ็อกซ์เพราะไม่มี gcc — ตรวจโค้ด `ruleMu` แทนแล้วว่าใช้ `Lock()/Unlock()` ถูกต้อง แนะนำให้รันจริงใน CI ก่อน merge) เปิด PR แล้วที่ [#135](https://github.com/saprayworld/pigate/pull/135)
 
 ## Design decisions (ยืนยันกับเจ้าของโปรเจกต์แล้ว)
 
