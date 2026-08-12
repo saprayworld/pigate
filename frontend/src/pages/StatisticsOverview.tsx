@@ -436,7 +436,7 @@ export default function StatisticsOverview() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <CapacityIndicator rings={capacityRings} window={window_} />
+          <CapacityIndicator rings={capacityRings} excludeIds={["firewall.logBuffer"]} window={window_} />
           {stats && <AccuracyInfoButton accuracy={stats.accuracy} />}
           <StatsWindowTabs value={window_} onChange={setWindow} />
           <Button
