@@ -330,6 +330,34 @@ func TestCategorize_NoMatchFallsBackToOther(t *testing.T) {
 	}
 }
 
+// T-03 (matched-endpoints plan): ServiceNameFor wraps categorize but returns
+// "" instead of "Other" for callers that want to fall back to raw PROTO/PORT
+// display rather than a misleading generic label.
+func TestServiceNameFor(t *testing.T) {
+	s := &TrafficStatsService{}
+	s.svcCache = []categoryEntry{
+		{name: "ALL", protocols: []uint8{6, 17}, portStart: 1, portEnd: 65535},
+		{name: "HTTPS", protocols: []uint8{6}, portStart: 443, portEnd: 443},
+	}
+	s.svcCachedAt = time.Now()
+
+	if got := s.ServiceNameFor("TCP", "443"); got != "HTTPS" {
+		t.Fatalf("expected HTTPS, got %q", got)
+	}
+	if got := s.ServiceNameFor("tcp", "8080"); got != "ALL" {
+		t.Fatalf("expected ALL (case-insensitive proto), got %q", got)
+	}
+	if got := s.ServiceNameFor("UDP", "not-a-port"); got != "" {
+		t.Fatalf("expected empty for unparsable port, got %q", got)
+	}
+	if got := s.ServiceNameFor("ICMP", "-"); got != "" {
+		t.Fatalf("expected empty for no ICMP object match, got %q", got)
+	}
+	if got := s.ServiceNameFor("proto-132", "-"); got != "" {
+		t.Fatalf("expected empty for unmatched other-protocol, got %q", got)
+	}
+}
+
 // raceFakeAcct returns fresh, monotonically growing flow/rule data on every
 // call — used to keep poll() genuinely mutating the newest (still-open)
 // bucket's maps for the duration of the race test below, rather than

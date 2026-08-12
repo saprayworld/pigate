@@ -155,7 +155,27 @@ func main() {
 		timeMgr = kernel.NewMockTimeManager()
 		sysStats = kernel.NewMockSystemStats()
 		powerMgr = kernel.NewMockPowerManager()
-		trafficLog = kernel.NewMockTrafficLog()
+		mTrafficLog := kernel.NewMockTrafficLog()
+		// SetRuleIDProvider wires live DB policy-rule ids into the mock
+		// traffic-log samples (docs/ref/todo/
+		// firewall-rule-matched-endpoints-plan.md T-07), so
+		// GET /api/policies/{id}/endpoints has real data to show under
+		// -mock=true. A one-time read at startup is enough for dev/test
+		// purposes — kernel must never import db, so this is a plain
+		// closure over repo captured here in main.go, same pattern as
+		// trafficAcct's ruleIDs provider just above.
+		mTrafficLog.SetRuleIDProvider(func() []string {
+			rules, err := repo.GetPolicies()
+			if err != nil {
+				return nil
+			}
+			ids := make([]string, 0, len(rules))
+			for _, r := range rules {
+				ids = append(ids, r.ID)
+			}
+			return ids
+		})
+		trafficLog = mTrafficLog
 		systemServiceMgr = kernel.NewMockSystemServiceManager()
 		capProber = kernel.NewMockCapabilityProber()
 		// ruleIDs supplies live DB policy-rule ids so MockTrafficAccounting's
@@ -398,6 +418,12 @@ func main() {
 	// after NewServer, exactly like FirewallService.SetRuleNameResolver above,
 	// so NewServer's signature stays unchanged.
 	policyStatsService := service.NewPolicyStatsService(repo, firewallService, trafficStatsService, ringBuffer)
+	// SetDomainLookup wires the DNS reverse-cache batch lookup (docs/ref/todo/
+	// firewall-rule-matched-endpoints-plan.md T-05) so GetRuleEndpoints can
+	// resolve EndpointHit.Domain — statisticsService already exists above
+	// (constructed before policyStatsService), same additive-setter pattern
+	// as statisticsService.SetLogBuffer(ringBuffer) further up.
+	policyStatsService.SetDomainLookup(statisticsService.LookupDomains)
 	server.SetPolicyStatsService(policyStatsService)
 
 	// Apply config form database to kernel

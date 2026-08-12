@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS policy_services (
 | `POST` | `/api/policies/{id}/toggle-log` | `HandleTogglePolicyLog` | เปิด/ปิดการเก็บบันทึก Log |
 | `POST` | `/api/policies/{id}/toggle-status` | `HandleTogglePolicyStatus` | เปิด/ปิดการใช้งานกฎชั่วคราว |
 | `POST` | `/api/policies/apply` | `HandleApplyPolicies` | นำกฎทั้งหมดไปประมวลผลลงเคอร์เนล Linux จริง |
+| `GET` | `/api/policies/{id}/endpoints` | `HandleGetPolicyRuleEndpoints` | Top IP/Service ที่ตรงกับกฎนี้ (aggregate สดจาก traffic-log ring buffer) — ดูหัวข้อ 10 |
 
 ---
 
@@ -182,5 +183,49 @@ table inet pigate_firewall {
 - `lastMatchedSource` เป็น `"log"` หรือ `"counter"` ตามแหล่งที่ resolve ได้ (ดูข้อ 2/3 ด้านบน) ความคลาดเคลื่อนของแหล่ง `"counter"` อยู่ที่ ±10 วินาที
 - กฎที่ `status = false` (Disabled) จะไม่ปรากฏใน `rules` เลย เพราะไม่ถูกสร้างใน nftables — ฝั่งหน้าบ้านแสดง "—" แทน 0/Unused
 - Endpoint นี้เป็น `authRoute` (ทุก role ที่ล็อกอินเรียกได้) เหมือนกลุ่ม `/api/statistics/*` เพราะข้อมูลอ่อนไหวต่ำ (มีแค่ rule id + byte count)
+
+---
+
+## 10. Matched Endpoints ต่อกฎ (`GET /api/policies/{id}/endpoints`)
+
+ไฟล์หลัก: `backend/internal/service/policy_endpoints.go`, `backend/internal/service/policy_endpoint_labels.go`, `backend/internal/logs/ringbuffer.go` (`AggregateByRule`), `backend/internal/service/traffic_stats.go` (`ServiceNameFor`), `backend/internal/api/handlers.go` (`HandleGetPolicyRuleEndpoints`), `frontend/src/services/policyEndpointsService.ts`, `frontend/src/components/policy/RuleStatsDrawer.tsx`
+
+งานนี้ตอบคำถาม "กฎนี้มี IP/Service อะไรบ้างที่โดนมันจริงๆ" สำหรับ troubleshoot — เพิ่มต่อจากหัวข้อ 9 (bytes/packets รวม) ในส่วน "Endpoints ที่ตรงกับกฎนี้" ของ `RuleStatsDrawer` ดู work plan เต็มที่ `docs/ref/todo/firewall-rule-matched-endpoints-plan.md` (Issue #134/#136 เสร็จสิ้น, PR ที่ merge เข้า `main`)
+
+### แหล่งข้อมูลและวิธีคำนวณ
+
+nftables counter รวมได้แค่ bytes/packets ต่อกฎ **แยกราย IP/port ไม่ได้เลย** ถ้าไม่รื้อไปทำ named-set + per-element counter (ซึ่งยังคืนแค่ element ที่ตั้งไว้ ไม่ใช่ IP จริงที่วิ่งเข้ามา) แหล่งข้อมูลเดียวที่รู้ว่า "แพ็กเก็ตไหนโดนกฎไหน" คือ **traffic-log ring buffer** (`internal/logs/ringbuffer.go`)
+
+- **Option A ที่เลือกใช้**: สแกน ring buffer สดทุกครั้งที่มี request ผ่าน `RingBuffer.AggregateByRule(ruleID)` (สแกนครั้งเดียวใต้ `RLock`, ไม่เพิ่ม goroutine/ticker, ไม่ persist อะไรเพิ่ม) — trade-off ที่ยอมรับคือหน้าต่างข้อมูลเท่ากับความจุ ring buffer ปัจจุบัน (ปรับได้ผ่าน `pigate.conf`, ดู `docs/ref/todo/firewall-log-buffer-capacity-plan.md`)
+- หน่วยนับคือ **"จำนวน log entry"** ไม่ใช่ bytes (NFLOG payload ไม่มีขนาดแพ็กเก็ต)
+- `PolicyStatsService.GetRuleEndpoints(ruleID, limit)` ทำตามลำดับ: หา rule จาก DB → `AggregateByRule` → ตัด top-N ต่อหมวด (เรียง count desc, tie-break ด้วย key asc) → resolve ชื่อแบบ batch (ไม่เรียกต่อแถว)
+
+### การเลือกชื่อที่แสดงต่อ IP/Service (ต่างจากหน้า Traffic Log โดยตั้งใจ)
+
+ลำดับความสำคัญ: **`addressName` (Address Object ที่ผู้ใช้ตั้งเอง) ชนะเสมอ → `domain` (DNS reverse cache) → `hostname` (DHCP lease)** — ตรงข้ามกับหน้า Traffic Log ที่ domain มาก่อน hostname และไม่รู้จัก Address Object เลย เพราะโจทย์ของฟีเจอร์นี้คือ "ชื่อที่ผู้ใช้ตั้งไว้เอง" ไม่ใช่ "ชื่อที่อินเทอร์เน็ตรู้จัก"
+
+- **IP → Address Object**: `addrMatcher` (pure function, `policy_endpoint_labels.go`) จับคู่เฉพาะ type `subnet`/`range` (ข้าม `fqdn` เพราะเป็นชื่อโดเมนไม่ใช่ช่วง IP) เลือก **prefix/range แคบสุดชนะ** เมื่อซ้อนกัน (tie-break ด้วยชื่อ ascii) ค่า config ที่ parse ไม่ผ่านถูกข้ามเงียบๆ ไม่ error ทั้ง request
+- **Port → Service Object**: `TrafficStatsService.ServiceNameFor(proto, port)` ใช้ matcher ตัวเดิมกับ Dashboard (`categorize`) ห้ามเขียนซ้ำ คืน `""` แทน `"Other"` เมื่อไม่ match (ฝั่ง UI จะโชว์ `PROTO/PORT` ดิบแทน)
+- `fromRule=true` เมื่อ Address Object/Service Object ที่ match นั้นเป็นตัวที่กฎนี้เองอ้างถึงใน `Source`/`Destination`/`Service` (ช่วย troubleshoot "โดนเพราะ object ตัวไหนที่ฉันตั้ง")
+
+### ข้อจำกัดสำคัญ (ต้องอ่านก่อนตีความตัวเลข)
+
+1. **ต้องเปิด Log ที่กฎนั้นเท่านั้น** — กฎที่ `log=false` จะตอบ `logEnabled: false` พร้อมลิสต์ว่างเสมอ (ไม่ใช่ error) นี่คือข้อจำกัดพื้นฐานที่แก้ไม่ได้ด้วยวิธีอื่นนอกจากบังคับทุกกฎ log (ผลข้างเคียงด้าน performance/privacy สูงเกินไป)
+2. **นับเป็นจำนวน log entry ไม่ใช่ bytes** — bytes/packets รวมต่อกฎมีอยู่แล้วในหัวข้อ 9
+3. **หน้าต่างข้อมูลเท่ากับ ring buffer ปัจจุบัน** — กฎที่ทราฟฟิกน้อยอาจถูกกฎที่ทราฟฟิกเยอะดันตกออกจากบัฟเฟอร์ก่อนเปิดดู และการ **ล้าง Traffic Log ทำให้ข้อมูลนี้หายทันที** เช่นกัน (เป็น privacy feature ที่ตั้งใจคงไว้)
+4. **เห็นเฉพาะ connection ใหม่และแพ็กเก็ตที่ถูก DROP** — พฤติกรรม NFLOG เดียวกับหน้า Traffic Log (`ct state established,related accept` อยู่ก่อนจุด log) ไม่ใช่ทุกแพ็กเก็ตที่วิ่งผ่าน
+5. `limit` (query param): default 10, ต้องอยู่ในช่วง 1–50 (นอกช่วง/ไม่ใช่ตัวเลข → 400 ต่างจาก endpoint อื่นในระบบที่มักจะ clamp เงียบๆ)
+6. rule id ที่ไม่มีจริง → 404; rule ที่ Disabled ยังตอบ 200 ได้ (อาจมี log เก่าค้างในบัฟเฟอร์) — ฝั่ง UI ต้องสื่อว่าเป็นข้อมูลย้อนหลัง
+7. ICMP: `port` เป็น `"-"` ตามที่ NFLOG parser ใส่มา ไม่ถูกแปลงเป็น `"0"`
+8. Endpoint นี้เป็น `authRoute` (GET เท่านั้น จึงยังใช้งานได้ภายใต้ `-disable-edit=true`) เหมือนหัวข้อ 9 และไม่แตะ `real_firewall.go` เลย (read/aggregate ล้วน)
+
+### Deep-link ไปหน้า Traffic Log ("ดู log ของกฎนี้")
+
+`RuleStatsDrawer` มีปุ่ม/ลิงก์ระดับหัวข้อและระดับแถว (IP/Service) ที่พาไปหน้า Traffic Log พร้อม filter สำเร็จรูป:
+
+- กฎ `chain=forward` → `/logs/traffic?q=<ชื่อกฎ>`; กฎ `chain=input`/`output` → `/logs/local?q=<ชื่อกฎ>&chain=input|output`
+- เพื่อให้ deep-link ด้วยชื่อกฎใช้งานได้ ต้องขยาย backend ก่อน: `GET /api/logs/traffic` พารามิเตอร์ `q` ตอนนี้ค้นหาครอบคลุม **`ruleName`/`ruleId`** เพิ่มจากเดิม (`src/dest/srcPort/port/proto/inIface/outIface/reason/chain`) — ฝั่ง client (`TrafficLogPage.tsx` ฟังก์ชัน `matchesFilter`) ต้องขยาย haystack ให้ตรงกันเป๊ะ (lockstep) ไม่งั้นแถวที่มาทาง SSE จะรั่วข้ามตัวกรอง
+- เป็นการค้นหาแบบ **substring บนชื่อกฎ ณ ตอนที่บันทึก log (snapshot-on-write)** — กฎที่ถูกเปลี่ยนชื่อภายหลังจะหาแถวเก่าไม่เจอ และชื่อที่เป็น substring ของกฎอื่นอาจติดมาด้วย (ข้อความนี้แสดงอยู่ใต้ปุ่มใน UI ด้วย)
+- ทุกค่าที่ประกอบเป็น URL query ผ่าน `encodeURIComponent` เสมอ
 
 ฝั่งหน้าบ้าน `PolicyChainPage.tsx` เรียก `policyStatsService.getStats(chain)` (ผ่าน `frontend/src/services/policyStatsService.ts`) ทุก ~10 วินาทีอิสระจากการโหลดตารางหลัก (ไม่ทำให้ตารางกระพริบ/รีเซ็ต scroll) และแสดงรายละเอียดครบทุก field ผ่าน `RuleStatsDrawer.tsx` เมื่อกดปุ่มไอคอน (`Activity`) ในแต่ละแถว

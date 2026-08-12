@@ -29,6 +29,16 @@ type PolicyStatsService struct {
 	firewall     *FirewallService
 	trafficStats *TrafficStatsService
 	ringBuffer   *logs.RingBuffer
+
+	// domainLookup is the optional batch DNS-reverse-cache lookup used by
+	// GetRuleEndpoints (docs/ref/todo/firewall-rule-matched-endpoints-plan.md
+	// T-05). It is set post-construction via SetDomainLookup — mirroring
+	// SetPolicyStatsService's own wiring in main.go — specifically so this
+	// constructor's signature never changes (StatisticsService, which owns
+	// LookupDomains, would otherwise have to become a fifth constructor
+	// parameter, and PolicyStatsService/StatisticsService are constructed in
+	// an order that makes a direct dependency awkward).
+	domainLookup func([]string) map[string]string
 }
 
 // NewPolicyStatsService constructs the service. Any dependency may be nil in
@@ -40,6 +50,14 @@ func NewPolicyStatsService(repo *db.Repository, firewall *FirewallService, traff
 		trafficStats: trafficStats,
 		ringBuffer:   ringBuffer,
 	}
+}
+
+// SetDomainLookup wires the batch DNS reverse-cache lookup (typically
+// StatisticsService.LookupDomains) used by GetRuleEndpoints to resolve
+// destination IPs to a domain name. Optional: GetRuleEndpoints tolerates it
+// being unset (Domain simply stays "" on every EndpointHit).
+func (s *PolicyStatsService) SetDomainLookup(fn func([]string) map[string]string) {
+	s.domainLookup = fn
 }
 
 // GetPolicyRuleStats returns usage stats for every enabled policy rule,

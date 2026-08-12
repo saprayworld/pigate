@@ -741,6 +741,71 @@ type PolicyRuleStats struct {
 	Available bool `json:"available"`
 }
 
+// EndpointHit is one aggregated IP (source or destination) observed matching
+// a policy rule in the traffic-log ring buffer — see
+// docs/ref/todo/firewall-rule-matched-endpoints-plan.md. Count is the number
+// of log entries (NOT bytes/packets — the NFLOG payload carries no packet
+// size). Name resolution precedence for display is AddressName (user-defined
+// Address Object) then Domain (DNS reverse cache) then Hostname (DHCP lease) —
+// see plan §2 decision 5. FromRule is true when AddressName equals one of the
+// rule's own Source/Destination address objects.
+type EndpointHit struct {
+	IP          string `json:"ip"`
+	Count       int    `json:"count"`
+	FirstSeenAt string `json:"firstSeenAt"`
+	LastSeenAt  string `json:"lastSeenAt"`
+	AddressName string `json:"addressName"`
+	Hostname    string `json:"hostname"`
+	Domain      string `json:"domain"`
+	FromRule    bool   `json:"fromRule"`
+}
+
+// ServiceHit is one aggregated proto/port pair observed matching a policy
+// rule in the traffic-log ring buffer. Count is the number of log entries.
+// Port is "-" for ICMP/ICMPv6 (as produced by the NFLOG parser — never
+// converted to "0"). FromRule is true when ServiceName equals the rule's own
+// Service object (matched loosely, tolerating the trailing-suffix quirk of
+// resolveService).
+type ServiceHit struct {
+	Proto       string `json:"proto"`
+	Port        string `json:"port"`
+	Count       int    `json:"count"`
+	FirstSeenAt string `json:"firstSeenAt"`
+	LastSeenAt  string `json:"lastSeenAt"`
+	ServiceName string `json:"serviceName"`
+	FromRule    bool   `json:"fromRule"`
+}
+
+// PolicyRuleEndpoints is the /api/policies/{id}/endpoints response — per-rule
+// "who matched this rule" troubleshooting view, derived entirely by scanning
+// the in-memory traffic-log ring buffer on request (Option A, plan §2
+// decision 1; no persistence, no background aggregator). Hard limitations
+// (surfaced in the UI, not hidden):
+//  1. Only rules with Log enabled ever have data (LogEnabled=false means the
+//     lists are always empty, not an error).
+//  2. Counts are log-entry counts, not bytes — NFLOG carries no packet size.
+//  3. The data window equals the ring buffer's current capacity/contents;
+//     clearing the traffic log makes this data disappear immediately.
+//  4. Only new connections (ct state new) and DROPped packets are logged, so
+//     counts are not a full packet/byte tally — see pages/ForwardTraffic.tsx.
+type PolicyRuleEndpoints struct {
+	RuleID             string        `json:"ruleId"`
+	RuleName           string        `json:"ruleName"`
+	Chain              string        `json:"chain"`
+	LogEnabled         bool          `json:"logEnabled"`
+	MatchedEntries     int           `json:"matchedEntries"`
+	UniqueSources      int           `json:"uniqueSources"`
+	UniqueDestinations int           `json:"uniqueDestinations"`
+	UniqueServices     int           `json:"uniqueServices"`
+	Limit              int           `json:"limit"`
+	Truncated          bool          `json:"truncated"`
+	ScannedEntries     int           `json:"scannedEntries"`
+	BufferOldestAt     string        `json:"bufferOldestAt,omitempty"`
+	Sources            []EndpointHit `json:"sources"`
+	Destinations       []EndpointHit `json:"destinations"`
+	Services           []ServiceHit  `json:"services"`
+}
+
 // TrafficDetail is the /api/dashboard/traffic-detail response backing the
 // Dashboard "Detailed" tab's Protocol Breakdown / Top Talkers / Top Rules
 // cards. ObservedBytes is the total the conntrack-based collector actually

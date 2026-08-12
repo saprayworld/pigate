@@ -797,10 +797,47 @@ func (m *MockSystemStats) GetConntrackCount() (count int, max int, available boo
 // synthesizes forward-traffic events on a timer (no netlink socket is ever
 // opened — safe to run on a dev workstation) so the Forward Traffic page and
 // the Dashboard Recent Logs widget have a live feed without a real kernel.
-type MockTrafficLog struct{}
+type MockTrafficLog struct {
+	// ruleIDProvider is optional (opt-in via SetRuleIDProvider): when unset,
+	// behavior is unchanged from before — every sample below uses its
+	// hardcoded ruleID literally, which never matches a real DB policy id
+	// (docs/ref/todo/firewall-rule-matched-endpoints-plan.md T-07 "สภาพ
+	// ปัจจุบัน"). When set, samples whose ruleID is meant to look like a
+	// resolvable DB rule get a random id drawn from the provider instead, so
+	// -mock=true has real data for GET /api/policies/{id}/endpoints. At least
+	// one sample per Watch* method keeps a deliberately-unresolvable id and
+	// one keeps an empty id, regardless of whether a provider is set — those
+	// two cases (a rule that can't be resolved, and "no rule at all") must
+	// stay exercisable in mock mode.
+	ruleIDProvider func() []string
+}
 
 func NewMockTrafficLog() *MockTrafficLog {
 	return &MockTrafficLog{}
+}
+
+// SetRuleIDProvider wires an opt-in source of live DB policy-rule ids (see
+// the ruleIDProvider field doc comment). fn is called once per synthesized
+// sample that wants a "real" id — main.go's mock wiring reads the DB once at
+// startup and returns that static snapshot, which is enough for dev/test
+// purposes and keeps this package free of any DB dependency.
+func (m *MockTrafficLog) SetRuleIDProvider(fn func() []string) {
+	m.ruleIDProvider = fn
+}
+
+// pickRuleID returns a random id from m.ruleIDProvider() when set and
+// non-empty, otherwise falls back to fallback unchanged (preserves the
+// pre-T-07 behavior when no provider is wired, or the provider has nothing
+// to offer yet).
+func (m *MockTrafficLog) pickRuleID(rng *rand.Rand, fallback string) string {
+	if m.ruleIDProvider == nil {
+		return fallback
+	}
+	ids := m.ruleIDProvider()
+	if len(ids) == 0 {
+		return fallback
+	}
+	return ids[rng.Intn(len(ids))]
 }
 
 func (m *MockTrafficLog) WatchForwardTraffic(ctx context.Context, cb func(model.FirewallLog)) error {
@@ -823,15 +860,20 @@ func (m *MockTrafficLog) WatchForwardTraffic(ctx context.Context, cb func(model.
 		// "unknown rule" display), and empty (structural drop, no single
 		// rule to blame).
 		ruleID string
+		// liveID: when a ruleIDProvider is wired (T-07), replace ruleID with
+		// a randomly-chosen real DB rule id for this sample. Left false on
+		// the two samples above that must keep exercising the
+		// unresolvable/empty cases even with a provider set.
+		liveID bool
 	}
 	samples := []sample{
-		{"PASS", "8.8.8.8", "53", "UDP", "eth0", "eth1", "Allowed (forward)", "rule-allow-dns"},
-		{"PASS", "142.250.80.46", "443", "TCP", "eth0", "eth1", "Allowed (forward)", "rule-allow-web"},
-		{"PASS", "1.1.1.1", "443", "TCP", "wlan0", "eth1", "Allowed (forward)", "rule-allow-web"},
-		{"DROP", "185.220.101.4", "23", "TCP", "eth0", "eth1", "Blocked (forward)", "rule-block-telnet"},
-		{"DROP", "45.13.104.9", "3389", "TCP", "wlan0", "eth1", "Blocked (forward)", "rule-deleted-demo"},
-		{"PASS", "140.82.113.3", "22", "TCP", "eth0", "eth1", "Allowed (forward)", ""},
-		{"DROP", "203.0.113.99", "443", "TCP", "eth0", "eth1", "Blocked (forward)", "sys-forward-defaultdrop"},
+		{"PASS", "8.8.8.8", "53", "UDP", "eth0", "eth1", "Allowed (forward)", "rule-allow-dns", true},
+		{"PASS", "142.250.80.46", "443", "TCP", "eth0", "eth1", "Allowed (forward)", "rule-allow-web", true},
+		{"PASS", "1.1.1.1", "443", "TCP", "wlan0", "eth1", "Allowed (forward)", "rule-allow-web", true},
+		{"DROP", "185.220.101.4", "23", "TCP", "eth0", "eth1", "Blocked (forward)", "rule-block-telnet", true},
+		{"DROP", "45.13.104.9", "3389", "TCP", "wlan0", "eth1", "Blocked (forward)", "rule-deleted-demo", false},
+		{"PASS", "140.82.113.3", "22", "TCP", "eth0", "eth1", "Allowed (forward)", "", false},
+		{"DROP", "203.0.113.99", "443", "TCP", "eth0", "eth1", "Blocked (forward)", "sys-forward-defaultdrop", false},
 	}
 
 	for {
@@ -840,6 +882,10 @@ func (m *MockTrafficLog) WatchForwardTraffic(ctx context.Context, cb func(model.
 			return nil
 		case <-ticker.C:
 			s := samples[rng.Intn(len(samples))]
+			ruleID := s.ruleID
+			if s.liveID {
+				ruleID = m.pickRuleID(rng, s.ruleID)
+			}
 			cb(model.FirewallLog{
 				Action:   s.action,
 				Src:      fmt.Sprintf("192.168.1.%d", 100+rng.Intn(50)),
@@ -851,7 +897,7 @@ func (m *MockTrafficLog) WatchForwardTraffic(ctx context.Context, cb func(model.
 				OutIface: s.out,
 				Reason:   s.reason,
 				Chain:    model.PolicyChainForward,
-				RuleID:   s.ruleID,
+				RuleID:   ruleID,
 			})
 		}
 	}
@@ -882,17 +928,21 @@ func (m *MockTrafficLog) WatchLocalTraffic(ctx context.Context, cb func(model.Fi
 		// system token (admin-access/default-drop, always resolvable via
 		// the static table), a plausible DB rule id, and empty.
 		ruleID string
+		// liveID: see the matching field in WatchForwardTraffic's sample
+		// struct. System tokens (sys-*) are intentionally never replaced —
+		// they resolve via the static system table regardless of DB state.
+		liveID bool
 	}
 	samples := []sample{
 		// input: traffic destined to the board itself.
-		{model.PolicyChainInput, "PASS", "192.168.1.10", "192.168.1.1", "51422", "443", "TCP", "eth1", "-", "Allowed (local-in)", "sys-admin-https"},
-		{model.PolicyChainInput, "PASS", "192.168.1.20", "192.168.1.1", "58311", "22", "TCP", "eth1", "-", "Allowed (local-in)", "sys-admin-ssh"},
-		{model.PolicyChainInput, "PASS", "192.168.1.15", "192.168.1.1", "-", "-", "ICMP", "eth1", "-", "Allowed (local-in)", "sys-admin-ping"},
-		{model.PolicyChainInput, "DROP", "203.0.113.77", "203.0.113.1", "44502", "23", "TCP", "eth0", "-", "Blocked (local-in)", "sys-input-defaultdrop"},
-		{model.PolicyChainInput, "DROP", "198.51.100.5", "203.0.113.1", "60123", "3389", "TCP", "eth0", "-", "Blocked (local-in)", "sys-input-defaultdrop"},
+		{model.PolicyChainInput, "PASS", "192.168.1.10", "192.168.1.1", "51422", "443", "TCP", "eth1", "-", "Allowed (local-in)", "sys-admin-https", false},
+		{model.PolicyChainInput, "PASS", "192.168.1.20", "192.168.1.1", "58311", "22", "TCP", "eth1", "-", "Allowed (local-in)", "sys-admin-ssh", false},
+		{model.PolicyChainInput, "PASS", "192.168.1.15", "192.168.1.1", "-", "-", "ICMP", "eth1", "-", "Allowed (local-in)", "sys-admin-ping", false},
+		{model.PolicyChainInput, "DROP", "203.0.113.77", "203.0.113.1", "44502", "23", "TCP", "eth0", "-", "Blocked (local-in)", "sys-input-defaultdrop", false},
+		{model.PolicyChainInput, "DROP", "198.51.100.5", "203.0.113.1", "60123", "3389", "TCP", "eth0", "-", "Blocked (local-in)", "sys-input-defaultdrop", false},
 		// output: traffic the board itself originates.
-		{model.PolicyChainOutput, "PASS", "203.0.113.1", "8.8.8.8", "51234", "53", "UDP", "-", "eth0", "Allowed (local-out)", "rule-allow-dns-out"},
-		{model.PolicyChainOutput, "PASS", "203.0.113.1", "129.6.15.28", "123", "123", "UDP", "-", "eth0", "Allowed (local-out)", ""},
+		{model.PolicyChainOutput, "PASS", "203.0.113.1", "8.8.8.8", "51234", "53", "UDP", "-", "eth0", "Allowed (local-out)", "rule-allow-dns-out", true},
+		{model.PolicyChainOutput, "PASS", "203.0.113.1", "129.6.15.28", "123", "123", "UDP", "-", "eth0", "Allowed (local-out)", "", false},
 	}
 
 	for {
@@ -901,6 +951,10 @@ func (m *MockTrafficLog) WatchLocalTraffic(ctx context.Context, cb func(model.Fi
 			return nil
 		case <-ticker.C:
 			s := samples[rng.Intn(len(samples))]
+			ruleID := s.ruleID
+			if s.liveID {
+				ruleID = m.pickRuleID(rng, s.ruleID)
+			}
 			cb(model.FirewallLog{
 				Chain:    s.chain,
 				Action:   s.action,
@@ -912,7 +966,7 @@ func (m *MockTrafficLog) WatchLocalTraffic(ctx context.Context, cb func(model.Fi
 				InIface:  s.in,
 				OutIface: s.out,
 				Reason:   s.reason,
-				RuleID:   s.ruleID,
+				RuleID:   ruleID,
 			})
 		}
 	}
