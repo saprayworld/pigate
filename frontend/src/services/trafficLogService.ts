@@ -56,6 +56,21 @@ export interface TrafficLogQuery {
   beforeTime?: string;
 }
 
+// TrafficLogBufferUsage mirrors backend model.TrafficLogBufferUsage (GET
+// /api/logs/traffic/usage, docs/ref/todo/
+// firewall-log-buffer-capacity-plan.md T-08, issue #134) — the shared ring
+// buffer's fill state, for the Forward/Local Traffic page header. Numbers
+// are for the WHOLE buffer (all three chains share it), not scoped to
+// whichever page is showing it.
+export interface TrafficLogBufferUsage {
+  used: number;
+  capacity: number;
+  usedPercent: number;
+  oldestEntry?: string; // as-stored (RFC3339/RFC3339Nano); empty when the buffer is empty
+  newestEntry?: string;
+  evicted: number;
+}
+
 // ---------------------------------------------------------------------------
 // Mock-mode data: a rolling in-memory feed so the page and its filters have
 // something live to show without a backend. New entries prepend over time.
@@ -87,8 +102,16 @@ const MOCK_SAMPLES: Array<Omit<TrafficLog, "id" | "time">> = [
   { chain: "output", action: "PASS", src: "203.0.113.1", dest: "129.6.15.28", srcPort: "123", port: "123", proto: "UDP", inIface: "-", outIface: "eth0", reason: "Allowed (local-out)" },
 ];
 
+// MOCK_CAPACITY is this mock feed's own stand-in "ring buffer capacity" — it
+// is NOT the real backend's traffic-log-buffer-capacity default; the mock
+// simply picks a smaller number so eviction is actually reachable in a dev
+// session. Never surfaced as a literal in the UI — always sent through the
+// `capacity` field of TrafficLogBufferUsage below, same as the real backend.
+const MOCK_CAPACITY = 5000;
+
 let mockLogs: TrafficLog[] | null = null;
 let mockCounter = 0;
+let mockEvicted = 0;
 
 function seedMockLogs(): TrafficLog[] {
   if (mockLogs) return mockLogs;
@@ -117,9 +140,14 @@ function advanceMockLogs() {
     time: new Date().toISOString(),
     src: s.chain === "output" ? s.src : `192.168.1.${100 + Math.floor(Math.random() * 50)}`,
   });
-  // Cap generously — this is an in-memory dev feed, not the real 10,000-entry
-  // ring buffer, but should comfortably outlast a manual scroll test.
-  if (logs.length > 5000) logs.length = 5000;
+  // Cap generously — this is an in-memory dev feed, not the real ring
+  // buffer's configurable capacity, but should comfortably outlast a manual
+  // scroll test. Anything trimmed off the tail counts as "evicted", mirroring
+  // the real ring buffer's oldest-first eviction.
+  if (logs.length > MOCK_CAPACITY) {
+    mockEvicted += logs.length - MOCK_CAPACITY;
+    logs.length = MOCK_CAPACITY;
+  }
 }
 
 function chainMatches(entryChain: TrafficChain, filter: TrafficChainFilter): boolean {
@@ -189,6 +217,7 @@ export const trafficLogService = {
   clearTrafficLogs: async (): Promise<void> => {
     if (IS_MOCK_MODE) {
       mockLogs = [];
+      mockEvicted = 0;
       return;
     }
 
@@ -196,5 +225,31 @@ export const trafficLogService = {
     if (!response.ok) {
       throw new Error(`Failed to clear traffic logs: ${response.statusText}`);
     }
+  },
+
+  // Backs the Forward/Local Traffic page's "used X / capacity (Y%) · oldest
+  // entry" summary bar (docs/ref/todo/firewall-log-buffer-capacity-plan.md
+  // T-08, issue #134).
+  getTrafficLogUsage: async (): Promise<TrafficLogBufferUsage> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const logs = seedMockLogs(); // newest-first, same convention as the real ring buffer's GetAll()
+      const used = logs.length;
+      const capacity = MOCK_CAPACITY;
+      return {
+        used,
+        capacity,
+        usedPercent: capacity > 0 ? (used / capacity) * 100 : 0,
+        oldestEntry: used > 0 ? logs[used - 1].time : undefined,
+        newestEntry: used > 0 ? logs[0].time : undefined,
+        evicted: mockEvicted,
+      };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/logs/traffic/usage`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch traffic log usage: ${response.statusText}`);
+    }
+    return response.json();
   },
 };

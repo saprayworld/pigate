@@ -39,17 +39,24 @@ function matchesGroup(ring: RingCapacity, group?: GroupFilter): boolean {
 export function CapacityIndicator({
   rings,
   group,
+  excludeIds,
   window: statsWindow,
   className,
 }: {
   rings: RingCapacity[] | undefined
   group?: GroupFilter
+  // Ring ids to drop even if they match `group` — e.g. firewall.logBuffer is
+  // its own "log count" concern surfaced on the Log & Report page, not the
+  // general capacity pill on Overview/Traffic.
+  excludeIds?: string[]
   window: StatsWindow
   className?: string
 }) {
   const navigate = useNavigate()
 
-  const candidates = (rings ?? []).filter((r) => matchesGroup(r, group))
+  const candidates = (rings ?? []).filter(
+    (r) => matchesGroup(r, group) && !excludeIds?.includes(r.id)
+  )
   if (candidates.length === 0) return null
 
   const worst = candidates.reduce((a, b) => (b.peakPercent > a.peakPercent ? b : a))

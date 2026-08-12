@@ -829,22 +829,30 @@ paths:
         Backs the Statistics -> Capacity page and the small "capacity"
         indicator pills on the Overview/Traffic/DNS pages (docs/ref/todo/
         statistics-capacity-visibility-plan.md, GitHub issue #123). Returns
-        exactly 10 rings, always in the same fixed order (traffic.hosts,
+        exactly 11 rings, always in the same fixed order (traffic.hosts,
         traffic.dests, traffic.conversations, firewall.denySources,
         firewall.denyPorts, dns.pairs, dns.clients, dns.reverseCache,
-        dns.domainIps, dns.domainIpsPerDomain) — the current/peak size of each of the RAM-only
-        in-memory tracking structures backing `/statistics/traffic` and
-        `/statistics/dns`, relative to its configured cap. This is an
-        EARLY-WARNING signal (percent full, before data is dropped) on top
-        of the existing after-the-fact `truncated` booleans those other two
-        endpoints already expose. Contains ONLY counts and percentages — no
-        domain name, IP address, or hostname ever appears in this response,
-        which is why (unlike some other Statistics endpoints) it carries no
-        extra sensitivity beyond ordinary authenticated access. `estimatedBytes`
+        dns.domainIps, dns.domainIpsPerDomain, firewall.logBuffer) — the
+        current/peak size of each of the RAM-only in-memory tracking
+        structures backing `/statistics/traffic` and `/statistics/dns`,
+        relative to its configured cap. This is an EARLY-WARNING signal
+        (percent full, before data is dropped) on top of the existing
+        after-the-fact `truncated` booleans those other two endpoints
+        already expose. Contains ONLY counts and percentages — no domain
+        name, IP address, or hostname ever appears in this response, which
+        is why (unlike some other Statistics endpoints) it carries no extra
+        sensitivity beyond ordinary authenticated access. `estimatedBytes`
         on each ring is an APPROXIMATION (entries currently held in RAM x a
         documented per-entry byte constant) — never a measured value — and,
         for a "bucket"-kind ring, reflects the WHOLE ring (up to 24h of
-        history), not just the requested `window`.
+        history), not just the requested `window`. The 11th ring,
+        `firewall.logBuffer` (docs/ref/todo/
+        firewall-log-buffer-capacity-plan.md, issue #134), reports the
+        shared traffic log ring buffer's fill state — its `cap` comes from
+        the `traffic-log-buffer-capacity` key in `pigate.conf` (default
+        10000, range 500-100000) and only changes on the next service
+        restart; it is also the only ring that ever populates
+        `oldestEntry`.
       parameters:
         - name: window
           in: query
@@ -872,7 +880,7 @@ paths:
             this parameter.
       responses:
         '200':
-          description: Capacity usage for all 10 tracking rings/indices
+          description: Capacity usage for all 11 tracking rings/indices
           content:
             application/json:
               schema:
@@ -1139,6 +1147,38 @@ paths:
                   $ref: '#/components/schemas/FirewallLog'
         '400':
           description: Invalid `chain` value
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /logs/traffic/usage:
+    get:
+      tags:
+        - Event Log
+      summary: Traffic log ring buffer fill state (used/capacity/oldest/newest/evicted)
+      description: |
+        A small, purpose-built summary for the Forward Traffic / Local
+        Traffic page headers (docs/ref/todo/
+        firewall-log-buffer-capacity-plan.md, GitHub issue #134) — separate
+        from `GET /statistics/capacity`'s 11-ring response so these pages
+        don't have to fetch every ring + series just to show one line. All
+        numbers are for the WHOLE shared ring buffer (forward + input +
+        output chains combined), NOT scoped to whichever page is asking.
+        `capacity` comes from the `traffic-log-buffer-capacity` config key
+        in `pigate.conf` (default 10000, accepted range 500-100000) and
+        only changes on the next service restart. `oldestEntry`/
+        `newestEntry` are the as-stored `time` string (RFC3339 or
+        RFC3339Nano) of the oldest/newest entries currently held, empty
+        when the buffer is empty. `evicted` is the cumulative count of
+        entries pushed out of the buffer since boot or the last
+        `POST /dashboard/logs/clear` — non-zero means the buffer has
+        filled up at least once.
+      responses:
+        '200':
+          description: Traffic log ring buffer usage
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrafficLogBufferUsage'
         '401':
           $ref: '#/components/responses/Unauthorized'
 
@@ -6091,6 +6131,16 @@ components:
             the request asked for it (series=1/true) AND kind == "bucket".
           items:
             $ref: '#/components/schemas/CapacityPoint'
+        oldestEntry:
+          type: string
+          format: date-time
+          description: >-
+            As-stored time string (RFC3339 or RFC3339Nano) of the oldest
+            entry still held by this ring — only meaningful for a ring with
+            a FIFO time dimension. Currently only set on the
+            `firewall.logBuffer` ring (docs/ref/todo/
+            firewall-log-buffer-capacity-plan.md, GitHub issue #134); every
+            other ring omits this field.
 
     CapacityStatistics:
       type: object
@@ -6101,12 +6151,14 @@ components:
         - generatedAt
       description: >-
         The GET /statistics/capacity response — current usage vs configured
-        cap for all 10 RAM-only tracking structures, always in the same fixed
+        cap for all 11 RAM-only tracking structures, always in the same fixed
         order (docs/ref/todo/statistics-capacity-visibility-plan.md T-01,
         GitHub issue #123; the 10th ring, dns.domainIpsPerDomain, was added
         by docs/ref/todo/statistics-dns-cap-notification-fix-plan.md
-        §3.4/T-06). Contains ONLY counts/percentages — no domain
-        name, IP address, or hostname ever appears here.
+        §3.4/T-06; the 11th ring, firewall.logBuffer, was added by docs/ref/
+        todo/firewall-log-buffer-capacity-plan.md, GitHub issue #134).
+        Contains ONLY counts/percentages — no domain name, IP address, or
+        hostname ever appears here.
       properties:
         window:
           type: string
@@ -6118,15 +6170,63 @@ components:
         rings:
           type: array
           description: >-
-            Always exactly 10 entries, in the fixed order: traffic.hosts,
+            Always exactly 11 entries, in the fixed order: traffic.hosts,
             traffic.dests, traffic.conversations, firewall.denySources,
             firewall.denyPorts, dns.pairs, dns.clients, dns.reverseCache,
-            dns.domainIps, dns.domainIpsPerDomain.
+            dns.domainIps, dns.domainIpsPerDomain, firewall.logBuffer.
           items:
             $ref: '#/components/schemas/RingCapacity'
         generatedAt:
           type: string
           format: date-time
+
+    TrafficLogBufferUsage:
+      type: object
+      required:
+        - used
+        - capacity
+        - usedPercent
+        - evicted
+      description: >-
+        The GET /logs/traffic/usage response — a small, purpose-built summary
+        of the traffic log ring buffer's fill state for the Forward/Local
+        Traffic page headers (docs/ref/todo/
+        firewall-log-buffer-capacity-plan.md, GitHub issue #134). Numbers are
+        for the WHOLE ring buffer (all three chains share it), not scoped to
+        a single page.
+      properties:
+        used:
+          type: integer
+          description: Current number of entries held in the buffer (<= capacity).
+        capacity:
+          type: integer
+          description: >-
+            Buffer's configured maximum size, from the traffic-log-buffer-
+            capacity key in pigate.conf (default 10000, accepted range
+            500-100000) — only changes on the next service restart.
+        usedPercent:
+          type: number
+          format: double
+          description: used as a percent of capacity (0 when capacity is 0).
+        oldestEntry:
+          type: string
+          format: date-time
+          description: >-
+            As-stored time string (RFC3339 or RFC3339Nano) of the oldest
+            entry still in the buffer; empty when the buffer is empty.
+        newestEntry:
+          type: string
+          format: date-time
+          description: >-
+            As-stored time string of the most recently added entry still in
+            the buffer; empty when the buffer is empty.
+        evicted:
+          type: integer
+          format: int64
+          description: >-
+            Cumulative count of entries pushed out of the buffer since boot
+            or the last POST /dashboard/logs/clear; non-zero means the
+            buffer has filled up and started discarding old entries.
 
     FirewallLog:
       type: object

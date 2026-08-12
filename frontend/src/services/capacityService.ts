@@ -40,15 +40,20 @@ export interface RingCapacity {
   // Only present when the request asked for it (series: true) AND
   // kind === "bucket".
   series?: CapacityPoint[]
+  // As-stored time string (RFC3339/RFC3339Nano) of the oldest entry still
+  // held by this ring — only ever set on firewall.logBuffer (docs/ref/todo/
+  // firewall-log-buffer-capacity-plan.md T-08, issue #134); every other
+  // ring omits it.
+  oldestEntry?: string
 }
 
 export interface CapacityStatistics {
   window: StatsWindow
   bucketCount: number
-  // Always exactly 10 entries, in a fixed order (traffic.hosts, traffic.dests,
+  // Always exactly 11 entries, in a fixed order (traffic.hosts, traffic.dests,
   // traffic.conversations, firewall.denySources, firewall.denyPorts,
   // dns.pairs, dns.clients, dns.reverseCache, dns.domainIps,
-  // dns.domainIpsPerDomain).
+  // dns.domainIpsPerDomain, firewall.logBuffer).
   rings: RingCapacity[]
   generatedAt: string
 }
@@ -75,6 +80,9 @@ const mockRingSpecs: {
   currentPercent: number
   peakPercent: number
   truncated: boolean
+  // Only set on the firewall.logBuffer ring below — every other ring leaves
+  // this undefined (see RingCapacity.oldestEntry's doc comment).
+  oldestEntry?: string
 }[] = [
   { id: "traffic.hosts", group: "traffic", label: "Top Source Hosts", kind: "bucket", capSource: "traffic-stats-max-hosts", entryBytes: 55, cap: 500, currentPercent: 22, peakPercent: 35, truncated: false },
   { id: "traffic.dests", group: "traffic", label: "Top Destinations", kind: "bucket", capSource: "traffic-stats-max-dests", entryBytes: 55, cap: 500, currentPercent: 30, peakPercent: 44, truncated: false },
@@ -86,6 +94,11 @@ const mockRingSpecs: {
   { id: "dns.reverseCache", group: "dns", label: "DNS reverse cache (IP -> domain)", kind: "flat", capSource: "DNS Server > Settings (DNS Cache Max Entries)", entryBytes: 90, cap: 1000, currentPercent: 41, peakPercent: 41, truncated: false },
   { id: "dns.domainIps", group: "dns", label: "DNS domain -> resolved IP index", kind: "flat", capSource: "dns-stats-max-domains", entryBytes: 2000, cap: 1000, currentPercent: 27, peakPercent: 27, truncated: false },
   { id: "dns.domainIpsPerDomain", group: "dns", label: "DNS resolved IPs ต่อโดเมน (สูงสุด)", kind: "flat", capSource: "dns-stats-max-ips-per-domain", entryBytes: 55, cap: 32, currentPercent: 50, peakPercent: 50, truncated: false },
+  // 11th ring: the traffic log ring buffer (docs/ref/todo/
+  // firewall-log-buffer-capacity-plan.md T-08, issue #134). capSource points
+  // at the real, editable config key — mock cap is this module's own
+  // stand-in number, never the literal "10,000" the UI must never hardcode.
+  { id: "firewall.logBuffer", group: "firewall", label: "Firewall Traffic Log Buffer", kind: "flat", capSource: "traffic-log-buffer-capacity", entryBytes: 400, cap: 5000, currentPercent: 55, peakPercent: 55, truncated: false, oldestEntry: new Date(Date.now() - 2 * 60 * 60_000).toISOString() },
 ]
 
 function mockSeries(window: StatsWindow, current: number, peak: number): CapacityPoint[] {
@@ -130,6 +143,9 @@ function buildMockCapacityStatistics(window: StatsWindow, withSeries: boolean): 
       truncated: spec.truncated || fullBuckets > 0,
       estimatedBytes: totalEntries * spec.entryBytes,
       entryBytes: spec.entryBytes,
+    }
+    if (spec.oldestEntry) {
+      ring.oldestEntry = spec.oldestEntry
     }
     if (withSeries && spec.kind === "bucket") {
       ring.series = mockSeries(window, current, peak)

@@ -757,9 +757,11 @@ const dnsUnknownClientParam = "unknown"
 // HandleGetRecentLogs backs the Dashboard "Recent Logs" widget. It reads the
 // same shared ring buffer as HandleGetTrafficLogs (so entries from all three
 // chains appear here — deliberate, see plan §6 Caution 7) but MUST cap how
-// much it returns: at trafficLogBufferCapacity (10,000) entries, an unbounded
-// GetAll() here would ship ~2.5 MB of JSON on every page load/SSE reconnect
-// (plan §6 Caution 5), which this small, frequently-hit widget never needs.
+// much it returns: at the configured traffic-log-buffer-capacity (default
+// 10,000, docs/ref/todo/firewall-log-buffer-capacity-plan.md T-05) entries, an
+// unbounded GetAll() here would ship several MB of JSON on every page
+// load/SSE reconnect (plan §6 Caution 5), which this small, frequently-hit
+// widget never needs.
 func (s *Server) HandleGetRecentLogs(w http.ResponseWriter, r *http.Request) {
 	limit := 100
 	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 {
@@ -996,6 +998,35 @@ func parseTrafficLogCursorTime(raw string) (time.Time, bool) {
 		return t, true
 	}
 	return time.Time{}, false
+}
+
+// HandleGetTrafficLogUsage returns the traffic log ring buffer's current fill
+// state — used/capacity/oldest/newest/evicted — for the small summary bar the
+// Forward/Local Traffic log pages show (docs/ref/todo/
+// firewall-log-buffer-capacity-plan.md T-04, issue #134). Deliberately a tiny,
+// purpose-built payload instead of reusing GET /api/statistics/capacity: it
+// reads s.logs.Usage() directly (a single O(1) RLock snapshot, see
+// RingBuffer.Usage's doc comment) and never calls GetAll(), never touches
+// SQLite, and never talks to the kernel. The numbers are for the WHOLE ring
+// buffer (all three chains share it), same caveat as HandleGetTrafficLogs.
+func (s *Server) HandleGetTrafficLogUsage(w http.ResponseWriter, r *http.Request) {
+	if s.logs == nil {
+		s.writeError(w, http.StatusInternalServerError, "log buffer not available")
+		return
+	}
+	used, capacity, oldest, newest, evicted := s.logs.Usage()
+	var usedPercent float64
+	if capacity > 0 {
+		usedPercent = float64(used) / float64(capacity) * 100
+	}
+	s.writeJSON(w, http.StatusOK, model.TrafficLogBufferUsage{
+		Used:        used,
+		Capacity:    capacity,
+		UsedPercent: usedPercent,
+		OldestEntry: oldest,
+		NewestEntry: newest,
+		Evicted:     evicted,
+	})
 }
 
 // HandleGetSystemEvents returns central event log entries (newest first) with

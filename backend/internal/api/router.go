@@ -87,6 +87,12 @@ func RegisterRoutes(s *Server) http.Handler {
 	// (never persisted). Read-only; clearing reuses /api/dashboard/logs/clear.
 	authRoute("GET /api/logs/traffic", s.HandleGetTrafficLogs)
 
+	// 2.2.1 Traffic log buffer usage summary (used/capacity/oldest/newest/
+	// evicted) for the Forward/Local Traffic page header — a small dedicated
+	// payload separate from /api/statistics/capacity's 11-ring response
+	// (docs/ref/todo/firewall-log-buffer-capacity-plan.md T-04, issue #134).
+	authRoute("GET /api/logs/traffic/usage", s.HandleGetTrafficLogUsage)
+
 	// 3. Network Interfaces
 	authRoute("GET /api/interfaces", s.HandleGetInterfaces)
 	authRoute("POST /api/interfaces/vlan", s.HandleCreateVlan)

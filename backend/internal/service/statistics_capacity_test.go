@@ -3,13 +3,16 @@ package service
 import (
 	"testing"
 
+	"pigate/internal/logs"
 	"pigate/internal/model"
 )
 
 // capacityRingByID is a small test helper — GetCapacityStatistics always
-// returns exactly 10 rings in a fixed order (plan §6/T-08 case 1; the 10th,
+// returns exactly 11 rings in a fixed order (plan §6/T-08 case 1; the 10th,
 // dns.domainIpsPerDomain, added by docs/ref/todo/
-// statistics-dns-cap-notification-fix-plan.md §3.4/T-06), so tests
+// statistics-dns-cap-notification-fix-plan.md §3.4/T-06; the 11th,
+// firewall.logBuffer, added by docs/ref/todo/
+// firewall-log-buffer-capacity-plan.md T-03, issue #134), so tests
 // look up the one they care about by ID rather than hardcoding indices,
 // keeping them resilient to (deliberate, documented) reordering.
 func capacityRingByID(t *testing.T, rings []model.RingCapacity, id string) model.RingCapacity {
@@ -34,12 +37,13 @@ func TestGetCapacityStatistics_Empty(t *testing.T) {
 		"firewall.denySources", "firewall.denyPorts",
 		"dns.pairs", "dns.clients",
 		"dns.reverseCache", "dns.domainIps", "dns.domainIpsPerDomain",
+		"firewall.logBuffer",
 	}
 
 	for _, window := range []string{"15m", "30m", "1h", "3h", "6h", "12h", "24h"} {
 		got := s.GetCapacityStatistics(window, true)
-		if len(got.Rings) != 10 {
-			t.Fatalf("window %s: expected 10 rings, got %d", window, len(got.Rings))
+		if len(got.Rings) != 11 {
+			t.Fatalf("window %s: expected 11 rings, got %d", window, len(got.Rings))
 		}
 		for i, id := range wantIDs {
 			if got.Rings[i].ID != id {
@@ -150,6 +154,60 @@ func TestGetCapacityStatistics_ReverseCacheCurrent(t *testing.T) {
 	}
 	if ring.FullBuckets != 0 {
 		t.Fatalf("expected fullBuckets=0 for a flat ring, got %d", ring.FullBuckets)
+	}
+}
+
+// TestGetCapacityStatistics_LogBufferNilIsZero covers the nil-logBuffer
+// degrade path (docs/ref/todo/firewall-log-buffer-capacity-plan.md T-03,
+// issue #134): a StatisticsService that never had SetLogBuffer called (e.g.
+// newTestStatisticsService above) must still report an all-zero
+// firewall.logBuffer ring rather than panicking.
+func TestGetCapacityStatistics_LogBufferNilIsZero(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+
+	got := s.GetCapacityStatistics("1h", false)
+	ring := capacityRingByID(t, got.Rings, "firewall.logBuffer")
+	if ring.Group != "firewall" || ring.Kind != "flat" {
+		t.Fatalf("expected group=firewall kind=flat, got %+v", ring)
+	}
+	if ring.CapSource != "traffic-log-buffer-capacity" {
+		t.Fatalf("expected capSource=traffic-log-buffer-capacity, got %q", ring.CapSource)
+	}
+	if ring.Cap != 0 || ring.Current != 0 || ring.Truncated || ring.OldestEntry != "" {
+		t.Fatalf("expected all-zero firewall.logBuffer ring when logBuffer is nil, got %+v", ring)
+	}
+}
+
+// TestGetCapacityStatistics_LogBufferUsage covers the wired-up path: once
+// SetLogBuffer is called, the firewall.logBuffer ring reflects the ring
+// buffer's live Usage() (cap, current entry count, oldest entry, and
+// truncated once eviction has happened) — docs/ref/todo/
+// firewall-log-buffer-capacity-plan.md T-03, issue #134.
+func TestGetCapacityStatistics_LogBufferUsage(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+	rb := logs.NewRingBuffer(2)
+	s.SetLogBuffer(rb)
+
+	rb.Add(model.FirewallLog{ID: "1", Time: "2026-01-01T00:00:00Z"})
+	rb.Add(model.FirewallLog{ID: "2", Time: "2026-01-01T00:00:01Z"})
+	rb.Add(model.FirewallLog{ID: "3", Time: "2026-01-01T00:00:02Z"}) // evicts "1"
+
+	got := s.GetCapacityStatistics("1h", false)
+	ring := capacityRingByID(t, got.Rings, "firewall.logBuffer")
+	if ring.Cap != 2 {
+		t.Fatalf("expected cap=2, got %d", ring.Cap)
+	}
+	if ring.Current != 2 {
+		t.Fatalf("expected current=2, got %d", ring.Current)
+	}
+	if ring.OldestEntry != "2026-01-01T00:00:01Z" {
+		t.Fatalf("expected oldestEntry to be entry 2's time (1 evicted), got %q", ring.OldestEntry)
+	}
+	if !ring.Truncated {
+		t.Fatalf("expected truncated=true once an entry has been evicted")
+	}
+	if ring.CapSource != "traffic-log-buffer-capacity" {
+		t.Fatalf("expected capSource=traffic-log-buffer-capacity, got %q", ring.CapSource)
 	}
 }
 

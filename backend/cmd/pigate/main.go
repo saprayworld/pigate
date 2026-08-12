@@ -36,15 +36,6 @@ import (
 // -config path, which must already exist.
 const defaultConfigPath = "/var/lib/pigate/pigate.conf"
 
-// trafficLogBufferCapacity is the max number of entries the shared traffic
-// log ring buffer holds (forward + input + output chains combined). At ~300-
-// 550 bytes/entry in practice (see
-// docs/ref/todo/traffic-log-pagination-and-local-traffic-plan.md §2.2 for the
-// full calculation) this is ~3-5.5 MB worst-case RAM on the Pi — a small,
-// fixed cost that lets the Forward Traffic / Local Traffic pages page back
-// ~20 screens (500 rows/page) of recent history via cursor pagination.
-const trafficLogBufferCapacity = 10000
-
 // version is the PiGate build version. It is overridable at build time via
 // -ldflags "-X main.version=<tag>" (see build.sh); the default applies to plain
 // `go build` / `go run` during development.
@@ -104,14 +95,21 @@ func main() {
 	log.Printf("[Main] DNS Stats Max Domains/IPs-per-domain: %d / %d", cfg.DNSStatsMaxDomains, cfg.DNSStatsMaxIPsPerDomain)
 	log.Printf("[Main] IPInfo (Public IP Info card) Enabled: %t", cfg.IPInfoEnabled)
 	log.Printf("[Main] Deny Stats Max Sources/Ports per bucket: %d / %d", cfg.DenyStatsMaxSources, cfg.DenyStatsMaxPorts)
+	log.Printf("[Main] Traffic Log Buffer Capacity: %d", cfg.TrafficLogBufferCapacity)
 
 	// 2. Initialize in-memory forward-traffic logs circular buffer (Ring Buffer).
 	// Fed live by the TrafficLogManager watcher below (real NFLOG or mock
 	// generator); powers both the Forward Traffic page and the Dashboard Recent
 	// Logs widget. RAM-only — never persisted (SD card wear, tech_stack_design.md
-	// §8). Capacity 500: a FirewallLog is a handful of short strings, so this is
-	// only a few hundred KB while giving the log view a useful window.
-	ringBuffer := logs.NewRingBuffer(trafficLogBufferCapacity)
+	// §8). Capacity comes from the file-only traffic-log-buffer-capacity config
+	// key (default 10000, accepted range 500-100000 — see internal/config's
+	// two-tier validation) rather than a compile-time constant, so an operator
+	// can raise/lower it via pigate.conf without a rebuild (docs/ref/todo/
+	// firewall-log-buffer-capacity-plan.md T-00/T-05, issue #134). It is only
+	// read here, once, at startup — changing the key takes effect on the NEXT
+	// restart, never live (the ring can't be resized/re-subscribed while
+	// running).
+	ringBuffer := logs.NewRingBuffer(cfg.TrafficLogBufferCapacity)
 
 	// 3. Initialize SQLite DB & run migrations
 	sqliteDB, err := db.InitDB(cfg.DBPath, cfg.Mock)
@@ -245,6 +243,11 @@ func main() {
 	// DenyStatsMaxSources/DenyStatsMaxPorts come from deny-stats-max-sources/
 	// -ports (docs/ref/todo/statistics-capacity-visibility-plan.md T-14).
 	statisticsService := service.NewStatisticsService(trafficStatsService, repo, dhcp, cfg.DNSStatsMaxPairs, cfg.DNSStatsMaxClients, cfg.DenyStatsMaxSources, cfg.DenyStatsMaxPorts)
+	// SetLogBuffer wires the traffic log ring buffer in so
+	// GetCapacityStatistics can report the firewall.logBuffer ring (docs/ref/
+	// todo/firewall-log-buffer-capacity-plan.md T-03/T-05, issue #134) —
+	// mirrors SetPolicyStatsService below rather than a constructor parameter.
+	statisticsService.SetLogBuffer(ringBuffer)
 
 	// Public IP Info card backend proxy (docs/ref/todo/
 	// statistics-host-ipinfo-plan.md T-06) — opt-in, default OFF via the

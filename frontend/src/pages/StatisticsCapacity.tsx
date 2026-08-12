@@ -23,13 +23,15 @@ import { useStatsWindow, StatsWindowTabs } from "@/components/statistics/DnsStat
 
 // /statistics/capacity — the detail page behind every CapacityIndicator pill
 // (docs/ref/todo/statistics-capacity-visibility-plan.md T-13, GitHub issue
-// #123): current/peak usage vs configured cap for all 9 RAM-only tracking
-// rings/indices, grouped by Traffic/DNS/Firewall, each with a per-bucket bar
-// chart (bucket-kind rings) or a plain current/cap bar (flat-kind rings).
-// window lives in the URL (?window=) via the same useStatsWindow hook every
-// other Statistics page uses; ?group= (set by CapacityIndicator's link) only
-// highlights the matching section — every group is still shown, since a user
-// who followed the link may still want the full picture.
+// #123): current/peak usage vs configured cap for all 11 RAM-only tracking
+// rings/indices (the 11th, firewall.logBuffer, added by docs/ref/todo/
+// firewall-log-buffer-capacity-plan.md, issue #134), grouped by
+// Traffic/DNS/Firewall, each with a per-bucket bar chart (bucket-kind rings)
+// or a plain current/cap bar (flat-kind rings). window lives in the URL
+// (?window=) via the same useStatsWindow hook every other Statistics page
+// uses; ?group= (set by CapacityIndicator's link) only highlights the
+// matching section — every group is still shown, since a user who followed
+// the link may still want the full picture.
 
 const REFRESH_INTERVAL_MS = 10_000
 
@@ -104,6 +106,15 @@ function FlatBar({ ring }: { ring: RingCapacity }) {
   )
 }
 
+// Formats a ring's oldestEntry (RFC3339/RFC3339Nano, see
+// RingCapacity.oldestEntry's doc comment) as a local date+time string,
+// falling back to the raw string if it fails to parse.
+function formatOldestEntry(iso: string): string {
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso
+  return d.toLocaleString()
+}
+
 function fmtRamBytes(n: number): string {
   if (!n || n <= 0) return "0 B"
   const units = ["B", "KB", "MB", "GB"]
@@ -137,9 +148,19 @@ function RingCard({ ring, highlighted }: { ring: RingCapacity; highlighted: bool
           </span>
         </div>
         {ring.kind === "bucket" ? <RingChart ring={ring} /> : <FlatBar ring={ring} />}
+        {ring.oldestEntry && (
+          <p className="text-[11px] text-muted-foreground">
+            log เก่าสุดที่ยังอยู่ในระบบ: {formatOldestEntry(ring.oldestEntry)}
+          </p>
+        )}
         <p className="text-[11px] text-muted-foreground">
           RAM โดยประมาณ: {fmtRamBytes(ring.estimatedBytes)} (ประมาณการ ไม่ใช่ค่าที่วัดจริง)
         </p>
+        {ring.capSource === "traffic-log-buffer-capacity" && (
+          <p className="text-[11px] text-muted-foreground">
+            ปรับค่าได้ที่ pigate.conf (คีย์ {ring.capSource}) — ต้อง restart service (sudo systemctl restart pigate) ถึงจะมีผล
+          </p>
+        )}
       </CardContent>
     </Card>
   )
@@ -200,7 +221,7 @@ export default function StatisticsCapacity() {
           <div>
             <h1 className="text-lg font-bold tracking-tight">Capacity</h1>
             <p className="text-xs text-muted-foreground">
-              การใช้งาน RAM-only tracking ring/index เทียบ cap ทั้ง 9 มิติ — early warning ก่อนข้อมูลตกหล่น
+              การใช้งาน RAM-only tracking ring/index เทียบ cap ทั้ง 11 มิติ — early warning ก่อนข้อมูลตกหล่น
             </p>
           </div>
         </div>

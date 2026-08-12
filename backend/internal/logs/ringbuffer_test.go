@@ -152,3 +152,113 @@ func TestLastMatchedByRule_Empty(t *testing.T) {
 		t.Fatalf("expected Size()=0")
 	}
 }
+
+// Usage on an empty buffer reports zero used, the configured capacity, empty
+// oldest/newest, and zero evicted (docs/ref/todo/
+// firewall-log-buffer-capacity-plan.md T-01, issue #134).
+func TestUsage_Empty(t *testing.T) {
+	rb := NewRingBuffer(5)
+	used, capacity, oldest, newest, evicted := rb.Usage()
+	if used != 0 {
+		t.Errorf("used = %d, want 0", used)
+	}
+	if capacity != 5 {
+		t.Errorf("capacity = %d, want 5", capacity)
+	}
+	if oldest != "" || newest != "" {
+		t.Errorf("oldest=%q newest=%q, want both empty", oldest, newest)
+	}
+	if evicted != 0 {
+		t.Errorf("evicted = %d, want 0", evicted)
+	}
+}
+
+// Usage reports oldest as logs[0] (the least-recently-added, still-held
+// entry) and newest as the most-recently-added entry, before the buffer has
+// filled up (no eviction yet).
+func TestUsage_BeforeFull(t *testing.T) {
+	rb := NewRingBuffer(5)
+	rb.Add(model.FirewallLog{ID: "1", Time: "2026-01-01T00:00:00Z"})
+	rb.Add(model.FirewallLog{ID: "2", Time: "2026-01-01T00:00:01Z"})
+	rb.Add(model.FirewallLog{ID: "3", Time: "2026-01-01T00:00:02Z"})
+
+	used, capacity, oldest, newest, evicted := rb.Usage()
+	if used != 3 {
+		t.Errorf("used = %d, want 3", used)
+	}
+	if capacity != 5 {
+		t.Errorf("capacity = %d, want 5", capacity)
+	}
+	if oldest != "2026-01-01T00:00:00Z" {
+		t.Errorf("oldest = %q, want the first entry's time", oldest)
+	}
+	if newest != "2026-01-01T00:00:02Z" {
+		t.Errorf("newest = %q, want the last entry's time", newest)
+	}
+	if evicted != 0 {
+		t.Errorf("evicted = %d, want 0 (buffer not yet full)", evicted)
+	}
+}
+
+// Once the buffer fills up and starts evicting, Usage.evicted counts every
+// eviction and oldest/newest track the current head/tail after eviction.
+func TestUsage_AfterEviction(t *testing.T) {
+	rb := NewRingBuffer(3)
+	rb.Add(model.FirewallLog{ID: "1", Time: "2026-01-01T00:00:00Z"})
+	rb.Add(model.FirewallLog{ID: "2", Time: "2026-01-01T00:00:01Z"})
+	rb.Add(model.FirewallLog{ID: "3", Time: "2026-01-01T00:00:02Z"})
+	// Buffer is now full (3/3, no eviction yet).
+	used, _, _, _, evicted := rb.Usage()
+	if used != 3 || evicted != 0 {
+		t.Fatalf("after filling: used=%d evicted=%d, want used=3 evicted=0", used, evicted)
+	}
+
+	rb.Add(model.FirewallLog{ID: "4", Time: "2026-01-01T00:00:03Z"}) // evicts entry "1"
+	rb.Add(model.FirewallLog{ID: "5", Time: "2026-01-01T00:00:04Z"}) // evicts entry "2"
+
+	used, capacity, oldest, newest, evicted := rb.Usage()
+	if used != 3 {
+		t.Errorf("used = %d, want 3 (still at capacity)", used)
+	}
+	if capacity != 3 {
+		t.Errorf("capacity = %d, want 3", capacity)
+	}
+	if oldest != "2026-01-01T00:00:02Z" {
+		t.Errorf("oldest = %q, want entry 3's time (1 and 2 evicted)", oldest)
+	}
+	if newest != "2026-01-01T00:00:04Z" {
+		t.Errorf("newest = %q, want entry 5's time", newest)
+	}
+	if evicted != 2 {
+		t.Errorf("evicted = %d, want 2", evicted)
+	}
+}
+
+// Clear resets evicted back to 0 (docs/ref/todo/
+// firewall-log-buffer-capacity-plan.md T-01/design decision 4).
+func TestClearResetsEvicted(t *testing.T) {
+	rb := NewRingBuffer(2)
+	rb.Add(model.FirewallLog{ID: "1", Time: "2026-01-01T00:00:00Z"})
+	rb.Add(model.FirewallLog{ID: "2", Time: "2026-01-01T00:00:01Z"})
+	rb.Add(model.FirewallLog{ID: "3", Time: "2026-01-01T00:00:02Z"}) // evicts "1"
+
+	if _, _, _, _, evicted := rb.Usage(); evicted != 1 {
+		t.Fatalf("expected evicted=1 before Clear, got %d", evicted)
+	}
+
+	rb.Clear()
+
+	used, capacity, oldest, newest, evicted := rb.Usage()
+	if used != 0 {
+		t.Errorf("used = %d, want 0 after Clear", used)
+	}
+	if capacity != 2 {
+		t.Errorf("capacity = %d, want 2 (unchanged by Clear)", capacity)
+	}
+	if oldest != "" || newest != "" {
+		t.Errorf("oldest=%q newest=%q, want both empty after Clear", oldest, newest)
+	}
+	if evicted != 0 {
+		t.Errorf("evicted = %d, want 0 after Clear", evicted)
+	}
+}

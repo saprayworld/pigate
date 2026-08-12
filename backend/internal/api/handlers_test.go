@@ -67,7 +67,13 @@ func buildTestServer(t *testing.T, allowDevCORS bool) (*Server, *db.Repository) 
 	testHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), net, service.NewEventLogService(repo), service.NewNetEventBus())
 	systemServiceSvc := service.NewSystemServiceService(kernel.NewMockSystemServiceManager(), repo)
 	trafficStatsService := service.NewTrafficStatsService(kernel.NewMockTrafficAccounting(nil), repo, dhcp, kernel.NewMockSystemStats(), 0, 0, 0)
-	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, allowDevCORS, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, wifiPresetService, systemServiceSvc, nil, trafficStatsService, service.NewStatisticsService(trafficStatsService, repo, dhcp, 2400, 200, 500, 300), service.NewIPInfoService(true, service.NewMockIPInfoProvider())) // dns-stats-max-pairs / dns-stats-max-clients defaults; deny-stats defaults; ipinfo enabled+mock provider for handler tests
+	statisticsService := service.NewStatisticsService(trafficStatsService, repo, dhcp, 2400, 200, 500, 300) // dns-stats-max-pairs / dns-stats-max-clients defaults; deny-stats defaults
+	// Mirrors cmd/pigate/main.go's SetLogBuffer wiring (docs/ref/todo/
+	// firewall-log-buffer-capacity-plan.md T-03/T-05, issue #134) so the
+	// firewall.logBuffer ring/usage endpoint tests exercise the real wired
+	// path, not just the nil-logBuffer degrade path.
+	statisticsService.SetLogBuffer(ringBuffer)
+	server := NewServer(repo, fw, net, rt, dhcp, ringBuffer, false, allowDevCORS, ifaceService, service.NewDhcpcdService(repo, ifaceService, dhcpcdMgr), routingService, fwService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, service.NewUserService(repo), nil, service.NewSystemStatusService(kernel.NewMockSystemStats(), repo, hostnameService, timeService, "test"), service.NewPowerService(kernel.NewMockPowerManager()), service.NewEventLogService(repo), testHealthChecker, wifiPresetService, systemServiceSvc, nil, trafficStatsService, statisticsService, service.NewIPInfoService(true, service.NewMockIPInfoProvider())) // ipinfo enabled+mock provider for handler tests
 
 	return server, repo
 }
@@ -2145,9 +2151,10 @@ func TestHandleGetIPInfo_Disabled(t *testing.T) {
 // TestCapacityStatisticsEndpoint is docs/ref/todo/
 // statistics-capacity-visibility-plan.md T-08 (API portion): the new
 // /api/statistics/capacity route must require auth (like every other
-// /api/statistics/* route), return exactly 10 rings with no PII, and treat
-// `series` as a strict "1"/"true" whitelist (anything else, including
-// missing, means false — never a 400).
+// /api/statistics/* route), return exactly 11 rings (docs/ref/todo/
+// firewall-log-buffer-capacity-plan.md T-06, issue #134, added the 11th,
+// firewall.logBuffer) with no PII, and treat `series` as a strict "1"/"true"
+// whitelist (anything else, including missing, means false — never a 400).
 func TestCapacityStatisticsEndpoint(t *testing.T) {
 	handler, _ := setupTestServer(t)
 	token := "mock_session_id_test_token"
@@ -2168,7 +2175,7 @@ func TestCapacityStatisticsEndpoint(t *testing.T) {
 		t.Errorf("without session: expected 401, got %d", rec.Code)
 	}
 
-	// Default (no series param): 10 rings, every series omitted.
+	// Default (no series param): 11 rings, every series omitted.
 	rec = get("/api/statistics/capacity")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
@@ -2178,9 +2185,10 @@ func TestCapacityStatisticsEndpoint(t *testing.T) {
 		t.Fatalf("decode failed: %v", err)
 	}
 	rings, _ := body["rings"].([]any)
-	if len(rings) != 10 {
-		t.Fatalf("expected 10 rings, got %d: %s", len(rings), rec.Body.String())
+	if len(rings) != 11 {
+		t.Fatalf("expected 11 rings, got %d: %s", len(rings), rec.Body.String())
 	}
+	var foundLogBuffer bool
 	for _, raw := range rings {
 		row, _ := raw.(map[string]any)
 		if _, hasSeries := row["series"]; hasSeries {
@@ -2192,6 +2200,21 @@ func TestCapacityStatisticsEndpoint(t *testing.T) {
 				t.Errorf("ring %v: unexpected PII-shaped field %q in response", row["id"], forbidden)
 			}
 		}
+		if row["id"] == "firewall.logBuffer" {
+			foundLogBuffer = true
+			if row["capSource"] != "traffic-log-buffer-capacity" {
+				t.Errorf("firewall.logBuffer: expected capSource=traffic-log-buffer-capacity, got %v", row["capSource"])
+			}
+			if row["group"] != "firewall" || row["kind"] != "flat" {
+				t.Errorf("firewall.logBuffer: expected group=firewall kind=flat, got group=%v kind=%v", row["group"], row["kind"])
+			}
+		}
+	}
+	if !foundLogBuffer {
+		t.Errorf("expected a firewall.logBuffer ring in the response, got %s", rec.Body.String())
+	}
+	if rings[len(rings)-1].(map[string]any)["id"] != "firewall.logBuffer" {
+		t.Errorf("expected firewall.logBuffer to be the last ring, got %s", rec.Body.String())
 	}
 
 	// series=1 must include series arrays.

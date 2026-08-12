@@ -914,18 +914,31 @@ type RingCapacity struct {
 	// present (non-nil) when the request asked for it (withSeries=true) AND
 	// Kind == "bucket"; omitted (omitempty) otherwise.
 	Series []CapacityPoint `json:"series,omitempty"`
+	// OldestEntry is the as-stored Time string (RFC3339 or RFC3339Nano — see
+	// model.FirewallLog.Time) of the oldest entry still held by this ring,
+	// only meaningful for a ring with a FIFO time dimension — currently only
+	// firewall.logBuffer (the traffic log ring buffer, docs/ref/todo/
+	// firewall-log-buffer-capacity-plan.md T-02, issue #134). Every other
+	// ring leaves this empty (omitempty) since a bucketed/flat index has no
+	// single well-defined "oldest entry" concept the way an ordered log
+	// buffer does.
+	OldestEntry string `json:"oldestEntry,omitempty"`
 }
 
 // CapacityStatistics is the GET /api/statistics/capacity response — current
-// usage vs configured cap for all 10 RAM-only tracking structures, always in
+// usage vs configured cap for all 11 RAM-only tracking structures, always in
 // the SAME fixed order (traffic.hosts, traffic.dests, traffic.conversations,
 // firewall.denySources, firewall.denyPorts, dns.pairs, dns.clients,
-// dns.reverseCache, dns.domainIps, dns.domainIpsPerDomain —
-// service/statistics_capacity.go). dns.domainIpsPerDomain was added by
-// docs/ref/todo/statistics-dns-cap-notification-fix-plan.md §3.4/T-06 — it is
-// a flat ring (no series) that reports the per-domain IP cap
-// (dns-stats-max-ips-per-domain) separately from dns.domainIps' domain count
-// (dns-stats-max-domains). Contains
+// dns.reverseCache, dns.domainIps, dns.domainIpsPerDomain,
+// firewall.logBuffer — service/statistics_capacity.go). dns.domainIpsPerDomain
+// was added by docs/ref/todo/statistics-dns-cap-notification-fix-plan.md
+// §3.4/T-06 — it is a flat ring (no series) that reports the per-domain IP
+// cap (dns-stats-max-ips-per-domain) separately from dns.domainIps' domain
+// count (dns-stats-max-domains). firewall.logBuffer was added by docs/ref/
+// todo/firewall-log-buffer-capacity-plan.md T-03 (issue #134) — it is a flat
+// ring reporting the traffic log ring buffer's fill state (capSource
+// "traffic-log-buffer-capacity"), and is the only ring that ever populates
+// RingCapacity.OldestEntry. Contains
 // ONLY counts/percentages — no domain name, IP address, or hostname ever
 // appears in this response (unlike TrafficStatistics/DNSQueryStatistics
 // above), which is why this endpoint is authRoute rather than
@@ -944,9 +957,40 @@ type CapacityStatistics struct {
 	// need to re-derive it, and so len(Rings[i].Series) == BucketCount always
 	// holds for every "bucket"-kind ring when Series is present.
 	BucketCount int `json:"bucketCount"`
-	// Rings is always exactly 10 entries, in the fixed order documented above
+	// Rings is always exactly 11 entries, in the fixed order documented above
 	// — never omitted, never reordered, never partial (even a ring with zero
 	// data still appears with Current=0).
 	Rings       []RingCapacity `json:"rings"`
 	GeneratedAt string         `json:"generatedAt"`
+}
+
+// TrafficLogBufferUsage is the GET /api/logs/traffic/usage response — a
+// small, purpose-built payload for the Forward/Local Traffic log pages
+// (docs/ref/todo/firewall-log-buffer-capacity-plan.md T-02/T-04, issue #134)
+// so those pages don't have to fetch all 11 rings + series from
+// CapacityStatistics just to read one number. The numbers here are for the
+// WHOLE traffic log ring buffer (backend/internal/logs/ringbuffer.go) —
+// forward, input and output chains share the same buffer, so Used/Evicted
+// are NOT scoped to a single chain/page.
+type TrafficLogBufferUsage struct {
+	// Used is the current number of entries held in the buffer (<= Capacity).
+	Used int `json:"used"`
+	// Capacity is the buffer's configured maximum size (config key
+	// traffic-log-buffer-capacity, default 10000) — read from the running
+	// ring buffer, never hardcoded.
+	Capacity int `json:"capacity"`
+	// UsedPercent is Used as a percent of Capacity (0-100; 0 when Capacity is
+	// somehow 0, to avoid a divide-by-zero).
+	UsedPercent float64 `json:"usedPercent"`
+	// OldestEntry is the as-stored Time string (RFC3339 or RFC3339Nano — see
+	// model.FirewallLog.Time) of the oldest entry still in the buffer, empty
+	// when the buffer is empty.
+	OldestEntry string `json:"oldestEntry,omitempty"`
+	// NewestEntry is the as-stored Time string of the most recently added
+	// entry still in the buffer, empty when the buffer is empty.
+	NewestEntry string `json:"newestEntry,omitempty"`
+	// Evicted is the cumulative count of entries pushed out of the buffer
+	// since boot or the last POST /api/dashboard/logs/clear — non-zero means
+	// the buffer has filled up and started discarding old entries.
+	Evicted uint64 `json:"evicted"`
 }

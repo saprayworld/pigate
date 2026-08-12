@@ -10,6 +10,7 @@ import (
 
 	"pigate/internal/db"
 	"pigate/internal/kernel"
+	"pigate/internal/logs"
 	"pigate/internal/model"
 )
 
@@ -90,6 +91,25 @@ type StatisticsService struct {
 	// NewStatisticsService), so RecordDNSEvent/GetStatistics never need a
 	// nil-check.
 	dns *dnsQueryStats
+
+	// logBuffer is optional (nil until SetLogBuffer is called by main.go,
+	// mirroring api.Server.SetPolicyStatsService's pattern) — it feeds the
+	// firewall.logBuffer ring in GetCapacityStatistics (docs/ref/todo/
+	// firewall-log-buffer-capacity-plan.md T-03, issue #134). NOT added as a
+	// NewStatisticsService parameter, to avoid growing that constructor's
+	// already-7-parameter signature further; wired via setter instead, same
+	// as SetPolicyStatsService.
+	logBuffer *logs.RingBuffer
+}
+
+// SetLogBuffer wires the traffic log ring buffer into the service after
+// construction (main.go calls this once, right after NewStatisticsService,
+// mirroring api.Server.SetPolicyStatsService — docs/ref/todo/
+// firewall-log-buffer-capacity-plan.md T-03/T-05, issue #134). Safe to call
+// with nil; GetCapacityStatistics degrades to an all-zero firewall.logBuffer
+// row when logBuffer is nil (e.g. a unit test that never calls this).
+func (s *StatisticsService) SetLogBuffer(rb *logs.RingBuffer) {
+	s.logBuffer = rb
 }
 
 // NewStatisticsService constructs the service. traffic must be the same

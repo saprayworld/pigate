@@ -261,7 +261,12 @@ export default function StatisticsTraffic() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <CapacityIndicator rings={capacityRings} group={["traffic", "firewall"]} window={window_} />
+          <CapacityIndicator
+            rings={capacityRings}
+            group={["traffic", "firewall"]}
+            excludeIds={["firewall.logBuffer"]}
+            window={window_}
+          />
           {data && <AccuracyInfoButton accuracy={data.accuracy} />}
           <StatsWindowTabs value={window_} onChange={setWindow} />
           <Button
