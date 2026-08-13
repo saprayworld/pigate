@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"net"
 	"testing"
 
 	"pigate/internal/model"
@@ -249,5 +250,162 @@ func TestOutputIPv6DropExprs(t *testing.T) {
 	}
 	if !hasVerdict(exprs, expr.VerdictDrop) {
 		t.Errorf("expected a Drop verdict, got %+v", exprs)
+	}
+}
+
+// stubLookupIP overrides the package-level lookupIP var for the duration of
+// a test and restores it afterwards, so FQDN address-object tests don't
+// depend on real DNS.
+func stubLookupIP(t *testing.T, ips []net.IP, err error) {
+	t.Helper()
+	orig := lookupIP
+	lookupIP = func(string) ([]net.IP, error) { return ips, err }
+	t.Cleanup(func() { lookupIP = orig })
+}
+
+// TestAddressCombos_FQDNExpandsToOneComboPerResolvedIPv4 asserts that an
+// address object with an "fqdn" entry resolving to several IPv4 addresses
+// expands into one addrCombo per resolved address (not just the first),
+// since this project does not use nftables sets (D-2) to express "match any
+// of these IPs" — every combo must become its own nft rule downstream.
+func TestAddressCombos_FQDNExpandsToOneComboPerResolvedIPv4(t *testing.T) {
+	want := []net.IP{
+		net.ParseIP("203.0.113.10").To4(),
+		net.ParseIP("203.0.113.11").To4(),
+		net.ParseIP("203.0.113.12").To4(),
+	}
+	stubLookupIP(t, want, nil)
+
+	addrs := map[string]model.AddressObject{
+		"EXAMPLE": {ID: "a2", Name: "EXAMPLE", Entries: []model.AddressEntry{{Type: "fqdn", Value: "example.test"}}},
+	}
+
+	combos, err := addressCombos("EXAMPLE", addrs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(combos) != len(want) {
+		t.Fatalf("expected %d combos (one per resolved IPv4), got %d: %+v", len(want), len(combos), combos)
+	}
+	seen := make(map[string]bool)
+	for _, c := range combos {
+		if !c.hasFilter || c.resolvedFQDNIP == nil {
+			t.Fatalf("expected every combo to be a resolved FQDN filter, got %+v", c)
+		}
+		seen[c.resolvedFQDNIP.String()] = true
+	}
+	for _, ip := range want {
+		if !seen[ip.String()] {
+			t.Errorf("resolved IP %s was not turned into a combo", ip)
+		}
+	}
+}
+
+// TestAddressCombos_FQDNResolvedIPsAreCapped asserts the maxFQDNResolvedIPs
+// safety cap: a domain resolving to an unusually large number of A records
+// still produces a bounded number of combos instead of growing unbounded.
+func TestAddressCombos_FQDNResolvedIPsAreCapped(t *testing.T) {
+	var many []net.IP
+	for i := 0; i < maxFQDNResolvedIPs+12; i++ {
+		many = append(many, net.IPv4(203, 0, 113, byte(i)).To4())
+	}
+	stubLookupIP(t, many, nil)
+
+	addrs := map[string]model.AddressObject{
+		"BIGFAN": {ID: "a3", Name: "BIGFAN", Entries: []model.AddressEntry{{Type: "fqdn", Value: "bigfanout.test"}}},
+	}
+
+	combos, err := addressCombos("BIGFAN", addrs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(combos) != maxFQDNResolvedIPs {
+		t.Fatalf("expected the resolved-IP count to be capped at %d, got %d", maxFQDNResolvedIPs, len(combos))
+	}
+}
+
+// TestAddressCombos_FQDNResolveFailureSkipsOnlyThatEntry asserts plan
+// Caution 3: a failing "fqdn" entry is skipped (no combo, no error from
+// addressCombos), while a sibling entry in the same object still expands
+// normally.
+func TestAddressCombos_FQDNResolveFailureSkipsOnlyThatEntry(t *testing.T) {
+	stubLookupIP(t, nil, &net.DNSError{Err: "no such host", IsNotFound: true})
+
+	addrs := map[string]model.AddressObject{
+		"MIXED": {ID: "a4", Name: "MIXED", Entries: []model.AddressEntry{
+			{Type: "fqdn", Value: "does-not-resolve.test"},
+			{Type: "subnet", Value: "10.1.2.3/32"},
+		}},
+	}
+
+	combos, err := addressCombos("MIXED", addrs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(combos) != 1 {
+		t.Fatalf("expected only the subnet entry to survive, got %d combos: %+v", len(combos), combos)
+	}
+	if combos[0].entry.Type != "subnet" || combos[0].entry.Value != "10.1.2.3/32" {
+		t.Errorf("expected the surviving combo to be the subnet entry, got %+v", combos[0])
+	}
+}
+
+// TestBuildRuleExpressions_FQDNComboMatchesResolvedIP is an end-to-end check
+// that a resolved-FQDN addrCombo produces a valid single-IP match rule via
+// buildRuleExpressions (not just addressCombos in isolation).
+func TestBuildRuleExpressions_FQDNComboMatchesResolvedIP(t *testing.T) {
+	resolvedIP := net.ParseIP("203.0.113.42").To4()
+	fqdnCombo := addrCombo{
+		hasFilter:      true,
+		objName:        "EXAMPLE",
+		entry:          model.AddressEntry{Type: "fqdn", Value: "example.test"},
+		resolvedFQDNIP: resolvedIP,
+	}
+
+	ruleSets, err := buildRuleExpressions(
+		model.PolicyChainForward,
+		"", "",
+		fqdnCombo, addrCombo{hasFilter: false}, sshCombo(),
+		"ACCEPT", false, false,
+		"[PiGate] FWD ACCEPT: ",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ruleSets) != 1 {
+		t.Fatalf("expected exactly 1 rule, got %d: %+v", len(ruleSets), ruleSets)
+	}
+
+	var found bool
+	for _, e := range ruleSets[0] {
+		if c, ok := e.(*expr.Cmp); ok && c.Op == expr.CmpOpEq && net.IP(c.Data).Equal(resolvedIP) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a Cmp against the resolved IP %s, got %+v", resolvedIP, ruleSets[0])
+	}
+	if !hasVerdict(ruleSets[0], expr.VerdictAccept) {
+		t.Errorf("expected the ACCEPT verdict, got %+v", ruleSets[0])
+	}
+}
+
+// TestBuildRuleExpressions_SingleValueAddressStillYieldsOneRule is a
+// regression guard: subnet/range address objects (the overwhelmingly common
+// case) must keep producing exactly one nft rule per combination, unchanged
+// by the FQDN multi-IP expansion added alongside this test.
+func TestBuildRuleExpressions_SingleValueAddressStillYieldsOneRule(t *testing.T) {
+	ruleSets, err := buildRuleExpressions(
+		model.PolicyChainForward,
+		"", "",
+		lanCombo(), addrCombo{hasFilter: false}, sshCombo(),
+		"ACCEPT", false, false,
+		"[PiGate] FWD ACCEPT: ",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ruleSets) != 1 {
+		t.Fatalf("expected exactly 1 rule for a single-value subnet object, got %d: %+v", len(ruleSets), ruleSets)
 	}
 }

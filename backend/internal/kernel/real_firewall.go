@@ -53,6 +53,21 @@ const (
 // generates for rule/object IDs.
 var logTokenPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
+// lookupIP resolves an FQDN address entry's value. A package-level var
+// (rather than calling net.LookupIP directly) so tests can substitute a
+// deterministic resolver instead of depending on real DNS.
+var lookupIP = net.LookupIP
+
+// maxFQDNResolvedIPs caps how many of an FQDN address entry's resolved
+// IPv4 addresses get turned into addrCombo match variants (addressCombos
+// below), so a domain with an unusually large number of A records cannot
+// blow up the nft rule count for a single policy rule on top of the
+// existing multi-entry expansion. DNS answers for ordinary services are
+// well under this in practice; anything beyond it only drops match
+// coverage for the least-preferred (typically least-used) resolved
+// addresses, it never fails the apply.
+const maxFQDNResolvedIPs = 8
+
 // maxLogPrefixBytes bounds the combined "<base><r=token> " log prefix so it
 // stays well under nftables/NFLOG's own log-prefix limit (128 bytes).
 const maxLogPrefixBytes = 120
@@ -954,14 +969,18 @@ func resolveService(name string, svcsMap map[string]model.ServiceObject) (model.
 }
 
 // buildIPMatchExpressions builds the nft match exprs for a single
-// model.AddressEntry (subnet /32 = Cmp equality, other subnet =
-// Payload+Bitwise+Cmp, range = Gte+Lte, fqdn = LookupIP matching the first
-// IPv4 result — match strategy unchanged from the pre-multi-value
-// implementation) at the given network-header offset (12 = source IP, 16 =
-// destination IP). objName is only used to identify the owning address
-// object in error/log messages — the name -> object/entries lookup itself
-// lives in addressCombos below (docs/ref/todo/
+// model.AddressEntry of type "subnet" (/32 = Cmp equality, other subnet =
+// Payload+Bitwise+Cmp) or "range" (Gte+Lte) at the given network-header
+// offset (12 = source IP, 16 = destination IP). objName is only used to
+// identify the owning address object in error/log messages — the name ->
+// object/entries lookup itself lives in addressCombos below (docs/ref/todo/
 // multi-value-address-service-objects-plan.md, T-04).
+//
+// "fqdn" entries never reach here: addressCombos resolves them up front
+// (one addrCombo per resolved IPv4 address, addrCombo.resolvedFQDNIP set —
+// see ipMatchExprsForCombo) so that a domain with several A records is
+// matched against all of them instead of only the first one DNS happened to
+// return.
 func buildIPMatchExpressions(entry model.AddressEntry, objName string, offset uint32) ([]expr.Any, error) {
 	var exprs []expr.Any
 	switch entry.Type {
@@ -1042,39 +1061,40 @@ func buildIPMatchExpressions(entry model.AddressEntry, objName string, offset ui
 			Data:     endIP,
 		})
 
-	case "fqdn":
-		ips, err := net.LookupIP(entry.Value)
-		if err != nil {
-			log.Printf("[RealFirewall] Warning: address object %q: failed to resolve FQDN %q: %v", objName, entry.Value, err)
-			return nil, err
-		}
-
-		var ipv4s []net.IP
-		for _, ip := range ips {
-			if ip4 := ip.To4(); ip4 != nil {
-				ipv4s = append(ipv4s, ip4)
-			}
-		}
-
-		if len(ipv4s) == 0 {
-			return nil, fmt.Errorf("no IPv4 address found for FQDN %q (address object %q)", entry.Value, objName)
-		}
-
-		log.Printf("[RealFirewall] Resolved FQDN %s to %s (matching first IP, address object %q)", entry.Value, ipv4s[0], objName)
-		exprs = append(exprs, &expr.Payload{
-			DestRegister: 1,
-			Base:         expr.PayloadBaseNetworkHeader,
-			Offset:       offset,
-			Len:          4,
-		})
-		exprs = append(exprs, &expr.Cmp{
-			Op:       expr.CmpOpEq,
-			Register: 1,
-			Data:     ipv4s[0],
-		})
+	default:
+		// Includes "fqdn": addressCombos never emits a combo whose entry.Type
+		// is "fqdn" without also setting resolvedFQDNIP (callers must go
+		// through ipMatchExprsForCombo, not this function, for those) — an
+		// unrecognized type reaching here is a bug, so fail closed instead of
+		// silently returning "no IP constraint".
+		return nil, fmt.Errorf("unsupported address entry type %q for address object %q", entry.Type, objName)
 	}
 
 	return exprs, nil
+}
+
+// ipMatchExprsForCombo returns the nft match exprs for one addrCombo at the
+// given network-header offset. A combo carrying a pre-resolved FQDN IP
+// (set by addressCombos when the entry is "fqdn") short-circuits straight
+// to an equality match against that address instead of going through
+// buildIPMatchExpressions, which only handles "subnet"/"range".
+func ipMatchExprsForCombo(c addrCombo, offset uint32) ([]expr.Any, error) {
+	if c.resolvedFQDNIP != nil {
+		return []expr.Any{
+			&expr.Payload{
+				DestRegister: 1,
+				Base:         expr.PayloadBaseNetworkHeader,
+				Offset:       offset,
+				Len:          4,
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     c.resolvedFQDNIP,
+			},
+		}, nil
+	}
+	return buildIPMatchExpressions(c.entry, c.objName, offset)
 }
 
 // addrCombo is one per-entry address filter to apply when generating a
@@ -1082,17 +1102,22 @@ func buildIPMatchExpressions(entry model.AddressEntry, objName string, offset ui
 // hasFilter=false represents "ALL" (no IP match expressions are emitted for
 // it at all), matching the old srcName=="ALL"/destName=="ALL" short-circuit
 // that existed before multi-value objects. objName is kept only for
-// error/log messages.
+// error/log messages. resolvedFQDNIP is set only for combos produced from a
+// "fqdn" entry — see addressCombos and ipMatchExprsForCombo.
 type addrCombo struct {
-	hasFilter bool
-	objName   string
-	entry     model.AddressEntry
+	hasFilter      bool
+	objName        string
+	entry          model.AddressEntry
+	resolvedFQDNIP net.IP
 }
 
 // comboDesc renders an addrCombo for skip/warning log messages.
 func comboDesc(c addrCombo) string {
 	if !c.hasFilter {
 		return "ALL"
+	}
+	if c.resolvedFQDNIP != nil {
+		return fmt.Sprintf("%s(%s=%s -> %s)", c.objName, c.entry.Type, c.entry.Value, c.resolvedFQDNIP)
 	}
 	return fmt.Sprintf("%s(%s=%s)", c.objName, c.entry.Type, c.entry.Value)
 }
@@ -1105,7 +1130,15 @@ func comboDesc(c addrCombo) string {
 // old addrsMap[name] miss. A known object expands into one combo per
 // model.AddressEntry in its Entries (falling back to a single entry built
 // from the legacy Type/Value pair if Entries hasn't been populated by the
-// caller — defensive only, db.Repository always populates it).
+// caller — defensive only, db.Repository always populates it), except a
+// "fqdn" entry: it is resolved here (once, regardless of how many
+// dest/service combinations the caller will cross it with) into one combo
+// per distinct IPv4 address found — up to maxFQDNResolvedIPs — instead of
+// only the first, so a domain backed by several A records (CDNs,
+// load-balanced services) is matched however the client actually connects.
+// A resolve failure, or a resolve that yields no IPv4 address, only skips
+// that one entry (logged as a warning) — other entries of the same object
+// still expand normally (plan Caution 3).
 func addressCombos(name string, addrsMap map[string]model.AddressObject) ([]addrCombo, error) {
 	if name == "" || name == "ALL" {
 		return []addrCombo{{hasFilter: false}}, nil
@@ -1120,7 +1153,34 @@ func addressCombos(name string, addrsMap map[string]model.AddressObject) ([]addr
 	}
 	combos := make([]addrCombo, 0, len(entries))
 	for _, e := range entries {
-		combos = append(combos, addrCombo{hasFilter: true, objName: name, entry: e})
+		if e.Type != "fqdn" {
+			combos = append(combos, addrCombo{hasFilter: true, objName: name, entry: e})
+			continue
+		}
+
+		ips, err := lookupIP(e.Value)
+		if err != nil {
+			log.Printf("[RealFirewall] Warning: address object %q: failed to resolve FQDN %q, skipping this entry: %v", name, e.Value, err)
+			continue
+		}
+		var ipv4s []net.IP
+		for _, ip := range ips {
+			if ip4 := ip.To4(); ip4 != nil {
+				ipv4s = append(ipv4s, ip4)
+			}
+		}
+		if len(ipv4s) == 0 {
+			log.Printf("[RealFirewall] Warning: address object %q: FQDN %q resolved no IPv4 address, skipping this entry", name, e.Value)
+			continue
+		}
+		if len(ipv4s) > maxFQDNResolvedIPs {
+			log.Printf("[RealFirewall] Warning: address object %q: FQDN %q resolved to %d IPv4 addresses, only matching the first %d (see maxFQDNResolvedIPs)", name, e.Value, len(ipv4s), maxFQDNResolvedIPs)
+			ipv4s = ipv4s[:maxFQDNResolvedIPs]
+		}
+		log.Printf("[RealFirewall] address object %q: resolved FQDN %s to %d IPv4 address(es): %v", name, e.Value, len(ipv4s), ipv4s)
+		for _, ip := range ipv4s {
+			combos = append(combos, addrCombo{hasFilter: true, objName: name, entry: e, resolvedFQDNIP: ip})
+		}
 	}
 	return combos, nil
 }
@@ -1237,8 +1297,11 @@ func outputIPv6DropExprs() []expr.Any {
 // whose source object has M entries, destination object has N entries, and
 // service object has K entries, the number of nft rules generated is
 // roughly M × N × K × proto, where proto is 1 normally or 2 when a service
-// entry's Protocol is "TCP/UDP" (expands into a TCP rule and a UDP rule).
-// This can grow very large very quickly (plan Caution 2), so
+// entry's Protocol is "TCP/UDP" (expands into a TCP rule and a UDP rule) —
+// M and/or N grow further still when a source/destination entry is "fqdn"
+// and resolves to more than one IPv4 address (addressCombos expands it into
+// one combo per resolved address, up to maxFQDNResolvedIPs). This can grow
+// very large very quickly (plan Caution 2), so
 // maxExpandedRulesPerPolicy (config key "max-expanded-rules-per-policy",
 // resolved once at startup into RealFirewall.maxExpandedRulesPerPolicy via
 // SetMaxExpandedRulesPerPolicy — never hardcoded at the point of use, plan
@@ -1398,7 +1461,7 @@ func buildRuleExpressions(
 
 	// 3. Source IP
 	if src.hasFilter {
-		srcExprs, err := buildIPMatchExpressions(src.entry, src.objName, 12)
+		srcExprs, err := ipMatchExprsForCombo(src, 12)
 		if err != nil {
 			return nil, err
 		}
@@ -1407,7 +1470,7 @@ func buildRuleExpressions(
 
 	// 4. Destination IP
 	if dest.hasFilter {
-		destExprs, err := buildIPMatchExpressions(dest.entry, dest.objName, 16)
+		destExprs, err := ipMatchExprsForCombo(dest, 16)
 		if err != nil {
 			return nil, err
 		}
