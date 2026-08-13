@@ -873,7 +873,10 @@ func trafficLogChainMatches(entry model.FirewallLog, chainParam string) bool {
 // widget; it never touches SQLite.
 //
 //	action     PASS | DROP                         (case-insensitive; empty = all)
-//	q          substring matched against src/dest/port/proto/interface/reason (case-insensitive)
+//	q          substring matched against src/dest/port/proto/interface/reason/
+//	           chain/ruleName/ruleId (case-insensitive; docs/ref/todo/
+//	           firewall-rule-matched-endpoints-plan.md T-12 added ruleName/
+//	           ruleId, e.g. for the RuleStatsDrawer "ดู log ของกฎนี้" deep-link)
 //	chain      forward | input | output | local (=input+output) | "" (=all); unknown value -> 400
 //	limit      max rows to return (default 100, capped at min(1000, buffer capacity))
 //	beforeId   cursor: id of the last row the client already has under the current filter
@@ -930,7 +933,11 @@ func (s *Server) HandleGetTrafficLogs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if needle != "" {
-			hay := strings.ToLower(entry.Src + " " + entry.Dest + " " + entry.SrcPort + " " + entry.Port + " " + entry.Proto + " " + entry.InIface + " " + entry.OutIface + " " + entry.Reason + " " + entry.Chain)
+			// ruleName/ruleId added by T-12 (see doc comment above) so the
+			// "ดู log ของกฎนี้" deep-link can search by rule name — this
+			// haystack MUST stay in lockstep with TrafficLogPage.tsx's
+			// client-side matchesFilter mirror (see that file's comment).
+			hay := strings.ToLower(entry.Src + " " + entry.Dest + " " + entry.SrcPort + " " + entry.Port + " " + entry.Proto + " " + entry.InIface + " " + entry.OutIface + " " + entry.Reason + " " + entry.Chain + " " + entry.RuleName + " " + entry.RuleID)
 			if !strings.Contains(hay, needle) {
 				continue
 			}
@@ -1623,6 +1630,16 @@ func (s *Server) HandleResetInterface(w http.ResponseWriter, r *http.Request) {
 // FIREWALL POLICY HANDLERS
 // =========================================================================
 
+// defaultPolicyEndpointsLimit/min/maxPolicyEndpointsLimit are the `limit`
+// query param bounds for GET /api/policies/{id}/endpoints (plan §3): unlike
+// the traffic-stats `limit` params above, an out-of-range or unparseable
+// value here is a 400, not a silent clamp (plan T-06).
+const (
+	defaultPolicyEndpointsLimit = 10
+	minPolicyEndpointsLimit     = 1
+	maxPolicyEndpointsLimit     = 50
+)
+
 func (s *Server) HandleGetPolicies(w http.ResponseWriter, r *http.Request) {
 	chain := r.URL.Query().Get("chain")
 	switch chain {
@@ -1667,6 +1684,43 @@ func (s *Server) HandleGetPolicyStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, stats)
+}
+
+// HandleGetPolicyRuleEndpoints serves GET /api/policies/{id}/endpoints — the
+// top IPs/services observed matching one rule, aggregated live from the
+// traffic-log ring buffer (docs/ref/todo/
+// firewall-rule-matched-endpoints-plan.md T-06). Same authRoute sensitivity
+// as HandleGetPolicyStats/HandleGetTrafficLogs — GET only, so it stays
+// reachable under -disable-edit=true. {id} is only ever used as an
+// in-memory/DB lookup key here, never concatenated into a query string.
+func (s *Server) HandleGetPolicyRuleEndpoints(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	limit := defaultPolicyEndpointsLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < minPolicyEndpointsLimit || n > maxPolicyEndpointsLimit {
+			s.writeError(w, http.StatusBadRequest, "Invalid limit query parameter (must be an integer 1-50)")
+			return
+		}
+		limit = n
+	}
+
+	if s.policyStats == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Policy usage statistics are not available")
+		return
+	}
+
+	result, err := s.policyStats.GetRuleEndpoints(id, limit)
+	if err != nil {
+		if errors.Is(err, service.ErrPolicyRuleNotFound) {
+			s.writeError(w, http.StatusNotFound, "Policy rule not found")
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) HandleCreatePolicy(w http.ResponseWriter, r *http.Request) {

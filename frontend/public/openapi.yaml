@@ -1100,7 +1100,15 @@ paths:
           in: query
           schema:
             type: string
-          description: Case-insensitive text search across src, dest, port, proto, chain, and reason
+          description: >-
+            Case-insensitive text search across src, dest, srcPort, port,
+            proto, inIface, outIface, reason, chain, ruleName, and ruleId.
+            ruleName/ruleId let the "ดู log ของกฎนี้" deep-link from a policy
+            rule's usage-stats drawer find its own matched rows — matching is
+            a plain substring against the rule's name as it was at the
+            moment the log entry was captured (snapshot-on-write), so a rule
+            renamed afterwards won't match its older entries, and a name
+            that's a substring of another rule's name may also match.
         - name: chain
           in: query
           schema:
@@ -1836,6 +1844,75 @@ paths:
           description: No active session
         '503':
           description: Statistics service not wired up (should not happen in a normal build)
+
+  /policies/{id}/endpoints:
+    get:
+      tags:
+        - Firewall Policies
+      summary: Top IPs/services observed matching one rule (troubleshooting)
+      description: >
+        "Which IP/service hit this rule" for the per-rule usage details
+        drawer (docs/ref/todo/firewall-rule-matched-endpoints-plan.md),
+        aggregated live by scanning the in-memory traffic-log ring buffer on
+        every request (no persistence, no background aggregator). Four hard
+        limitations:
+
+        (1) REQUIRES `log` ENABLED — a rule with `log: false` always returns
+        `logEnabled: false` and empty lists; there is no other way to see
+        which packets matched it. (2) COUNTS ARE LOG ENTRIES, NOT BYTES — the
+        underlying NFLOG capture carries no packet size, so `count` on every
+        entry is "number of log events", not traffic volume (byte/packet
+        totals live in GET /policies/stats instead). (3) THE DATA WINDOW
+        EQUALS THE RING BUFFER — results only cover whatever is still in the
+        traffic-log buffer right now (see `bufferOldestAt`/`scannedEntries`);
+        clearing the traffic log (or the buffer simply rolling over under
+        heavy traffic) makes older matches disappear immediately, and a
+        low-traffic rule can be pushed out entirely by a high-traffic one.
+        (4) ONLY NEW CONNECTIONS AND DROPS ARE LOGGED — same NFLOG behavior
+        as the Traffic Log pages: established/related traffic on an already
+        -open connection is never logged again, so counts are not a full
+        packet tally.
+
+        Name resolution precedence differs deliberately from the Traffic Log
+        pages: for each IP, a user-defined Address Object name
+        (`addressName`) wins over a DNS-resolved `domain`, which wins over a
+        DHCP-lease `hostname` — because here the point is "what did I name
+        this", not "what does the internet call this".
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Policy rule id.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: >-
+            Max entries per category (sources/destinations/services).
+            Default 10. Out-of-range or non-integer values are a 400 (unlike
+            most other `limit` query params in this API, which silently
+            clamp).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+      responses:
+        '200':
+          description: Matched endpoints for this rule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyRuleEndpoints'
+        '400':
+          description: Invalid limit query parameter (must be an integer 1-50)
+        '401':
+          description: No active session
+        '404':
+          description: Policy rule not found
+        '503':
+          description: Policy usage statistics service not wired up (should not happen in a normal build)
 
   /policies/{id}:
     put:
@@ -6767,6 +6844,177 @@ components:
             should show a "not available yet" state rather than a
             misleading all-zero table.
           example: true
+
+    EndpointHit:
+      type: object
+      description: >-
+        One aggregated source or destination IP observed matching a rule, in
+        GET /policies/{id}/endpoints. Name precedence for display:
+        addressName, then domain, then hostname (see that endpoint's
+        description) — the raw ip is always present as a fallback.
+      required:
+        - ip
+        - count
+        - firstSeenAt
+        - lastSeenAt
+        - addressName
+        - hostname
+        - domain
+        - fromRule
+      properties:
+        ip:
+          type: string
+          example: 192.168.1.120
+        count:
+          type: integer
+          description: Number of matching log entries currently in the buffer (NOT bytes).
+          example: 210
+        firstSeenAt:
+          type: string
+          format: date-time
+          description: RFC3339(Nano) timestamp of the oldest matching entry still in the buffer.
+        lastSeenAt:
+          type: string
+          format: date-time
+          description: RFC3339(Nano) timestamp of the newest matching entry.
+        addressName:
+          type: string
+          description: User-defined Address Object name covering this IP, or "" if none matched.
+          example: LAN_Clients
+        hostname:
+          type: string
+          description: DHCP lease/reservation hostname, or "" (only used when addressName and domain are both empty).
+          example: notebook-01
+        domain:
+          type: string
+          description: DNS reverse-cache domain, or "" (only used when addressName is empty).
+          example: www.google.com
+        fromRule:
+          type: boolean
+          description: true when addressName is one of this rule's own source/destination Address Objects.
+          example: true
+
+    ServiceHit:
+      type: object
+      description: >-
+        One aggregated proto/port pair observed matching a rule, in GET
+        /policies/{id}/endpoints.
+      required:
+        - proto
+        - port
+        - count
+        - firstSeenAt
+        - lastSeenAt
+        - serviceName
+        - fromRule
+      properties:
+        proto:
+          type: string
+          example: TCP
+        port:
+          type: string
+          description: Destination port, or "-" for ICMP/ICMPv6 (never converted to "0").
+          example: "443"
+        count:
+          type: integer
+          description: Number of matching log entries currently in the buffer (NOT bytes).
+          example: 301
+        firstSeenAt:
+          type: string
+          format: date-time
+        lastSeenAt:
+          type: string
+          format: date-time
+        serviceName:
+          type: string
+          description: Matching Service Object name, or "" if none matched (client shows raw PROTO/PORT instead).
+          example: HTTPS
+        fromRule:
+          type: boolean
+          description: true when serviceName is this rule's own Service object.
+          example: true
+
+    PolicyRuleEndpoints:
+      type: object
+      description: >-
+        Response of GET /policies/{id}/endpoints — see that endpoint's
+        description for the 4 hard limitations (requires log enabled, counts
+        are log entries not bytes, data window equals the ring buffer, only
+        new-connections/drops are logged).
+      required:
+        - ruleId
+        - ruleName
+        - chain
+        - logEnabled
+        - matchedEntries
+        - uniqueSources
+        - uniqueDestinations
+        - uniqueServices
+        - limit
+        - truncated
+        - scannedEntries
+        - sources
+        - destinations
+        - services
+      properties:
+        ruleId:
+          type: string
+          example: rule-xxxx
+        ruleName:
+          type: string
+          example: Allow LAN to WAN
+        chain:
+          type: string
+          enum: [forward, input, output]
+          example: forward
+        logEnabled:
+          type: boolean
+          description: rule.log — false means the lists below are always empty.
+          example: true
+        matchedEntries:
+          type: integer
+          description: Number of log entries for this rule currently in the buffer.
+          example: 482
+        uniqueSources:
+          type: integer
+          description: Distinct source IPs seen, counted BEFORE the limit truncation.
+          example: 12
+        uniqueDestinations:
+          type: integer
+          example: 96
+        uniqueServices:
+          type: integer
+          example: 7
+        limit:
+          type: integer
+          example: 10
+        truncated:
+          type: boolean
+          description: true when at least one category has more entries than limit.
+          example: true
+        scannedEntries:
+          type: integer
+          description: Size of the traffic-log buffer actually scanned (every chain/rule combined).
+          example: 10000
+        bufferOldestAt:
+          type: string
+          format: date-time
+          description: >-
+            Timestamp of the oldest entry currently in the whole buffer —
+            the edge of this endpoint's data window. Omitted if the buffer
+            is empty.
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/EndpointHit'
+        destinations:
+          type: array
+          items:
+            $ref: '#/components/schemas/EndpointHit'
+        services:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServiceHit'
 
     PolicyRuleInput:
       type: object

@@ -145,6 +145,84 @@ func (r *RingBuffer) Usage() (used int, capacity int, oldest string, newest stri
 	return used, capacity, oldest, newest, evicted
 }
 
+// Counted is one aggregated key's tally within a RuleAggregate: how many log
+// entries matched, and the as-stored Time string (see model.FirewallLog.Time)
+// of the first and last occurrence seen during the scan.
+type Counted struct {
+	Count     int
+	FirstSeen string
+	LastSeen  string
+}
+
+// RuleAggregate is the result of AggregateByRule: raw per-key tallies for one
+// rule, scanned once from the ring buffer. It intentionally carries no
+// ranking/top-N/name-resolution logic — that belongs to the service layer
+// (see docs/ref/todo/firewall-rule-matched-endpoints-plan.md T-02/T-05).
+type RuleAggregate struct {
+	Sources    map[string]Counted // key = Src IP
+	Dests      map[string]Counted // key = Dest IP
+	Services   map[string]Counted // key = "PROTO/PORT"
+	Matched    int                // number of entries whose RuleID == ruleID
+	Scanned    int                // total entries scanned (every chain, every rule)
+	OldestTime string             // Time of the oldest entry currently in the buffer, "" if empty
+}
+
+// AggregateByRule scans the buffer once, oldest to newest, under a single
+// RLock, and tallies per-source-IP / per-destination-IP / per-proto+port
+// counts for every entry whose RuleID matches ruleID. It never copies the
+// whole buffer (unlike GetAll) and never returns slices/maps referencing
+// r.logs internals, so it is safe to call from an HTTP handler. Entries with
+// Src/Dest == "-" are skipped for the respective map; entries with an empty
+// RuleID never match (RuleID == "" here would be meaningless — it's the
+// "no rule resolved" sentinel, see FirewallLog.RuleID doc comment).
+func (r *RingBuffer) AggregateByRule(ruleID string) RuleAggregate {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	agg := RuleAggregate{
+		Sources:  make(map[string]Counted),
+		Dests:    make(map[string]Counted),
+		Services: make(map[string]Counted),
+	}
+	n := len(r.logs)
+	agg.Scanned = n
+	if n > 0 {
+		agg.OldestTime = r.logs[0].Time
+	}
+	if ruleID == "" {
+		return agg
+	}
+
+	tally := func(m map[string]Counted, key string, t string) {
+		c, ok := m[key]
+		if !ok {
+			c.FirstSeen = t
+		}
+		c.Count++
+		c.LastSeen = t
+		m[key] = c
+	}
+
+	for i := 0; i < n; i++ {
+		entry := r.logs[i]
+		if entry.RuleID != ruleID {
+			continue
+		}
+		agg.Matched++
+		if entry.Src != "" && entry.Src != "-" {
+			tally(agg.Sources, entry.Src, entry.Time)
+		}
+		if entry.Dest != "" && entry.Dest != "-" {
+			tally(agg.Dests, entry.Dest, entry.Time)
+		}
+		if entry.Proto != "" {
+			svcKey := entry.Proto + "/" + entry.Port
+			tally(agg.Services, svcKey, entry.Time)
+		}
+	}
+	return agg
+}
+
 // Subscribe registers a listener and returns its receive channel plus a cancel
 // func that unregisters it (idempotent). buf is the channel's buffer depth; the
 // producer never blocks on a full channel — the event is dropped instead (a

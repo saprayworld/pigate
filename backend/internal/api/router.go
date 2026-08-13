@@ -121,6 +121,11 @@ func RegisterRoutes(s *Server) http.Handler {
 	// firewall-policy-rule-usage-stats-plan.md T-06) — authRoute, not
 	// superAdminRoute, same sensitivity level as /api/statistics/*.
 	authRoute("GET /api/policies/stats", s.HandleGetPolicyStats)
+	// GET /api/policies/{id}/endpoints: per-rule matched IP/service endpoints
+	// (docs/ref/todo/firewall-rule-matched-endpoints-plan.md T-06) — same
+	// authRoute sensitivity as /api/policies/stats and /api/logs/traffic (read
+	// of data every logged-in role can already see).
+	authRoute("GET /api/policies/{id}/endpoints", s.HandleGetPolicyRuleEndpoints)
 	authRoute("POST /api/policies", s.HandleCreatePolicy)
 	authRoute("PUT /api/policies/{id}", s.HandleUpdatePolicy)
 	authRoute("DELETE /api/policies/{id}", s.HandleDeletePolicy)

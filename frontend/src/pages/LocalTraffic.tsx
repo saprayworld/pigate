@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { useSearchParams } from "react-router"
 import { ShieldAlert } from "lucide-react"
 
 import { TrafficLogPage } from "@/components/logs/TrafficLogPage"
@@ -14,7 +15,18 @@ export default function LocalTraffic() {
   // "local" (input+output) is the default; the dropdown can narrow to one
   // side. Changing it flows through TrafficLogPage's refreshKey, which
   // resets pagination (fresh cursor + first page), same as any other filter.
-  const [chain, setChain] = useState<TrafficChainFilter>("local")
+  //
+  // ?chain= seeds the initial dropdown value (docs/ref/todo/
+  // firewall-rule-matched-endpoints-plan.md T-13 deep-link from
+  // RuleStatsDrawer): "input"/"output" narrow immediately, anything else
+  // (including no param at all) falls back to "local", same as before this
+  // param existed. Read once via useState's lazy initializer, never written
+  // back to the URL.
+  const [searchParams] = useSearchParams()
+  const [chain, setChain] = useState<TrafficChainFilter>(() => {
+    const fromURL = searchParams.get("chain")
+    return fromURL === "input" || fromURL === "output" ? fromURL : "local"
+  })
 
   return (
     <TrafficLogPage

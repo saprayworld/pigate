@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react"
+import { useSearchParams } from "react-router"
 import { Search, Trash2, Pause, Play, Loader2, Info } from "lucide-react"
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -51,10 +52,14 @@ const ACTION_OPTIONS = [
 /* Client-side mirror of the server's traffic-log filter (handlers.go
  * HandleGetTrafficLogs): chain equality/group + action equality + a
  * case-insensitive substring across src/dest/srcPort/port/proto/inIface/
- * outIface/reason/chain. Kept in lockstep so a row pushed over SSE is shown only when
- * it would also pass the server filter — including chain, otherwise input/
- * output entries would leak into the Forward Traffic page via the live
- * stream and vice versa (plan §6 Caution 6). */
+ * outIface/reason/chain/ruleName/ruleId. Kept in lockstep so a row pushed
+ * over SSE is shown only when it would also pass the server filter —
+ * including chain, otherwise input/output entries would leak into the
+ * Forward Traffic page via the live stream and vice versa (plan §6 Caution
+ * 6). ruleName/ruleId were added by docs/ref/todo/
+ * firewall-rule-matched-endpoints-plan.md T-12/T-13 for the RuleStatsDrawer
+ * "ดู log ของกฎนี้" deep-link — if the server-side haystack in handlers.go
+ * ever changes, this list must change with it. */
 function matchesFilter(
   l: SSELogEntry,
   action: string,
@@ -72,7 +77,19 @@ function matchesFilter(
     }
   }
   if (needle) {
-    const hay = [l.src, l.dest, l.srcPort, l.port, l.proto, l.inIface ?? "", l.outIface ?? "", l.reason, entryChain]
+    const hay = [
+      l.src,
+      l.dest,
+      l.srcPort,
+      l.port,
+      l.proto,
+      l.inIface ?? "",
+      l.outIface ?? "",
+      l.reason,
+      entryChain,
+      l.ruleName ?? "",
+      l.ruleId ?? "",
+    ]
       .join(" ")
       .toLowerCase()
     if (!hay.includes(needle.toLowerCase())) return false
@@ -205,10 +222,23 @@ export function TrafficLogPage({
   // Bumped on Clear to force an immediate first-page refetch even while paused.
   const [clearNonce, setClearNonce] = useState(0)
 
+  // Deep-link support (docs/ref/todo/firewall-rule-matched-endpoints-plan.md
+  // T-13): ?q= and ?action= seed the filter state's initial value ONLY, via
+  // useState's lazy initializer — read once on mount, never written back to
+  // the URL (no history pollution) and never overwrite what the user types
+  // afterwards. searchParams itself is intentionally unused past the initial
+  // render; navigating here again with different params requires a fresh
+  // mount (react-router already remounts on a full navigation to the same
+  // route in this app's usage, matching every other deep-link consumer).
+  const [searchParams] = useSearchParams()
+
   // Filters
-  const [action, setAction] = useState("all")
-  const [search, setSearch] = useState("")
-  const [debouncedSearch, setDebouncedSearch] = useState("")
+  const [action, setAction] = useState(() => {
+    const fromURL = searchParams.get("action")
+    return ACTION_OPTIONS.some((opt) => opt.value === fromURL) ? (fromURL as string) : "all"
+  })
+  const [search, setSearch] = useState(() => searchParams.get("q") ?? "")
+  const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams.get("q") ?? "")
 
   useEffect(() => {
     const id = setTimeout(() => setDebouncedSearch(search), 400)

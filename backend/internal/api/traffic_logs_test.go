@@ -207,6 +207,63 @@ func TestHandleGetTrafficLogs_FilterBeforeCursor(t *testing.T) {
 	}
 }
 
+// TestHandleGetTrafficLogs_QSearchesRuleNameAndID covers T-12 (docs/ref/todo/
+// firewall-rule-matched-endpoints-plan.md): q= matches ruleName and ruleId
+// (for the RuleStatsDrawer "ดู log ของกฎนี้" deep-link), while the pre-existing
+// q= behavior (IP/port/reason/etc) still finds unrelated rows and never
+// leaks a differently-named rule's rows into a rule-name search.
+func TestHandleGetTrafficLogs_QSearchesRuleNameAndID(t *testing.T) {
+	server, _ := buildTestServer(t, false)
+	handler := RegisterRoutes(server)
+	AddSession("mock_session_id_test_token", "pigate")
+
+	now := time.Now()
+	server.logs.Add(model.FirewallLog{
+		ID: "by-name", Time: now.Add(-3 * time.Second).Format(time.RFC3339Nano),
+		Action: "PASS", Src: "192.168.1.50", Dest: "8.8.8.8", Port: "443", Proto: "TCP",
+		Chain: model.PolicyChainForward, Reason: "Allowed (forward)",
+		RuleID: "rule-abc123", RuleName: "Allow LAN to WAN",
+	})
+	server.logs.Add(model.FirewallLog{
+		ID: "other-rule", Time: now.Add(-2 * time.Second).Format(time.RFC3339Nano),
+		Action: "PASS", Src: "192.168.1.51", Dest: "1.1.1.1", Port: "53", Proto: "UDP",
+		Chain: model.PolicyChainForward, Reason: "Allowed (forward)",
+		RuleID: "rule-def456", RuleName: "Allow DNS",
+	})
+	server.logs.Add(model.FirewallLog{
+		ID: "no-rule", Time: now.Add(-1 * time.Second).Format(time.RFC3339Nano),
+		Action: "DROP", Src: "203.0.113.9", Dest: "203.0.113.1", Port: "23", Proto: "TCP",
+		Chain: model.PolicyChainForward, Reason: "Blocked (forward)",
+	})
+
+	// q=<rule name> returns only that rule's row.
+	byName := getTrafficLogs(t, handler, "q="+url.QueryEscape("Allow LAN to WAN"))
+	if len(byName) != 1 || byName[0].ID != "by-name" {
+		t.Fatalf("expected q=<rule name> to return only by-name, got %+v", byName)
+	}
+
+	// q=<rule id> also works.
+	byID := getTrafficLogs(t, handler, "q=rule-def456")
+	if len(byID) != 1 || byID[0].ID != "other-rule" {
+		t.Fatalf("expected q=<rule id> to return only other-rule, got %+v", byID)
+	}
+
+	// Pre-existing q= behavior (IP/port/reason) must be unchanged: matching
+	// on an IP still finds its row regardless of rule name/id.
+	byIP := getTrafficLogs(t, handler, "q=203.0.113.9")
+	if len(byIP) != 1 || byIP[0].ID != "no-rule" {
+		t.Fatalf("expected q=<ip> to still work, got %+v", byIP)
+	}
+	byPort := getTrafficLogs(t, handler, "q=53")
+	if len(byPort) != 1 || byPort[0].ID != "other-rule" {
+		t.Fatalf("expected q=<port> to still work, got %+v", byPort)
+	}
+	byReason := getTrafficLogs(t, handler, "q="+url.QueryEscape("Blocked (forward)"))
+	if len(byReason) != 1 || byReason[0].ID != "no-rule" {
+		t.Fatalf("expected q=<reason> to still work, got %+v", byReason)
+	}
+}
+
 // TestHandleGetTrafficLogs_BackwardCompatible asserts a client that doesn't
 // send chain/cursor params (the pre-pagination contract) still works.
 func TestHandleGetTrafficLogs_BackwardCompatible(t *testing.T) {

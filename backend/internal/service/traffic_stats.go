@@ -1042,6 +1042,53 @@ func (s *TrafficStatsService) categorize(proto uint8, dstPort uint16) string {
 	return "Other"
 }
 
+// ServiceNameFor is the exported, string-typed wrapper around categorize used
+// by policy_endpoints.go (see
+// docs/ref/todo/firewall-rule-matched-endpoints-plan.md T-03) to translate a
+// traffic-log entry's (Proto, Port) — as produced by the NFLOG parser, e.g.
+// "TCP"/"UDP"/"ICMP"/"ICMPv6"/"proto-N" and a decimal port string or "-" for
+// non TCP/UDP — into a Service-Object name. Deliberately does NOT reuse
+// categorize's "Other" fallback: callers here want "" so the UI can fall back
+// to displaying the raw PROTO/PORT instead of a misleading "Other" label.
+func (s *TrafficStatsService) ServiceNameFor(proto string, port string) string {
+	var p uint8
+	switch strings.ToUpper(strings.TrimSpace(proto)) {
+	case "TCP":
+		p = 6
+	case "UDP":
+		p = 17
+	case "ICMP":
+		p = 1
+	case "ICMPV6":
+		p = 58
+	default:
+		// "proto-N" or any other spelling: try to recover the numeric id so
+		// an ICMP-style Service Object (protocol "ICMP") can still match via
+		// the isICMP branch of categorize when N happens to be 1/58 — but any
+		// other value simply falls into the generic non-TCP/UDP branch below.
+		if n, err := strconv.Atoi(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(proto)), "proto-")); err == nil && n >= 0 && n <= 255 {
+			p = uint8(n)
+		} else {
+			return ""
+		}
+	}
+
+	var dstPort uint16
+	if p == 6 || p == 17 {
+		n, err := strconv.Atoi(strings.TrimSpace(port))
+		if err != nil || n < 0 || n > 65535 {
+			return ""
+		}
+		dstPort = uint16(n)
+	}
+
+	name := s.categorize(p, dstPort)
+	if name == "Other" {
+		return ""
+	}
+	return name
+}
+
 func protoMatches(protocols []uint8, proto uint8) bool {
 	for _, p := range protocols {
 		if p == proto {
