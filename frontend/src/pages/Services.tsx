@@ -138,7 +138,7 @@ export default function Services() {
         (protoFilter === "ICMP" && svc.protocol === "ICMP")
 
       return matchSearch && matchProto
-    })
+    }).sort((a, b) => a.name.localeCompare(b.name))
   }, [services, searchQuery, protoFilter])
 
   // --- CRUD Actions ---

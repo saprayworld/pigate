@@ -137,7 +137,7 @@ export default function Addresses() {
       const matchType = selectedTypeFilter === "all" || addr.type === selectedTypeFilter
 
       return matchSearch && matchType
-    })
+    }).sort((a, b) => a.name.localeCompare(b.name))
   }, [addresses, searchQuery, selectedTypeFilter])
 
   // --- Checkbox Actions ---
