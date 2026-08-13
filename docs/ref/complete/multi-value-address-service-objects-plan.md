@@ -6,7 +6,14 @@
 `Web_Ports` = `TCP/80` + `TCP/443` + `TCP/8000-8010` + `UDP/443`
 (เทียบเท่า address group / service group ของไฟร์วอลล์ทั่วไป)
 
-สถานะ: **ยืนยันครบแล้ว (เจ้าของตอบ D-1..D-4 ครบ) — รอ PR #137 merge เข้า `main` ก่อนเริ่มโค้ด**
+สถานะ: **เสร็จแล้ว** — implement ครบ T-00A ถึง T-14 บน branch `feat/multi-value-address-service-objects`,
+ai-qa ตรวจ Final Acceptance ผ่านทั้งหมดในรอบแรก (build/test/lint ของทั้ง backend และ frontend ผ่านหมด,
+ทดสอบ end-to-end ผ่าน mock server ครบทุกข้อใน Final Acceptance รวมถึง idempotent InitDB, migration จาก
+DB เดิม, การสร้าง/แก้ไข object หลายรายการผ่าน UI, การขยาย policy เป็นหลายกฎด้วย rule id เดียวกัน,
+สถิติ per-rule รวมเป็นบรรทัดเดียว, matched-endpoint labeling, และ config key `max-object-entries`/
+`max-expanded-rules-per-policy` ทำงานตาม two-tier validation) — มีเพียงหมายเหตุความเสี่ยงเล็กน้อยว่า
+cap guard ใน `kernel/real_firewall.go` ไม่มี automated test เพราะต้องใช้ CAP_NET_ADMIN จริง (ไม่ใช่
+regression ใหม่ เป็นข้อจำกัดเดิมของโค้ดเบส) ไม่ block การปิดงาน
 (แผนนี้แก้ไฟล์ที่ PR #137 เป็นคนสร้าง/แก้ ได้แก่ `service/policy_endpoint_labels.go`, `service/policy_endpoints.go`,
 `service/traffic_stats.go` ⇒ ถ้าเริ่มก่อน merge จะชน conflict แน่นอน)
 
@@ -82,14 +89,15 @@ CREATE TABLE IF NOT EXISTS service_objects (
   `addUserChainRules` ⇒ **แผนนี้แตะเฉพาะ section 3 เท่านั้น ไม่แตะลำดับ section**
 - `real_traffic_account.go:181-191` `accumulateRuleCounters` **บวกสะสม counter ของทุก nft rule ที่มี UserData เดียวกัน**
   ⇒ การแตกกฎเพิ่มขึ้นไม่ทำให้สถิติ per-rule เพี้ยน (ยืนยันแล้ว)
-- `kernel/mock.go:33-34` `ApplyFirewallRules(rules, addrs, svcs, ...)` แค่เก็บ input ไว้ ไม่ parse ค่า address/service
+- `kernel/mock.go:33-34` `ApplyRules(rules, addrs, svcs, ...)` แค่เก็บ input ไว้ ไม่ parse ค่า address/service
 
 ### 1.5 Service layer
 
 - `service/firewall.go:60` `NewFirewallService(repo, firewall, ifaceService)`; `197-204` ดึง `repo.GetAddresses()/GetServices()`
   ส่งเข้า kernel; `297-350` เป็น pass-through CRUD
-- `service/traffic_stats.go:1084-1124` `buildCategoryEntries(svcs)` สร้าง lookup table จาก **1 (protocol, port) ต่อ 1 service**
+- `service/traffic_stats.go:1131-1156` `buildCategoryEntries(svcs)` สร้าง lookup table จาก **1 (protocol, port) ต่อ 1 service**
   ใช้โดย `categorize()` (เลือกช่วงพอร์ตแคบสุด, tie-break ด้วยชื่อ) + cache TTL 60s
+  (บรรทัดเลื่อนจาก PR #137 ที่แทรก `ServiceNameFor` ไว้ก่อนหน้าที่ 1053 — ใช้ชื่อฟังก์ชันค้นหาแทนเลขบรรทัดตายตัวถ้าไม่ตรง)
 - **จาก PR #137** (ยังไม่ merge): `service/policy_endpoint_labels.go` มี `newAddrMatcher([]model.AddressObject)` ที่อ่าน
   `addr.Type`/`addr.Value` เฉพาะ `subnet`/`range` (ข้าม fqdn) แปลงเป็นช่วง IP แล้ว `Match(ip)` คืน **ชื่อ object ที่ช่วงแคบที่สุด**
   ที่ครอบ IP นั้น (tie-break ด้วยชื่อ), และ `service/policy_endpoints.go` ใช้ `trafficStats.ServiceNameFor(proto, port)`
@@ -106,9 +114,10 @@ CREATE TABLE IF NOT EXISTS service_objects (
 
 ### 1.7 API + Backup
 
-- `api/handlers.go:1944-2042` (address) และ `2048-2130` (service) map `Input → model` ตรง ๆ field ต่อ field
-- `docs/openapi.yaml` (+ สำเนา `frontend/public/openapi.yaml`) มี schema `AddressObject/AddressObjectInput` (6909-6960)
-  และ `ServiceObject/ServiceObjectInput` (7031-7083) — **ห้ามแก้ `backend/internal/api/dist/openapi.yaml`** (build artifact)
+- `api/handlers.go:1998-2105` (address) และ `2111-2181` (service) map `Input → model` ตรง ๆ field ต่อ field
+  (เลื่อนจาก PR #137 ~+55/+60 บรรทัด — ค้นด้วยชื่อฟังก์ชัน `HandleCreateAddress`/`HandleCreateService` ถ้าไม่ตรง)
+- `docs/openapi.yaml` (+ สำเนา `frontend/public/openapi.yaml`) มี schema `AddressObject` (7157), `AddressObjectInput` (7189)
+  และ `ServiceObject` (7279), `ServiceObjectInput` (7312) — **ห้ามแก้ `backend/internal/api/dist/openapi.yaml`** (build artifact)
 - Backup: `model/backup.go:58-59` เก็บ `[]AddressObject`/`[]ServiceObject` ตรง ๆ;
   `db/backup_repo.go:93-134` wipe แล้ว INSERT กลับ (ข้าม system/predefined);
   `service/backup.go:650-687` `validateConfig` ตรวจว่า policy อ้าง object ที่มีในไฟล์;
@@ -149,7 +158,7 @@ CREATE TABLE IF NOT EXISTS service_objects (
 | เหตุผลของช่วง | 1 = อย่างน้อยต้องมีค่าได้ 1 รายการ; 512 = เพดานที่ยัง render บนหน้าเว็บและ validate ได้ไหวบน Pi 5 | 64 = ต่ำกว่านี้ policy ปกติ (ALL×ALL×ALL) ก็ยังต้องแตกได้; 65536 = เพดานกัน RAM/เวลาโหลด nft ruleset บน Pi 5 |
 | Validation | two-tier เหมือนคีย์ tuning อื่น: ไม่ใช่จำนวนเต็ม = error ตั้งแต่ `applyKey`; เป็นจำนวนเต็มแต่นอกช่วง = **clamp กลับ default + warning ใน `Resolve` (ห้าม fatal)** | เช่นเดียวกัน |
 | ตำแหน่งใน `orderedKeys` | ต่อท้ายสุด (หลัง `traffic-log-buffer-capacity`) เพื่อให้ไฟล์ config ที่ generate ไว้แล้ว diff นิ่ง | ต่อท้ายถัดจาก `max-object-entries` |
-| การมีผล | `max-object-entries` มีผลกับการ validate ตอน create/update object (มีผลทันทีต่อ request ถัดไปหลัง restart) | `max-expanded-rules-per-policy` มีผลตอน `ApplyFirewallRules` |
+| การมีผล | `max-object-entries` มีผลกับการ validate ตอน create/update object (มีผลทันทีต่อ request ถัดไปหลัง restart) | `max-expanded-rules-per-policy` มีผลตอน `ApplyRules` |
 | การส่งค่าเข้า layer | `main.go` → `repo.SetObjectLimits(cfg.MaxObjectEntries)` (setter แบบเดียวกับ `SetMockMode`) | `main.go` → `kernel.RealFirewall.SetMaxExpandedRulesPerPolicy(cfg.MaxExpandedRulesPerPolicy)` (setter หลัง `NewRealFirewall`, **ห้ามเปลี่ยน signature constructor**) แล้วส่งลงเป็นพารามิเตอร์ของ `addUserChainRules` |
 
 > ทั้งสองคีย์ **แก้แล้วต้อง `sudo systemctl restart pigate` ถึงมีผล** (อ่านครั้งเดียวตอน startup ตาม pattern "apply config at startup" ของโปรเจกต์)
@@ -297,12 +306,13 @@ CREATE TABLE IF NOT EXISTS service_objects (
   "title": "เพิ่ม AddressEntry/ServiceEntry + validator กลางใน model (เพดานเป็นพารามิเตอร์ ไม่ใช่ const ตายตัว)",
   "layer": "model",
   "files": ["backend/internal/model/object_entry_validate.go"],
-  "instruction": "สร้างไฟล์ใหม่ backend/internal/model/object_entry_validate.go (สไตล์เดียวกับ model/port_forward_validate.go) ประกอบด้วย: (1) type AddressEntry struct { Type string `json:\"type\"`; Value string `json:\"value\"` } และ type ServiceEntry struct { Protocol string `json:\"protocol\"`; Port string `json:\"port\"` } พร้อม doc comment ว่า 1 object มีได้หลาย entry และ entry คือหน่วยที่ถูกแปลงเป็น nft match 1 ชุด และ type/protocol อยู่ระดับ entry (ปนกันได้ใน object เดียว ตาม D-1); (2) func ValidateAddressEntry(e AddressEntry) error — ยกตรรกะจาก db/repository.go validateAddressObject มาแบบ verbatim (subnet ใช้ net.ParseCIDR; range รูปแบบ START-END ตรวจ ParseIP ทั้งสองฝั่งและ family ต้องตรง; fqdn ใช้ตรรกะเดียวกับ isValidFQDN ที่ย้ายมาเป็น helper unexported ในไฟล์นี้) ห้ามเปลี่ยนกฎการตรวจ; (3) func ValidateServiceEntry(e ServiceEntry) error — ยกตรรกะจาก validateServiceObject (protocol ∈ TCP/UDP/TCP\\/UDP/ICMP, ICMP ⇒ port == \"-\", อื่น ๆ เลขเดี่ยวหรือ start-end ที่ 1..65535 และ start <= end); (4) **ห้ามประกาศเพดานเป็น const ที่ใช้งานจริง** — ให้ประกาศเพียง `const DefaultMaxObjectEntries = 64` พร้อม comment ว่าเป็นค่า default ที่ต้อง sync กับ config.Defaults().MaxObjectEntries และค่าจริงมาจาก config key max-object-entries (D-3, plan §2.1); (5) func ValidateAddressEntries(es []AddressEntry, maxEntries int) error และ ValidateServiceEntries(es []ServiceEntry, maxEntries int) error — ต้องมีอย่างน้อย 1 รายการ, ไม่เกิน maxEntries (ถ้า maxEntries <= 0 ให้ fallback ใช้ DefaultMaxObjectEntries พร้อม comment), ทุกรายการผ่าน validator เดี่ยว, รายการซ้ำ (เทียบแบบ trim+lowercase ของ type|value และ protocol|port) คืน error ระบุค่าที่ซ้ำ. ห้ามแก้ไฟล์อื่นใน task นี้",
+  "instruction": "สร้างไฟล์ใหม่ backend/internal/model/object_entry_validate.go (สไตล์เดียวกับ model/port_forward_validate.go) ประกอบด้วย: (1) type AddressEntry struct { Type string `json:\"type\"`; Value string `json:\"value\"` } และ type ServiceEntry struct { Protocol string `json:\"protocol\"`; Port string `json:\"port\"` } พร้อม doc comment ว่า 1 object มีได้หลาย entry และ entry คือหน่วยที่ถูกแปลงเป็น nft match 1 ชุด และ type/protocol อยู่ระดับ entry (ปนกันได้ใน object เดียว ตาม D-1); (2) func ValidateAddressEntry(e AddressEntry) error — ยกตรรกะจาก db/repository.go validateAddressObject มาแบบ verbatim (subnet ใช้ net.ParseCIDR; range รูปแบบ START-END ตรวจ ParseIP ทั้งสองฝั่งและ family ต้องตรง; fqdn ใช้ตรรกะเดียวกับ isValidFQDN ที่ย้ายมาเป็น helper unexported ในไฟล์นี้) ห้ามเปลี่ยนกฎการตรวจ; (3) func ValidateServiceEntry(e ServiceEntry) error — ยกตรรกะจาก validateServiceObject (protocol ∈ TCP/UDP/TCP\\/UDP/ICMP, ICMP ⇒ port == \"-\", อื่น ๆ เลขเดี่ยวหรือ start-end ที่ 1..65535 และ start <= end) — **การตรวจรูปแบบ/ช่วงพอร์ตต้อง reuse `model.ParsePortSpec` (มีอยู่แล้วใน model/types.go:843 และถูกใช้อยู่แล้วใน service/traffic_stats.go) ห้ามเขียน parser พอร์ตซ้ำใหม่** (ตรงกับหลัก validate ที่เดียวของ Caution 5); (4) **ห้ามประกาศเพดานเป็น const ที่ใช้งานจริง** — ให้ประกาศเพียง `const DefaultMaxObjectEntries = 64` พร้อม comment ว่าเป็นค่า default ที่ต้อง sync กับ config.Defaults().MaxObjectEntries และค่าจริงมาจาก config key max-object-entries (D-3, plan §2.1); (5) func ValidateAddressEntries(es []AddressEntry, maxEntries int) error และ ValidateServiceEntries(es []ServiceEntry, maxEntries int) error — ต้องมีอย่างน้อย 1 รายการ, ไม่เกิน maxEntries (ถ้า maxEntries <= 0 ให้ fallback ใช้ DefaultMaxObjectEntries พร้อม comment), ทุกรายการผ่าน validator เดี่ยว, รายการซ้ำ (เทียบแบบ trim+lowercase ของ type|value และ protocol|port) คืน error ระบุค่าที่ซ้ำ. ห้ามแก้ไฟล์อื่นใน task นี้",
   "acceptance": [
     "cd backend && go build ./... ผ่าน",
     "มี AddressEntry, ServiceEntry, DefaultMaxObjectEntries=64 และ ValidateAddressEntries/ValidateServiceEntries ที่รับ maxEntries เป็นพารามิเตอร์",
     "ไม่มี const เพดานตัวใดถูกใช้เป็นค่าบังคับใช้จริงในไฟล์นี้ (ใช้ได้เฉพาะเป็น fallback default)",
-    "กฎการ validate ตรงกับของเดิมใน db/repository.go ทุกกรณี"
+    "กฎการ validate ตรงกับของเดิมใน db/repository.go ทุกกรณี",
+    "ValidateServiceEntry เรียกใช้ model.ParsePortSpec แทนการเขียน parser พอร์ตซ้ำ"
   ],
   "depends_on": ["T-00A"]
 }
@@ -377,7 +387,7 @@ CREATE TABLE IF NOT EXISTS service_objects (
   "title": "real_firewall: expand ทุก entry + guard จำนวนกฎที่รับค่าจาก config",
   "layer": "kernel",
   "files": ["backend/internal/kernel/real_firewall.go"],
-  "instruction": "ใน backend/internal/kernel/real_firewall.go — security-sensitive path ต้องรักษาพฤติกรรมเดิมทุกอย่างนอกจากการรองรับหลายค่า: (1) เปลี่ยน buildIPMatchExpressions ให้รับ model.AddressEntry แทนการเปิด addrsMap ด้วยชื่อ แล้วสร้าง exprs ชุดเดิมเป๊ะ (subnet /32 = Cmp เท่ากับ, subnet อื่น = Payload+Bitwise+Cmp, range = Gte+Lte, fqdn = LookupIP ใช้ IPv4 ตัวแรกเหมือนเดิม) ห้ามเปลี่ยนวิธี match; เพิ่ม helper แปลงชื่อ object → []AddressEntry (ไม่พบชื่อ = error เหมือนเดิม, \"ALL\"/ว่าง = ไม่มีเงื่อนไข IP เหมือนเดิม); (2) addUserChainRules loop เพิ่มเป็น: src object → ทุก src entry, dest object → ทุก dest entry, service object → ทุก service entry → ทุก protocol ของ entry นั้น (entry ที่ protocol == \"TCP/UDP\" ยังแตกเป็น TCP และ UDP); ทุก nft rule ที่แตกออกมาต้องใช้ ruleUserData (rule id) เดียวกันและ logPrefix ที่ผ่าน withRuleToken(r.ID) เดียวกัน; ห้ามแตะโครง 4 section และลำดับ rule ระหว่าง policy; (3) resolveService คืน object พร้อม entries (คง fallback ตัดคำแรกของชื่อ) และ buildRuleExpressions รับ service entry ที่ resolve แล้วแทนการอ่าน svc.Protocol/svc.Port ของทั้ง object; (4) error รายรายการ: entry ใด build ไม่ผ่าน (เช่น FQDN resolve ไม่ได้) ให้ log warning ระบุชื่อ object + ค่า entry แล้ว continue เฉพาะ entry นั้น entry อื่นของ object เดิมต้องยังถูก generate; (5) **guard เพดานต้องมาจาก config ไม่ใช่ const (D-3)**: เพิ่ม field `maxExpandedRulesPerPolicy int` ใน struct RealFirewall (ค่าเริ่มต้นใน NewRealFirewall = 4096 พร้อม comment ว่าเป็น default ที่ต้อง sync กับ config.Defaults().MaxExpandedRulesPerPolicy) + setter `SetMaxExpandedRulesPerPolicy(n int)` (**ห้ามเปลี่ยน signature ของ NewRealFirewall**) แล้วส่งค่าลงเป็นพารามิเตอร์ของ addUserChainRules; เมื่อการแตกกฎของ policy rule หนึ่งจะเกินเพดาน ให้หยุดแตกต่อและ log warning ระบุชื่อ/ไอดี rule + เพดานที่ใช้ + ชื่อคีย์ config (max-expanded-rules-per-policy) แต่ **ห้าม return error หรือทำให้ ApplyFirewallRules ทั้งชุดล้ม**; (6) doc comment สรุปสูตรจำนวนกฎ (M×N×K×proto) และอ้าง plan §2.1. ห้ามใช้ nftables set (D-2) ห้ามเพิ่ม dependency",
+  "instruction": "ใน backend/internal/kernel/real_firewall.go — security-sensitive path ต้องรักษาพฤติกรรมเดิมทุกอย่างนอกจากการรองรับหลายค่า: (1) เปลี่ยน buildIPMatchExpressions ให้รับ model.AddressEntry แทนการเปิด addrsMap ด้วยชื่อ แล้วสร้าง exprs ชุดเดิมเป๊ะ (subnet /32 = Cmp เท่ากับ, subnet อื่น = Payload+Bitwise+Cmp, range = Gte+Lte, fqdn = LookupIP ใช้ IPv4 ตัวแรกเหมือนเดิม) ห้ามเปลี่ยนวิธี match; เพิ่ม helper แปลงชื่อ object → []AddressEntry (ไม่พบชื่อ = error เหมือนเดิม, \"ALL\"/ว่าง = ไม่มีเงื่อนไข IP เหมือนเดิม); (2) addUserChainRules loop เพิ่มเป็น: src object → ทุก src entry, dest object → ทุก dest entry, service object → ทุก service entry → ทุก protocol ของ entry นั้น (entry ที่ protocol == \"TCP/UDP\" ยังแตกเป็น TCP และ UDP); ทุก nft rule ที่แตกออกมาต้องใช้ ruleUserData (rule id) เดียวกันและ logPrefix ที่ผ่าน withRuleToken(r.ID) เดียวกัน; ห้ามแตะโครง 4 section และลำดับ rule ระหว่าง policy; (3) resolveService คืน object พร้อม entries (คง fallback ตัดคำแรกของชื่อ) และ buildRuleExpressions รับ service entry ที่ resolve แล้วแทนการอ่าน svc.Protocol/svc.Port ของทั้ง object; (4) error รายรายการ: entry ใด build ไม่ผ่าน (เช่น FQDN resolve ไม่ได้) ให้ log warning ระบุชื่อ object + ค่า entry แล้ว continue เฉพาะ entry นั้น entry อื่นของ object เดิมต้องยังถูก generate; (5) **guard เพดานต้องมาจาก config ไม่ใช่ const (D-3)**: เพิ่ม field `maxExpandedRulesPerPolicy int` ใน struct RealFirewall (ค่าเริ่มต้นใน NewRealFirewall = 4096 พร้อม comment ว่าเป็น default ที่ต้อง sync กับ config.Defaults().MaxExpandedRulesPerPolicy) + setter `SetMaxExpandedRulesPerPolicy(n int)` (**ห้ามเปลี่ยน signature ของ NewRealFirewall**) แล้วส่งค่าลงเป็นพารามิเตอร์ของ addUserChainRules; เมื่อการแตกกฎของ policy rule หนึ่งจะเกินเพดาน ให้หยุดแตกต่อและ log warning ระบุชื่อ/ไอดี rule + เพดานที่ใช้ + ชื่อคีย์ config (max-expanded-rules-per-policy) แต่ **ห้าม return error หรือทำให้ ApplyRules ทั้งชุดล้ม**; (6) doc comment สรุปสูตรจำนวนกฎ (M×N×K×proto) และอ้าง plan §2.1. ห้ามใช้ nftables set (D-2) ห้ามเพิ่ม dependency",
   "acceptance": [
     "cd backend && go build ./... ผ่าน",
     "src 3 entries × dest ALL × service 2 entries ⇒ จำนวน nft rule ตามสูตร และทุกกฎมี UserData = rule id เดียวกัน",
@@ -398,7 +408,7 @@ CREATE TABLE IF NOT EXISTS service_objects (
   "title": "ตรวจ/ปรับ mock kernel และเทสต์โครงสร้าง chain",
   "layer": "kernel",
   "files": ["backend/internal/kernel/mock.go", "backend/internal/kernel/policy_chain_test.go"],
-  "instruction": "ตรวจ backend/internal/kernel/mock.go: ApplyFirewallRules ปัจจุบันเก็บ addrs/svcs ไว้เฉย ๆ ไม่ parse ค่า ⇒ ถ้าไม่มีจุดใดอ่าน .Value/.Port ให้เพิ่มเพียง comment ว่า mock ไม่ตีความ entries และของจริงอยู่ใน real_firewall.go; ถ้าพบจุดที่อ่านค่า object (เช่นการสังเคราะห์ traffic log) ให้ปรับให้วนทุก entry; ถ้า mock มี setter/field เทียบเท่า ให้เพิ่ม no-op SetMaxExpandedRulesPerPolicy เฉพาะเมื่อ interface บังคับเท่านั้น (ห้ามเพิ่มเมธอดใน FirewallManager interface ถ้าไม่จำเป็น — setter นี้ควรอยู่บน struct RealFirewall เท่านั้น และ main.go เรียกผ่าน type assertion หรือตอนสร้าง real). จากนั้นอัปเดต policy_chain_test.go ให้คอมไพล์และผ่านกับ signature ใหม่ โดย **ห้ามอ่อนข้อ assertion เดิม** เรื่องลำดับ section/กฎ ให้ปรับเฉพาะ fixture ให้ใช้ Entries",
+  "instruction": "ตรวจ backend/internal/kernel/mock.go: ApplyRules ปัจจุบันเก็บ addrs/svcs ไว้เฉย ๆ ไม่ parse ค่า ⇒ ถ้าไม่มีจุดใดอ่าน .Value/.Port ให้เพิ่มเพียง comment ว่า mock ไม่ตีความ entries และของจริงอยู่ใน real_firewall.go; ถ้าพบจุดที่อ่านค่า object (เช่นการสังเคราะห์ traffic log) ให้ปรับให้วนทุก entry; ถ้า mock มี setter/field เทียบเท่า ให้เพิ่ม no-op SetMaxExpandedRulesPerPolicy เฉพาะเมื่อ interface บังคับเท่านั้น (ห้ามเพิ่มเมธอดใน FirewallManager interface ถ้าไม่จำเป็น — setter นี้ควรอยู่บน struct RealFirewall เท่านั้น และ main.go เรียกผ่าน type assertion หรือตอนสร้าง real). จากนั้นอัปเดต policy_chain_test.go ให้คอมไพล์และผ่านกับ signature ใหม่ โดย **ห้ามอ่อนข้อ assertion เดิม** เรื่องลำดับ section/กฎ ให้ปรับเฉพาะ fixture ให้ใช้ Entries",
   "acceptance": [
     "cd backend && go build ./... และ go test ./internal/kernel/... ผ่าน",
     "assertion เดิมเรื่องลำดับ section/กฎยังอยู่ครบ",

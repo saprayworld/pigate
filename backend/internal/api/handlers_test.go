@@ -277,6 +277,189 @@ func TestAddressCRUDAPI(t *testing.T) {
 	}
 }
 
+// TestAddressCRUDAPI_EntriesBody covers T-09's API scope: creating/updating
+// an Address Object via the new "entries" body (multiple entries), and the
+// 400 path when neither entries nor legacy type/value is supplied
+// (docs/ref/todo/multi-value-address-service-objects-plan.md T-09).
+func TestAddressCRUDAPI_EntriesBody(t *testing.T) {
+	handler, _ := setupTestServer(t)
+	authToken := "mock_session_id_test_token"
+
+	// 1. Create with entries body (multiple entries).
+	addrInput := model.AddressObjectInput{
+		Name: "Multi_Entries_Addr",
+		Entries: []model.AddressEntry{
+			{Type: "subnet", Value: "10.20.0.0/24"},
+			{Type: "subnet", Value: "10.20.1.0/24"},
+		},
+	}
+	body, _ := json.Marshal(addrInput)
+	req := httptest.NewRequest("POST", "/api/addresses", bytes.NewBuffer(body))
+	addSessionCookie(req, authToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for creating address with entries body, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var created model.AddressObject
+	json.NewDecoder(rec.Body).Decode(&created)
+	if len(created.Entries) != 2 {
+		t.Fatalf("Expected 2 entries in create response, got %d: %+v", len(created.Entries), created.Entries)
+	}
+	// Legacy Type/Value must mirror Entries[0] for old clients.
+	if created.Type != "subnet" || created.Value != "10.20.0.0/24" {
+		t.Errorf("Expected legacy type/value to mirror Entries[0], got type=%q value=%q", created.Type, created.Value)
+	}
+
+	// 2. GET by list must also return the full entries.
+	req = httptest.NewRequest("GET", "/api/addresses", nil)
+	addSessionCookie(req, authToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	var list []model.AddressObject
+	json.NewDecoder(rec.Body).Decode(&list)
+	var found *model.AddressObject
+	for i := range list {
+		if list[i].ID == created.ID {
+			found = &list[i]
+		}
+	}
+	if found == nil || len(found.Entries) != 2 {
+		t.Fatalf("Expected created address with 2 entries in list, got %+v", found)
+	}
+
+	// 3. Update with a replaced entries body (different count).
+	updateInput := model.AddressObjectInput{
+		Name: "Multi_Entries_Addr",
+		Entries: []model.AddressEntry{
+			{Type: "fqdn", Value: "svc.pigate.local"},
+		},
+	}
+	body, _ = json.Marshal(updateInput)
+	req = httptest.NewRequest("PUT", "/api/addresses/"+created.ID, bytes.NewBuffer(body))
+	addSessionCookie(req, authToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for updating address with entries body, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var updated model.AddressObject
+	json.NewDecoder(rec.Body).Decode(&updated)
+	if len(updated.Entries) != 1 || updated.Entries[0].Value != "svc.pigate.local" {
+		t.Fatalf("Expected update to fully replace entries, got %+v", updated.Entries)
+	}
+
+	// 4. 400 when body has neither entries nor legacy type/value.
+	emptyInput := model.AddressObjectInput{Name: "No_Entries_Addr"}
+	body, _ = json.Marshal(emptyInput)
+	req = httptest.NewRequest("POST", "/api/addresses", bytes.NewBuffer(body))
+	addSessionCookie(req, authToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 Bad Request creating an address with no entries/legacy fields, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+
+	// 5. 400 on malformed request payload (unparsable JSON).
+	req = httptest.NewRequest("POST", "/api/addresses", bytes.NewBufferString("not json"))
+	addSessionCookie(req, authToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 Bad Request for malformed JSON payload, got %d", rec.Code)
+	}
+}
+
+// TestAddressCRUDAPI_LegacyBodyStillWorks locks in that the old single-value
+// {type, value} request body (no "entries" key) still creates/updates an
+// address object correctly — required for backward compat with any client
+// not yet updated to send entries (plan §5 compat requirement).
+func TestAddressCRUDAPI_LegacyBodyStillWorks(t *testing.T) {
+	handler, _ := setupTestServer(t)
+	authToken := "mock_session_id_test_token"
+
+	addrInput := model.AddressObjectInput{
+		Name:  "Legacy_Body_Addr",
+		Type:  "subnet",
+		Value: "192.168.50.0/24",
+	}
+	body, _ := json.Marshal(addrInput)
+	req := httptest.NewRequest("POST", "/api/addresses", bytes.NewBuffer(body))
+	addSessionCookie(req, authToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for creating address with legacy body, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var created model.AddressObject
+	json.NewDecoder(rec.Body).Decode(&created)
+	if len(created.Entries) != 1 || created.Entries[0].Value != "192.168.50.0/24" {
+		t.Fatalf("Expected legacy body to be normalized into a single entry, got %+v", created.Entries)
+	}
+}
+
+// TestServiceCRUDAPI_EntriesBody mirrors TestAddressCRUDAPI_EntriesBody for
+// Service Objects (T-09 API scope).
+func TestServiceCRUDAPI_EntriesBody(t *testing.T) {
+	handler, _ := setupTestServer(t)
+	authToken := "mock_session_id_test_token"
+
+	// 1. Create with entries body (multiple entries).
+	svcInput := model.ServiceObjectInput{
+		Name: "Multi_Entries_Svc",
+		Entries: []model.ServiceEntry{
+			{Protocol: "TCP", Port: "80"},
+			{Protocol: "TCP", Port: "443"},
+		},
+	}
+	body, _ := json.Marshal(svcInput)
+	req := httptest.NewRequest("POST", "/api/services", bytes.NewBuffer(body))
+	addSessionCookie(req, authToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for creating service with entries body, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var created model.ServiceObject
+	json.NewDecoder(rec.Body).Decode(&created)
+	if len(created.Entries) != 2 {
+		t.Fatalf("Expected 2 entries in create response, got %d: %+v", len(created.Entries), created.Entries)
+	}
+	if created.Protocol != "TCP" || created.Port != "80" {
+		t.Errorf("Expected legacy protocol/port to mirror Entries[0], got protocol=%q port=%q", created.Protocol, created.Port)
+	}
+
+	// 2. Update with a replaced entries body.
+	updateInput := model.ServiceObjectInput{
+		Name:    "Multi_Entries_Svc",
+		Entries: []model.ServiceEntry{{Protocol: "UDP", Port: "53"}},
+	}
+	body, _ = json.Marshal(updateInput)
+	req = httptest.NewRequest("PUT", "/api/services/"+created.ID, bytes.NewBuffer(body))
+	addSessionCookie(req, authToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for updating service with entries body, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var updated model.ServiceObject
+	json.NewDecoder(rec.Body).Decode(&updated)
+	if len(updated.Entries) != 1 || updated.Entries[0].Port != "53" {
+		t.Fatalf("Expected update to fully replace entries, got %+v", updated.Entries)
+	}
+
+	// 3. 400 when body has neither entries nor legacy protocol/port.
+	emptyInput := model.ServiceObjectInput{Name: "No_Entries_Svc"}
+	body, _ = json.Marshal(emptyInput)
+	req = httptest.NewRequest("POST", "/api/services", bytes.NewBuffer(body))
+	addSessionCookie(req, authToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 Bad Request creating a service with no entries/legacy fields, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestWifiScanAPI(t *testing.T) {
 	handler, repo := setupTestServer(t)
 	authToken := "mock_session_id_test_token"

@@ -30,11 +30,22 @@ export function syncReferences() {
 
     // 1. Recalculate Address Object references
     const updatedAddresses = addresses.map((addr: AddressObject) => {
-      // An address is referenced if its name or value is in a policy's source or destination list
+      // An address is referenced if its name is in a policy's source/destination
+      // list (the primary match), or if any of its entries' values are
+      // (legacy value-based match, now checked across every entry — not just
+      // entries[0] — see Caution 10 of the multi-value-address-service-objects
+      // plan, otherwise refPolicies drifts for multi-entry objects in mock mode).
+      const addrValues = Array.isArray(addr.entries) && addr.entries.length > 0
+        ? addr.entries.map((e) => e.value)
+        : [addr.value];
       const refs = policies
         .filter((policy: PolicyRule) => {
-          const srcMatch = policy.source && (policy.source.includes(addr.name) || policy.source.includes(addr.value));
-          const destMatch = policy.destination && (policy.destination.includes(addr.name) || policy.destination.includes(addr.value));
+          const srcMatch = policy.source && (
+            policy.source.includes(addr.name) || addrValues.some((v) => policy.source.includes(v))
+          );
+          const destMatch = policy.destination && (
+            policy.destination.includes(addr.name) || addrValues.some((v) => policy.destination.includes(v))
+          );
           return srcMatch || destMatch;
         })
         .map((policy: PolicyRule) => policy.name);

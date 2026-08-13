@@ -314,7 +314,7 @@ func TestFirewallService_AddressObjects(t *testing.T) {
 		t.Errorf("Expected value '192.168.1.0/24', got '%s'", found.Value)
 	}
 
-	addr.Value = "192.168.2.0/24"
+	addr.Entries = []model.AddressEntry{{Type: "subnet", Value: "192.168.2.0/24"}}
 	if err := svc.UpdateAddress(addr); err != nil {
 		t.Fatalf("UpdateAddress failed: %v", err)
 	}

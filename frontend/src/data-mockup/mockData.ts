@@ -147,12 +147,30 @@ export interface PortForward {
 // Initial mockup data for Port Forwarding
 export const initialPortForwards: PortForward[] = []
 
+// A single address entry (see docs/ref/todo/
+// multi-value-address-service-objects-plan.md). An AddressObject now holds
+// one or more of these; the legacy top-level type/value fields on
+// AddressObject are kept only as a compat mirror of entries[0].
+export interface AddressEntry {
+  type: "subnet" | "range" | "fqdn"
+  value: string
+}
+
 // Types for Address Objects
 export interface AddressObject {
   id: string
   name: string
+  // deprecated: compat mirror of entries[0], kept for backward compatibility
+  // with older clients/localStorage payloads. Will be removed in the next
+  // major version — prefer `entries`.
   type: "subnet" | "range" | "fqdn"
+  // deprecated: compat mirror of entries[0], see `type` above.
   value: string
+  // Optional so callers that only supply the legacy type/value pair (e.g.
+  // pages not yet migrated to the list-form editor — see T-12/T-13) keep
+  // compiling; normalizeAddress()/normalizeService() below always fill it in
+  // before persisting or sending to the API.
+  entries?: AddressEntry[]
   system: boolean
   refPolicies: string[]
 }
@@ -164,6 +182,7 @@ export const initialAddressObjects: AddressObject[] = [
     name: "ALL",
     type: "subnet",
     value: "0.0.0.0/0",
+    entries: [{ type: "subnet", value: "0.0.0.0/0" }],
     system: true,
     refPolicies: []
   },
@@ -172,6 +191,7 @@ export const initialAddressObjects: AddressObject[] = [
     name: "LAN_Network",
     type: "subnet",
     value: "192.168.1.0/24",
+    entries: [{ type: "subnet", value: "192.168.1.0/24" }],
     system: false,
     refPolicies: []
   },
@@ -181,6 +201,7 @@ export const initialAddressObjects: AddressObject[] = [
     type: "subnet",
     system: false,
     value: "192.168.1.10/32",
+    entries: [{ type: "subnet", value: "192.168.1.10/32" }],
     refPolicies: []
   },
   {
@@ -189,6 +210,7 @@ export const initialAddressObjects: AddressObject[] = [
     type: "range",
     system: false,
     value: "192.168.1.100 - 192.168.1.200",
+    entries: [{ type: "range", value: "192.168.1.100 - 192.168.1.200" }],
     refPolicies: []
   },
   {
@@ -197,6 +219,7 @@ export const initialAddressObjects: AddressObject[] = [
     type: "fqdn",
     system: false,
     value: "pigate-update.com",
+    entries: [{ type: "fqdn", value: "pigate-update.com" }],
     refPolicies: []
   },
   {
@@ -205,16 +228,40 @@ export const initialAddressObjects: AddressObject[] = [
     type: "subnet",
     system: false,
     value: "198.51.100.0/22",
+    // Seed demonstrating a multi-entry object (subnet + range + fqdn mixed).
+    entries: [
+      { type: "subnet", value: "198.51.100.0/22" },
+      { type: "range", value: "203.0.113.10 - 203.0.113.20" },
+      { type: "fqdn", value: "known-bad.example.com" }
+    ],
     refPolicies: []
   }
 ]
+
+// A single service entry (see docs/ref/todo/
+// multi-value-address-service-objects-plan.md). A ServiceObject now holds
+// one or more of these; the legacy top-level protocol/port fields on
+// ServiceObject are kept only as a compat mirror of entries[0].
+export interface ServiceEntry {
+  protocol: "TCP" | "UDP" | "TCP/UDP" | "ICMP"
+  port: string
+}
 
 // Types for Service Objects
 export interface ServiceObject {
   id: string
   name: string
+  // deprecated: compat mirror of entries[0], kept for backward compatibility
+  // with older clients/localStorage payloads. Will be removed in the next
+  // major version — prefer `entries`.
   protocol: "TCP" | "UDP" | "TCP/UDP" | "ICMP"
+  // deprecated: compat mirror of entries[0], see `protocol` above.
   port: string
+  // Optional so callers that only supply the legacy protocol/port pair (e.g.
+  // pages not yet migrated to the list-form editor — see T-12/T-13) keep
+  // compiling; normalizeAddress()/normalizeService() below always fill it in
+  // before persisting or sending to the API.
+  entries?: ServiceEntry[]
   type: "system" | "custom"
   refPolicies: string[]
 }
@@ -226,6 +273,7 @@ export const initialServiceObjects: ServiceObject[] = [
     name: "ALL",
     protocol: "TCP/UDP",
     port: "1-65535",
+    entries: [{ protocol: "TCP/UDP", port: "1-65535" }],
     type: "system",
     refPolicies: []
   },
@@ -234,6 +282,7 @@ export const initialServiceObjects: ServiceObject[] = [
     name: "HTTP",
     protocol: "TCP",
     port: "80",
+    entries: [{ protocol: "TCP", port: "80" }],
     type: "system",
     refPolicies: []
   },
@@ -242,6 +291,7 @@ export const initialServiceObjects: ServiceObject[] = [
     name: "HTTPS",
     protocol: "TCP",
     port: "443",
+    entries: [{ protocol: "TCP", port: "443" }],
     type: "system",
     refPolicies: []
   },
@@ -250,6 +300,7 @@ export const initialServiceObjects: ServiceObject[] = [
     name: "SSH",
     protocol: "TCP",
     port: "22",
+    entries: [{ protocol: "TCP", port: "22" }],
     type: "system",
     refPolicies: []
   },
@@ -258,6 +309,7 @@ export const initialServiceObjects: ServiceObject[] = [
     name: "DNS",
     protocol: "UDP",
     port: "53",
+    entries: [{ protocol: "UDP", port: "53" }],
     type: "system",
     refPolicies: []
   },
@@ -266,7 +318,22 @@ export const initialServiceObjects: ServiceObject[] = [
     name: "ICMP",
     protocol: "ICMP",
     port: "-",
+    entries: [{ protocol: "ICMP", port: "-" }],
     type: "system",
+    refPolicies: []
+  },
+  {
+    id: "svc-7",
+    name: "Web_Ports",
+    protocol: "TCP",
+    port: "80",
+    // Seed demonstrating a multi-entry service object.
+    entries: [
+      { protocol: "TCP", port: "80" },
+      { protocol: "TCP", port: "443" },
+      { protocol: "UDP", port: "443" }
+    ],
+    type: "custom",
     refPolicies: []
   }
 ]

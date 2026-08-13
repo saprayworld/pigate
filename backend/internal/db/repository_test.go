@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"errors"
 	"runtime"
 	"strings"
@@ -1018,5 +1019,402 @@ func TestHTTPSAdminAccessMigration(t *testing.T) {
 	// A row that already had HTTPS must be left byte-for-byte unchanged (idempotent).
 	if got := get("iface-both"); got != "HTTP,HTTPS,SSH" {
 		t.Errorf("iface-both: expected unchanged 'HTTP,HTTPS,SSH', got %q", got)
+	}
+}
+
+// =========================================================================
+// T-09: multi-value Address/Service object entries (docs/ref/todo/
+// multi-value-address-service-objects-plan.md)
+// =========================================================================
+
+// TestAddressEntries_MultiCRUDAndSeqOrder covers creating/updating an
+// AddressObject with several entries: the child rows must round-trip in
+// insertion order (seq 1..N) and UpdateAddress must fully replace the
+// previous entry set rather than append to it.
+func TestAddressEntries_MultiCRUDAndSeqOrder(t *testing.T) {
+	db, _ := InitDB(":memory:")
+	defer db.Close()
+	repo := NewRepository(db)
+
+	addr := model.AddressObject{
+		ID:   "addr-multi",
+		Name: "Multi_Subnets",
+		Entries: []model.AddressEntry{
+			{Type: "subnet", Value: "10.0.1.0/24"},
+			{Type: "subnet", Value: "10.0.2.0/24"},
+			{Type: "range", Value: "10.0.3.1-10.0.3.10"},
+		},
+	}
+	if err := repo.CreateAddress(addr); err != nil {
+		t.Fatalf("CreateAddress with multiple entries failed: %v", err)
+	}
+
+	fetched, err := repo.GetAddressByID("addr-multi")
+	if err != nil || fetched == nil {
+		t.Fatalf("GetAddressByID failed: %v", err)
+	}
+	if len(fetched.Entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d: %+v", len(fetched.Entries), fetched.Entries)
+	}
+	wantOrder := []string{"10.0.1.0/24", "10.0.2.0/24", "10.0.3.1-10.0.3.10"}
+	for i, w := range wantOrder {
+		if fetched.Entries[i].Value != w {
+			t.Errorf("entry[%d]: expected value %q (seq order), got %q", i, w, fetched.Entries[i].Value)
+		}
+	}
+	// Legacy Type/Value fields must mirror Entries[0] (compat).
+	if fetched.Type != "subnet" || fetched.Value != "10.0.1.0/24" {
+		t.Errorf("expected legacy Type/Value to mirror Entries[0], got type=%q value=%q", fetched.Type, fetched.Value)
+	}
+
+	// GetAddresses (list) must also return the same ordered entries.
+	list, err := repo.GetAddresses()
+	if err != nil {
+		t.Fatalf("GetAddresses failed: %v", err)
+	}
+	var found *model.AddressObject
+	for i := range list {
+		if list[i].ID == "addr-multi" {
+			found = &list[i]
+		}
+	}
+	if found == nil || len(found.Entries) != 3 {
+		t.Fatalf("expected addr-multi with 3 entries in GetAddresses, got %+v", found)
+	}
+
+	// Update replaces the entry set entirely (fewer entries, different order).
+	fetched.Entries = []model.AddressEntry{
+		{Type: "fqdn", Value: "api.pigate.local"},
+		{Type: "subnet", Value: "10.0.9.0/24"},
+	}
+	if err := repo.UpdateAddress(*fetched); err != nil {
+		t.Fatalf("UpdateAddress with replaced entries failed: %v", err)
+	}
+	updated, err := repo.GetAddressByID("addr-multi")
+	if err != nil || updated == nil {
+		t.Fatalf("GetAddressByID after update failed: %v", err)
+	}
+	if len(updated.Entries) != 2 {
+		t.Fatalf("expected 2 entries after update (full replace, not append), got %d: %+v", len(updated.Entries), updated.Entries)
+	}
+	if updated.Entries[0].Value != "api.pigate.local" || updated.Entries[1].Value != "10.0.9.0/24" {
+		t.Errorf("expected replaced entries in seq order, got %+v", updated.Entries)
+	}
+}
+
+// TestServiceEntries_MultiCRUDAndSeqOrder mirrors
+// TestAddressEntries_MultiCRUDAndSeqOrder for ServiceObject/ServiceEntry.
+func TestServiceEntries_MultiCRUDAndSeqOrder(t *testing.T) {
+	db, _ := InitDB(":memory:")
+	defer db.Close()
+	repo := NewRepository(db)
+
+	svc := model.ServiceObject{
+		ID:   "svc-multi",
+		Name: "Web_Ports",
+		Type: "custom",
+		Entries: []model.ServiceEntry{
+			{Protocol: "TCP", Port: "80"},
+			{Protocol: "TCP", Port: "443"},
+		},
+	}
+	if err := repo.CreateService(svc); err != nil {
+		t.Fatalf("CreateService with multiple entries failed: %v", err)
+	}
+
+	fetched, err := repo.GetServiceByID("svc-multi")
+	if err != nil || fetched == nil {
+		t.Fatalf("GetServiceByID failed: %v", err)
+	}
+	if len(fetched.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %+v", len(fetched.Entries), fetched.Entries)
+	}
+	if fetched.Entries[0].Port != "80" || fetched.Entries[1].Port != "443" {
+		t.Errorf("expected entries in seq order 80,443, got %+v", fetched.Entries)
+	}
+	if fetched.Protocol != "TCP" || fetched.Port != "80" {
+		t.Errorf("expected legacy Protocol/Port to mirror Entries[0], got protocol=%q port=%q", fetched.Protocol, fetched.Port)
+	}
+
+	// Update replaces the entry set.
+	fetched.Entries = []model.ServiceEntry{{Protocol: "UDP", Port: "53"}}
+	if err := repo.UpdateService(*fetched); err != nil {
+		t.Fatalf("UpdateService with replaced entries failed: %v", err)
+	}
+	updated, err := repo.GetServiceByID("svc-multi")
+	if err != nil || updated == nil {
+		t.Fatalf("GetServiceByID after update failed: %v", err)
+	}
+	if len(updated.Entries) != 1 || updated.Entries[0].Protocol != "UDP" || updated.Entries[0].Port != "53" {
+		t.Fatalf("expected fully replaced single entry UDP/53, got %+v", updated.Entries)
+	}
+}
+
+// TestObjectEntries_RejectInvalidSets covers the reject paths enforced by
+// model.ValidateAddressEntries/ValidateServiceEntries via the repository:
+// empty entries, entries exceeding the SetObjectLimits cap, duplicate
+// entries, and a malformed entry value.
+func TestObjectEntries_RejectInvalidSets(t *testing.T) {
+	db, _ := InitDB(":memory:")
+	defer db.Close()
+	repo := NewRepository(db)
+
+	// Empty entries (and empty legacy Type/Value) must be rejected.
+	if err := repo.CreateAddress(model.AddressObject{ID: "addr-empty", Name: "Empty_Entries"}); err == nil {
+		t.Error("expected error creating address object with no entries, got nil")
+	}
+	if err := repo.CreateService(model.ServiceObject{ID: "svc-empty", Name: "Empty_Entries"}); err == nil {
+		t.Error("expected error creating service object with no entries, got nil")
+	}
+
+	// Duplicate entries must be rejected.
+	dupAddr := model.AddressObject{
+		ID:   "addr-dup",
+		Name: "Dup_Entries",
+		Entries: []model.AddressEntry{
+			{Type: "subnet", Value: "10.0.0.0/24"},
+			{Type: "subnet", Value: "10.0.0.0/24"},
+		},
+	}
+	if err := repo.CreateAddress(dupAddr); err == nil {
+		t.Error("expected error creating address object with duplicate entries, got nil")
+	}
+	dupSvc := model.ServiceObject{
+		ID:   "svc-dup",
+		Name: "Dup_Entries",
+		Entries: []model.ServiceEntry{
+			{Protocol: "TCP", Port: "80"},
+			{Protocol: "TCP", Port: "80"},
+		},
+	}
+	if err := repo.CreateService(dupSvc); err == nil {
+		t.Error("expected error creating service object with duplicate entries, got nil")
+	}
+
+	// A malformed entry value must be rejected even when other entries in the
+	// same object are valid.
+	malformedAddr := model.AddressObject{
+		ID:   "addr-malformed",
+		Name: "Malformed_Entries",
+		Entries: []model.AddressEntry{
+			{Type: "subnet", Value: "10.0.0.0/24"},
+			{Type: "subnet", Value: "not-a-subnet"},
+		},
+	}
+	if err := repo.CreateAddress(malformedAddr); err == nil {
+		t.Error("expected error creating address object with a malformed entry, got nil")
+	}
+
+	// Too many entries: lower the cap via SetObjectLimits, then exceed it.
+	repo.SetObjectLimits(2)
+	tooManyAddr := model.AddressObject{
+		ID:   "addr-too-many",
+		Name: "Too_Many_Entries",
+		Entries: []model.AddressEntry{
+			{Type: "subnet", Value: "10.0.0.0/24"},
+			{Type: "subnet", Value: "10.0.1.0/24"},
+			{Type: "subnet", Value: "10.0.2.0/24"},
+		},
+	}
+	if err := repo.CreateAddress(tooManyAddr); err == nil {
+		t.Error("expected error creating address object exceeding SetObjectLimits cap, got nil")
+	}
+	// Exactly at the cap must still succeed.
+	atCapAddr := model.AddressObject{
+		ID:   "addr-at-cap",
+		Name: "At_Cap_Entries",
+		Entries: []model.AddressEntry{
+			{Type: "subnet", Value: "10.0.0.0/24"},
+			{Type: "subnet", Value: "10.0.1.0/24"},
+		},
+	}
+	if err := repo.CreateAddress(atCapAddr); err != nil {
+		t.Errorf("expected address object exactly at the SetObjectLimits cap to succeed, got: %v", err)
+	}
+
+	tooManySvc := model.ServiceObject{
+		ID:   "svc-too-many",
+		Name: "Too_Many_Entries",
+		Entries: []model.ServiceEntry{
+			{Protocol: "TCP", Port: "80"},
+			{Protocol: "TCP", Port: "443"},
+			{Protocol: "TCP", Port: "22"},
+		},
+	}
+	if err := repo.CreateService(tooManySvc); err == nil {
+		t.Error("expected error creating service object exceeding SetObjectLimits cap, got nil")
+	}
+}
+
+// TestObjectEntries_SystemLockAndDeleteWhileReferenced verifies that (1) a
+// system-predefined object's entries cannot be updated, and (2) an object
+// with multiple entries still cannot be deleted while referenced by a
+// firewall policy — same referential-integrity rule as the single-value path,
+// now exercised through a multi-entry object.
+func TestObjectEntries_SystemLockAndDeleteWhileReferenced(t *testing.T) {
+	db, _ := InitDB(":memory:")
+	defer db.Close()
+	repo := NewRepository(db)
+
+	// System lock: the seeded "ALL" address object (addr-1) must reject an
+	// update even when the update carries multiple entries.
+	allAddr, err := repo.GetAddressByID("addr-1")
+	if err != nil || allAddr == nil {
+		t.Fatalf("failed to fetch seeded ALL address object: %v", err)
+	}
+	allAddr.Entries = []model.AddressEntry{
+		{Type: "subnet", Value: "1.1.1.1/32"},
+		{Type: "subnet", Value: "2.2.2.2/32"},
+	}
+	if err := repo.UpdateAddress(*allAddr); err == nil {
+		t.Error("expected error updating system predefined address object with multiple entries, got nil")
+	}
+
+	// Delete-while-referenced: create a multi-entry address/service, reference
+	// them from a policy, then confirm delete is blocked until the policy is
+	// removed.
+	addr := model.AddressObject{
+		ID:   "addr-ref-multi",
+		Name: "Ref_Multi",
+		Entries: []model.AddressEntry{
+			{Type: "subnet", Value: "10.10.0.0/24"},
+			{Type: "subnet", Value: "10.10.1.0/24"},
+		},
+	}
+	if err := repo.CreateAddress(addr); err != nil {
+		t.Fatalf("CreateAddress failed: %v", err)
+	}
+	dst := model.AddressObject{ID: "addr-ref-dst", Name: "Ref_Dst", Type: "subnet", Value: "8.8.8.8/32"}
+	if err := repo.CreateAddress(dst); err != nil {
+		t.Fatalf("CreateAddress (dst) failed: %v", err)
+	}
+	svc := model.ServiceObject{
+		ID:   "svc-ref-multi",
+		Name: "Ref_Multi_Svc",
+		Type: "custom",
+		Entries: []model.ServiceEntry{
+			{Protocol: "TCP", Port: "80"},
+			{Protocol: "TCP", Port: "443"},
+		},
+	}
+	if err := repo.CreateService(svc); err != nil {
+		t.Fatalf("CreateService failed: %v", err)
+	}
+
+	rule := model.PolicyRule{
+		ID:           "rule-ref-multi",
+		Name:         "Ref Multi Rule",
+		InInterface:  "eth0",
+		OutInterface: "wlan0",
+		Source:       []string{"Ref_Multi"},
+		Destination:  []string{"Ref_Dst"},
+		Service:      []string{"Ref_Multi_Svc"},
+		Action:       "ACCEPT",
+	}
+	if err := repo.CreatePolicy(rule); err != nil {
+		t.Fatalf("CreatePolicy failed: %v", err)
+	}
+
+	if err := repo.DeleteAddress("addr-ref-multi"); err == nil {
+		t.Error("expected error deleting multi-entry address object referenced by a policy, got nil")
+	}
+	if err := repo.DeleteService("svc-ref-multi"); err == nil {
+		t.Error("expected error deleting multi-entry service object referenced by a policy, got nil")
+	}
+
+	if err := repo.DeletePolicy("rule-ref-multi"); err != nil {
+		t.Fatalf("DeletePolicy failed: %v", err)
+	}
+	if err := repo.DeleteAddress("addr-ref-multi"); err != nil {
+		t.Errorf("expected delete to succeed after policy removal: %v", err)
+	}
+	if err := repo.DeleteService("svc-ref-multi"); err != nil {
+		t.Errorf("expected delete to succeed after policy removal: %v", err)
+	}
+}
+
+// TestObjectEntries_BackfillFromLegacyDBIsIdempotent simulates upgrading a
+// pre-multi-value database: address_objects/service_objects rows exist but
+// their address_object_values/service_object_ports child rows are missing
+// (as if seeded before this migration existed). Rebooting (InitDB) must
+// backfill exactly one seq=1 child row per parent, and running it again must
+// not duplicate rows (docs/ref/todo/multi-value-address-service-objects-plan.md
+// §3 item 3).
+func TestObjectEntries_BackfillFromLegacyDBIsIdempotent(t *testing.T) {
+	dsn := t.TempDir() + "/legacy-entries.db"
+
+	first, err := InitDB(dsn)
+	if err != nil {
+		t.Fatalf("initial InitDB failed: %v", err)
+	}
+	// Simulate the pre-migration state: parent rows exist (from the normal
+	// seed), but their child entry rows do not.
+	if _, err := first.Exec("DELETE FROM address_object_values"); err != nil {
+		t.Fatalf("failed to clear address_object_values: %v", err)
+	}
+	if _, err := first.Exec("DELETE FROM service_object_ports"); err != nil {
+		t.Fatalf("failed to clear service_object_ports: %v", err)
+	}
+	// Also add a legacy-style custom row with no child entries, to mirror a
+	// pre-migration user database that has custom objects too.
+	if _, err := first.Exec(
+		"INSERT INTO address_objects (id, name, type, value, system) VALUES (?, ?, ?, ?, 0)",
+		"addr-legacy-custom", "Legacy_Custom", "subnet", "172.16.0.0/24"); err != nil {
+		t.Fatalf("failed to seed legacy custom address row: %v", err)
+	}
+	var addrParentCount, svcParentCount int
+	if err := first.QueryRow("SELECT COUNT(*) FROM address_objects").Scan(&addrParentCount); err != nil {
+		t.Fatalf("count address_objects: %v", err)
+	}
+	if err := first.QueryRow("SELECT COUNT(*) FROM service_objects").Scan(&svcParentCount); err != nil {
+		t.Fatalf("count service_objects: %v", err)
+	}
+	first.Close()
+
+	// Reboot: migration/backfill must run and populate exactly one seq=1 row
+	// per parent.
+	second, err := InitDB(dsn)
+	if err != nil {
+		t.Fatalf("InitDB on legacy data (no child entries) failed: %v", err)
+	}
+
+	countRows := func(db *sql.DB, table string) int {
+		var n int
+		if err := db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		return n
+	}
+
+	if got := countRows(second, "address_object_values"); got != addrParentCount {
+		t.Fatalf("expected %d backfilled address_object_values rows (1 per parent), got %d", addrParentCount, got)
+	}
+	if got := countRows(second, "service_object_ports"); got != svcParentCount {
+		t.Fatalf("expected %d backfilled service_object_ports rows (1 per parent), got %d", svcParentCount, got)
+	}
+
+	var seq int
+	if err := second.QueryRow("SELECT seq FROM address_object_values WHERE address_id = ?", "addr-legacy-custom").Scan(&seq); err != nil {
+		t.Fatalf("query backfilled seq for legacy custom address: %v", err)
+	}
+	if seq != 1 {
+		t.Errorf("expected backfilled seq=1 for the legacy custom address, got %d", seq)
+	}
+	second.Close()
+
+	// Reboot again (no further mutation in between): row counts must stay
+	// exactly the same — the WHERE NOT EXISTS guard must not duplicate rows
+	// on a DB that already has its children backfilled.
+	third, err := InitDB(dsn)
+	if err != nil {
+		t.Fatalf("InitDB (second reboot) failed: %v", err)
+	}
+	defer third.Close()
+
+	if got := countRows(third, "address_object_values"); got != addrParentCount {
+		t.Fatalf("backfill not idempotent: expected %d address_object_values rows after a second reboot, got %d", addrParentCount, got)
+	}
+	if got := countRows(third, "service_object_ports"); got != svcParentCount {
+		t.Fatalf("backfill not idempotent: expected %d service_object_ports rows after a second reboot, got %d", svcParentCount, got)
 	}
 }

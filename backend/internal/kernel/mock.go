@@ -27,6 +27,13 @@ func NewMockFirewall(dockerCompat bool) *MockFirewall {
 	}
 }
 
+// ApplyRules is a log-only no-op: it never parses addrs/svcs entry values
+// (model.AddressEntry.Value / model.ServiceEntry.Port) — it only counts
+// objects/rules for the log lines below. The real multi-value entry
+// expansion (cartesian product over Entries, FQDN resolution, protocol
+// splitting, etc.) lives exclusively in real_firewall.go's addressCombos/
+// serviceCombos/addUserChainRules (docs/ref/todo/
+// multi-value-address-service-objects-plan.md T-04/T-05).
 func (m *MockFirewall) ApplyRules(
 	rules []model.PolicyRule,
 	ifaces []model.NetworkInterface,

@@ -318,6 +318,8 @@ func TestWriteParseRoundTrip(t *testing.T) {
 	cfg.DenyStatsMaxSources = 800
 	cfg.DenyStatsMaxPorts = 400
 	cfg.TrafficLogBufferCapacity = 20000
+	cfg.MaxObjectEntries = 128
+	cfg.MaxExpandedRulesPerPolicy = 8192
 
 	var buf bytes.Buffer
 	if err := Write(&buf, cfg); err != nil {
@@ -361,8 +363,8 @@ func TestWriteParseRoundTripDefaults(t *testing.T) {
 
 func TestKnownKeys(t *testing.T) {
 	keys := KnownKeys()
-	if len(keys) != 23 {
-		t.Fatalf("expected 23 known keys, got %d: %v", len(keys), keys)
+	if len(keys) != 25 {
+		t.Fatalf("expected 25 known keys, got %d: %v", len(keys), keys)
 	}
 	// "config" and "v" must never be treated as config-file keys.
 	for _, k := range keys {
@@ -438,8 +440,20 @@ func TestKnownKeys(t *testing.T) {
 	if !hasTrafficLogBufferCapacity {
 		t.Fatalf("expected traffic-log-buffer-capacity in KnownKeys, got %v", keys)
 	}
-	if keys[len(keys)-1] != "traffic-log-buffer-capacity" {
-		t.Fatalf("expected traffic-log-buffer-capacity to be the last key, got %v", keys)
+	var hasMaxObjectEntries, hasMaxExpandedRulesPerPolicy bool
+	for _, k := range keys {
+		switch k {
+		case "max-object-entries":
+			hasMaxObjectEntries = true
+		case "max-expanded-rules-per-policy":
+			hasMaxExpandedRulesPerPolicy = true
+		}
+	}
+	if !hasMaxObjectEntries || !hasMaxExpandedRulesPerPolicy {
+		t.Fatalf("expected max-object-entries/max-expanded-rules-per-policy in KnownKeys, got %v", keys)
+	}
+	if keys[len(keys)-1] != "max-expanded-rules-per-policy" {
+		t.Fatalf("expected max-expanded-rules-per-policy to be the last key, got %v", keys)
 	}
 }
 
@@ -597,6 +611,133 @@ func TestResolve_TrafficLogBufferCapacity(t *testing.T) {
 		fileVals := map[string]string{"traffic-log-buffer-capacity": "abc"}
 		if _, _, err := Resolve(Defaults(), fileVals, nil); err == nil {
 			t.Fatalf("expected error for non-integer traffic-log-buffer-capacity")
+		}
+	})
+}
+
+// TestResolve_MaxObjectEntriesAndMaxExpandedRulesPerPolicy covers the two
+// multi-value-object caps' default/override/out-of-range/non-integer
+// behavior (docs/ref/todo/multi-value-address-service-objects-plan.md
+// §2.1/T-00A) — same pattern as TestResolve_TrafficLogBufferCapacity above.
+func TestResolve_MaxObjectEntriesAndMaxExpandedRulesPerPolicy(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		cfg, warns, err := Resolve(Defaults(), nil, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.MaxObjectEntries != 64 {
+			t.Fatalf("got MaxObjectEntries=%d, want default 64", cfg.MaxObjectEntries)
+		}
+		if cfg.MaxExpandedRulesPerPolicy != 4096 {
+			t.Fatalf("got MaxExpandedRulesPerPolicy=%d, want default 4096", cfg.MaxExpandedRulesPerPolicy)
+		}
+	})
+
+	t.Run("file override", func(t *testing.T) {
+		fileVals := map[string]string{"max-object-entries": "128", "max-expanded-rules-per-policy": "8192"}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.MaxObjectEntries != 128 {
+			t.Fatalf("got MaxObjectEntries=%d, want 128", cfg.MaxObjectEntries)
+		}
+		if cfg.MaxExpandedRulesPerPolicy != 8192 {
+			t.Fatalf("got MaxExpandedRulesPerPolicy=%d, want 8192", cfg.MaxExpandedRulesPerPolicy)
+		}
+	})
+
+	t.Run("out of range clamps to default with warning", func(t *testing.T) {
+		for _, v := range []string{"0", "-1", "513"} {
+			fileVals := map[string]string{"max-object-entries": v}
+			cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+			if err != nil {
+				t.Fatalf("Resolve(max-object-entries=%q) failed: %v", v, err)
+			}
+			if len(warns) != 1 {
+				t.Fatalf("Resolve(max-object-entries=%q): expected 1 warning, got %v", v, warns)
+			}
+			if cfg.MaxObjectEntries != 64 {
+				t.Fatalf("Resolve(max-object-entries=%q): got %d, want default 64", v, cfg.MaxObjectEntries)
+			}
+		}
+		for _, v := range []string{"0", "-1", "63", "65537"} {
+			fileVals := map[string]string{"max-expanded-rules-per-policy": v}
+			cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+			if err != nil {
+				t.Fatalf("Resolve(max-expanded-rules-per-policy=%q) failed: %v", v, err)
+			}
+			if len(warns) != 1 {
+				t.Fatalf("Resolve(max-expanded-rules-per-policy=%q): expected 1 warning, got %v", v, warns)
+			}
+			if cfg.MaxExpandedRulesPerPolicy != 4096 {
+				t.Fatalf("Resolve(max-expanded-rules-per-policy=%q): got %d, want default 4096", v, cfg.MaxExpandedRulesPerPolicy)
+			}
+		}
+	})
+
+	t.Run("boundary values pass without warning", func(t *testing.T) {
+		fileVals := map[string]string{"max-object-entries": "1"}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.MaxObjectEntries != 1 {
+			t.Fatalf("got %d, want 1", cfg.MaxObjectEntries)
+		}
+
+		fileVals = map[string]string{"max-object-entries": "512"}
+		cfg, warns, err = Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.MaxObjectEntries != 512 {
+			t.Fatalf("got %d, want 512", cfg.MaxObjectEntries)
+		}
+
+		fileVals = map[string]string{"max-expanded-rules-per-policy": "64"}
+		cfg, warns, err = Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.MaxExpandedRulesPerPolicy != 64 {
+			t.Fatalf("got %d, want 64", cfg.MaxExpandedRulesPerPolicy)
+		}
+
+		fileVals = map[string]string{"max-expanded-rules-per-policy": "65536"}
+		cfg, warns, err = Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.MaxExpandedRulesPerPolicy != 65536 {
+			t.Fatalf("got %d, want 65536", cfg.MaxExpandedRulesPerPolicy)
+		}
+	})
+
+	t.Run("non-integer is a fail-fast error", func(t *testing.T) {
+		if _, _, err := Resolve(Defaults(), map[string]string{"max-object-entries": "abc"}, nil); err == nil {
+			t.Fatalf("expected error for non-integer max-object-entries")
+		}
+		if _, _, err := Resolve(Defaults(), map[string]string{"max-expanded-rules-per-policy": "abc"}, nil); err == nil {
+			t.Fatalf("expected error for non-integer max-expanded-rules-per-policy")
 		}
 	})
 }

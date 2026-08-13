@@ -7154,6 +7154,26 @@ components:
           example: true
 
     # --- Address Object Schemas ---
+    AddressEntry:
+      type: object
+      description: >-
+        One address match within an AddressObject. An AddressObject can hold
+        multiple entries (multi-value objects) — each entry becomes exactly
+        one nft match/rule fragment when the object is expanded. `type` is
+        per-entry, so subnet/range/fqdn entries can be mixed within the same
+        object.
+      required:
+        - type
+        - value
+      properties:
+        type:
+          type: string
+          enum: [subnet, range, fqdn]
+          example: subnet
+        value:
+          type: string
+          example: 192.168.1.0/24
+
     AddressObject:
       type: object
       required:
@@ -7174,9 +7194,21 @@ components:
           type: string
           enum: [subnet, range, fqdn]
           example: subnet
+          deprecated: true
+          description: >-
+            Deprecated: compat mirror of `entries[0].type` only, kept
+            temporarily for old clients. Never used to generate firewall
+            rules. Planned removal in the next major version — use `entries`
+            instead.
         value:
           type: string
           example: 192.168.1.0/24
+          deprecated: true
+          description: >-
+            Deprecated: compat mirror of `entries[0].value` only, kept
+            temporarily for old clients. Never used to generate firewall
+            rules. Planned removal in the next major version — use `entries`
+            instead.
         system:
           type: boolean
           example: false
@@ -7185,6 +7217,18 @@ components:
           items:
             type: string
           example: [rule-a1b2]
+        entries:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/AddressEntry'
+          description: >-
+            The multi-value entries for this address object (source of
+            truth). The maximum number of entries per object is capped by the
+            `max-object-entries` key in `pigate.conf` (default 64).
+          example:
+            - type: subnet
+              value: 192.168.1.0/24
 
     AddressObjectInput:
       type: object
@@ -7200,12 +7244,36 @@ components:
           type: string
           enum: [subnet, range, fqdn]
           example: subnet
+          deprecated: true
+          description: >-
+            Deprecated: compat mirror of `entries[0].type`. Used only when
+            `entries` is not sent in the request body. Planned removal in the
+            next major version — use `entries` instead.
         value:
           type: string
           example: 192.168.1.0/24
+          deprecated: true
+          description: >-
+            Deprecated: compat mirror of `entries[0].value`. Used only when
+            `entries` is not sent in the request body. Planned removal in the
+            next major version — use `entries` instead.
         comment:
           type: string
           example: Local LAN network subnet card
+        entries:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/AddressEntry'
+          description: >-
+            The multi-value entries for this address object. When omitted,
+            the legacy `type`/`value` fields are used to build a single-entry
+            object instead. The maximum number of entries per object is
+            capped by the `max-object-entries` key in `pigate.conf` (default
+            64).
+          example:
+            - type: subnet
+              value: 192.168.1.0/24
 
     # --- Wi-Fi Preset Schemas ---
     WifiPreset:
@@ -7276,6 +7344,26 @@ components:
           example: hardware
 
     # --- Service Object Schemas ---
+    ServiceEntry:
+      type: object
+      description: >-
+        One protocol/port match within a ServiceObject. A ServiceObject can
+        hold multiple entries — each entry becomes exactly one nft
+        match/rule fragment when the object is expanded. `protocol` is
+        per-entry, so e.g. a TCP entry and a UDP entry can be mixed within
+        the same object.
+      required:
+        - protocol
+        - port
+      properties:
+        protocol:
+          type: string
+          enum: [TCP, UDP, TCP/UDP, ICMP]
+          example: TCP
+        port:
+          type: string
+          example: "80"
+
     ServiceObject:
       type: object
       required:
@@ -7296,9 +7384,21 @@ components:
           type: string
           enum: [TCP, UDP, TCP/UDP, ICMP]
           example: TCP
+          deprecated: true
+          description: >-
+            Deprecated: compat mirror of `entries[0].protocol` only, kept
+            temporarily for old clients. Never used to generate firewall
+            rules. Planned removal in the next major version — use `entries`
+            instead.
         port:
           type: string
           example: "80"
+          deprecated: true
+          description: >-
+            Deprecated: compat mirror of `entries[0].port` only, kept
+            temporarily for old clients. Never used to generate firewall
+            rules. Planned removal in the next major version — use `entries`
+            instead.
         type:
           type: string
           enum: [system, custom]
@@ -7308,6 +7408,18 @@ components:
           items:
             type: string
           example: []
+        entries:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ServiceEntry'
+          description: >-
+            The multi-value entries for this service object (source of
+            truth). The maximum number of entries per object is capped by the
+            `max-object-entries` key in `pigate.conf` (default 64).
+          example:
+            - protocol: TCP
+              port: "80"
 
     ServiceObjectInput:
       type: object
@@ -7323,12 +7435,36 @@ components:
           type: string
           enum: [TCP, UDP, TCP/UDP, ICMP]
           example: TCP
+          deprecated: true
+          description: >-
+            Deprecated: compat mirror of `entries[0].protocol`. Used only
+            when `entries` is not sent in the request body. Planned removal
+            in the next major version — use `entries` instead.
         port:
           type: string
           example: "8080"
+          deprecated: true
+          description: >-
+            Deprecated: compat mirror of `entries[0].port`. Used only when
+            `entries` is not sent in the request body. Planned removal in the
+            next major version — use `entries` instead.
         comment:
           type: string
           example: Alternative HTTP web port
+        entries:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ServiceEntry'
+          description: >-
+            The multi-value entries for this service object. When omitted,
+            the legacy `protocol`/`port` fields are used to build a
+            single-entry object instead. The maximum number of entries per
+            object is capped by the `max-object-entries` key in
+            `pigate.conf` (default 64).
+          example:
+            - protocol: TCP
+              port: "8080"
 
     # --- DNS Server Schemas ---
     DNSZone:

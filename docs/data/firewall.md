@@ -65,6 +65,61 @@ CREATE TABLE IF NOT EXISTS policy_services (
 );
 ```
 
+### Address/Service Objects และตารางลูก Multi-Value (`address_object_values` / `service_object_ports`)
+
+ตั้งแต่ฟีเจอร์ Multi-Value Address & Service Objects (ดู `docs/ref/todo/multi-value-address-service-objects-plan.md`) `address_objects`/`service_objects` แต่ละแถวสามารถมีได้หลาย entry (subnet/range/fqdn หลายค่า หรือ protocol/port หลายคู่) โดยเก็บลงตารางลูกแยกต่างหาก:
+
+```sql
+-- ตารางหลักของ Address Object (คอลัมน์ type/value คือ compat mirror ของ entry แรก — ดู Deprecation note)
+CREATE TABLE IF NOT EXISTS address_objects (
+    id     TEXT PRIMARY KEY,
+    name   TEXT UNIQUE NOT NULL,
+    type   TEXT NOT NULL CHECK(type IN ('subnet', 'range', 'fqdn')),
+    value  TEXT NOT NULL,
+    system INTEGER DEFAULT 0 CHECK(system IN (0, 1)),
+    comment TEXT
+);
+
+-- ตารางหลักของ Service Object (คอลัมน์ protocol/port คือ compat mirror ของ entry แรก — ดู Deprecation note)
+CREATE TABLE IF NOT EXISTS service_objects (
+    id       TEXT PRIMARY KEY,
+    name     TEXT UNIQUE NOT NULL,
+    protocol TEXT NOT NULL CHECK(protocol IN ('TCP', 'UDP', 'TCP/UDP', 'ICMP')),
+    port     TEXT NOT NULL,
+    type     TEXT NOT NULL CHECK(type IN ('system', 'custom')),
+    comment  TEXT
+);
+
+-- ตารางลูก: entry ทั้งหมดของ Address Object แต่ละตัว (source of truth)
+CREATE TABLE IF NOT EXISTS address_object_values (
+    address_id TEXT NOT NULL,
+    seq        INTEGER NOT NULL,
+    type       TEXT NOT NULL CHECK(type IN ('subnet', 'range', 'fqdn')),
+    value      TEXT NOT NULL,
+    PRIMARY KEY (address_id, seq),
+    FOREIGN KEY (address_id) REFERENCES address_objects(id) ON DELETE CASCADE
+);
+
+-- ตารางลูก: entry ทั้งหมดของ Service Object แต่ละตัว (source of truth)
+CREATE TABLE IF NOT EXISTS service_object_ports (
+    service_id TEXT NOT NULL,
+    seq        INTEGER NOT NULL,
+    protocol   TEXT NOT NULL CHECK(protocol IN ('TCP', 'UDP', 'TCP/UDP', 'ICMP')),
+    port       TEXT NOT NULL,
+    PRIMARY KEY (service_id, seq),
+    FOREIGN KEY (service_id) REFERENCES service_objects(id) ON DELETE CASCADE
+);
+```
+
+จำนวน entry ต่อ object ถูกจำกัดด้วยคีย์ `max-object-entries` ใน `pigate.conf` (default 64) และจำนวนกฎ nftables ที่ขยายออกมาต่อ policy ถูกจำกัดด้วย `max-expanded-rules-per-policy` (default 4096) — ทั้งสองเป็น file-only key (ไม่มี CLI flag คู่กัน)
+
+**Deprecation note**: คอลัมน์ `address_objects.type`/`address_objects.value` และ `service_objects.protocol`/`service_objects.port` เป็น **compat layer ชั่วคราว** ที่ mirror มาจาก entry แรก (`seq=1`) ของตารางลูกเท่านั้น และ **ต้องไม่ถูกอ่านเพื่อสร้างกฎไฟร์วอลล์อีกต่อไป** (โค้ดปัจจุบันอ่านจากตารางลูกเสมอ) เหตุผลที่ยังต้องเก็บคอลัมน์เหล่านี้ไว้ชั่วคราวแทนที่จะลบทิ้งทันที:
+1. SQLite รุ่นเก่าที่ยังพบใน field ไม่รองรับ `DROP COLUMN` แบบตรงไปตรงมา (ต้องสร้างตารางใหม่ทั้งตารางแล้ว copy ข้อมูล ซึ่งมีความเสี่ยงสูงกว่า)
+2. คอลัมน์เหล่านี้เป็น `NOT NULL` พร้อม `CHECK` constraint ที่ผูกกับ schema เดิม การลบทันทีจะกระทบ backward-compat ของ backup/restore ที่ยังไม่ผ่านช่วงเปลี่ยนผ่าน
+3. ต้องเผื่อกรณี downgrade กลับไปใช้ binary รุ่นก่อนหน้าฟีเจอร์นี้ระหว่างช่วงเปลี่ยนผ่าน — บินารีรุ่นเก่ายังอ่าน `type`/`value`/`protocol`/`port` ได้ตามปกติ
+
+คอลัมน์ทั้งสี่นี้มีแผนถูกลบออกใน major version ถัดไป เมื่อมั่นใจว่าทุก deployment ผ่านช่วงเปลี่ยนผ่านแล้ว
+
 ### การป้องกันความสมบูรณ์ของข้อมูล (Data Integrity)
 * ตารางเชื่อมโยงกำหนด `ON DELETE RESTRICT` สำหรับ Address และ Service Objects เพื่อป้องกันไม่ให้ผู้ใช้ลบวัตถุระบบที่กฎไฟร์วอลล์กำลังอ้างอิงอยู่
 * ฝั่งหน้าบ้าน (Frontend) จะมีกลไกตรวจสอบความสัมพันธ์และจะบล็อกคำสั่งลบหากพบว่าค่า `refPolicies` ไม่ว่าง

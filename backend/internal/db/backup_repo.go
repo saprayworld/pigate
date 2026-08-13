@@ -57,6 +57,17 @@ func (r *Repository) GetBackupUsers() ([]model.BackupUser, error) {
 	return out, nil
 }
 
+// MaxObjectEntries returns the per-object entries cap currently enforced by
+// this repository (either the config-supplied max-object-entries value set via
+// SetObjectLimits at startup, or model.DefaultMaxObjectEntries if that was
+// never called). BackupService.Import uses this so backup entry validation
+// enforces the exact same cap as CreateAddress/CreateService, instead of a
+// second hardcoded number (plan Caution 5 — validation must live in one
+// place; this just exposes the limit that already lives there).
+func (r *Repository) MaxObjectEntries() int {
+	return r.maxObjectEntries
+}
+
 // Checkpoint flushes the WAL into the main database file. Call this before
 // SnapshotDatabase so a file-copy snapshot doesn't miss recently written pages
 // that still live only in the -wal file. No-op errors are ignored by callers in
@@ -85,6 +96,12 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 	// --- 1. Wipe in FK-safe order (children before parents) --------------
 	// Junction tables reference firewall_policies (CASCADE) and address/service
 	// objects (RESTRICT), so they must go before the objects they point at.
+	// address_object_values / service_object_ports (T-02) reference their
+	// parent address_objects/service_objects row with ON DELETE CASCADE, so
+	// deleting only the non-system parent rows below also removes exactly
+	// their own child rows automatically — system objects (and therefore their
+	// child rows too, since their parent is never deleted here) are left
+	// untouched, same as before this table existed (Caution 7).
 	wipes := []string{
 		"DELETE FROM policy_services",
 		"DELETE FROM policy_addresses",
@@ -112,11 +129,23 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 		if a.System {
 			continue
 		}
+		// Defense-in-depth only: BackupService.Import already normalized
+		// legacy Type/Value into Entries (and validated every entry) before
+		// this transaction started, fail-closed. NormalizeAddressObject is
+		// idempotent and nil-safe, so calling it again here is a no-op for an
+		// already-normalized object and only matters if RestoreConfig is ever
+		// called directly with a pre-normalization cfg. The master row is
+		// always written as a mirror of entry 1 (plan T-07 item 1).
+		obj := a
+		model.NormalizeAddressObject(&obj)
 		if _, err := tx.Exec(
 			"INSERT INTO address_objects (id, name, type, value, system) VALUES (?, ?, ?, ?, 0)",
-			a.ID, a.Name, a.Type, a.Value,
+			obj.ID, obj.Name, obj.Type, obj.Value,
 		); err != nil {
-			return fmt.Errorf("restore address %q: %w", a.Name, err)
+			return fmt.Errorf("restore address %q: %w", obj.Name, err)
+		}
+		if err := replaceAddressEntries(tx, obj.ID, obj.Entries); err != nil {
+			return fmt.Errorf("restore address %q entries: %w", obj.Name, err)
 		}
 	}
 
@@ -125,11 +154,18 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 		if s.Type == "system" {
 			continue
 		}
+		// See the address-object loop above for why Normalize is called here
+		// too (defense-in-depth; BackupService.Import already did this).
+		obj := s
+		model.NormalizeServiceObject(&obj)
 		if _, err := tx.Exec(
 			"INSERT INTO service_objects (id, name, protocol, port, type) VALUES (?, ?, ?, ?, 'custom')",
-			s.ID, s.Name, s.Protocol, s.Port,
+			obj.ID, obj.Name, obj.Protocol, obj.Port,
 		); err != nil {
-			return fmt.Errorf("restore service %q: %w", s.Name, err)
+			return fmt.Errorf("restore service %q: %w", obj.Name, err)
+		}
+		if err := replaceServiceEntries(tx, obj.ID, obj.Entries); err != nil {
+			return fmt.Errorf("restore service %q entries: %w", obj.Name, err)
 		}
 	}
 

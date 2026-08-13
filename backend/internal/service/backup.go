@@ -212,6 +212,14 @@ func (s *BackupService) Import(raw []byte, opts model.ImportOptions) (*model.Imp
 		return nil, err
 	}
 
+	// Legacy Type/Value (address) and Protocol/Port (service) fields are
+	// normalized into Entries — and every entry validated — only now, strictly
+	// after decodeBackup's checksum check has already run. See Caution 1 at
+	// decodeBackup's checksum comparison for why this ordering is load-bearing.
+	if err := s.normalizeAndValidateObjectEntries(&cfg); err != nil {
+		return nil, fmt.Errorf("validation failed: %w", err)
+	}
+
 	if err := validateConfig(cfg); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
@@ -579,6 +587,15 @@ func decodeBackup(raw []byte, passphrase string) (model.BackupConfig, int, error
 		cfg = *file.Config
 	}
 
+	// CAUTION 1 (docs/ref/todo/multi-value-address-service-objects-plan.md §4):
+	// cfg must be compared against the checksum EXACTLY as decoded above — do
+	// NOT normalize (legacy Type/Value -> Entries) or otherwise mutate cfg
+	// before this point. AddressObject.Entries/ServiceObject.Entries are
+	// `omitempty`, so a pre-v2.x/legacy backup file marshals with no "entries"
+	// key at all; configChecksum() must reproduce those exact bytes or every
+	// legacy backup would fail verification here. Normalization happens later,
+	// in BackupService.Import (normalizeAndValidateObjectEntries), strictly
+	// after this checksum check has already passed.
 	if file.Meta.Checksum != "" {
 		want := strings.TrimPrefix(file.Meta.Checksum, "sha256:")
 		got, err := configChecksum(cfg)
@@ -641,6 +658,37 @@ func mapLegacyV1(raw []byte) (model.BackupConfig, error) {
 		cfg.SystemHostname = *v1.HostnameSettings
 	}
 	return cfg, nil
+}
+
+// normalizeAndValidateObjectEntries backfills Entries from the legacy
+// Type/Value (address) / Protocol/Port (service) fields for backup files that
+// predate the multi-value feature — i.e. files with no "entries" key at all —
+// then validates every resulting entry through the single canonical validator
+// (model.ValidateAddressEntries/ValidateServiceEntries, plan Caution 5),
+// using the same per-object cap the live repository enforces
+// (s.repo.MaxObjectEntries(): either the config-supplied max-object-entries
+// value, or model.DefaultMaxObjectEntries if that was never set). This is
+// fail-closed: any single invalid/duplicate/over-cap entry rejects the whole
+// file — nothing is written to the DB — before RestoreConfig ever runs (plan
+// T-07 acceptance: "ไฟล์ที่มี entry เพี้ยนถูก reject ก่อนเขียน DB").
+//
+// Must only be called after decodeBackup's checksum check (see Caution 1
+// comment there) — never before.
+func (s *BackupService) normalizeAndValidateObjectEntries(cfg *model.BackupConfig) error {
+	maxEntries := s.repo.MaxObjectEntries()
+	for i := range cfg.Addresses {
+		model.NormalizeAddressObject(&cfg.Addresses[i])
+		if err := model.ValidateAddressEntries(cfg.Addresses[i].Entries, maxEntries); err != nil {
+			return fmt.Errorf("address object %q: %w", cfg.Addresses[i].Name, err)
+		}
+	}
+	for i := range cfg.ServiceObjects {
+		model.NormalizeServiceObject(&cfg.ServiceObjects[i])
+		if err := model.ValidateServiceEntries(cfg.ServiceObjects[i].Entries, maxEntries); err != nil {
+			return fmt.Errorf("service object %q: %w", cfg.ServiceObjects[i].Name, err)
+		}
+	}
+	return nil
 }
 
 // validateConfig runs cheap, structural validation before any DB write:

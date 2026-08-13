@@ -76,12 +76,39 @@ func withRuleToken(base, token string) string {
 // RealFirewall implements FirewallManager using Netlink and github.com/google/nftables
 type RealFirewall struct {
 	dockerCompat bool
+
+	// maxExpandedRulesPerPolicy caps how many nft rules a single DB
+	// PolicyRule may expand into via the multi-value address/service
+	// object cartesian expansion in addUserChainRules (see its doc comment
+	// for the M×N×K×proto formula — docs/ref/todo/
+	// multi-value-address-service-objects-plan.md §2.1, D-3). The default
+	// here (4096) must stay in sync with config.Defaults().
+	// MaxExpandedRulesPerPolicy; the value actually enforced in production
+	// comes from the file-only "max-expanded-rules-per-policy" config key
+	// via SetMaxExpandedRulesPerPolicy below — never hardcode a cap at the
+	// point of use (plan Caution 15).
+	maxExpandedRulesPerPolicy int
 }
 
 func NewRealFirewall(dockerCompat bool) *RealFirewall {
 	return &RealFirewall{
-		dockerCompat: dockerCompat,
+		dockerCompat:              dockerCompat,
+		maxExpandedRulesPerPolicy: 4096,
 	}
+}
+
+// SetMaxExpandedRulesPerPolicy overrides the per-PolicyRule nft rule
+// expansion cap (default 4096, see the struct field doc above). Called once
+// at startup from cmd/pigate/main.go with the resolved
+// config.Config.MaxExpandedRulesPerPolicy value (plan §2.1) — a setter
+// rather than a NewRealFirewall constructor parameter, so the constructor's
+// signature stays stable for existing callers/tests. Values <= 0 are
+// ignored (keeps the built-in default rather than disabling the cap).
+func (rf *RealFirewall) SetMaxExpandedRulesPerPolicy(n int) {
+	if n <= 0 {
+		return
+	}
+	rf.maxExpandedRulesPerPolicy = n
 }
 
 func (rf *RealFirewall) ApplyRules(
@@ -443,7 +470,7 @@ func (rf *RealFirewall) ApplyRules(
 	// that a bad rule here cannot lock the operator out of the web UI/SSH
 	// (plan section 2.2, Caution 8).
 	addUserChainRules(conn, table, inputChain, model.PolicyChainInput, rules, addrsMap, svcsMap,
-		"[PiGate] INP ACCEPT: ", "[PiGate] INP DROP  : ")
+		"[PiGate] INP ACCEPT: ", "[PiGate] INP DROP  : ", rf.maxExpandedRulesPerPolicy)
 
 	// --- Section 4: Final Drop Log ---
 	// Highest-volume log point in the whole file (catches every unsolicited
@@ -552,7 +579,7 @@ func (rf *RealFirewall) ApplyRules(
 
 	// User rules in forward
 	addUserChainRules(conn, table, forwardChain, model.PolicyChainForward, rules, addrsMap, svcsMap,
-		"[PiGate] FWD ACCEPT: ", "[PiGate] FWD DROP  : ")
+		"[PiGate] FWD ACCEPT: ", "[PiGate] FWD DROP  : ", rf.maxExpandedRulesPerPolicy)
 
 	// Final Drop Log in forward — also to the NFLOG group (see forwardLogExpr).
 	conn.AddRule(&nftables.Rule{
@@ -624,7 +651,7 @@ func (rf *RealFirewall) ApplyRules(
 	// chain policy is accept, so anything not matched by a user DROP rule
 	// above simply falls through to the implicit accept.
 	addUserChainRules(conn, table, outputChain, model.PolicyChainOutput, rules, addrsMap, svcsMap,
-		"[PiGate] OUT ACCEPT: ", "[PiGate] OUT DROP  : ")
+		"[PiGate] OUT ACCEPT: ", "[PiGate] OUT DROP  : ", rf.maxExpandedRulesPerPolicy)
 
 	// 6. Setup NAT table and chain for policy-based source NAT.
 	// Source NAT is now driven per firewall policy (the policy's "NAT" toggle),
@@ -926,26 +953,30 @@ func resolveService(name string, svcsMap map[string]model.ServiceObject) (model.
 	return model.ServiceObject{}, false
 }
 
-func buildIPMatchExpressions(name string, addrsMap map[string]model.AddressObject, offset uint32) ([]expr.Any, error) {
-	addr, ok := addrsMap[name]
-	if !ok {
-		return nil, fmt.Errorf("address object %q not found", name)
-	}
-
+// buildIPMatchExpressions builds the nft match exprs for a single
+// model.AddressEntry (subnet /32 = Cmp equality, other subnet =
+// Payload+Bitwise+Cmp, range = Gte+Lte, fqdn = LookupIP matching the first
+// IPv4 result — match strategy unchanged from the pre-multi-value
+// implementation) at the given network-header offset (12 = source IP, 16 =
+// destination IP). objName is only used to identify the owning address
+// object in error/log messages — the name -> object/entries lookup itself
+// lives in addressCombos below (docs/ref/todo/
+// multi-value-address-service-objects-plan.md, T-04).
+func buildIPMatchExpressions(entry model.AddressEntry, objName string, offset uint32) ([]expr.Any, error) {
 	var exprs []expr.Any
-	switch addr.Type {
+	switch entry.Type {
 	case "subnet":
-		val := strings.TrimSpace(addr.Value)
+		val := strings.TrimSpace(entry.Value)
 		if !strings.Contains(val, "/") {
 			val += "/32"
 		}
 		_, ipNet, err := net.ParseCIDR(val)
 		if err != nil {
-			return nil, fmt.Errorf("invalid subnet value %q for %q: %w", addr.Value, name, err)
+			return nil, fmt.Errorf("invalid subnet value %q for address object %q: %w", entry.Value, objName, err)
 		}
 		ipBytes := ipNet.IP.To4()
 		if ipBytes == nil {
-			return nil, fmt.Errorf("only IPv4 subnets are supported: %q", addr.Value)
+			return nil, fmt.Errorf("only IPv4 subnets are supported: %q (address object %q)", entry.Value, objName)
 		}
 		maskBytes := []byte(ipNet.Mask)
 
@@ -984,14 +1015,14 @@ func buildIPMatchExpressions(name string, addrsMap map[string]model.AddressObjec
 		}
 
 	case "range":
-		parts := strings.Split(addr.Value, "-")
+		parts := strings.Split(entry.Value, "-")
 		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid range value %q for %q", addr.Value, name)
+			return nil, fmt.Errorf("invalid range value %q for address object %q", entry.Value, objName)
 		}
 		startIP := net.ParseIP(strings.TrimSpace(parts[0])).To4()
 		endIP := net.ParseIP(strings.TrimSpace(parts[1])).To4()
 		if startIP == nil || endIP == nil {
-			return nil, fmt.Errorf("invalid IP range %q", addr.Value)
+			return nil, fmt.Errorf("invalid IP range %q for address object %q", entry.Value, objName)
 		}
 
 		exprs = append(exprs, &expr.Payload{
@@ -1012,9 +1043,9 @@ func buildIPMatchExpressions(name string, addrsMap map[string]model.AddressObjec
 		})
 
 	case "fqdn":
-		ips, err := net.LookupIP(addr.Value)
+		ips, err := net.LookupIP(entry.Value)
 		if err != nil {
-			log.Printf("[RealFirewall] Warning: failed to resolve FQDN %q: %v", addr.Value, err)
+			log.Printf("[RealFirewall] Warning: address object %q: failed to resolve FQDN %q: %v", objName, entry.Value, err)
 			return nil, err
 		}
 
@@ -1026,10 +1057,10 @@ func buildIPMatchExpressions(name string, addrsMap map[string]model.AddressObjec
 		}
 
 		if len(ipv4s) == 0 {
-			return nil, fmt.Errorf("no IPv4 address found for FQDN %q", addr.Value)
+			return nil, fmt.Errorf("no IPv4 address found for FQDN %q (address object %q)", entry.Value, objName)
 		}
 
-		log.Printf("[RealFirewall] Resolved FQDN %s to %s (matching first IP)", addr.Value, ipv4s[0])
+		log.Printf("[RealFirewall] Resolved FQDN %s to %s (matching first IP, address object %q)", entry.Value, ipv4s[0], objName)
 		exprs = append(exprs, &expr.Payload{
 			DestRegister: 1,
 			Base:         expr.PayloadBaseNetworkHeader,
@@ -1044,6 +1075,114 @@ func buildIPMatchExpressions(name string, addrsMap map[string]model.AddressObjec
 	}
 
 	return exprs, nil
+}
+
+// addrCombo is one per-entry address filter to apply when generating a
+// single nft rule inside addUserChainRules's cartesian expansion.
+// hasFilter=false represents "ALL" (no IP match expressions are emitted for
+// it at all), matching the old srcName=="ALL"/destName=="ALL" short-circuit
+// that existed before multi-value objects. objName is kept only for
+// error/log messages.
+type addrCombo struct {
+	hasFilter bool
+	objName   string
+	entry     model.AddressEntry
+}
+
+// comboDesc renders an addrCombo for skip/warning log messages.
+func comboDesc(c addrCombo) string {
+	if !c.hasFilter {
+		return "ALL"
+	}
+	return fmt.Sprintf("%s(%s=%s)", c.objName, c.entry.Type, c.entry.Value)
+}
+
+// addressCombos resolves an address object name, as referenced by a
+// PolicyRule's Source/Destination list, into the list of per-entry combos to
+// expand into nft rules. "" / "ALL" means "no IP condition" (single combo,
+// hasFilter=false) — identical to the pre-multi-value behavior. Any other
+// name must exist in addrsMap; an unknown name is a hard error, same as the
+// old addrsMap[name] miss. A known object expands into one combo per
+// model.AddressEntry in its Entries (falling back to a single entry built
+// from the legacy Type/Value pair if Entries hasn't been populated by the
+// caller — defensive only, db.Repository always populates it).
+func addressCombos(name string, addrsMap map[string]model.AddressObject) ([]addrCombo, error) {
+	if name == "" || name == "ALL" {
+		return []addrCombo{{hasFilter: false}}, nil
+	}
+	addr, ok := addrsMap[name]
+	if !ok {
+		return nil, fmt.Errorf("address object %q not found", name)
+	}
+	entries := addr.Entries
+	if len(entries) == 0 {
+		entries = []model.AddressEntry{{Type: addr.Type, Value: addr.Value}}
+	}
+	combos := make([]addrCombo, 0, len(entries))
+	for _, e := range entries {
+		combos = append(combos, addrCombo{hasFilter: true, objName: name, entry: e})
+	}
+	return combos, nil
+}
+
+// svcCombo is one per-entry (protocol, port) filter to apply when generating
+// a single nft rule inside addUserChainRules's cartesian expansion.
+// hasFilter=false represents "ALL" (no protocol/port match expressions are
+// emitted for it), matching the old svcName=="ALL" short-circuit. protocol
+// is already resolved to the nft-level value ("TCP" | "UDP" | "ICMP") — a
+// ServiceEntry whose Protocol is "TCP/UDP" expands into two combos (one TCP,
+// one UDP), same as the old s.Protocol=="TCP/UDP" =>
+// protocols=["TCP","UDP"] branch.
+type svcCombo struct {
+	hasFilter bool
+	objName   string
+	protocol  string
+	port      string
+}
+
+// svcComboDesc renders a svcCombo for skip/warning log messages.
+func svcComboDesc(c svcCombo) string {
+	if !c.hasFilter {
+		return "ALL"
+	}
+	return fmt.Sprintf("%s(%s %s)", c.objName, c.protocol, c.port)
+}
+
+// serviceCombos resolves a service object name, as referenced by a
+// PolicyRule's Service list, into the list of per-entry combos to expand
+// into nft rules. "" / "ALL" means "no service condition" (single combo,
+// hasFilter=false). Any other name is looked up via resolveService
+// (preserving its "HTTP (TCP 80)" => "HTTP" fallback, Caution 11) — an
+// unresolved name is a hard error and the whole service reference is
+// skipped by the caller, matching the effective (net) behavior of the old
+// code where an unknown service name always failed the svcName!="ALL"
+// lookup that used to live inside buildRuleExpressions. A resolved object
+// expands into one or two combos per model.ServiceEntry in its Entries
+// (falling back to a single entry built from the legacy Protocol/Port pair
+// if Entries hasn't been populated — defensive only).
+func serviceCombos(name string, svcsMap map[string]model.ServiceObject) ([]svcCombo, error) {
+	if name == "" || name == "ALL" {
+		return []svcCombo{{hasFilter: false}}, nil
+	}
+	svc, ok := resolveService(name, svcsMap)
+	if !ok {
+		return nil, fmt.Errorf("service object %q not found", name)
+	}
+	entries := svc.Entries
+	if len(entries) == 0 {
+		entries = []model.ServiceEntry{{Protocol: svc.Protocol, Port: svc.Port}}
+	}
+	combos := make([]svcCombo, 0, len(entries))
+	for _, e := range entries {
+		proto := strings.ToUpper(strings.TrimSpace(e.Protocol))
+		if proto == "TCP/UDP" {
+			combos = append(combos, svcCombo{hasFilter: true, objName: name, protocol: "TCP", port: e.Port})
+			combos = append(combos, svcCombo{hasFilter: true, objName: name, protocol: "UDP", port: e.Port})
+		} else {
+			combos = append(combos, svcCombo{hasFilter: true, objName: name, protocol: proto, port: e.Port})
+		}
+	}
+	return combos, nil
 }
 
 // buildRuleExpressions builds the nftables rule(s) for one (interface,
@@ -1090,6 +1229,23 @@ func outputIPv6DropExprs() []expr.Any {
 // chainName into one or more nftables rules appended to nfChain, via
 // buildRuleExpressions. Used for all three chains (forward/input/output) —
 // see docs/ref/todo/input-output-chain-firewall-plan.md section 2.4.
+//
+// Multi-value address/service objects (docs/ref/todo/
+// multi-value-address-service-objects-plan.md §2.1, D-1/D-2) turn what used
+// to be "1 nft rule per (source name, destination name, service name,
+// protocol)" into a full cartesian expansion over entries: for a PolicyRule
+// whose source object has M entries, destination object has N entries, and
+// service object has K entries, the number of nft rules generated is
+// roughly M × N × K × proto, where proto is 1 normally or 2 when a service
+// entry's Protocol is "TCP/UDP" (expands into a TCP rule and a UDP rule).
+// This can grow very large very quickly (plan Caution 2), so
+// maxExpandedRulesPerPolicy (config key "max-expanded-rules-per-policy",
+// resolved once at startup into RealFirewall.maxExpandedRulesPerPolicy via
+// SetMaxExpandedRulesPerPolicy — never hardcoded at the point of use, plan
+// D-3/Caution 15) caps the number of nft rules any single PolicyRule may
+// expand into. Hitting the cap logs a warning and stops expanding further
+// combinations for that rule only; it never returns an error or fails
+// ApplyRules as a whole (plan Caution 2).
 func addUserChainRules(
 	conn *nftables.Conn,
 	table *nftables.Table,
@@ -1099,6 +1255,7 @@ func addUserChainRules(
 	addrsMap map[string]model.AddressObject,
 	svcsMap map[string]model.ServiceObject,
 	acceptLogPrefix, dropLogPrefix string,
+	maxExpandedRulesPerPolicy int,
 ) {
 	for _, r := range rules {
 		if !r.Status || r.Chain != chainName {
@@ -1126,50 +1283,77 @@ func addUserChainRules(
 			services = []string{"ALL"}
 		}
 
+		// expandedCount tracks how many nft rules this PolicyRule has
+		// produced so far, across every (src name, dest name, svc name)
+		// triple below — the cap applies per PolicyRule, not per triple.
+		expandedCount := 0
+
+	srcLoop:
 		for _, src := range sources {
+			// Object-not-found is a hard error for the whole name (matches
+			// the old addrsMap[name] miss) — skip just this name, other
+			// sources/destinations/services of the same rule still apply.
+			srcCombos, err := addressCombos(src, addrsMap)
+			if err != nil {
+				log.Printf("[RealFirewall] Skip %s rule %q source %q: %v", chainName, r.Name, src, err)
+				continue
+			}
 			for _, dest := range destinations {
+				destCombos, err := addressCombos(dest, addrsMap)
+				if err != nil {
+					log.Printf("[RealFirewall] Skip %s rule %q destination %q: %v", chainName, r.Name, dest, err)
+					continue
+				}
 				for _, svc := range services {
-					var protocols []string
-					if svc == "ALL" {
-						protocols = []string{"ALL"}
-					} else if s, ok := resolveService(svc, svcsMap); ok {
-						if strings.ToUpper(s.Protocol) == "TCP/UDP" {
-							protocols = []string{"TCP", "UDP"}
-						} else {
-							protocols = []string{strings.ToUpper(s.Protocol)}
-						}
-					} else {
-						protocols = []string{"ALL"}
+					svcCombos, err := serviceCombos(svc, svcsMap)
+					if err != nil {
+						log.Printf("[RealFirewall] Skip %s rule %q service %q: %v", chainName, r.Name, svc, err)
+						continue
 					}
 
-					for _, proto := range protocols {
-						logPrefix := acceptLogPrefix
-						if r.Action == "DROP" {
-							logPrefix = dropLogPrefix
-						}
-						// Tag the log prefix with this DB rule's id, so a matching NFLOG
-						// entry can be traced back to the exact PolicyRule that produced
-						// it (see withRuleToken doc comment above). Omitted silently if
-						// r.ID fails the whitelist or the prefix would overflow.
-						logPrefix = withRuleToken(logPrefix, r.ID)
-						ruleSets, err := buildRuleExpressions(
-							chainName,
-							r.InInterface, r.OutInterface,
-							src, dest, svc, proto,
-							r.Action, r.Log, r.Nat, logPrefix,
-							addrsMap, svcsMap,
-						)
-						if err != nil {
-							log.Printf("[RealFirewall] Skip %s rule %q combination (%s,%s,%s): %v", chainName, r.Name, src, dest, svc, err)
-							continue
-						}
-						for _, exprs := range ruleSets {
-							conn.AddRule(&nftables.Rule{
-								Table:    table,
-								Chain:    nfChain,
-								Exprs:    exprs,
-								UserData: ruleUserData,
-							})
+					for _, sc := range srcCombos {
+						for _, dc := range destCombos {
+							for _, vc := range svcCombos {
+								if expandedCount >= maxExpandedRulesPerPolicy {
+									log.Printf("[RealFirewall] Policy rule %q (id=%s, chain=%s) hit the nft rule expansion cap (%d); truncating further expansion for this rule — raise the %q config key to allow more",
+										r.Name, r.ID, chainName, maxExpandedRulesPerPolicy, "max-expanded-rules-per-policy")
+									break srcLoop
+								}
+
+								logPrefix := acceptLogPrefix
+								if r.Action == "DROP" {
+									logPrefix = dropLogPrefix
+								}
+								// Tag the log prefix with this DB rule's id, so a matching NFLOG
+								// entry can be traced back to the exact PolicyRule that produced
+								// it (see withRuleToken doc comment above). Omitted silently if
+								// r.ID fails the whitelist or the prefix would overflow.
+								logPrefix = withRuleToken(logPrefix, r.ID)
+
+								// Per-entry failure (e.g. an FQDN entry that fails to resolve)
+								// only skips this one (sc, dc, vc) combination — every other
+								// entry of the same object still gets generated (plan Caution 3).
+								ruleSets, err := buildRuleExpressions(
+									chainName,
+									r.InInterface, r.OutInterface,
+									sc, dc, vc,
+									r.Action, r.Log, r.Nat, logPrefix,
+								)
+								if err != nil {
+									log.Printf("[RealFirewall] Skip %s rule %q entry combination (src=%s dest=%s svc=%s): %v",
+										chainName, r.Name, comboDesc(sc), comboDesc(dc), svcComboDesc(vc), err)
+									continue
+								}
+								for _, exprs := range ruleSets {
+									conn.AddRule(&nftables.Rule{
+										Table:    table,
+										Chain:    nfChain,
+										Exprs:    exprs,
+										UserData: ruleUserData,
+									})
+									expandedCount++
+								}
+							}
 						}
 					}
 				}
@@ -1181,14 +1365,12 @@ func addUserChainRules(
 func buildRuleExpressions(
 	chain string,
 	inInterface, outInterface string,
-	srcName, destName string,
-	svcName, proto string,
+	src, dest addrCombo,
+	svc svcCombo,
 	action string,
 	logEnabled bool,
 	nat bool,
 	logPrefix string,
-	addrsMap map[string]model.AddressObject,
-	svcsMap map[string]model.ServiceObject,
 ) ([][]expr.Any, error) {
 	// Chain-scoped interface fields: input has no meaningful egress
 	// interface, output has no meaningful ingress interface.
@@ -1215,8 +1397,8 @@ func buildRuleExpressions(
 	}
 
 	// 3. Source IP
-	if srcName != "" && srcName != "ALL" {
-		srcExprs, err := buildIPMatchExpressions(srcName, addrsMap, 12)
+	if src.hasFilter {
+		srcExprs, err := buildIPMatchExpressions(src.entry, src.objName, 12)
 		if err != nil {
 			return nil, err
 		}
@@ -1224,8 +1406,8 @@ func buildRuleExpressions(
 	}
 
 	// 4. Destination IP
-	if destName != "" && destName != "ALL" {
-		destExprs, err := buildIPMatchExpressions(destName, addrsMap, 16)
+	if dest.hasFilter {
+		destExprs, err := buildIPMatchExpressions(dest.entry, dest.objName, 16)
 		if err != nil {
 			return nil, err
 		}
@@ -1233,14 +1415,9 @@ func buildRuleExpressions(
 	}
 
 	// 5. Service / Protocol
-	if svcName != "" && svcName != "ALL" {
-		svc, ok := resolveService(svcName, svcsMap)
-		if !ok {
-			return nil, fmt.Errorf("service object %q not found", svcName)
-		}
-
+	if svc.hasFilter {
 		var protoVal byte
-		switch proto {
+		switch svc.protocol {
 		case "TCP":
 			protoVal = 6
 		case "UDP":
@@ -1248,16 +1425,7 @@ func buildRuleExpressions(
 		case "ICMP":
 			protoVal = 1
 		default:
-			switch strings.ToUpper(svc.Protocol) {
-			case "TCP":
-				protoVal = 6
-			case "UDP":
-				protoVal = 17
-			case "ICMP":
-				protoVal = 1
-			default:
-				return nil, fmt.Errorf("unsupported protocol %q for service %q", svc.Protocol, svcName)
-			}
+			return nil, fmt.Errorf("unsupported protocol %q for service %q", svc.protocol, svc.objName)
 		}
 
 		// Match IP protocol
@@ -1274,7 +1442,7 @@ func buildRuleExpressions(
 		})
 
 		if protoVal != 1 { // Non-ICMP, check port
-			portStr := strings.TrimSpace(svc.Port)
+			portStr := strings.TrimSpace(svc.port)
 			if portStr != "" && portStr != "-" && portStr != "1-65535" {
 				parts := strings.Split(portStr, "-")
 				if len(parts) == 1 {

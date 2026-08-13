@@ -35,23 +35,39 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { type AddressObject } from "@/data-mockup/mockData"
+import { type AddressEntry, type AddressObject } from "@/data-mockup/mockData"
 import { addressService } from "@/services/addressService"
 import { useAlert } from "@/hooks/useAlert"
 import { cn, isValidCidr, isValidIpRange } from "@/lib/utils"
+
+// UI-side cap on how many rows the form allows adding — a soft guardrail
+// only; the backend enforces the authoritative cap from its own config
+// (DefaultMaxObjectEntries) and its rejection is surfaced as a formError
+// (see handleSave's catch block) rather than silently swallowed.
+const MAX_FORM_ENTRIES = 64
+
+const FQDN_REGEX = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,6}$/
+
+let entryRowKeySeq = 0
+function nextEntryRowKey() {
+  entryRowKeySeq += 1
+  return `row-${entryRowKeySeq}`
+}
 
 // Helper: Dashboard-style stat card (mirrors Dashboard's StatCard)
 function StatCard({
   icon: Icon,
   title,
   value,
+  hint,
 }: {
   icon: typeof BookOpen
   title: string
   value: number
+  hint?: string
 }) {
   return (
-    <Card size="sm" className="gap-0">
+    <Card size="sm" className="gap-0" title={hint}>
       <CardHeader className="space-y-0">
         <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
           <Icon className="h-4 w-4 shrink-0" />
@@ -83,8 +99,9 @@ export default function Addresses() {
 
   // Form fields
   const [formName, setFormName] = useState("")
-  const [formType, setFormType] = useState<"subnet" | "range" | "fqdn">("subnet")
-  const [formValue, setFormValue] = useState("")
+  const [formEntries, setFormEntries] = useState<{ key: string; type: AddressEntry["type"]; value: string }[]>([
+    { key: nextEntryRowKey(), type: "subnet", value: "" },
+  ])
   const [formError, setFormError] = useState("")
 
   // Fetch logic (used by refresh actions / after save-delete; showLoading=false for those)
@@ -117,24 +134,33 @@ export default function Addresses() {
     initialLoad()
   }, [alert])
 
+  // Entries of an address object, falling back to the legacy type/value pair
+  // for records that somehow still lack `entries` (normalizeAddress() in
+  // addressService should already guarantee this, but stay defensive here).
+  const entriesOf = (addr: AddressObject): AddressEntry[] =>
+    addr.entries && addr.entries.length > 0 ? addr.entries : [{ type: addr.type, value: addr.value }]
+
   // --- Statistics ---
+  // Counts objects that contain at least one entry of the given type (an
+  // object with mixed entry types counts toward every matching stat card).
   const stats = useMemo(() => {
     const total = addresses.length
-    const subnets = addresses.filter(a => a.type === "subnet").length
-    const ranges = addresses.filter(a => a.type === "range").length
-    const fqdns = addresses.filter(a => a.type === "fqdn").length
+    const subnets = addresses.filter(a => entriesOf(a).some(e => e.type === "subnet")).length
+    const ranges = addresses.filter(a => entriesOf(a).some(e => e.type === "range")).length
+    const fqdns = addresses.filter(a => entriesOf(a).some(e => e.type === "fqdn")).length
     return { total, subnets, ranges, fqdns }
   }, [addresses])
 
   // --- Filtered Addresses ---
   const filteredAddresses = useMemo(() => {
     return addresses.filter(addr => {
+      const entries = entriesOf(addr)
       const matchSearch =
         addr.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        addr.value.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        entries.some(e => e.value.toLowerCase().includes(searchQuery.toLowerCase())) ||
         addr.refPolicies.some(p => p.toLowerCase().includes(searchQuery.toLowerCase()))
 
-      const matchType = selectedTypeFilter === "all" || addr.type === selectedTypeFilter
+      const matchType = selectedTypeFilter === "all" || entries.some(e => e.type === selectedTypeFilter)
 
       return matchSearch && matchType
     })
@@ -166,8 +192,7 @@ export default function Addresses() {
   const openCreateModal = () => {
     setEditingObject(null)
     setFormName("")
-    setFormType("subnet")
-    setFormValue("")
+    setFormEntries([{ key: nextEntryRowKey(), type: "subnet", value: "" }])
     setFormError("")
     setIsModalOpen(true)
   }
@@ -175,10 +200,32 @@ export default function Addresses() {
   const openEditModal = (obj: AddressObject) => {
     setEditingObject(obj)
     setFormName(obj.name)
-    setFormType(obj.type)
-    setFormValue(obj.value)
+    const entries = entriesOf(obj)
+    setFormEntries(
+      entries.length > 0
+        ? entries.map(e => ({ key: nextEntryRowKey(), type: e.type, value: e.value }))
+        : [{ key: nextEntryRowKey(), type: "subnet", value: "" }]
+    )
     setFormError("")
     setIsModalOpen(true)
+  }
+
+  // --- Form row handlers (dynamic entries list) ---
+  const handleAddRow = () => {
+    if (formEntries.length >= MAX_FORM_ENTRIES) return
+    setFormEntries(prev => [...prev, { key: nextEntryRowKey(), type: "subnet", value: "" }])
+  }
+
+  const handleRemoveRow = (key: string) => {
+    setFormEntries(prev => (prev.length <= 1 ? prev : prev.filter(r => r.key !== key)))
+  }
+
+  const handleRowTypeChange = (key: string, type: AddressEntry["type"]) => {
+    setFormEntries(prev => prev.map(r => (r.key === key ? { ...r, type, value: "" } : r)))
+  }
+
+  const handleRowValueChange = (key: string, value: string) => {
+    setFormEntries(prev => prev.map(r => (r.key === key ? { ...r, value } : r)))
   }
 
   const handleDelete = async (id: string, name: string) => {
@@ -251,58 +298,77 @@ export default function Addresses() {
       return
     }
 
-    // 3. Strict Value validation based on type
-    const trimmedVal = formValue.trim()
-    if (!trimmedVal) {
-      setFormError("กรุณากรอกข้อมูลค่าที่อยู่ไอพี")
-      return
+    // 3. Strict per-row value validation based on type
+    const trimmedEntries = formEntries.map(r => ({ ...r, value: r.value.trim() }))
+    for (let i = 0; i < trimmedEntries.length; i++) {
+      const row = trimmedEntries[i]
+      const rowLabel = `แถวที่ ${i + 1}`
+      if (!row.value) {
+        setFormError(`${rowLabel}: กรุณากรอกข้อมูลค่าที่อยู่ไอพี`)
+        return
+      }
+      if (row.type === "subnet" && !isValidCidr(row.value)) {
+        setFormError(`${rowLabel}: รูปแบบ Subnet ไม่ถูกต้อง (เช่น 192.168.1.0/24 หรือ 10.0.0.1/32) และค่า Octet ต้องอยู่ในช่วง 0-255`)
+        return
+      }
+      if (row.type === "range" && !isValidIpRange(row.value)) {
+        setFormError(`${rowLabel}: รูปแบบ IP Range ไม่ถูกต้อง (เช่น 192.168.1.100 - 192.168.1.200) และค่าเริ่มต้นต้องน้อยกว่าหรือเท่ากับสิ้นสุด (0-255)`)
+        return
+      }
+      if (row.type === "fqdn" && !FQDN_REGEX.test(row.value)) {
+        setFormError(`${rowLabel}: รูปแบบ FQDN ไม่ถูกต้อง (เช่น google.com หรือ updates.raspberrypi.org)`)
+        return
+      }
     }
-    if (formType === "subnet") {
-      if (!isValidCidr(trimmedVal)) {
-        setFormError("รูปแบบ Subnet ไม่ถูกต้อง (เช่น 192.168.1.0/24 หรือ 10.0.0.1/32) และค่า Octet ต้องอยู่ในช่วง 0-255")
+
+    // 4. Duplicate entries within the form (same type + same value)
+    const seen = new Set<string>()
+    for (let i = 0; i < trimmedEntries.length; i++) {
+      const row = trimmedEntries[i]
+      const dedupeKey = `${row.type}:${row.value.toLowerCase()}`
+      if (seen.has(dedupeKey)) {
+        setFormError(`แถวที่ ${i + 1}: มีรายการที่ซ้ำกันอยู่แล้วในฟอร์ม (${row.value})`)
         return
       }
-    } else if (formType === "range") {
-      if (!isValidIpRange(trimmedVal)) {
-        setFormError("รูปแบบ IP Range ไม่ถูกต้อง (เช่น 192.168.1.100 - 192.168.1.200) และค่าเริ่มต้นต้องน้อยกว่าหรือเท่ากับสิ้นสุด (0-255)")
-        return
-      }
-    } else if (formType === "fqdn") {
-      const fqdnRegex = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,6}$/
-      if (!fqdnRegex.test(trimmedVal)) {
-        setFormError("รูปแบบ FQDN ไม่ถูกต้อง (เช่น google.com หรือ updates.raspberrypi.org)")
-        return
-      }
+      seen.add(dedupeKey)
     }
+
+    const entries: AddressEntry[] = trimmedEntries.map(r => ({ type: r.type, value: r.value }))
 
     try {
       if (editingObject) {
         // Edit
         await addressService.update(editingObject.id, {
           name: formName,
-          type: formType,
-          value: trimmedVal
+          type: entries[0].type,
+          value: entries[0].value,
+          entries,
         })
       } else {
         // Create
         await addressService.create({
           name: formName,
-          type: formType,
-          value: trimmedVal
+          type: entries[0].type,
+          value: entries[0].value,
+          entries,
         })
       }
       await loadAddresses(false)
       setIsModalOpen(false)
     } catch (err) {
+      // Surfaces backend rejections directly (e.g. the configured max-entries
+      // cap being lower than MAX_FORM_ENTRIES) instead of swallowing them.
       setFormError(getErrorMessage(err) || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
     }
   }
 
+  // Filtering by type matches objects that contain at least one entry of
+  // that type (see matchType in filteredAddresses above).
   const typeFilters: { value: typeof selectedTypeFilter; label: string }[] = [
     { value: "all", label: "All" },
-    { value: "subnet", label: "Subnet" },
-    { value: "range", label: "IP Range" },
-    { value: "fqdn", label: "FQDN" },
+    { value: "subnet", label: "Has Subnet" },
+    { value: "range", label: "Has IP Range" },
+    { value: "fqdn", label: "Has FQDN" },
   ]
 
   return (
@@ -310,9 +376,24 @@ export default function Addresses() {
       {/* 1. Stats overview */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard icon={BookOpen} title="Total Objects" value={stats.total} />
-        <StatCard icon={Network} title="Subnets" value={stats.subnets} />
-        <StatCard icon={Layers} title="IP Ranges" value={stats.ranges} />
-        <StatCard icon={Globe} title="FQDNs" value={stats.fqdns} />
+        <StatCard
+          icon={Network}
+          title="Subnets"
+          value={stats.subnets}
+          hint="จำนวนวัตถุที่มีรายการชนิด Subnet อย่างน้อย 1 รายการ (วัตถุที่มีหลายชนิดปนกันจะถูกนับซ้ำในหลายการ์ด)"
+        />
+        <StatCard
+          icon={Layers}
+          title="IP Ranges"
+          value={stats.ranges}
+          hint="จำนวนวัตถุที่มีรายการชนิด IP Range อย่างน้อย 1 รายการ (วัตถุที่มีหลายชนิดปนกันจะถูกนับซ้ำในหลายการ์ด)"
+        />
+        <StatCard
+          icon={Globe}
+          title="FQDNs"
+          value={stats.fqdns}
+          hint="จำนวนวัตถุที่มีรายการชนิด FQDN อย่างน้อย 1 รายการ (วัตถุที่มีหลายชนิดปนกันจะถูกนับซ้ำในหลายการ์ด)"
+        />
       </div>
 
       {/* 2. Address objects table */}
@@ -327,7 +408,7 @@ export default function Addresses() {
               </Badge>
             </CardTitle>
             <CardDescription className="text-xs">
-              กำหนดค่า IP Address, Subnet หรือ FQDN เพื่อนำไปอ้างอิงใช้ในนโยบายไฟร์วอลล์ซ้ำได้สะดวก
+              กำหนดค่า IP Address, Subnet หรือ FQDN ได้หลายรายการต่อวัตถุ เพื่อนำไปอ้างอิงใช้ในนโยบายไฟร์วอลล์ซ้ำได้สะดวก
             </CardDescription>
           </div>
 
@@ -433,23 +514,47 @@ export default function Addresses() {
                     </TableCell>
                     <TableCell className="py-3 font-mono text-sm font-medium text-foreground">{addr.name}</TableCell>
                     <TableCell className="py-3">
-                      {addr.type === "subnet" && (
-                        <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                          Subnet
-                        </Badge>
-                      )}
-                      {addr.type === "range" && (
-                        <Badge variant="outline" className="rounded border-warning/20 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
-                          IP Range
-                        </Badge>
-                      )}
-                      {addr.type === "fqdn" && (
-                        <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                          FQDN
-                        </Badge>
-                      )}
+                      {(() => {
+                        const entries = entriesOf(addr)
+                        const distinctTypes = new Set(entries.map(e => e.type))
+                        if (distinctTypes.size > 1) {
+                          return (
+                            <Badge variant="outline" className="rounded border-warning/20 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
+                              Mixed
+                            </Badge>
+                          )
+                        }
+                        const type = entries[0]?.type ?? "subnet"
+                        const labels: Record<AddressEntry["type"], string> = { subnet: "Subnet", range: "IP Range", fqdn: "FQDN" }
+                        const badgeClass = type === "range"
+                          ? "rounded border-warning/20 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning"
+                          : "rounded border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"
+                        return (
+                          <Badge variant="outline" className={badgeClass}>
+                            {labels[type]}
+                          </Badge>
+                        )
+                      })()}
                     </TableCell>
-                    <TableCell className="py-3 font-mono text-xs text-muted-foreground">{addr.value}</TableCell>
+                    <TableCell className="py-3 font-mono text-xs text-muted-foreground">
+                      {(() => {
+                        const entries = entriesOf(addr)
+                        const visible = entries.slice(0, 3)
+                        const remaining = entries.length - visible.length
+                        return (
+                          <div className="flex flex-wrap items-center gap-1">
+                            {visible.map((e, i) => (
+                              <span key={i} className="rounded bg-muted px-1.5 py-0.5">
+                                {e.value}
+                              </span>
+                            ))}
+                            {remaining > 0 && (
+                              <span className="text-[10px] italic text-muted-foreground/70">+{remaining} more</span>
+                            )}
+                          </div>
+                        )
+                      })()}
+                    </TableCell>
                     <TableCell className="py-3">
                       {addr.refPolicies.length === 0 ? (
                         <span className="text-xs italic text-muted-foreground/45">None</span>
@@ -547,50 +652,72 @@ export default function Addresses() {
               <p className="mt-0.5 text-[10px] text-muted-foreground">ห้ามเว้นวรรค ใช้ได้เฉพาะอักษรภาษาอังกฤษ ตัวเลข และ _</p>
             </div>
 
-            {/* Field: Type */}
+            {/* Field: Entries (dynamic list of type + value rows) */}
             <div className="space-y-1.5">
-              <Label htmlFor="form-type" className="block text-xs font-medium text-muted-foreground">
-                ประเภทที่อยู่ (Type)
-              </Label>
-              <select
-                id="form-type"
-                value={formType}
-                onChange={(e) => {
-                  setFormType(e.target.value as "subnet" | "range" | "fqdn")
-                  setFormValue("") // Reset value to avoid invalid placeholder confusion
-                }}
-                className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-              >
-                <option value="subnet">Subnet (IP/Netmask)</option>
-                <option value="range">IP Range (ช่วงไอพี)</option>
-                <option value="fqdn">FQDN (ชื่อโดเมน)</option>
-              </select>
-            </div>
+              <div className="flex items-center justify-between">
+                <Label className="block text-xs font-medium text-muted-foreground">
+                  รายการที่อยู่ไอพี (Entries) <span className="text-destructive">*</span>
+                </Label>
+                <span className="text-[10px] text-muted-foreground">{formEntries.length} / {MAX_FORM_ENTRIES}</span>
+              </div>
 
-            {/* Field: Value */}
-            <div className="space-y-1.5">
-              <Label htmlFor="form-value" className="block text-xs font-medium text-muted-foreground">
-                ค่าที่อยู่ไอพี (Value) <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="form-value"
-                type="text"
-                required
-                value={formValue}
-                onChange={(e) => setFormValue(e.target.value)}
-                placeholder={
-                  formType === "subnet"
-                    ? "เช่น 192.168.1.0/24 หรือ 10.0.0.10/32"
-                    : formType === "range"
-                      ? "เช่น 192.168.1.100 - 192.168.1.200"
-                      : "เช่น google.com หรือ dev.pigate.local"
-                }
-                className="h-9 font-mono text-sm"
-              />
+              <div className="space-y-2">
+                {formEntries.map((row, idx) => (
+                  <div key={row.key} className="flex items-start gap-2">
+                    <select
+                      aria-label={`ประเภทของแถวที่ ${idx + 1}`}
+                      value={row.type}
+                      onChange={(e) => handleRowTypeChange(row.key, e.target.value as AddressEntry["type"])}
+                      className="h-9 w-[130px] shrink-0 cursor-pointer rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                    >
+                      <option value="subnet">Subnet</option>
+                      <option value="range">IP Range</option>
+                      <option value="fqdn">FQDN</option>
+                    </select>
+                    <Input
+                      aria-label={`ค่าของแถวที่ ${idx + 1}`}
+                      type="text"
+                      required
+                      value={row.value}
+                      onChange={(e) => handleRowValueChange(row.key, e.target.value)}
+                      placeholder={
+                        row.type === "subnet"
+                          ? "เช่น 192.168.1.0/24"
+                          : row.type === "range"
+                            ? "เช่น 192.168.1.100 - 192.168.1.200"
+                            : "เช่น google.com"
+                      }
+                      className="h-9 flex-1 font-mono text-sm"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => handleRemoveRow(row.key)}
+                      disabled={formEntries.length <= 1}
+                      className="mt-0.5 shrink-0 cursor-pointer text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40"
+                      title="ลบแถวนี้"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleAddRow}
+                disabled={formEntries.length >= MAX_FORM_ENTRIES}
+                className="cursor-pointer gap-1.5 text-xs disabled:cursor-not-allowed"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                เพิ่มรายการ
+              </Button>
+
               <p className="mt-0.5 text-[10px] text-muted-foreground">
-                {formType === "subnet" && "ระบุเป็น CIDR Format เช่น /24 หรือ /32 สำหรับไอพีเดี่ยว"}
-                {formType === "range" && "ระบุไอพีเริ่มต้น และไอพีสิ้นสุด คั่นกลางด้วยเครื่องหมาย -"}
-                {formType === "fqdn" && "ระบุชื่อโดเมน FQDN ที่ต้องการกรอง เช่น updates.raspberrypi.org"}
+                Subnet: ระบุเป็น CIDR เช่น /24 หรือ /32 สำหรับไอพีเดี่ยว · IP Range: ไอพีเริ่มต้น-สิ้นสุด คั่นด้วย - · FQDN: ชื่อโดเมน เช่น updates.raspberrypi.org
               </p>
             </div>
 
