@@ -192,7 +192,7 @@ export default function Services() {
         protoFilter === "All" || entries.some(e => e.protocol === protoFilter)
 
       return matchSearch && matchProto
-    })
+    }).sort((a, b) => a.name.localeCompare(b.name))
   }, [services, searchQuery, protoFilter])
 
   // --- CRUD Actions ---
