@@ -2010,6 +2010,11 @@ func (s *Server) HandleCreateAddress(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
 		return
 	}
+	model.NormalizeAddressObjectInput(&input)
+	if len(input.Entries) == 0 {
+		s.writeError(w, http.StatusBadRequest, "At least one entry (or legacy type/value) is required")
+		return
+	}
 
 	id, err := randomID("addr-")
 	if err != nil {
@@ -2023,14 +2028,16 @@ func (s *Server) HandleCreateAddress(w http.ResponseWriter, r *http.Request) {
 		Value:       input.Value,
 		System:      false,
 		RefPolicies: []string{},
+		Entries:     input.Entries,
 	}
 
 	if err := s.firewallService.CreateAddress(addr); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	model.NormalizeAddressObject(&addr)
 	s.logEvent(r, model.EventCategoryFirewall, "firewall.address_created", model.EventSeverityInfo,
-		addr.Name, "Address object \""+addr.Name+"\" created")
+		addr.Name, fmt.Sprintf("Address object \"%s\" created (%d entries)", addr.Name, len(addr.Entries)))
 	s.writeJSON(w, http.StatusOK, addr)
 }
 
@@ -2047,21 +2054,28 @@ func (s *Server) HandleUpdateAddress(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
 		return
 	}
+	model.NormalizeAddressObjectInput(&input)
+	if len(input.Entries) == 0 {
+		s.writeError(w, http.StatusBadRequest, "At least one entry (or legacy type/value) is required")
+		return
+	}
 
 	addr := model.AddressObject{
-		ID:     id,
-		Name:   input.Name,
-		Type:   input.Type,
-		Value:  input.Value,
-		System: false,
+		ID:      id,
+		Name:    input.Name,
+		Type:    input.Type,
+		Value:   input.Value,
+		System:  false,
+		Entries: input.Entries,
 	}
 
 	if err := s.firewallService.UpdateAddress(addr); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	model.NormalizeAddressObject(&addr)
 	s.logEvent(r, model.EventCategoryFirewall, "firewall.address_updated", model.EventSeverityInfo,
-		addr.Name, "Address object \""+addr.Name+"\" updated")
+		addr.Name, fmt.Sprintf("Address object \"%s\" updated (%d entries)", addr.Name, len(addr.Entries)))
 	s.writeJSON(w, http.StatusOK, addr)
 }
 
@@ -2114,6 +2128,11 @@ func (s *Server) HandleCreateService(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
 		return
 	}
+	model.NormalizeServiceObjectInput(&input)
+	if len(input.Entries) == 0 {
+		s.writeError(w, http.StatusBadRequest, "At least one entry (or legacy protocol/port) is required")
+		return
+	}
 
 	id, err := randomID("svc-")
 	if err != nil {
@@ -2127,14 +2146,16 @@ func (s *Server) HandleCreateService(w http.ResponseWriter, r *http.Request) {
 		Port:        input.Port,
 		Type:        "custom",
 		RefPolicies: []string{},
+		Entries:     input.Entries,
 	}
 
 	if err := s.firewallService.CreateService(svc); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	model.NormalizeServiceObject(&svc)
 	s.logEvent(r, model.EventCategoryFirewall, "firewall.service_created", model.EventSeverityInfo,
-		svc.Name, "Service object \""+svc.Name+"\" created")
+		svc.Name, fmt.Sprintf("Service object \"%s\" created (%d entries)", svc.Name, len(svc.Entries)))
 	s.writeJSON(w, http.StatusOK, svc)
 }
 
@@ -2151,6 +2172,11 @@ func (s *Server) HandleUpdateService(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
 		return
 	}
+	model.NormalizeServiceObjectInput(&input)
+	if len(input.Entries) == 0 {
+		s.writeError(w, http.StatusBadRequest, "At least one entry (or legacy protocol/port) is required")
+		return
+	}
 
 	svc := model.ServiceObject{
 		ID:       id,
@@ -2158,14 +2184,16 @@ func (s *Server) HandleUpdateService(w http.ResponseWriter, r *http.Request) {
 		Protocol: input.Protocol,
 		Port:     input.Port,
 		Type:     "custom",
+		Entries:  input.Entries,
 	}
 
 	if err := s.firewallService.UpdateService(svc); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	model.NormalizeServiceObject(&svc)
 	s.logEvent(r, model.EventCategoryFirewall, "firewall.service_updated", model.EventSeverityInfo,
-		svc.Name, "Service object \""+svc.Name+"\" updated")
+		svc.Name, fmt.Sprintf("Service object \"%s\" updated (%d entries)", svc.Name, len(svc.Entries)))
 	s.writeJSON(w, http.StatusOK, svc)
 }
 

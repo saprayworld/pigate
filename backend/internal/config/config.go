@@ -73,6 +73,19 @@
 // any subscriber. There is no live re-sizing path, so changing this key only
 // takes effect after a `sudo systemctl restart pigate` (or equivalent
 // restart of the process) — never while the process is running.
+//
+// max-object-entries / max-expanded-rules-per-policy (docs/ref/todo/
+// multi-value-address-service-objects-plan.md §2.1/T-00A) are also file-only
+// and use the same two-tier validation as the *-max-* keys above.
+// max-object-entries caps how many sub-entries a single Address/Service
+// Object may hold (enforced by db/repository.go's validation on
+// create/update); max-expanded-rules-per-policy caps how many nft rules a
+// single firewall policy rule may expand into once its address/service
+// objects' entries are cross-multiplied (enforced by kernel/real_firewall.go's
+// addUserChainRules). Like traffic-log-buffer-capacity, both are only
+// consumed at process startup (wired into the repository/kernel layer once
+// during cmd/pigate/main.go's construction) — changing either only takes
+// effect after a service restart, never live.
 package config
 
 import (
@@ -150,6 +163,18 @@ type Config struct {
 	// construct the ring buffer — changing it takes effect only after a
 	// service restart, never live.
 	TrafficLogBufferCapacity int
+
+	// MaxObjectEntries/MaxExpandedRulesPerPolicy are also file-only (no
+	// matching CLI flag). MaxObjectEntries is the maximum number of
+	// sub-entries allowed in a single Address/Service Object, enforced at
+	// validation time in db/repository.go. MaxExpandedRulesPerPolicy is the
+	// ceiling on how many nft rules a single firewall policy rule may expand
+	// into (its address/service objects' entries cross-multiplied), enforced
+	// in kernel/real_firewall.go's addUserChainRules (docs/ref/todo/
+	// multi-value-address-service-objects-plan.md §2.1). Both take effect
+	// only on process restart, like TrafficLogBufferCapacity above.
+	MaxObjectEntries          int
+	MaxExpandedRulesPerPolicy int
 }
 
 // Defaults returns the Config populated with the exact same defaults as the
@@ -202,6 +227,12 @@ func Defaults() Config {
 		// replaces in cmd/pigate/main.go (docs/ref/todo/
 		// firewall-log-buffer-capacity-plan.md T-00).
 		TrafficLogBufferCapacity: 10000,
+
+		// Owner-confirmed defaults (D-3, docs/ref/todo/
+		// multi-value-address-service-objects-plan.md §2.1). MaxObjectEntries
+		// must be kept in sync with model.DefaultMaxObjectEntries.
+		MaxObjectEntries:          64,
+		MaxExpandedRulesPerPolicy: 4096,
 	}
 }
 
@@ -250,6 +281,12 @@ const (
 	// keyTrafficLogBufferCapacity is also file-only (no CLI flag — docs/ref/
 	// todo/firewall-log-buffer-capacity-plan.md T-00, issue #134).
 	keyTrafficLogBufferCapacity = "traffic-log-buffer-capacity"
+
+	// keyMaxObjectEntries/keyMaxExpandedRulesPerPolicy are also file-only (no
+	// CLI flag — docs/ref/todo/multi-value-address-service-objects-plan.md
+	// §2.1/T-00A).
+	keyMaxObjectEntries          = "max-object-entries"
+	keyMaxExpandedRulesPerPolicy = "max-expanded-rules-per-policy"
 )
 
 // maxDNSStatsPairsCap/maxDNSStatsClientsCap are RAM-guard sanity ceilings for
@@ -309,6 +346,23 @@ const (
 	maxTrafficLogBufferCapacity = 100000
 )
 
+// minMaxObjectEntries/maxMaxObjectEntries and
+// minMaxExpandedRulesPerPolicy/maxMaxExpandedRulesPerPolicy are the accepted
+// ranges for the two multi-value-object caps (docs/ref/todo/
+// multi-value-address-service-objects-plan.md §2.1). The object-entries floor
+// (1) always allows at least a single-value object (parity with the old
+// single-value behavior); the ceiling (512) keeps a single object's expansion
+// bounded. The expanded-rules-per-policy floor (64) still allows a reasonably
+// sized address x service cross-product; the ceiling (65536) bounds worst-case
+// nft ruleset size for one policy rule so a misconfigured object pair can't
+// blow up the whole firewall table.
+const (
+	minMaxObjectEntries          = 1
+	maxMaxObjectEntries          = 512
+	minMaxExpandedRulesPerPolicy = 64
+	maxMaxExpandedRulesPerPolicy = 65536
+)
+
 // orderedKeys is the fixed key order used by Write (and reused by KnownKeys)
 // so the generated file is stable/diffable across runs.
 var orderedKeys = []string{
@@ -351,6 +405,13 @@ var orderedKeys = []string{
 	// among the existing ones) keeps already-generated pigate.conf files
 	// diffing cleanly across upgrades.
 	keyTrafficLogBufferCapacity,
+	// Appended at the very end, after traffic-log-buffer-capacity, per
+	// docs/ref/todo/multi-value-address-service-objects-plan.md T-00A —
+	// keeping new keys strictly appended (rather than alphabetized among the
+	// existing ones) keeps already-generated pigate.conf files diffing
+	// cleanly across upgrades.
+	keyMaxObjectEntries,
+	keyMaxExpandedRulesPerPolicy,
 }
 
 // KnownKeys returns the list of recognized config/flag keys, in the fixed
@@ -511,6 +572,18 @@ func Resolve(defaults Config, fileVals, explicit map[string]string) (Config, []s
 			cfg.TrafficLogBufferCapacity, minTrafficLogBufferCapacity, maxTrafficLogBufferCapacity, defaults.TrafficLogBufferCapacity))
 		cfg.TrafficLogBufferCapacity = defaults.TrafficLogBufferCapacity
 	}
+	if cfg.MaxObjectEntries < minMaxObjectEntries || cfg.MaxObjectEntries > maxMaxObjectEntries {
+		warnings = append(warnings, fmt.Sprintf(
+			"max-object-entries=%d out of range (%d..%d), using default %d",
+			cfg.MaxObjectEntries, minMaxObjectEntries, maxMaxObjectEntries, defaults.MaxObjectEntries))
+		cfg.MaxObjectEntries = defaults.MaxObjectEntries
+	}
+	if cfg.MaxExpandedRulesPerPolicy < minMaxExpandedRulesPerPolicy || cfg.MaxExpandedRulesPerPolicy > maxMaxExpandedRulesPerPolicy {
+		warnings = append(warnings, fmt.Sprintf(
+			"max-expanded-rules-per-policy=%d out of range (%d..%d), using default %d",
+			cfg.MaxExpandedRulesPerPolicy, minMaxExpandedRulesPerPolicy, maxMaxExpandedRulesPerPolicy, defaults.MaxExpandedRulesPerPolicy))
+		cfg.MaxExpandedRulesPerPolicy = defaults.MaxExpandedRulesPerPolicy
+	}
 
 	return cfg, warnings, nil
 }
@@ -659,6 +732,20 @@ func applyKey(cfg *Config, key, value string) error {
 		// Range-checking is deliberately NOT done here — see Resolve's
 		// post-processing pass (clamp + warn, not fail-fast).
 		cfg.TrafficLogBufferCapacity = n
+	case keyMaxObjectEntries:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		// Range-checking is deliberately NOT done here — see Resolve's
+		// post-processing pass (clamp + warn, not fail-fast).
+		cfg.MaxObjectEntries = n
+	case keyMaxExpandedRulesPerPolicy:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		cfg.MaxExpandedRulesPerPolicy = n
 	default:
 		// Unreachable: callers only invoke applyKey for keys that passed
 		// isKnownKey. Kept as a safety net rather than a silent no-op.
@@ -717,6 +804,10 @@ func keyValue(cfg Config, key string) string {
 		return strconv.Itoa(cfg.DenyStatsMaxPorts)
 	case keyTrafficLogBufferCapacity:
 		return strconv.Itoa(cfg.TrafficLogBufferCapacity)
+	case keyMaxObjectEntries:
+		return strconv.Itoa(cfg.MaxObjectEntries)
+	case keyMaxExpandedRulesPerPolicy:
+		return strconv.Itoa(cfg.MaxExpandedRulesPerPolicy)
 	default:
 		return ""
 	}

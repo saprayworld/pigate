@@ -1128,28 +1128,39 @@ func (s *TrafficStatsService) categoryEntries() []categoryEntry {
 	return entries
 }
 
+// buildCategoryEntries turns a Service Object snapshot into the flat
+// categoryEntry lookup table categorize() scans. A Service Object may hold
+// multiple Entries (plan
+// docs/ref/todo/multi-value-address-service-objects-plan.md T-08) — each
+// entry becomes its own categoryEntry, all sharing the parent object's Name,
+// so e.g. a single object with TCP/80 and TCP/443 entries yields two
+// categoryEntry rows that both categorize traffic under that one object
+// name. An invalid port spec on one entry only skips that entry, not the
+// rest of the object's entries.
 func buildCategoryEntries(svcs []model.ServiceObject) []categoryEntry {
 	out := make([]categoryEntry, 0, len(svcs))
 	for _, sv := range svcs {
-		proto := strings.ToUpper(strings.TrimSpace(sv.Protocol))
-		switch proto {
-		case "ICMP":
-			out = append(out, categoryEntry{name: sv.Name, isICMP: true})
-		case "TCP", "UDP", "TCP/UDP":
-			start, end, ok := parseServicePortRange(sv.Port)
-			if !ok {
-				continue // invalid port spec on this Service Object — skip it
+		for _, e := range sv.Entries {
+			proto := strings.ToUpper(strings.TrimSpace(e.Protocol))
+			switch proto {
+			case "ICMP":
+				out = append(out, categoryEntry{name: sv.Name, isICMP: true})
+			case "TCP", "UDP", "TCP/UDP":
+				start, end, ok := parseServicePortRange(e.Port)
+				if !ok {
+					continue // invalid port spec on this entry — skip only this entry
+				}
+				protocols := []uint8{6, 17}
+				if proto == "TCP" {
+					protocols = []uint8{6}
+				} else if proto == "UDP" {
+					protocols = []uint8{17}
+				}
+				out = append(out, categoryEntry{name: sv.Name, protocols: protocols, portStart: start, portEnd: end})
+			default:
+				// Unsupported/unrecognized protocol string — not a valid
+				// firewall-usable Service Object either, so skip categorization.
 			}
-			protocols := []uint8{6, 17}
-			if proto == "TCP" {
-				protocols = []uint8{6}
-			} else if proto == "UDP" {
-				protocols = []uint8{17}
-			}
-			out = append(out, categoryEntry{name: sv.Name, protocols: protocols, portStart: start, portEnd: end})
-		default:
-			// Unsupported/unrecognized protocol string — not a valid
-			// firewall-usable Service Object either, so skip categorization.
 		}
 	}
 	return out

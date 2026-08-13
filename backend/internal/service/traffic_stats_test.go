@@ -358,6 +358,55 @@ func TestServiceNameFor(t *testing.T) {
 	}
 }
 
+// TestBuildCategoryEntries_MultiEntryServiceObjectSharesLabel covers T-08's
+// acceptance for the Traffic page: a single Service Object with a TCP/80 and
+// a TCP/443 entry must categorize BOTH ports under the same object name
+// (docs/ref/todo/multi-value-address-service-objects-plan.md T-08).
+func TestBuildCategoryEntries_MultiEntryServiceObjectSharesLabel(t *testing.T) {
+	svcs := []model.ServiceObject{
+		{
+			Name: "Web",
+			Entries: []model.ServiceEntry{
+				{Protocol: "TCP", Port: "80"},
+				{Protocol: "TCP", Port: "443"},
+			},
+		},
+	}
+	s := &TrafficStatsService{}
+	s.svcCache = buildCategoryEntries(svcs)
+	s.svcCachedAt = time.Now()
+
+	if got := s.categorize(6, 80); got != "Web" {
+		t.Fatalf("expected TCP/80 entry to categorize as Web, got %q", got)
+	}
+	if got := s.categorize(6, 443); got != "Web" {
+		t.Fatalf("expected TCP/443 entry to categorize as Web, got %q", got)
+	}
+	if got := s.categorize(6, 8080); got != "Other" {
+		t.Fatalf("expected no match outside either entry to fall back to Other, got %q", got)
+	}
+}
+
+// TestBuildCategoryEntries_SingleEntryObjectUnchanged locks in that a plain
+// single-entry Service Object still categorizes exactly as before multi-value
+// support (docs/ref/todo/multi-value-address-service-objects-plan.md T-08
+// acceptance: "object ค่าเดียวผลลัพธ์เหมือนเดิม").
+func TestBuildCategoryEntries_SingleEntryObjectUnchanged(t *testing.T) {
+	svcs := []model.ServiceObject{
+		{Name: "SSH", Entries: []model.ServiceEntry{{Protocol: "TCP", Port: "22"}}},
+	}
+	s := &TrafficStatsService{}
+	s.svcCache = buildCategoryEntries(svcs)
+	s.svcCachedAt = time.Now()
+
+	if got := s.categorize(6, 22); got != "SSH" {
+		t.Fatalf("expected TCP/22 to categorize as SSH, got %q", got)
+	}
+	if got := s.categorize(6, 23); got != "Other" {
+		t.Fatalf("expected TCP/23 to fall back to Other, got %q", got)
+	}
+}
+
 // raceFakeAcct returns fresh, monotonically growing flow/rule data on every
 // call — used to keep poll() genuinely mutating the newest (still-open)
 // bucket's maps for the duration of the race test below, rather than

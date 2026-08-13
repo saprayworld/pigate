@@ -371,6 +371,145 @@ func TestImportLegacyBackupWithoutChainNormalizesToForward(t *testing.T) {
 	}
 }
 
+// TestImportLegacyBackupWithoutEntriesKeyChecksumRegression is a regression
+// test for T-09/T-08 (docs/ref/todo/multi-value-address-service-objects-plan.md
+// Caution 1): AddressObject.Entries/ServiceObject.Entries MUST stay
+// `json:"entries,omitempty"` so that a pre-multi-value (v2.x) backup file —
+// which never had an "entries" key at all — still marshals to byte-identical
+// JSON and its stored checksum still verifies. If anyone removes omitempty,
+// a freshly-exported cfg with Entries populated would marshal differently
+// than the legacy fixture below, and this test fails immediately.
+func TestImportLegacyBackupWithoutEntriesKeyChecksumRegression(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	// Simulate a pre-multi-value exporter: clear Entries on every address and
+	// service object, as if the field never existed (legacy Type/Value only).
+	for i := range file.Config.Addresses {
+		file.Config.Addresses[i].Entries = nil
+	}
+	for i := range file.Config.ServiceObjects {
+		file.Config.ServiceObjects[i].Entries = nil
+	}
+	sum, err := configChecksum(*file.Config)
+	if err != nil {
+		t.Fatalf("configChecksum: %v", err)
+	}
+	file.Meta.Checksum = sum
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// Load-bearing assertion: the "entries" key must be entirely absent from
+	// the marshalled legacy fixture — this is what breaks if omitempty is
+	// ever removed from AddressEntry/ServiceEntry's Entries field.
+	if strings.Contains(string(raw), `"entries"`) {
+		t.Fatalf("test setup invalid (or omitempty was removed from Entries): raw backup still contains an entries key: %s", raw)
+	}
+
+	res, err := bs.Import(raw, model.ImportOptions{})
+	if err != nil {
+		t.Fatalf("import of legacy backup without an entries key must succeed (checksum must still verify), got: %v", err)
+	}
+	if res.Counts["addresses"] == 0 {
+		t.Errorf("expected addresses to be imported, got count 0")
+	}
+
+	// After import, every address/service must have been backfilled to
+	// exactly one entry mirroring its legacy Type/Value or Protocol/Port.
+	addr, err := repo.GetAddressByID("addr-c1")
+	if err != nil || addr == nil {
+		t.Fatalf("get imported address: %v", err)
+	}
+	if len(addr.Entries) != 1 || addr.Entries[0].Type != "subnet" || addr.Entries[0].Value != "10.10.0.0/24" {
+		t.Errorf("expected addr-c1 backfilled to a single subnet entry, got %+v", addr.Entries)
+	}
+
+	svc, err := repo.GetServiceByID("svc-c1")
+	if err != nil || svc == nil {
+		t.Fatalf("get imported service: %v", err)
+	}
+	if len(svc.Entries) != 1 || svc.Entries[0].Protocol != "TCP" || svc.Entries[0].Port != "8080" {
+		t.Errorf("expected svc-c1 backfilled to a single TCP/8080 entry, got %+v", svc.Entries)
+	}
+}
+
+// TestImportRoundTripMultiEntryObjects covers the multi-value round-trip
+// case: an object with several entries must export/import with every entry
+// intact, in order, and the checksum must still verify since Entries IS
+// populated on this file (mirrors TestImportRoundTrip's pattern).
+func TestImportRoundTripMultiEntryObjects(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+
+	if err := repo.CreateAddress(model.AddressObject{
+		ID:   "addr-multi",
+		Name: "MultiBranch",
+		Entries: []model.AddressEntry{
+			{Type: "subnet", Value: "10.30.0.0/24"},
+			{Type: "subnet", Value: "10.30.1.0/24"},
+			{Type: "range", Value: "10.30.2.1-10.30.2.20"},
+		},
+	}); err != nil {
+		t.Fatalf("create multi-entry address: %v", err)
+	}
+	if err := repo.CreateService(model.ServiceObject{
+		ID:   "svc-multi",
+		Name: "MultiWeb",
+		Type: "custom",
+		Entries: []model.ServiceEntry{
+			{Protocol: "TCP", Port: "80"},
+			{Protocol: "TCP", Port: "443"},
+		},
+	}); err != nil {
+		t.Fatalf("create multi-entry service: %v", err)
+	}
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"entries"`) {
+		t.Fatalf("test setup invalid: expected an entries key for the multi-entry objects in %s", raw)
+	}
+
+	// Wipe and re-import into a fresh DB to prove entries round-trip.
+	bs2, repo2 := newBackupTestEnv(t)
+	if _, err := bs2.Import(raw, model.ImportOptions{}); err != nil {
+		t.Fatalf("import of multi-entry objects failed: %v", err)
+	}
+
+	addr, err := repo2.GetAddressByID("addr-multi")
+	if err != nil || addr == nil {
+		t.Fatalf("get imported multi-entry address: %v", err)
+	}
+	wantAddrValues := []string{"10.30.0.0/24", "10.30.1.0/24", "10.30.2.1-10.30.2.20"}
+	if len(addr.Entries) != len(wantAddrValues) {
+		t.Fatalf("expected %d entries, got %d: %+v", len(wantAddrValues), len(addr.Entries), addr.Entries)
+	}
+	for i, want := range wantAddrValues {
+		if addr.Entries[i].Value != want {
+			t.Errorf("entry[%d]: expected %q, got %q", i, want, addr.Entries[i].Value)
+		}
+	}
+
+	svc, err := repo2.GetServiceByID("svc-multi")
+	if err != nil || svc == nil {
+		t.Fatalf("get imported multi-entry service: %v", err)
+	}
+	if len(svc.Entries) != 2 || svc.Entries[0].Port != "80" || svc.Entries[1].Port != "443" {
+		t.Fatalf("expected 2 entries (80, 443) in order, got %+v", svc.Entries)
+	}
+}
+
 func TestImportChecksumMismatchRejected(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo)

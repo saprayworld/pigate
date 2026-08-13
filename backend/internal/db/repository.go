@@ -23,6 +23,14 @@ type Repository struct {
 	mockFromReal           bool
 	allowEditSystemRoutes  bool
 	prioritizeKernelRoutes bool
+	// maxObjectEntries is the per-object entries cap enforced by
+	// ValidateAddressEntries/ValidateServiceEntries. Defaults to
+	// model.DefaultMaxObjectEntries but is meant to be overridden at startup
+	// via SetObjectLimits from cfg.MaxObjectEntries (config key
+	// "max-object-entries", see docs/ref/todo/
+	// multi-value-address-service-objects-plan.md §2.1, D-3) — never
+	// hardcode the cap at the point of use.
+	maxObjectEntries int
 }
 
 func NewRepository(db *sql.DB) *Repository {
@@ -32,7 +40,15 @@ func NewRepository(db *sql.DB) *Repository {
 		mockFromReal:           false,
 		allowEditSystemRoutes:  false,
 		prioritizeKernelRoutes: false, // default to false
+		maxObjectEntries:       model.DefaultMaxObjectEntries,
 	}
+}
+
+// SetObjectLimits sets the per-object entries cap for Address/Service objects.
+// Called by cmd/pigate/main.go with cfg.MaxObjectEntries after config
+// resolution (pattern mirrors SetMockMode/SetAllowEditSystemRoutes above).
+func (r *Repository) SetObjectLimits(maxObjectEntries int) {
+	r.maxObjectEntries = maxObjectEntries
 }
 
 func (r *Repository) SetMockMode(mockMode bool, mockFromReal bool) {
@@ -182,6 +198,39 @@ func (r *Repository) UsernameExists(username string) (bool, error) {
 // ADDRESS OBJECTS
 // =========================================================================
 
+// loadAddressEntries loads every address_object_values row (ordered by
+// address_id then seq) and groups them in memory by address_id. Doing a
+// single query up front (instead of one query per address inside a loop over
+// still-open rows) avoids nested queries against a busy *sql.Rows cursor and
+// keeps GetAddresses O(1) round trips for the child table regardless of how
+// many address objects exist.
+func (r *Repository) loadAddressEntries(addressID string) (map[string][]model.AddressEntry, error) {
+	query := "SELECT address_id, type, value FROM address_object_values"
+	args := []interface{}{}
+	if addressID != "" {
+		query += " WHERE address_id = ?"
+		args = append(args, addressID)
+	}
+	query += " ORDER BY address_id ASC, seq ASC"
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string][]model.AddressEntry)
+	for rows.Next() {
+		var id string
+		var e model.AddressEntry
+		if err := rows.Scan(&id, &e.Type, &e.Value); err != nil {
+			return nil, err
+		}
+		out[id] = append(out[id], e)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repository) GetAddresses() ([]model.AddressObject, error) {
 	rows, err := r.db.Query("SELECT id, name, type, value, system FROM address_objects")
 	if err != nil {
@@ -199,11 +248,33 @@ func (r *Repository) GetAddresses() ([]model.AddressObject, error) {
 		addr.System = sysInt == 1
 		addr.RefPolicies = []string{} // default empty array
 
+		list = append(list, addr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+
+	// Load every child entry row up front (single query) and group in memory,
+	// rather than querying per-row while the parent rows cursor is open.
+	entriesByID, err := r.loadAddressEntries("")
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		addr := &list[i]
+		if es, ok := entriesByID[addr.ID]; ok && len(es) > 0 {
+			addr.Entries = es
+		}
+		// object with no child rows (edge case) falls back to a single entry
+		// mirrored from the legacy columns.
+		model.NormalizeAddressObject(addr)
+
 		// Query referenced policy names
 		refRows, err := r.db.Query(`
-			SELECT DISTINCT fp.name 
-			FROM policy_addresses pa 
-			JOIN firewall_policies fp ON pa.policy_id = fp.id 
+			SELECT DISTINCT fp.name
+			FROM policy_addresses pa
+			JOIN firewall_policies fp ON pa.policy_id = fp.id
 			WHERE pa.address_id = ?`, addr.ID)
 		if err == nil {
 			for refRows.Next() {
@@ -214,8 +285,6 @@ func (r *Repository) GetAddresses() ([]model.AddressObject, error) {
 			}
 			refRows.Close()
 		}
-
-		list = append(list, addr)
 	}
 	return list, nil
 }
@@ -234,10 +303,21 @@ func (r *Repository) GetAddressByID(id string) (*model.AddressObject, error) {
 	addr.System = sysInt == 1
 	addr.RefPolicies = []string{}
 
+	entriesByID, err := r.loadAddressEntries(addr.ID)
+	if err != nil {
+		return nil, err
+	}
+	if es, ok := entriesByID[addr.ID]; ok && len(es) > 0 {
+		addr.Entries = es
+	}
+	// object with no child rows (edge case) falls back to a single entry
+	// mirrored from the legacy columns.
+	model.NormalizeAddressObject(&addr)
+
 	refRows, err := r.db.Query(`
-		SELECT DISTINCT fp.name 
-		FROM policy_addresses pa 
-		JOIN firewall_policies fp ON pa.policy_id = fp.id 
+		SELECT DISTINCT fp.name
+		FROM policy_addresses pa
+		JOIN firewall_policies fp ON pa.policy_id = fp.id
 		WHERE pa.address_id = ?`, addr.ID)
 	if err == nil {
 		defer refRows.Close()
@@ -252,62 +332,33 @@ func (r *Repository) GetAddressByID(id string) (*model.AddressObject, error) {
 	return &addr, nil
 }
 
-func isValidFQDN(s string) bool {
-	if len(s) == 0 || len(s) > 253 {
-		return false
-	}
-	labels := strings.Split(s, ".")
-	for _, label := range labels {
-		if len(label) == 0 || len(label) > 63 {
-			return false
-		}
-		if label[0] == '-' || label[len(label)-1] == '-' {
-			return false
-		}
-		for _, c := range label {
-			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
-				return false
-			}
-		}
-	}
-	return true
-}
-
+// validateAddressObject is a thin wrapper around the canonical entry
+// validator in model/object_entry_validate.go — see plan Caution 5, there
+// must be only one set of validation rules. Name emptiness stays here
+// because it is an object-level (not entry-level) concern.
 func (r *Repository) validateAddressObject(addr model.AddressObject) error {
 	if len(strings.TrimSpace(addr.Name)) == 0 {
 		return errors.New("address object name cannot be empty")
 	}
-	if addr.Type != "subnet" && addr.Type != "range" && addr.Type != "fqdn" {
-		return fmt.Errorf("invalid address object type: %s", addr.Type)
+	entries := addr.Entries
+	if len(entries) == 0 {
+		entries = []model.AddressEntry{{Type: addr.Type, Value: addr.Value}}
 	}
+	return model.ValidateAddressEntries(entries, r.maxObjectEntries)
+}
 
-	switch addr.Type {
-	case "subnet":
-		_, _, err := net.ParseCIDR(addr.Value)
-		if err != nil {
-			return fmt.Errorf("invalid subnet value %q: %w", addr.Value, err)
-		}
-	case "range":
-		parts := strings.Split(addr.Value, "-")
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid IP range value %q: must be in format START-END", addr.Value)
-		}
-		ipStartStr := strings.TrimSpace(parts[0])
-		ipEndStr := strings.TrimSpace(parts[1])
-		ipStart := net.ParseIP(ipStartStr)
-		ipEnd := net.ParseIP(ipEndStr)
-		if ipStart == nil {
-			return fmt.Errorf("invalid start IP %q in range %q", ipStartStr, addr.Value)
-		}
-		if ipEnd == nil {
-			return fmt.Errorf("invalid end IP %q in range %q", ipEndStr, addr.Value)
-		}
-		if (ipStart.To4() != nil) != (ipEnd.To4() != nil) {
-			return fmt.Errorf("IP range family mismatch: %s and %s must be of same IP version", ipStartStr, ipEndStr)
-		}
-	case "fqdn":
-		if !isValidFQDN(addr.Value) {
-			return fmt.Errorf("invalid FQDN value %q", addr.Value)
+// replaceAddressEntries deletes every existing address_object_values row for
+// addressID and re-inserts entries as seq 1..N, within tx. Must be called
+// only after model.ValidateAddressEntries has already succeeded (fail-closed
+// — no partial writes on invalid input).
+func replaceAddressEntries(tx *sql.Tx, addressID string, entries []model.AddressEntry) error {
+	if _, err := tx.Exec("DELETE FROM address_object_values WHERE address_id = ?", addressID); err != nil {
+		return err
+	}
+	for i, e := range entries {
+		if _, err := tx.Exec("INSERT INTO address_object_values (address_id, seq, type, value) VALUES (?, ?, ?, ?)",
+			addressID, i+1, e.Type, e.Value); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -317,34 +368,63 @@ func (r *Repository) CreateAddress(addr model.AddressObject) error {
 	if err := r.validateAddressObject(addr); err != nil {
 		return err
 	}
+	model.NormalizeAddressObject(&addr)
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	sysVal := 0
 	if addr.System {
 		sysVal = 1
 	}
-	_, err := r.db.Exec("INSERT INTO address_objects (id, name, type, value, system) VALUES (?, ?, ?, ?, ?)",
-		addr.ID, addr.Name, addr.Type, addr.Value, sysVal)
-	return err
+	if _, err := tx.Exec("INSERT INTO address_objects (id, name, type, value, system) VALUES (?, ?, ?, ?, ?)",
+		addr.ID, addr.Name, addr.Type, addr.Value, sysVal); err != nil {
+		return err
+	}
+	if err := replaceAddressEntries(tx, addr.ID, addr.Entries); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *Repository) UpdateAddress(addr model.AddressObject) error {
 	if err := r.validateAddressObject(addr); err != nil {
 		return err
 	}
+	model.NormalizeAddressObject(&addr)
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	// Check system lock
 	var system int
-	err := r.db.QueryRow("SELECT system FROM address_objects WHERE id = ?", addr.ID).Scan(&system)
-	if err != nil {
+	if err := tx.QueryRow("SELECT system FROM address_objects WHERE id = ?", addr.ID).Scan(&system); err != nil {
 		return err
 	}
 	if system == 1 {
 		return errors.New("cannot update system predefined address objects")
 	}
 
-	_, err = r.db.Exec("UPDATE address_objects SET name = ?, type = ?, value = ? WHERE id = ?",
-		addr.Name, addr.Type, addr.Value, addr.ID)
-	return err
+	if _, err := tx.Exec("UPDATE address_objects SET name = ?, type = ?, value = ? WHERE id = ?",
+		addr.Name, addr.Type, addr.Value, addr.ID); err != nil {
+		return err
+	}
+	if err := replaceAddressEntries(tx, addr.ID, addr.Entries); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
+// DeleteAddress removes an address object. Deleting the parent row cascades
+// only to its own address_object_values child rows (ON DELETE CASCADE) — it
+// has no effect on policy_addresses, which is a separate RESTRICT-style
+// relation still enforced explicitly by the refCount check below.
 func (r *Repository) DeleteAddress(id string) error {
 	// Check system and references
 	var system int
@@ -373,6 +453,9 @@ func (r *Repository) DeleteAddress(id string) error {
 // rows were actually removed (IDs that don't exist are silently skipped by the
 // SQL IN delete, so the count can be lower than len(ids) — callers auditing the
 // operation must report this count, not the requested one).
+// BulkDeleteAddresses removes the given address objects. As with
+// DeleteAddress, ON DELETE CASCADE only reaches address_object_values; the
+// policy_addresses reference check below is unaffected and still blocks.
 func (r *Repository) BulkDeleteAddresses(ids []string) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
@@ -425,6 +508,37 @@ func (r *Repository) AddressNameExists(name string) (bool, error) {
 // SERVICE OBJECTS
 // =========================================================================
 
+// loadServiceEntries loads every service_object_ports row (ordered by
+// service_id then seq) and groups them in memory by service_id. See
+// loadAddressEntries for the rationale (single query up front, no nested
+// query against an open rows cursor).
+func (r *Repository) loadServiceEntries(serviceID string) (map[string][]model.ServiceEntry, error) {
+	query := "SELECT service_id, protocol, port FROM service_object_ports"
+	args := []interface{}{}
+	if serviceID != "" {
+		query += " WHERE service_id = ?"
+		args = append(args, serviceID)
+	}
+	query += " ORDER BY service_id ASC, seq ASC"
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string][]model.ServiceEntry)
+	for rows.Next() {
+		var id string
+		var e model.ServiceEntry
+		if err := rows.Scan(&id, &e.Protocol, &e.Port); err != nil {
+			return nil, err
+		}
+		out[id] = append(out[id], e)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repository) GetServices() ([]model.ServiceObject, error) {
 	rows, err := r.db.Query("SELECT id, name, protocol, port, type FROM service_objects")
 	if err != nil {
@@ -440,11 +554,31 @@ func (r *Repository) GetServices() ([]model.ServiceObject, error) {
 		}
 		svc.RefPolicies = []string{}
 
+		list = append(list, svc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+
+	entriesByID, err := r.loadServiceEntries("")
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		svc := &list[i]
+		if es, ok := entriesByID[svc.ID]; ok && len(es) > 0 {
+			svc.Entries = es
+		}
+		// object with no child rows (edge case) falls back to a single entry
+		// mirrored from the legacy columns.
+		model.NormalizeServiceObject(svc)
+
 		// Query referenced policy names
 		refRows, err := r.db.Query(`
-			SELECT DISTINCT fp.name 
-			FROM policy_services ps 
-			JOIN firewall_policies fp ON ps.policy_id = fp.id 
+			SELECT DISTINCT fp.name
+			FROM policy_services ps
+			JOIN firewall_policies fp ON ps.policy_id = fp.id
 			WHERE ps.service_id = ?`, svc.ID)
 		if err == nil {
 			for refRows.Next() {
@@ -455,8 +589,6 @@ func (r *Repository) GetServices() ([]model.ServiceObject, error) {
 			}
 			refRows.Close()
 		}
-
-		list = append(list, svc)
 	}
 	return list, nil
 }
@@ -473,10 +605,21 @@ func (r *Repository) GetServiceByID(id string) (*model.ServiceObject, error) {
 	}
 	svc.RefPolicies = []string{}
 
+	entriesByID, err := r.loadServiceEntries(svc.ID)
+	if err != nil {
+		return nil, err
+	}
+	if es, ok := entriesByID[svc.ID]; ok && len(es) > 0 {
+		svc.Entries = es
+	}
+	// object with no child rows (edge case) falls back to a single entry
+	// mirrored from the legacy columns.
+	model.NormalizeServiceObject(&svc)
+
 	refRows, err := r.db.Query(`
-		SELECT DISTINCT fp.name 
-		FROM policy_services ps 
-		JOIN firewall_policies fp ON ps.policy_id = fp.id 
+		SELECT DISTINCT fp.name
+		FROM policy_services ps
+		JOIN firewall_policies fp ON ps.policy_id = fp.id
 		WHERE ps.service_id = ?`, svc.ID)
 	if err == nil {
 		defer refRows.Close()
@@ -491,55 +634,35 @@ func (r *Repository) GetServiceByID(id string) (*model.ServiceObject, error) {
 	return &svc, nil
 }
 
-func isValidPort(pStr string) bool {
-	pStr = strings.TrimSpace(pStr)
-	port, err := strconv.Atoi(pStr)
-	if err != nil {
-		return false
-	}
-	return port >= 1 && port <= 65535
-}
-
+// validateServiceObject is a thin wrapper around the canonical entry
+// validator in model/object_entry_validate.go — see plan Caution 5, there
+// must be only one set of validation rules. Name emptiness stays here
+// because it is an object-level (not entry-level) concern.
 func (r *Repository) validateServiceObject(svc model.ServiceObject) error {
 	if len(strings.TrimSpace(svc.Name)) == 0 {
 		return errors.New("service object name cannot be empty")
 	}
-	if svc.Protocol != "TCP" && svc.Protocol != "UDP" && svc.Protocol != "TCP/UDP" && svc.Protocol != "ICMP" {
-		return fmt.Errorf("invalid protocol: %s", svc.Protocol)
+	entries := svc.Entries
+	if len(entries) == 0 {
+		entries = []model.ServiceEntry{{Protocol: svc.Protocol, Port: svc.Port}}
 	}
+	return model.ValidateServiceEntries(entries, r.maxObjectEntries)
+}
 
-	portStr := strings.TrimSpace(svc.Port)
-	if svc.Protocol == "ICMP" {
-		if portStr != "-" {
-			return fmt.Errorf("ICMP service port must be '-'")
-		}
-		return nil
+// replaceServiceEntries deletes every existing service_object_ports row for
+// serviceID and re-inserts entries as seq 1..N, within tx. Must be called
+// only after model.ValidateServiceEntries has already succeeded (fail-closed
+// — no partial writes on invalid input).
+func replaceServiceEntries(tx *sql.Tx, serviceID string, entries []model.ServiceEntry) error {
+	if _, err := tx.Exec("DELETE FROM service_object_ports WHERE service_id = ?", serviceID); err != nil {
+		return err
 	}
-
-	// Non-ICMP protocols require valid numeric ports or port ranges
-	parts := strings.Split(portStr, "-")
-	if len(parts) == 1 {
-		if !isValidPort(parts[0]) {
-			return fmt.Errorf("invalid port %q: must be a number between 1 and 65535", parts[0])
+	for i, e := range entries {
+		if _, err := tx.Exec("INSERT INTO service_object_ports (service_id, seq, protocol, port) VALUES (?, ?, ?, ?)",
+			serviceID, i+1, e.Protocol, e.Port); err != nil {
+			return err
 		}
-	} else if len(parts) == 2 {
-		startStr := strings.TrimSpace(parts[0])
-		endStr := strings.TrimSpace(parts[1])
-		if !isValidPort(startStr) {
-			return fmt.Errorf("invalid start port %q in range %q: must be a number between 1 and 65535", startStr, portStr)
-		}
-		if !isValidPort(endStr) {
-			return fmt.Errorf("invalid end port %q in range %q: must be a number between 1 and 65535", endStr, portStr)
-		}
-		start, _ := strconv.Atoi(startStr)
-		end, _ := strconv.Atoi(endStr)
-		if start > end {
-			return fmt.Errorf("invalid port range %q: start port %d cannot be greater than end port %d", portStr, start, end)
-		}
-	} else {
-		return fmt.Errorf("invalid port format %q: must be a single port or range (e.g. 80 or 80-88)", portStr)
 	}
-
 	return nil
 }
 
@@ -547,29 +670,58 @@ func (r *Repository) CreateService(svc model.ServiceObject) error {
 	if err := r.validateServiceObject(svc); err != nil {
 		return err
 	}
-	_, err := r.db.Exec("INSERT INTO service_objects (id, name, protocol, port, type) VALUES (?, ?, ?, ?, ?)",
-		svc.ID, svc.Name, svc.Protocol, svc.Port, svc.Type)
-	return err
+	model.NormalizeServiceObject(&svc)
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("INSERT INTO service_objects (id, name, protocol, port, type) VALUES (?, ?, ?, ?, ?)",
+		svc.ID, svc.Name, svc.Protocol, svc.Port, svc.Type); err != nil {
+		return err
+	}
+	if err := replaceServiceEntries(tx, svc.ID, svc.Entries); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *Repository) UpdateService(svc model.ServiceObject) error {
 	if err := r.validateServiceObject(svc); err != nil {
 		return err
 	}
-	var sType string
-	err := r.db.QueryRow("SELECT type FROM service_objects WHERE id = ?", svc.ID).Scan(&sType)
+	model.NormalizeServiceObject(&svc)
+
+	tx, err := r.db.Begin()
 	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var sType string
+	if err := tx.QueryRow("SELECT type FROM service_objects WHERE id = ?", svc.ID).Scan(&sType); err != nil {
 		return err
 	}
 	if sType == "system" {
 		return errors.New("cannot update system predefined service objects")
 	}
 
-	_, err = r.db.Exec("UPDATE service_objects SET name = ?, protocol = ?, port = ? WHERE id = ?",
-		svc.Name, svc.Protocol, svc.Port, svc.ID)
-	return err
+	if _, err := tx.Exec("UPDATE service_objects SET name = ?, protocol = ?, port = ? WHERE id = ?",
+		svc.Name, svc.Protocol, svc.Port, svc.ID); err != nil {
+		return err
+	}
+	if err := replaceServiceEntries(tx, svc.ID, svc.Entries); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
+// DeleteService removes a service object. Deleting the parent row cascades
+// only to its own service_object_ports child rows (ON DELETE CASCADE) — it
+// has no effect on policy_services, which is a separate RESTRICT-style
+// relation still enforced explicitly by the refCount check below.
 func (r *Repository) DeleteService(id string) error {
 	var sType string
 	err := r.db.QueryRow("SELECT type FROM service_objects WHERE id = ?", id).Scan(&sType)

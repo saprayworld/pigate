@@ -255,6 +255,36 @@ func migrate(db *sql.DB) error {
 			comment TEXT
 		);`,
 
+		// address_object_values / service_object_ports (docs/ref/todo/
+		// multi-value-address-service-objects-plan.md §3 items 1/2, D-4): child
+		// tables are the source of truth for the (possibly many) match entries of
+		// an Address/Service object. The parent tables' type/value and
+		// protocol/port columns above are now a TEMPORARY compat mirror of the
+		// first entry (seq=1) only — kept solely because (a) they are NOT NULL
+		// with a CHECK constraint and older SQLite has no DROP COLUMN, and (b)
+		// they let a downgraded binary keep working during the transition. They
+		// are written on every create/update for backward compatibility but must
+		// NEVER be read again to generate firewall rules; new code must read the
+		// entries from these child tables instead. Planned removal in the next
+		// major version.
+		`CREATE TABLE IF NOT EXISTS address_object_values (
+			address_id TEXT NOT NULL,
+			seq        INTEGER NOT NULL,
+			type       TEXT NOT NULL CHECK(type IN ('subnet', 'range', 'fqdn')),
+			value      TEXT NOT NULL,
+			PRIMARY KEY (address_id, seq),
+			FOREIGN KEY (address_id) REFERENCES address_objects(id) ON DELETE CASCADE
+		);`,
+
+		`CREATE TABLE IF NOT EXISTS service_object_ports (
+			service_id TEXT NOT NULL,
+			seq        INTEGER NOT NULL,
+			protocol   TEXT NOT NULL CHECK(protocol IN ('TCP', 'UDP', 'TCP/UDP', 'ICMP')),
+			port       TEXT NOT NULL,
+			PRIMARY KEY (service_id, seq),
+			FOREIGN KEY (service_id) REFERENCES service_objects(id) ON DELETE CASCADE
+		);`,
+
 		`CREATE TABLE IF NOT EXISTS firewall_policies (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
@@ -937,6 +967,36 @@ func seed(db *sql.DB, dsn string, mockMode bool) error {
 		if err != nil {
 			return err
 		}
+	}
+
+	// 3.1 Backfill address_object_values / service_object_ports (docs/ref/todo/
+	// multi-value-address-service-objects-plan.md §3 item 3, D-2). Must run
+	// AFTER the default object seeds above so freshly-seeded rows (addr-1,
+	// svc-1..svc-6) get a seq=1 child row too, in addition to any pre-existing
+	// user objects from before this migration. The `WHERE NOT EXISTS` guard
+	// makes this safe to run on every InitDB call (idempotent) and safe across
+	// a downgrade-then-upgrade cycle, without ever touching/duplicating a row
+	// that already has children — no user data is ever lost or overwritten here.
+	if res, err := db.Exec(`
+		INSERT INTO address_object_values (address_id, seq, type, value)
+		SELECT a.id, 1, a.type, a.value
+		FROM address_objects a
+		WHERE NOT EXISTS (SELECT 1 FROM address_object_values v WHERE v.address_id = a.id)
+	`); err != nil {
+		return fmt.Errorf("failed to backfill address_object_values: %w", err)
+	} else if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("[Migration] Backfilled %d row(s) into address_object_values", n)
+	}
+
+	if res, err := db.Exec(`
+		INSERT INTO service_object_ports (service_id, seq, protocol, port)
+		SELECT s.id, 1, s.protocol, s.port
+		FROM service_objects s
+		WHERE NOT EXISTS (SELECT 1 FROM service_object_ports p WHERE p.service_id = s.id)
+	`); err != nil {
+		return fmt.Errorf("failed to backfill service_object_ports: %w", err)
+	} else if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("[Migration] Backfilled %d row(s) into service_object_ports", n)
 	}
 
 	// 4. Seed Default DHCP Configuration

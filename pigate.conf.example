@@ -195,3 +195,22 @@ deny-stats-max-ports=300
 # ring buffer — changing it here has NO effect until you restart the service
 # (`sudo systemctl restart pigate`).
 traffic-log-buffer-capacity=10000
+
+# The two keys below bound Multi-Value Address & Service Objects (docs/ref/
+# todo/multi-value-address-service-objects-plan.md). Same clamp+warn (not
+# fatal) out-of-range validation as the other file-only keys above.
+#
+# IMPORTANT: both values are only read ONCE, at process startup — changing
+# them here has NO effect until you restart the service
+# (`sudo systemctl restart pigate`).
+
+# Maximum number of entries (e.g. subnet/range/fqdn values, or protocol/port
+# pairs) allowed inside a single Address Object or Service Object, enforced
+# at create/update time. Default 64, accepted range 1-512.
+max-object-entries=64
+
+# Maximum number of nft rules a single firewall policy is allowed to expand
+# into (source entries x destination entries x service entries, roughly) when
+# Apply Settings runs, to bound the worst-case ruleset size from multi-value
+# objects. Default 4096, accepted range 64-65536.
+max-expanded-rules-per-policy=4096

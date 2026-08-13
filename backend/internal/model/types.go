@@ -68,38 +68,178 @@ type ChangePasswordRequest struct {
 
 // AddressObject represents IP/Subnet definitions
 type AddressObject struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Type        string   `json:"type"` // "subnet", "range", "fqdn"
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Deprecated: compat mirror of Entries[0] only. Kept temporarily for old
+	// clients and to allow downgrading the binary (SQLite versions in the
+	// field do not support DROP COLUMN easily and the column is NOT NULL
+	// with a CHECK constraint) — it will be removed in the next major
+	// version. Must never be used to generate firewall rules.
+	Type string `json:"type"` // "subnet", "range", "fqdn"
+	// Deprecated: compat mirror of Entries[0] only. Kept temporarily for old
+	// clients and to allow downgrading the binary (SQLite versions in the
+	// field do not support DROP COLUMN easily and the column is NOT NULL
+	// with a CHECK constraint) — it will be removed in the next major
+	// version. Must never be used to generate firewall rules.
 	Value       string   `json:"value"`
 	System      bool     `json:"system"`
 	RefPolicies []string `json:"refPolicies"`
+	// Entries holds the multi-value entries for this address object. Additive
+	// field — see docs/ref/todo/multi-value-address-service-objects-plan.md
+	// Caution 1: MUST keep omitempty on every new field here, otherwise old
+	// backup files (encoded before this field existed) will fail checksum
+	// verification and become un-importable.
+	Entries []AddressEntry `json:"entries,omitempty"`
 }
 
 // AddressObjectInput represents fields to create or update an AddressObject
 type AddressObjectInput struct {
-	Name    string `json:"name"`
-	Type    string `json:"type"` // "subnet", "range", "fqdn"
+	Name string `json:"name"`
+	// Deprecated: compat mirror of Entries[0] only. Kept temporarily for old
+	// clients and to allow downgrading the binary (SQLite versions in the
+	// field do not support DROP COLUMN easily and the column is NOT NULL
+	// with a CHECK constraint) — it will be removed in the next major
+	// version. Must never be used to generate firewall rules.
+	Type string `json:"type"` // "subnet", "range", "fqdn"
+	// Deprecated: compat mirror of Entries[0] only. Kept temporarily for old
+	// clients and to allow downgrading the binary (SQLite versions in the
+	// field do not support DROP COLUMN easily and the column is NOT NULL
+	// with a CHECK constraint) — it will be removed in the next major
+	// version. Must never be used to generate firewall rules.
 	Value   string `json:"value"`
 	Comment string `json:"comment,omitempty"`
+	// Entries holds the multi-value entries for this address object. Additive
+	// field — see docs/ref/todo/multi-value-address-service-objects-plan.md
+	// Caution 1: MUST keep omitempty on every new field here, otherwise old
+	// backup files (encoded before this field existed) will fail checksum
+	// verification and become un-importable.
+	Entries []AddressEntry `json:"entries,omitempty"`
 }
 
 // ServiceObject represents firewall port definitions
 type ServiceObject struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Protocol    string   `json:"protocol"` // "TCP", "UDP", "TCP/UDP", "ICMP"
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Deprecated: compat mirror of Entries[0] only. Kept temporarily for old
+	// clients and to allow downgrading the binary (SQLite versions in the
+	// field do not support DROP COLUMN easily and the column is NOT NULL
+	// with a CHECK constraint) — it will be removed in the next major
+	// version. Must never be used to generate firewall rules.
+	Protocol string `json:"protocol"` // "TCP", "UDP", "TCP/UDP", "ICMP"
+	// Deprecated: compat mirror of Entries[0] only. Kept temporarily for old
+	// clients and to allow downgrading the binary (SQLite versions in the
+	// field do not support DROP COLUMN easily and the column is NOT NULL
+	// with a CHECK constraint) — it will be removed in the next major
+	// version. Must never be used to generate firewall rules.
 	Port        string   `json:"port"`
 	Type        string   `json:"type"` // "system", "custom"
 	RefPolicies []string `json:"refPolicies"`
+	// Entries holds the multi-value entries for this service object. Additive
+	// field — see docs/ref/todo/multi-value-address-service-objects-plan.md
+	// Caution 1: MUST keep omitempty on every new field here, otherwise old
+	// backup files (encoded before this field existed) will fail checksum
+	// verification and become un-importable.
+	Entries []ServiceEntry `json:"entries,omitempty"`
 }
 
 // ServiceObjectInput represents fields to create or update a ServiceObject
 type ServiceObjectInput struct {
-	Name     string `json:"name"`
+	Name string `json:"name"`
+	// Deprecated: compat mirror of Entries[0] only. Kept temporarily for old
+	// clients and to allow downgrading the binary (SQLite versions in the
+	// field do not support DROP COLUMN easily and the column is NOT NULL
+	// with a CHECK constraint) — it will be removed in the next major
+	// version. Must never be used to generate firewall rules.
 	Protocol string `json:"protocol"` // "TCP", "UDP", "TCP/UDP", "ICMP"
-	Port     string `json:"port"`
-	Comment  string `json:"comment,omitempty"`
+	// Deprecated: compat mirror of Entries[0] only. Kept temporarily for old
+	// clients and to allow downgrading the binary (SQLite versions in the
+	// field do not support DROP COLUMN easily and the column is NOT NULL
+	// with a CHECK constraint) — it will be removed in the next major
+	// version. Must never be used to generate firewall rules.
+	Port    string `json:"port"`
+	Comment string `json:"comment,omitempty"`
+	// Entries holds the multi-value entries for this service object. Additive
+	// field — see docs/ref/todo/multi-value-address-service-objects-plan.md
+	// Caution 1: MUST keep omitempty on every new field here, otherwise old
+	// backup files (encoded before this field existed) will fail checksum
+	// verification and become un-importable.
+	Entries []ServiceEntry `json:"entries,omitempty"`
+}
+
+// NormalizeAddressObject keeps the legacy Type/Value fields and the new
+// Entries slice in sync (see the Deprecated notes on AddressObject). It is
+// nil-safe and idempotent:
+//   - if Entries is empty but legacy Type/Value is set, Entries is populated
+//     with a single entry mirroring the legacy value;
+//   - if Entries is non-empty, the legacy Type/Value fields are always
+//     overwritten from Entries[0] (Entries is the source of truth once set).
+func NormalizeAddressObject(a *AddressObject) {
+	if a == nil {
+		return
+	}
+	if len(a.Entries) == 0 {
+		if a.Type != "" || a.Value != "" {
+			a.Entries = []AddressEntry{{Type: a.Type, Value: a.Value}}
+		}
+		return
+	}
+	a.Type = a.Entries[0].Type
+	a.Value = a.Entries[0].Value
+}
+
+// NormalizeAddressObjectInput is the *AddressObjectInput counterpart of
+// NormalizeAddressObject, used by handlers before persisting a create/update
+// request. See NormalizeAddressObject for the sync rules.
+func NormalizeAddressObjectInput(a *AddressObjectInput) {
+	if a == nil {
+		return
+	}
+	if len(a.Entries) == 0 {
+		if a.Type != "" || a.Value != "" {
+			a.Entries = []AddressEntry{{Type: a.Type, Value: a.Value}}
+		}
+		return
+	}
+	a.Type = a.Entries[0].Type
+	a.Value = a.Entries[0].Value
+}
+
+// NormalizeServiceObject keeps the legacy Protocol/Port fields and the new
+// Entries slice in sync (see the Deprecated notes on ServiceObject). It is
+// nil-safe and idempotent:
+//   - if Entries is empty but legacy Protocol/Port is set, Entries is
+//     populated with a single entry mirroring the legacy value;
+//   - if Entries is non-empty, the legacy Protocol/Port fields are always
+//     overwritten from Entries[0] (Entries is the source of truth once set).
+func NormalizeServiceObject(s *ServiceObject) {
+	if s == nil {
+		return
+	}
+	if len(s.Entries) == 0 {
+		if s.Protocol != "" || s.Port != "" {
+			s.Entries = []ServiceEntry{{Protocol: s.Protocol, Port: s.Port}}
+		}
+		return
+	}
+	s.Protocol = s.Entries[0].Protocol
+	s.Port = s.Entries[0].Port
+}
+
+// NormalizeServiceObjectInput is the *ServiceObjectInput counterpart of
+// NormalizeServiceObject, used by handlers before persisting a create/update
+// request. See NormalizeServiceObject for the sync rules.
+func NormalizeServiceObjectInput(s *ServiceObjectInput) {
+	if s == nil {
+		return
+	}
+	if len(s.Entries) == 0 {
+		if s.Protocol != "" || s.Port != "" {
+			s.Entries = []ServiceEntry{{Protocol: s.Protocol, Port: s.Port}}
+		}
+		return
+	}
+	s.Protocol = s.Entries[0].Protocol
+	s.Port = s.Entries[0].Port
 }
 
 // Policy chain identifiers — which nftables base chain a PolicyRule targets.
@@ -853,7 +993,7 @@ func ParsePortSpec(spec string) (start, end int, err error) {
 	case 2:
 		s, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
 		e, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
-		if err1 != nil || err2 != nil || s < 1 || e > 65535 || s >= e {
+		if err1 != nil || err2 != nil || s < 1 || e > 65535 || s > e {
 			return 0, 0, fmt.Errorf("invalid port range %q", spec)
 		}
 		return s, e, nil

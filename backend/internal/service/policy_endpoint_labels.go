@@ -33,20 +33,29 @@ type addrMatcher struct {
 
 // newAddrMatcher builds a matcher from a snapshot of Address Objects. Safe
 // to call with a nil/empty slice (Match then always returns ok=false).
+//
+// An Address Object may hold multiple Entries (plan
+// docs/ref/todo/multi-value-address-service-objects-plan.md T-08) — each
+// entry contributes its own addrRange, and every range for the same object
+// carries that object's Name. This is intentional: a single object with N
+// subnet/range entries ends up with N ranges in m.ranges, so Match can still
+// pick the narrowest one across all objects and entries.
 func newAddrMatcher(objs []model.AddressObject) *addrMatcher {
 	m := &addrMatcher{}
 	for _, o := range objs {
-		switch strings.ToLower(strings.TrimSpace(o.Type)) {
-		case "subnet":
-			if r, ok := subnetToRange(o.Value); ok {
-				m.ranges = append(m.ranges, addrRange{name: o.Name, start: r.start, end: r.end, size: rangeSize(r.start, r.end)})
+		for _, e := range o.Entries {
+			switch strings.ToLower(strings.TrimSpace(e.Type)) {
+			case "subnet":
+				if r, ok := subnetToRange(e.Value); ok {
+					m.ranges = append(m.ranges, addrRange{name: o.Name, start: r.start, end: r.end, size: rangeSize(r.start, r.end)})
+				}
+			case "range":
+				if start, end, ok := parseRangeValue(e.Value); ok {
+					m.ranges = append(m.ranges, addrRange{name: o.Name, start: start, end: end, size: rangeSize(start, end)})
+				}
+			default:
+				// "fqdn" and anything unrecognized: no IP range to match against.
 			}
-		case "range":
-			if start, end, ok := parseRangeValue(o.Value); ok {
-				m.ranges = append(m.ranges, addrRange{name: o.Name, start: start, end: end, size: rangeSize(start, end)})
-			}
-		default:
-			// "fqdn" and anything unrecognized: no IP range to match against.
 		}
 	}
 	return m

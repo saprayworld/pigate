@@ -122,6 +122,12 @@ func main() {
 	repo.SetMockMode(cfg.Mock, cfg.MockFromReal)
 	repo.SetAllowEditSystemRoutes(cfg.AllowEditSystemRoutes)
 	repo.SetPrioritizeKernelRoutes(cfg.PrioritizeKernelRoutes)
+	// Per-Address/Service-Object entry cap comes from the file-only
+	// max-object-entries config key (docs/ref/todo/
+	// multi-value-address-service-objects-plan.md §2.1) — no CLI flag by
+	// design. Read once at startup; changing the key only takes effect on
+	// the next restart.
+	repo.SetObjectLimits(cfg.MaxObjectEntries)
 
 	// 4. Instantiate Kernel managers (Force Mock layer for now)
 	var fw kernel.FirewallManager
@@ -195,7 +201,15 @@ func main() {
 	} else {
 		// Real kernel integrations via netlink — used on Raspberry Pi 5 production.
 		// Requires: sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
-		fw = kernel.NewRealFirewall(cfg.DockerCompat)
+		realFw := kernel.NewRealFirewall(cfg.DockerCompat)
+		// Per-policy-rule expanded nft rule cap comes from the file-only
+		// max-expanded-rules-per-policy config key (docs/ref/todo/
+		// multi-value-address-service-objects-plan.md §2.1) — no CLI flag by
+		// design, mock mode does not need it. Must be set on the concrete
+		// *RealFirewall before it is assigned to the fw interface variable, since
+		// FirewallManager itself does not (and must not) expose this method.
+		realFw.SetMaxExpandedRulesPerPolicy(cfg.MaxExpandedRulesPerPolicy)
+		fw = realFw
 		net = kernel.NewRealNetwork()
 		rt = kernel.NewRealRouting(cfg.AllowEditSystemRoutes)
 		qos = kernel.NewRealQos()

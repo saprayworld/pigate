@@ -9,15 +9,18 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Shared address/service maps for the buildRuleExpressions tests below.
-func chainTestMaps() (map[string]model.AddressObject, map[string]model.ServiceObject) {
-	addrs := map[string]model.AddressObject{
-		"LAN": {ID: "a1", Name: "LAN", Type: "subnet", Value: "192.168.1.0/24"},
-	}
-	svcs := map[string]model.ServiceObject{
-		"SSH": {ID: "s1", Name: "SSH", Protocol: "TCP", Port: "22"},
-	}
-	return addrs, svcs
+// lanCombo/sshCombo are the single-entry addrCombo/svcCombo fixtures the
+// buildRuleExpressions tests below use in place of the old
+// name+addrsMap/svcsMap lookups (buildRuleExpressions no longer resolves
+// object names itself — that now happens one level up via addressCombos/
+// serviceCombos, see T-04/T-05 of docs/ref/todo/
+// multi-value-address-service-objects-plan.md).
+func lanCombo() addrCombo {
+	return addrCombo{hasFilter: true, objName: "LAN", entry: model.AddressEntry{Type: "subnet", Value: "192.168.1.0/24"}}
+}
+
+func sshCombo() svcCombo {
+	return svcCombo{hasFilter: true, objName: "SSH", protocol: "TCP", port: "22"}
 }
 
 func hasMark(exprs []expr.Any) bool {
@@ -60,16 +63,13 @@ func hasVerdict(exprs []expr.Any, kind expr.VerdictKind) bool {
 // must never be set on the input/output chains, even when Nat=true and the
 // action is ACCEPT (the one condition that DOES set it on forward).
 func TestBuildRuleExpressions_NoFwmarkOnInputOutput(t *testing.T) {
-	addrs, svcs := chainTestMaps()
-
 	for _, chain := range []string{model.PolicyChainInput, model.PolicyChainOutput} {
 		ruleSets, err := buildRuleExpressions(
 			chain,
 			"eth0", "eth0", // both set; effective interface is trimmed internally
-			"LAN", "LAN", "SSH", "TCP",
+			lanCombo(), lanCombo(), sshCombo(),
 			"ACCEPT", false, true, /* nat=true */
 			"[PiGate] TEST ACCEPT: ",
-			addrs, svcs,
 		)
 		if err != nil {
 			t.Fatalf("chain=%s: unexpected error: %v", chain, err)
@@ -86,10 +86,9 @@ func TestBuildRuleExpressions_NoFwmarkOnInputOutput(t *testing.T) {
 	ruleSets, err := buildRuleExpressions(
 		model.PolicyChainForward,
 		"eth0", "eth1",
-		"LAN", "LAN", "SSH", "TCP",
+		lanCombo(), lanCombo(), sshCombo(),
 		"ACCEPT", false, true,
 		"[PiGate] FWD ACCEPT: ",
-		addrs, svcs,
 	)
 	if err != nil {
 		t.Fatalf("forward: unexpected error: %v", err)
@@ -106,15 +105,12 @@ func TestBuildRuleExpressions_NoFwmarkOnInputOutput(t *testing.T) {
 // Counter + Log(group=LocalNflogGroup) + Verdict, with no expr.Limit —
 // mirroring the forward chain's shape, not the old two-rule split.
 func TestBuildRuleExpressions_InputOutputSingleRuleWithNflog(t *testing.T) {
-	addrs, svcs := chainTestMaps()
-
 	for _, chain := range []string{model.PolicyChainInput, model.PolicyChainOutput} {
 		ruleSets, err := buildRuleExpressions(
 			chain,
-			"", "", "LAN", "LAN", "SSH", "TCP",
+			"", "", lanCombo(), lanCombo(), sshCombo(),
 			"DROP", true /* logEnabled */, false,
 			"[PiGate] TEST DROP  : ",
-			addrs, svcs,
 		)
 		if err != nil {
 			t.Fatalf("chain=%s: unexpected error: %v", chain, err)
@@ -156,8 +152,6 @@ func TestBuildRuleExpressions_InputOutputSingleRuleWithNflog(t *testing.T) {
 // TestBuildRuleExpressions_LogSplitOnInputOutput check with a rule that must
 // keep holding regardless of how buildRuleExpressions is refactored later.
 func TestBuildRuleExpressions_LimitNeverWithVerdict(t *testing.T) {
-	addrs, svcs := chainTestMaps()
-
 	chains := []string{model.PolicyChainForward, model.PolicyChainInput, model.PolicyChainOutput}
 	actions := []string{"ACCEPT", "DROP"}
 	logOptions := []bool{true, false}
@@ -170,10 +164,9 @@ func TestBuildRuleExpressions_LimitNeverWithVerdict(t *testing.T) {
 					ruleSets, err := buildRuleExpressions(
 						chain,
 						"eth0", "eth0",
-						"LAN", "LAN", "SSH", "TCP",
+						lanCombo(), lanCombo(), sshCombo(),
 						action, logEnabled, nat,
 						"[PiGate] TEST : ",
-						addrs, svcs,
 					)
 					if err != nil {
 						t.Fatalf("chain=%s action=%s log=%v nat=%v: unexpected error: %v", chain, action, logEnabled, nat, err)
@@ -217,14 +210,11 @@ func TestBuildRuleExpressions_LimitNeverWithVerdict(t *testing.T) {
 // chain's log+verdict stay combined in one rule (NFLOG target, RAM ring
 // buffer — no rate-limit/SD-card concern), unlike input/output above.
 func TestBuildRuleExpressions_ForwardKeepsSingleRuleWithLog(t *testing.T) {
-	addrs, svcs := chainTestMaps()
-
 	ruleSets, err := buildRuleExpressions(
 		model.PolicyChainForward,
-		"", "", "LAN", "LAN", "SSH", "TCP",
+		"", "", lanCombo(), lanCombo(), sshCombo(),
 		"DROP", true, false,
 		"[PiGate] FWD DROP  : ",
-		addrs, svcs,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
