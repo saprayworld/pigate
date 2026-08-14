@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	"pigate/internal/model"
 )
@@ -182,11 +183,28 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 		chain := model.NormalizePolicyChain(p.Chain)
 		chainPriority[chain]++
 		logVal, natVal, statVal := boolToInt(p.Log), boolToInt(p.Nat), boolToInt(p.Status)
+		// monitored (docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md
+		// T-12, issue #141) round-trips through backup export/import like
+		// every other policy flag — a backup file that predates this field
+		// simply decodes p.Monitored as the Go zero value (false), which is
+		// exactly the desired backward-compatible behavior (Caution 7: the
+		// policy_rule_counters table itself is runtime data and is never
+		// exported/imported — only the flag is).
+		monVal := boolToInt(p.Monitored)
 		if _, err := tx.Exec(
-			"INSERT INTO firewall_policies (id, name, chain, in_interface, out_interface, action, log, nat, status, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			p.ID, p.Name, chain, p.InInterface, p.OutInterface, p.Action, logVal, natVal, statVal, chainPriority[chain],
+			"INSERT INTO firewall_policies (id, name, chain, in_interface, out_interface, action, log, nat, status, priority, monitored) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			p.ID, p.Name, chain, p.InInterface, p.OutInterface, p.Action, logVal, natVal, statVal, chainPriority[chain], monVal,
 		); err != nil {
 			return fmt.Errorf("restore policy %q: %w", p.Name, err)
+		}
+		if p.Monitored {
+			now := time.Now().UTC().Format(time.RFC3339)
+			if _, err := tx.Exec(
+				"INSERT OR IGNORE INTO policy_rule_counters (policy_id, bytes, packets, started_at, updated_at) VALUES (?, 0, 0, ?, ?)",
+				p.ID, now, now,
+			); err != nil {
+				return fmt.Errorf("restore policy %q counter row: %w", p.Name, err)
+			}
 		}
 		if err := restorePolicyRelations(tx, p); err != nil {
 			return err

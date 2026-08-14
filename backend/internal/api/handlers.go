@@ -60,6 +60,12 @@ type Server struct {
 	// NewServer's already-30-parameter signature stays unchanged (docs/ref/
 	// todo/firewall-policy-rule-usage-stats-plan.md T-06).
 	policyStats *service.PolicyStatsService
+
+	// policyCounterStore is optional (nil until SetPolicyCounterStore is
+	// called by main.go) — same additive-setter pattern as policyStats above
+	// (docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md T-11, issue
+	// #141). Used by HandleTogglePolicyMonitor/HandleResetPolicyMonitorCounter.
+	policyCounterStore *service.PolicyCounterStore
 }
 
 // SetPolicyStatsService wires the optional per-rule usage stats service into
@@ -67,6 +73,12 @@ type Server struct {
 // all (HandleGetPolicyStats then reports 503).
 func (s *Server) SetPolicyStatsService(p *service.PolicyStatsService) {
 	s.policyStats = p
+}
+
+// SetPolicyCounterStore wires the optional persisted "Monitor" counter store
+// into the server — see the policyCounterStore field doc comment above.
+func (s *Server) SetPolicyCounterStore(store *service.PolicyCounterStore) {
+	s.policyCounterStore = store
 }
 
 func NewServer(
@@ -1796,6 +1808,12 @@ func (s *Server) HandleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		Log:          input.Log,
 		Nat:          input.Nat,
 		Status:       input.Status,
+		// The general edit form has no Monitor control (it's a dedicated
+		// toggle-monitor endpoint, docs/ref/todo/
+		// fqdn-retry-and-monitored-counters-plan.md T-11) — always carry the
+		// existing value forward here so a plain edit can never silently
+		// turn Monitor off (D-6: "ไม่รีเซ็ตอัตโนมัติทุกกรณี").
+		Monitored: existing.Monitored,
 	}
 
 	if err := s.firewallService.UpdatePolicy(rule); err != nil {
@@ -1879,6 +1897,75 @@ func (s *Server) HandleTogglePolicyStatus(w http.ResponseWriter, r *http.Request
 	s.logEvent(r, model.EventCategoryFirewall, "firewall.policy_toggled", model.EventSeverityInfo,
 		p.Name, "Firewall policy \""+p.Name+"\" "+state)
 	s.writeJSON(w, http.StatusOK, p)
+}
+
+// HandleTogglePolicyMonitor serves POST /api/policies/{id}/toggle-monitor —
+// flips the persisted "Monitor" opt-in on a rule (docs/ref/todo/
+// fqdn-retry-and-monitored-counters-plan.md D-6/T-11, issue #141). Same
+// authRoute sensitivity as toggle-log/toggle-status (a POST, so it's already
+// blocked for read-only roles/-disable-edit by RoleReadOnlyMiddleware).
+func (s *Server) HandleTogglePolicyMonitor(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	p, err := s.firewallService.GetPolicyByID(id)
+	if err != nil || p == nil {
+		s.writeError(w, http.StatusNotFound, "Policy rule not found")
+		return
+	}
+	if s.policyCounterStore == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Monitor counters are not available")
+		return
+	}
+
+	newState := !p.Monitored
+	if err := s.policyCounterStore.SetMonitored(id, newState); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	updated, err := s.firewallService.GetPolicyByID(id)
+	if err != nil || updated == nil {
+		s.writeError(w, http.StatusInternalServerError, "Failed to reload policy after toggling monitor")
+		return
+	}
+
+	state := "disabled"
+	if updated.Monitored {
+		state = "enabled"
+	}
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.policy_monitor_toggled", model.EventSeverityInfo,
+		updated.Name, "Monitor on firewall policy \""+updated.Name+"\" "+state)
+	s.writeJSON(w, http.StatusOK, updated)
+}
+
+// HandleResetPolicyMonitorCounter serves POST /api/policies/{id}/monitor/reset
+// — zeroes a rule's persisted Monitor counter and refreshes its "started at"
+// (docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md D-6/T-11, issue
+// #141). The frontend is responsible for a confirm dialog before calling
+// this — the backend does not require re-confirmation.
+func (s *Server) HandleResetPolicyMonitorCounter(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	p, err := s.firewallService.GetPolicyByID(id)
+	if err != nil || p == nil {
+		s.writeError(w, http.StatusNotFound, "Policy rule not found")
+		return
+	}
+	if s.policyCounterStore == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Monitor counters are not available")
+		return
+	}
+	if !p.Monitored {
+		s.writeError(w, http.StatusBadRequest, "Policy rule is not monitored")
+		return
+	}
+
+	if err := s.policyCounterStore.ResetRule(id); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.logEvent(r, model.EventCategoryFirewall, "firewall.policy_monitor_reset", model.EventSeverityInfo,
+		p.Name, "Monitor counter on firewall policy \""+p.Name+"\" reset")
+	s.writeJSON(w, http.StatusOK, map[string]bool{"reset": true})
 }
 
 func (s *Server) syncFirewallRules() error {

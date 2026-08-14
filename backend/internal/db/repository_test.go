@@ -1418,3 +1418,141 @@ func TestObjectEntries_BackfillFromLegacyDBIsIdempotent(t *testing.T) {
 		t.Fatalf("backfill not idempotent: expected %d service_object_ports rows after a second reboot, got %d", svcParentCount, got)
 	}
 }
+
+// TestPolicyRuleCounters_MonitoredCRUD covers the persisted "Monitor"
+// counter CRUD added for docs/ref/todo/
+// fqdn-retry-and-monitored-counters-plan.md T-07 (issue #141): toggling
+// monitored keeps the policy_rule_counters row in lockstep, deltas
+// accumulate, zero-delta flushes are a no-op, and reset zeroes the total.
+func TestPolicyRuleCounters_MonitoredCRUD(t *testing.T) {
+	sqliteDB, err := InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer sqliteDB.Close()
+	repo := NewRepository(sqliteDB)
+
+	addr := model.AddressObject{ID: "addr-mon-src", Name: "MON_SRC", Type: "subnet", Value: "10.0.0.0/24"}
+	dst := model.AddressObject{ID: "addr-mon-dst", Name: "MON_DST", Type: "subnet", Value: "8.8.8.8/32"}
+	svc := model.ServiceObject{ID: "svc-mon", Name: "MON_SVC", Protocol: "UDP", Port: "53", Type: "custom"}
+	if err := repo.CreateAddress(addr); err != nil {
+		t.Fatalf("CreateAddress: %v", err)
+	}
+	if err := repo.CreateAddress(dst); err != nil {
+		t.Fatalf("CreateAddress: %v", err)
+	}
+	if err := repo.CreateService(svc); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+
+	rule := model.PolicyRule{
+		ID: "rule-mon-1", Name: "Monitored Rule",
+		Source: []string{"MON_SRC"}, Destination: []string{"MON_DST"}, Service: []string{"MON_SVC"},
+		Action: "ACCEPT", Status: true,
+	}
+	if err := repo.CreatePolicy(rule); err != nil {
+		t.Fatalf("CreatePolicy: %v", err)
+	}
+
+	// Not monitored yet: no ids, no rows.
+	ids, err := repo.GetMonitoredPolicyIDs()
+	if err != nil {
+		t.Fatalf("GetMonitoredPolicyIDs: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("expected no monitored ids yet, got %v", ids)
+	}
+
+	// Enable monitoring.
+	if err := repo.SetPolicyMonitored("rule-mon-1", true); err != nil {
+		t.Fatalf("SetPolicyMonitored(true): %v", err)
+	}
+	ids, err = repo.GetMonitoredPolicyIDs()
+	if err != nil {
+		t.Fatalf("GetMonitoredPolicyIDs: %v", err)
+	}
+	if !ids["rule-mon-1"] {
+		t.Fatalf("expected rule-mon-1 to be monitored, got %v", ids)
+	}
+	counters, err := repo.GetPolicyRuleCounters()
+	if err != nil {
+		t.Fatalf("GetPolicyRuleCounters: %v", err)
+	}
+	if len(counters) != 1 || counters[0].RuleID != "rule-mon-1" || counters[0].Bytes != 0 {
+		t.Fatalf("expected a single zeroed counter row, got %+v", counters)
+	}
+	startedAt := counters[0].StartedAt
+
+	// Zero-delta flush must be a true no-op (Caution 6): updated_at must not
+	// even change.
+	if err := repo.AddPolicyRuleCounterDeltas(map[string]model.RuleCounter{"rule-mon-1": {Bytes: 0, Packets: 0}}); err != nil {
+		t.Fatalf("AddPolicyRuleCounterDeltas(zero): %v", err)
+	}
+	after, _ := repo.GetPolicyRuleCounters()
+	if after[0].UpdatedAt != counters[0].UpdatedAt {
+		t.Fatalf("zero-delta flush must not write updated_at: before=%q after=%q", counters[0].UpdatedAt, after[0].UpdatedAt)
+	}
+
+	// Non-zero delta accumulates; unknown ids are silently skipped.
+	if err := repo.AddPolicyRuleCounterDeltas(map[string]model.RuleCounter{
+		"rule-mon-1":          {Bytes: 100, Packets: 2},
+		"rule-does-not-exist": {Bytes: 999, Packets: 9},
+	}); err != nil {
+		t.Fatalf("AddPolicyRuleCounterDeltas: %v", err)
+	}
+	if err := repo.AddPolicyRuleCounterDeltas(map[string]model.RuleCounter{"rule-mon-1": {Bytes: 50, Packets: 1}}); err != nil {
+		t.Fatalf("AddPolicyRuleCounterDeltas (second): %v", err)
+	}
+	counters, err = repo.GetPolicyRuleCounters()
+	if err != nil {
+		t.Fatalf("GetPolicyRuleCounters: %v", err)
+	}
+	if len(counters) != 1 || counters[0].Bytes != 150 || counters[0].Packets != 3 {
+		t.Fatalf("expected accumulated bytes=150 packets=3, got %+v", counters)
+	}
+	if counters[0].StartedAt != startedAt {
+		t.Fatalf("StartedAt must not change on delta accumulation: got %q, want %q", counters[0].StartedAt, startedAt)
+	}
+
+	// Reset zeroes bytes/packets and refreshes started_at.
+	if err := repo.ResetPolicyRuleCounter("rule-mon-1"); err != nil {
+		t.Fatalf("ResetPolicyRuleCounter: %v", err)
+	}
+	counters, _ = repo.GetPolicyRuleCounters()
+	if counters[0].Bytes != 0 || counters[0].Packets != 0 {
+		t.Fatalf("expected reset counter to be zeroed, got %+v", counters[0])
+	}
+
+	// Disable monitoring: row must be deleted.
+	if err := repo.SetPolicyMonitored("rule-mon-1", false); err != nil {
+		t.Fatalf("SetPolicyMonitored(false): %v", err)
+	}
+	counters, err = repo.GetPolicyRuleCounters()
+	if err != nil {
+		t.Fatalf("GetPolicyRuleCounters: %v", err)
+	}
+	if len(counters) != 0 {
+		t.Fatalf("expected no counter rows after disabling monitor, got %+v", counters)
+	}
+	ids, _ = repo.GetMonitoredPolicyIDs()
+	if len(ids) != 0 {
+		t.Fatalf("expected no monitored ids after disabling monitor, got %v", ids)
+	}
+
+	// SetPolicyMonitored on an unknown id is an error.
+	if err := repo.SetPolicyMonitored("rule-does-not-exist", true); err == nil {
+		t.Fatalf("expected error for SetPolicyMonitored on unknown id")
+	}
+
+	// Deleting a monitored rule cascades the counter row.
+	if err := repo.SetPolicyMonitored("rule-mon-1", true); err != nil {
+		t.Fatalf("SetPolicyMonitored(true) again: %v", err)
+	}
+	if err := repo.DeletePolicy("rule-mon-1"); err != nil {
+		t.Fatalf("DeletePolicy: %v", err)
+	}
+	counters, _ = repo.GetPolicyRuleCounters()
+	if len(counters) != 0 {
+		t.Fatalf("expected FK cascade to remove the counter row on delete, got %+v", counters)
+	}
+}

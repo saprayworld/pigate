@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -756,7 +757,7 @@ func (r *Repository) ServiceNameExists(name string) (bool, error) {
 // =========================================================================
 
 func (r *Repository) GetPolicies() ([]model.PolicyRule, error) {
-	rows, err := r.db.Query("SELECT id, name, chain, in_interface, out_interface, action, log, nat, status FROM firewall_policies ORDER BY chain ASC, priority ASC")
+	rows, err := r.db.Query("SELECT id, name, chain, in_interface, out_interface, action, log, nat, status, monitored FROM firewall_policies ORDER BY chain ASC, priority ASC")
 	if err != nil {
 		return nil, err
 	}
@@ -765,13 +766,14 @@ func (r *Repository) GetPolicies() ([]model.PolicyRule, error) {
 	list := []model.PolicyRule{}
 	for rows.Next() {
 		var p model.PolicyRule
-		var logInt, natInt, statInt int
-		if err := rows.Scan(&p.ID, &p.Name, &p.Chain, &p.InInterface, &p.OutInterface, &p.Action, &logInt, &natInt, &statInt); err != nil {
+		var logInt, natInt, statInt, monInt int
+		if err := rows.Scan(&p.ID, &p.Name, &p.Chain, &p.InInterface, &p.OutInterface, &p.Action, &logInt, &natInt, &statInt, &monInt); err != nil {
 			return nil, err
 		}
 		p.Log = logInt == 1
 		p.Nat = natInt == 1
 		p.Status = statInt == 1
+		p.Monitored = monInt == 1
 		p.Source = []string{}
 		p.Destination = []string{}
 		p.Service = []string{}
@@ -818,10 +820,10 @@ func (r *Repository) GetPolicies() ([]model.PolicyRule, error) {
 }
 
 func (r *Repository) GetPolicyByID(id string) (*model.PolicyRule, error) {
-	row := r.db.QueryRow("SELECT id, name, chain, in_interface, out_interface, action, log, nat, status FROM firewall_policies WHERE id = ?", id)
+	row := r.db.QueryRow("SELECT id, name, chain, in_interface, out_interface, action, log, nat, status, monitored FROM firewall_policies WHERE id = ?", id)
 	var p model.PolicyRule
-	var logInt, natInt, statInt int
-	err := row.Scan(&p.ID, &p.Name, &p.Chain, &p.InInterface, &p.OutInterface, &p.Action, &logInt, &natInt, &statInt)
+	var logInt, natInt, statInt, monInt int
+	err := row.Scan(&p.ID, &p.Name, &p.Chain, &p.InInterface, &p.OutInterface, &p.Action, &logInt, &natInt, &statInt, &monInt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -831,6 +833,7 @@ func (r *Repository) GetPolicyByID(id string) (*model.PolicyRule, error) {
 	p.Log = logInt == 1
 	p.Nat = natInt == 1
 	p.Status = statInt == 1
+	p.Monitored = monInt == 1
 	p.Source = []string{}
 	p.Destination = []string{}
 	p.Service = []string{}
@@ -923,11 +926,32 @@ func (r *Repository) CreatePolicy(p model.PolicyRule) error {
 	if p.Status {
 		statVal = 1
 	}
+	monVal := 0
+	if p.Monitored {
+		monVal = 1
+	}
 
-	_, err = tx.Exec("INSERT INTO firewall_policies (id, name, chain, in_interface, out_interface, action, log, nat, status, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		p.ID, p.Name, p.Chain, p.InInterface, p.OutInterface, p.Action, logVal, natVal, statVal, maxPriority+1)
+	_, err = tx.Exec("INSERT INTO firewall_policies (id, name, chain, in_interface, out_interface, action, log, nat, status, priority, monitored) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		p.ID, p.Name, p.Chain, p.InInterface, p.OutInterface, p.Action, logVal, natVal, statVal, maxPriority+1, monVal)
 	if err != nil {
 		return err
+	}
+
+	// A rule created already-monitored (currently only reachable via a
+	// crafted API payload or a restore path — the create-rule UI never sets
+	// this) must get its counter row up front, so "monitored=1 in
+	// firewall_policies" <=> "a row exists in policy_rule_counters" always
+	// holds, matching the invariant SetPolicyMonitored maintains for the
+	// normal toggle-on-existing-rule path (docs/ref/todo/
+	// fqdn-retry-and-monitored-counters-plan.md D-6).
+	if p.Monitored {
+		now := time.Now().UTC().Format(time.RFC3339)
+		if _, err := tx.Exec(
+			"INSERT OR IGNORE INTO policy_rule_counters (policy_id, bytes, packets, started_at, updated_at) VALUES (?, 0, 0, ?, ?)",
+			p.ID, now, now,
+		); err != nil {
+			return err
+		}
 	}
 
 	// Insert association mappings
@@ -978,9 +1002,13 @@ func (r *Repository) UpdatePolicy(p model.PolicyRule) error {
 	if p.Status {
 		statVal = 1
 	}
+	monVal := 0
+	if p.Monitored {
+		monVal = 1
+	}
 
-	_, err = tx.Exec("UPDATE firewall_policies SET name = ?, chain = ?, in_interface = ?, out_interface = ?, action = ?, log = ?, nat = ?, status = ? WHERE id = ?",
-		p.Name, p.Chain, p.InInterface, p.OutInterface, p.Action, logVal, natVal, statVal, p.ID)
+	_, err = tx.Exec("UPDATE firewall_policies SET name = ?, chain = ?, in_interface = ?, out_interface = ?, action = ?, log = ?, nat = ?, status = ?, monitored = ? WHERE id = ?",
+		p.Name, p.Chain, p.InInterface, p.OutInterface, p.Action, logVal, natVal, statVal, monVal, p.ID)
 	if err != nil {
 		return err
 	}
@@ -1070,6 +1098,179 @@ func (r *Repository) DeletePolicy(id string) error {
 	}
 
 	return tx.Commit()
+}
+
+// =========================================================================
+// Persisted "Monitor" counters (docs/ref/todo/
+// fqdn-retry-and-monitored-counters-plan.md T-07, issue #141)
+// =========================================================================
+
+// GetMonitoredPolicyIDs returns the set of policy rule ids that currently
+// have monitored=1. Used by PolicyCounterStore.Flush to filter which
+// drained deltas actually get persisted.
+func (r *Repository) GetMonitoredPolicyIDs() (map[string]bool, error) {
+	rows, err := r.db.Query("SELECT id FROM firewall_policies WHERE monitored = 1")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// SetPolicyMonitored flips the monitored flag on policy id, and keeps the
+// policy_rule_counters row in lockstep within a single transaction:
+// enabling creates a fresh zeroed row (INSERT OR IGNORE — a rapid
+// off/on toggle before a delete lands must not wipe an existing row),
+// disabling permanently deletes it (D-6: turning Monitor off discards the
+// accumulated total, by design — the caller is responsible for surfacing a
+// confirm dialog before calling this with on=false).
+func (r *Repository) SetPolicyMonitored(id string, monitored bool) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	monVal := 0
+	if monitored {
+		monVal = 1
+	}
+	res, err := tx.Exec("UPDATE firewall_policies SET monitored = ? WHERE id = ?", monVal, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+
+	if monitored {
+		now := time.Now().UTC().Format(time.RFC3339)
+		if _, err := tx.Exec(
+			"INSERT OR IGNORE INTO policy_rule_counters (policy_id, bytes, packets, started_at, updated_at) VALUES (?, 0, 0, ?, ?)",
+			id, now, now,
+		); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.Exec("DELETE FROM policy_rule_counters WHERE policy_id = ?", id); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetPolicyRuleCounters returns every persisted monitored-rule counter row.
+func (r *Repository) GetPolicyRuleCounters() ([]model.MonitoredCounter, error) {
+	rows, err := r.db.Query("SELECT policy_id, bytes, packets, started_at, updated_at FROM policy_rule_counters")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []model.MonitoredCounter
+	for rows.Next() {
+		var c model.MonitoredCounter
+		var bytesVal, packetsVal int64
+		if err := rows.Scan(&c.RuleID, &bytesVal, &packetsVal, &c.StartedAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		// SQLite INTEGER is signed 64-bit — a negative value here can only
+		// come from external tampering/corruption, never from this package's
+		// own writes (AddPolicyRuleCounterDeltas only ever adds non-negative
+		// deltas). Clamp defensively rather than surface a garbage uint64.
+		if bytesVal < 0 {
+			log.Printf("[Repository] Warning: policy_rule_counters.bytes for %q is negative (%d), treating as 0", c.RuleID, bytesVal)
+			bytesVal = 0
+		}
+		if packetsVal < 0 {
+			log.Printf("[Repository] Warning: policy_rule_counters.packets for %q is negative (%d), treating as 0", c.RuleID, packetsVal)
+			packetsVal = 0
+		}
+		c.Bytes = uint64(bytesVal)
+		c.Packets = uint64(packetsVal)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// AddPolicyRuleCounterDeltas adds each delta's bytes/packets onto the
+// persisted running total for that rule id, in one transaction. Ids with no
+// existing policy_rule_counters row (rule not monitored, or deleted since
+// the delta was captured) are silently skipped — they are not an error.
+// Returns immediately without opening a transaction if deltas is empty or
+// every value in it is zero, to avoid an SD-card write for a no-op flush
+// (docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md Caution 6).
+func (r *Repository) AddPolicyRuleCounterDeltas(deltas map[string]model.RuleCounter) error {
+	hasNonZero := false
+	for _, d := range deltas {
+		if d.Bytes != 0 || d.Packets != 0 {
+			hasNonZero = true
+			break
+		}
+	}
+	if !hasNonZero {
+		return nil
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	stmt, err := tx.Prepare("UPDATE policy_rule_counters SET bytes = bytes + ?, packets = packets + ?, updated_at = ? WHERE policy_id = ?")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	// Deterministic iteration order for stable test/log behavior.
+	ids := make([]string, 0, len(deltas))
+	for id := range deltas {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	for _, id := range ids {
+		d := deltas[id]
+		if d.Bytes == 0 && d.Packets == 0 {
+			continue
+		}
+		if _, err := stmt.Exec(int64(d.Bytes), int64(d.Packets), now, id); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+// ResetPolicyRuleCounter zeroes an existing monitored rule's persisted
+// counter and resets started_at to now (D-6: the "รีเซ็ตค่า" button). No-op
+// (returns sql.ErrNoRows) if the rule isn't currently monitored/has no row.
+func (r *Repository) ResetPolicyRuleCounter(id string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := r.db.Exec(
+		"UPDATE policy_rule_counters SET bytes = 0, packets = 0, started_at = ?, updated_at = ? WHERE policy_id = ?",
+		now, now, id,
+	)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // =========================================================================
