@@ -2032,6 +2032,79 @@ paths:
               schema:
                 $ref: '#/components/schemas/PolicyRule'
 
+  /policies/{id}/toggle-monitor:
+    post:
+      tags:
+        - Firewall Policies
+      summary: Toggle the persisted "Monitor" opt-in on a rule
+      description: >-
+        Flips PolicyRule.monitored. Turning it on starts a persisted running
+        total (bytes/packets) from 0 that accumulates across every future
+        Apply Settings and process restart, unlike the ephemeral
+        "since last apply" counters exposed by GET /policies/stats. Turning
+        it off permanently discards the accumulated total (the frontend is
+        expected to confirm with the user before calling this to turn
+        Monitor off). See docs/ref/todo/
+        fqdn-retry-and-monitored-counters-plan.md (issue #141).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Monitor opt-in toggled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyRule'
+        '401':
+          description: No valid session
+        '403':
+          description: Forbidden (read-only role or -disable-edit mode)
+        '404':
+          description: Policy rule not found
+        '503':
+          description: Monitor counter store not available
+
+  /policies/{id}/monitor/reset:
+    post:
+      tags:
+        - Firewall Policies
+      summary: Reset a rule's persisted Monitor counter back to 0
+      description: >-
+        Zeroes the rule's accumulated Monitor bytes/packets and resets
+        monitoredSince to now. Only valid for a rule that currently has
+        monitored=true. The frontend is expected to show a confirm dialog
+        before calling this endpoint.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Counter reset
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reset:
+                    type: boolean
+        '400':
+          description: Policy rule is not monitored
+        '401':
+          description: No valid session
+        '403':
+          description: Forbidden (read-only role or -disable-edit mode)
+        '404':
+          description: Policy rule not found
+        '503':
+          description: Monitor counter store not available
+
   /policies/apply:
     post:
       tags:
@@ -6740,6 +6813,18 @@ components:
         status:
           type: boolean
           example: true
+        monitored:
+          type: boolean
+          default: false
+          description: >-
+            Opts this rule into a persisted running total (bytes/packets)
+            that accumulates in SQLite across every Apply Settings and
+            process restart, unlike the ephemeral counters exposed by GET
+            /policies/stats (see PolicyRuleStat.monitored* below). Toggle
+            via POST /policies/{id}/toggle-monitor, never by editing this
+            flag through PUT /policies/{id} (docs/ref/todo/
+            fqdn-retry-and-monitored-counters-plan.md D-6, issue #141).
+          example: false
 
     PolicyRuleStat:
       type: object
@@ -6807,6 +6892,36 @@ components:
             "log" = resolved from the traffic-log ring buffer (rule has
             Log enabled); "counter" = fallback from the 10s nft counter
             poll (±10s accuracy). Omitted when lastMatchedAt is omitted.
+        monitored:
+          type: boolean
+          description: >-
+            Mirrors PolicyRule.monitored. When true, monitoredBytes/
+            monitoredPackets/monitoredSince below are populated from a
+            SEPARATE persisted counter that accumulates across every Apply
+            Settings and process restart — it is NOT the same accounting as
+            bytes/packets/percent above (those remain "since the last
+            successful apply" only, and monitored totals are never folded
+            into totalBytes/totalPackets/percent). It only resets when the
+            user explicitly resets it (POST /policies/{id}/monitor/reset)
+            or turns Monitor off (POST /policies/{id}/toggle-monitor).
+          example: false
+        monitoredBytes:
+          type: integer
+          format: uint64
+          description: Persisted running total, only meaningful when monitored=true.
+          example: 812400
+        monitoredPackets:
+          type: integer
+          format: uint64
+          description: Persisted running total, only meaningful when monitored=true.
+          example: 5210
+        monitoredSince:
+          type: string
+          format: date-time
+          description: >-
+            RFC3339 UTC — when the current persisted total started
+            accumulating (set when Monitor was turned on, or refreshed by a
+            reset). Empty when monitored=false.
 
     PolicyRuleStats:
       type: object
@@ -7077,6 +7192,15 @@ components:
         status:
           type: boolean
           example: true
+        monitored:
+          type: boolean
+          default: false
+          description: >-
+            Accepted for symmetry with the PolicyRule response shape, but
+            ignored by POST/PUT /policies — Monitor can only be toggled via
+            POST /policies/{id}/toggle-monitor (docs/ref/todo/
+            fqdn-retry-and-monitored-counters-plan.md D-6/T-11).
+          example: false
 
     # --- Port Forwarding (DNAT) Schemas ---
     PortForward:
