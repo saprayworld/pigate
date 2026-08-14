@@ -342,6 +342,25 @@ type TrafficStatsService struct {
 	ruleBaseline map[string]model.RuleCounter
 	lastRuleHit  map[string]time.Time
 
+	// pendingRuleDeltas accumulates per-rule deltas computed by
+	// processRuleCounters, for PolicyCounterStore (service/
+	// policy_counter_store.go) to drain and persist into SQLite (docs/ref/
+	// todo/fqdn-retry-and-monitored-counters-plan.md D-5, issue #141). Guarded
+	// by ruleMu like the rest of the rule-counter state above. Deliberately
+	// separate from ruleBaseline/lastRuleHit — this map has exactly one
+	// consumer (DrainRuleDeltas) and is cleared on every drain, unlike the
+	// other two which are never cleared.
+	pendingRuleDeltas map[string]model.RuleCounter
+
+	// applyEpoch guards against a DumpRuleCounters() call that straddles an
+	// ApplyRules flush from corrupting ruleBaseline/pendingRuleDeltas (D-5,
+	// Caution 10): every call site of DumpRuleCounters must read the epoch
+	// via ruleEpoch() BEFORE calling DumpRuleCounters, then pass that value
+	// into processRuleCounters, which discards the whole dump if the epoch
+	// has since changed (i.e. EndApply() ran in between). See EndApply's doc
+	// comment for the exact race this prevents.
+	applyEpoch uint64
+
 	// Service Objects categorization cache (plan §2.2, Caution 9).
 	svcMu       sync.RWMutex
 	svcCache    []categoryEntry
@@ -448,6 +467,7 @@ func NewTrafficStatsService(acct kernel.TrafficAccountingManager, repo *db.Repos
 		flowState:               make(map[string]*flowSampleState),
 		ruleBaseline:            make(map[string]model.RuleCounter),
 		lastRuleHit:             make(map[string]time.Time),
+		pendingRuleDeltas:       make(map[string]model.RuleCounter),
 		rateAcc:                 newRateAccumulator(),
 		lastRate:                newRateAccumulator(),
 	}
@@ -671,10 +691,16 @@ func (s *TrafficStatsService) poll() {
 	}
 
 	ruleDeltas := make(map[string]model.RuleCounter)
+	// Read the epoch BEFORE dumping (D-5/Caution 10) — see applyEpoch's doc
+	// comment. If ApplyRules's EndApply() races in between this read and the
+	// dump actually landing in the kernel, processRuleCounters below detects
+	// the mismatch and discards the whole dump rather than risk double-
+	// counting.
+	epoch := s.ruleEpoch()
 	if counters, err := s.acct.DumpRuleCounters(); err != nil {
 		log.Printf("[TrafficStats] DumpRuleCounters failed (Top Rules will show stale/empty data): %v", err)
 	} else {
-		s.processRuleCounters(counters, ruleDeltas)
+		s.processRuleCounters(counters, ruleDeltas, epoch)
 	}
 
 	// Rate accumulator: merge this tick's deltas (a no-op when the deltas maps
@@ -924,9 +950,19 @@ func (s *TrafficStatsService) protoSnapshot() (tcp, udp, icmp, other int, capped
 // (cur < baseline, e.g. the operator triggered ApplyRules) by treating the
 // new cumulative value itself as the delta instead of underflowing a uint64
 // subtraction (plan Caution 2).
-func (s *TrafficStatsService) processRuleCounters(counters map[string]model.RuleCounter, ruleDeltas map[string]model.RuleCounter) {
+// epoch must have been read via ruleEpoch() BEFORE the counters dump was
+// taken (see poll()/PollRuleCountersOnce() call sites) — if it no longer
+// matches s.applyEpoch, this entire dump is discarded without touching
+// ruleBaseline/pendingRuleDeltas/lastRuleHit (D-5/Caution 10): the dump
+// straddled an EndApply() call, so its values can no longer be trusted
+// against the (now-reset) baseline.
+func (s *TrafficStatsService) processRuleCounters(counters map[string]model.RuleCounter, ruleDeltas map[string]model.RuleCounter, epoch uint64) {
 	s.ruleMu.Lock()
 	defer s.ruleMu.Unlock()
+
+	if epoch != s.applyEpoch {
+		return
+	}
 
 	firstPoll := !s.ruleSeeded
 	now := time.Now()
@@ -944,6 +980,7 @@ func (s *TrafficStatsService) processRuleCounters(counters map[string]model.Rule
 			if !firstPoll && (cur.Bytes > 0 || cur.Packets > 0) {
 				ruleDeltas[id] = cur
 				s.lastRuleHit[id] = now
+				s.addPendingDeltaLocked(id, cur)
 			}
 		case firstPoll:
 			s.ruleBaseline[id] = cur
@@ -952,13 +989,106 @@ func (s *TrafficStatsService) processRuleCounters(counters map[string]model.Rule
 			deltaPackets := cur.Packets - base.Packets
 			s.ruleBaseline[id] = cur
 			if deltaBytes > 0 || deltaPackets > 0 {
-				ruleDeltas[id] = model.RuleCounter{Bytes: deltaBytes, Packets: deltaPackets}
+				delta := model.RuleCounter{Bytes: deltaBytes, Packets: deltaPackets}
+				ruleDeltas[id] = delta
 				s.lastRuleHit[id] = now
+				s.addPendingDeltaLocked(id, delta)
 			}
 		}
 	}
 
 	s.ruleSeeded = true
+}
+
+// addPendingDeltaLocked adds delta onto pendingRuleDeltas[id]. Caller must
+// hold ruleMu.
+func (s *TrafficStatsService) addPendingDeltaLocked(id string, delta model.RuleCounter) {
+	acc := s.pendingRuleDeltas[id]
+	acc.Bytes += delta.Bytes
+	acc.Packets += delta.Packets
+	s.pendingRuleDeltas[id] = acc
+}
+
+// DrainRuleDeltas returns the accumulated per-rule deltas since the last
+// drain and clears the accumulator. Intended to have exactly one consumer,
+// PolicyCounterStore (service/policy_counter_store.go) — see D-5.
+func (s *TrafficStatsService) DrainRuleDeltas() map[string]model.RuleCounter {
+	s.ruleMu.Lock()
+	defer s.ruleMu.Unlock()
+	out := s.pendingRuleDeltas
+	s.pendingRuleDeltas = make(map[string]model.RuleCounter)
+	return out
+}
+
+// ruleEpoch returns the current apply epoch. Callers must read this BEFORE
+// calling s.acct.DumpRuleCounters(), then pass the value into
+// processRuleCounters — see applyEpoch's doc comment.
+func (s *TrafficStatsService) ruleEpoch() uint64 {
+	s.ruleMu.Lock()
+	defer s.ruleMu.Unlock()
+	return s.applyEpoch
+}
+
+// EndApply must be called exactly once, after FirewallService.ApplyRules
+// returns nil (a successful apply) — never on a failed apply, and never as
+// a bare "zero the baselines" call (D-5/Caution 10 — this is the fix for a
+// documented double-count race). It atomically, under ruleMu:
+//  1. resets every existing ruleBaseline entry to {0,0} (keys are kept,
+//     ruleSeeded stays true) — since ApplyRules flushes and rebuilds the nft
+//     ruleset, every rule's live kernel counter restarts at 0, so the
+//     baseline must restart at 0 too, or the next poll would see a spurious
+//     "reset" (cur < base) and either mis-attribute or double-credit hits.
+//  2. increments applyEpoch.
+//
+// Why an epoch instead of just zeroing: a poll() (or
+// PollRuleCountersOnce()) tick can be in flight concurrently with
+// ApplyRules — a DumpRuleCounters() call issued right before the flush can
+// return AFTER this method has already zeroed the baseline, or a dump taken
+// right after the flush can be processed before the zero happens. Either
+// ordering, if not guarded, can double-credit the persisted "Monitor"
+// counters:
+//   - dump straddles zero from before: sees a large pre-flush cur against a
+//     baseline that's already 0 -> the whole cumulative total gets credited
+//     as a "delta" a second time.
+//   - a poll cuts in between ApplyRules succeeding and EndApply running:
+//     sees a small post-flush cur against the old large baseline -> detected
+//     as a "reset", credits cur once (correct), sets baseline=cur; then
+//     EndApply zeroes baseline to 0 anyway -> the NEXT poll sees the same
+//     cur again against baseline=0 and credits it a second time.
+//
+// The epoch check in processRuleCounters closes both: any dump whose epoch
+// was read before this call completes is simply discarded (worst case, one
+// ~10s poll tick's worth of counter data is dropped — acceptable, since
+// FlushBeforeApply already persisted everything up to just before the apply
+// began).
+func (s *TrafficStatsService) EndApply() {
+	s.ruleMu.Lock()
+	defer s.ruleMu.Unlock()
+	for id := range s.ruleBaseline {
+		s.ruleBaseline[id] = model.RuleCounter{}
+	}
+	s.applyEpoch++
+}
+
+// PollRuleCountersOnce performs a single, synchronous rule-counter dump +
+// process cycle, outside of the normal poll() ticker cadence — used by
+// PolicyCounterStore.FlushBeforeApply to capture the last <=flowPollInterval
+// (10s) worth of counter movement immediately before ApplyRules flushes the
+// kernel counters to 0, so that window isn't silently lost from the
+// persisted "Monitor" totals. Deliberately narrow: it only feeds
+// processRuleCounters (baseline/pendingRuleDeltas/lastRuleHit) — it does NOT
+// touch the bucket ring/rate accumulator/session history, unlike poll().
+// Safe to call when s.acct is a mock (DumpRuleCounters on the mock simply
+// returns an empty/zero result, same as any other tick).
+func (s *TrafficStatsService) PollRuleCountersOnce() error {
+	epoch := s.ruleEpoch()
+	counters, err := s.acct.DumpRuleCounters()
+	if err != nil {
+		return err
+	}
+	ruleDeltas := make(map[string]model.RuleCounter)
+	s.processRuleCounters(counters, ruleDeltas, epoch)
+	return nil
 }
 
 // RuleCounterSnapshot returns a copy of the cumulative-since-last-apply

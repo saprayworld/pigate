@@ -1241,3 +1241,122 @@ func TestGetTrafficBreakdownForDests_SumEqualsDestTotals(t *testing.T) {
 		t.Fatalf("expected zero DestTotals for empty dstIPs, got %+v", bd.DestTotals)
 	}
 }
+
+// TestTrafficStats_PendingDeltas_DrainAccumulatesAndClears (docs/ref/todo/
+// fqdn-retry-and-monitored-counters-plan.md T-08, issue #141): every delta
+// processRuleCounters computes is also mirrored into pendingRuleDeltas;
+// DrainRuleDeltas returns the accumulated total and clears it.
+func TestTrafficStats_PendingDeltas_DrainAccumulatesAndClears(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		ruleResponses: []map[string]model.RuleCounter{
+			{"rule-1": {Bytes: 1000, Packets: 10}}, // seed
+			{"rule-1": {Bytes: 1500, Packets: 15}}, // delta 500/5
+			{"rule-1": {Bytes: 1800, Packets: 18}}, // delta 300/3
+		},
+	}
+	s := newTestTrafficStatsService(t, acct, nil)
+	s.poll()
+	s.poll()
+
+	pending := s.DrainRuleDeltas()
+	if pending["rule-1"].Bytes != 500 || pending["rule-1"].Packets != 5 {
+		t.Fatalf("expected pending delta 500/5 after first real poll, got %+v", pending["rule-1"])
+	}
+
+	// Drain must clear the accumulator.
+	if again := s.DrainRuleDeltas(); len(again) != 0 {
+		t.Fatalf("expected empty pending deltas immediately after drain, got %+v", again)
+	}
+
+	s.poll()
+	pending = s.DrainRuleDeltas()
+	if pending["rule-1"].Bytes != 300 || pending["rule-1"].Packets != 3 {
+		t.Fatalf("expected pending delta 300/3 after second real poll, got %+v", pending["rule-1"])
+	}
+}
+
+// TestTrafficStats_EndApply_ResetsBaselineAndBumpsEpoch verifies EndApply
+// zeroes existing baselines (keeping keys/ruleSeeded) and increments the
+// epoch, and that a subsequent poll credits the FULL post-apply counter
+// value as a fresh delta (since the kernel counter itself restarted at 0
+// too) rather than treating it as a "reset" double-credit.
+func TestTrafficStats_EndApply_ResetsBaselineAndBumpsEpoch(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		ruleResponses: []map[string]model.RuleCounter{
+			{"rule-1": {Bytes: 1000, Packets: 10}}, // seed
+			{"rule-1": {Bytes: 1500, Packets: 15}}, // delta 500/5
+		},
+	}
+	s := newTestTrafficStatsService(t, acct, nil)
+	s.poll()
+	s.poll()
+	_ = s.DrainRuleDeltas()
+
+	epochBefore := s.ruleEpoch()
+	s.EndApply()
+	if s.ruleEpoch() != epochBefore+1 {
+		t.Fatalf("expected EndApply to increment epoch from %d, got %d", epochBefore, s.ruleEpoch())
+	}
+	snap := s.RuleCounterSnapshot()
+	if snap["rule-1"].Bytes != 0 || snap["rule-1"].Packets != 0 {
+		t.Fatalf("expected baseline zeroed after EndApply, got %+v", snap["rule-1"])
+	}
+	if !s.RuleCountersReady() {
+		t.Fatalf("expected ruleSeeded to remain true after EndApply")
+	}
+
+	// Simulate the newly-applied ruleset producing fresh traffic starting
+	// from 0 again (nft counters always start at 0 after a flush+rebuild).
+	acct.ruleResponses = append(acct.ruleResponses, map[string]model.RuleCounter{"rule-1": {Bytes: 120, Packets: 3}})
+	s.poll()
+	pending := s.DrainRuleDeltas()
+	if pending["rule-1"].Bytes != 120 || pending["rule-1"].Packets != 3 {
+		t.Fatalf("expected the full post-apply value (120/3) credited once, got %+v", pending["rule-1"])
+	}
+}
+
+// TestTrafficStats_ProcessRuleCounters_StaleEpochDiscardsWholeDump is the
+// direct regression test for D-5/Caution 10: a dump whose epoch no longer
+// matches current must not touch baseline/pending/lastRuleHit at all.
+func TestTrafficStats_ProcessRuleCounters_StaleEpochDiscardsWholeDump(t *testing.T) {
+	s := newTestTrafficStatsService(t, &fakeTrafficAccounting{}, nil)
+
+	staleEpoch := s.ruleEpoch()
+	s.EndApply() // bumps the epoch, s.applyEpoch is now staleEpoch+1
+
+	ruleDeltas := make(map[string]model.RuleCounter)
+	s.processRuleCounters(map[string]model.RuleCounter{"rule-1": {Bytes: 9999, Packets: 99}}, ruleDeltas, staleEpoch)
+
+	if len(ruleDeltas) != 0 {
+		t.Fatalf("expected a stale-epoch dump to produce no deltas, got %+v", ruleDeltas)
+	}
+	if pending := s.DrainRuleDeltas(); len(pending) != 0 {
+		t.Fatalf("expected a stale-epoch dump to leave pendingRuleDeltas untouched, got %+v", pending)
+	}
+	snap := s.RuleCounterSnapshot()
+	if _, ok := snap["rule-1"]; ok {
+		t.Fatalf("expected a stale-epoch dump to never seed a new rule id, got %+v", snap)
+	}
+}
+
+// TestTrafficStats_PollRuleCountersOnce_FeedsBaselineAndPending exercises
+// the FlushBeforeApply helper directly, outside the normal poll() cadence.
+func TestTrafficStats_PollRuleCountersOnce_FeedsBaselineAndPending(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		ruleResponses: []map[string]model.RuleCounter{
+			{"rule-1": {Bytes: 1000, Packets: 10}}, // seed
+		},
+	}
+	s := newTestTrafficStatsService(t, acct, nil)
+	if err := s.PollRuleCountersOnce(); err != nil {
+		t.Fatalf("PollRuleCountersOnce (seed): %v", err)
+	}
+	acct.ruleResponses = append(acct.ruleResponses, map[string]model.RuleCounter{"rule-1": {Bytes: 1100, Packets: 11}})
+	if err := s.PollRuleCountersOnce(); err != nil {
+		t.Fatalf("PollRuleCountersOnce (delta): %v", err)
+	}
+	pending := s.DrainRuleDeltas()
+	if pending["rule-1"].Bytes != 100 || pending["rule-1"].Packets != 1 {
+		t.Fatalf("expected PollRuleCountersOnce to feed a 100/1 delta, got %+v", pending["rule-1"])
+	}
+}
