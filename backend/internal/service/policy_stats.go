@@ -39,6 +39,14 @@ type PolicyStatsService struct {
 	// parameter, and PolicyStatsService/StatisticsService are constructed in
 	// an order that makes a direct dependency awkward).
 	domainLookup func([]string) map[string]string
+
+	// counterStore is the optional persisted "Monitor" counter store (docs/
+	// ref/todo/fqdn-retry-and-monitored-counters-plan.md T-10, issue #141),
+	// wired post-construction via SetCounterStore for the same reason as
+	// domainLookup above. nil until set (main.go always wires it) — when
+	// nil, every rule's Monitored/MonitoredBytes/MonitoredPackets/
+	// MonitoredSince stay at their zero value.
+	counterStore *PolicyCounterStore
 }
 
 // NewPolicyStatsService constructs the service. Any dependency may be nil in
@@ -58,6 +66,12 @@ func NewPolicyStatsService(repo *db.Repository, firewall *FirewallService, traff
 // being unset (Domain simply stays "" on every EndpointHit).
 func (s *PolicyStatsService) SetDomainLookup(fn func([]string) map[string]string) {
 	s.domainLookup = fn
+}
+
+// SetCounterStore wires the optional persisted "Monitor" counter store — see
+// the counterStore field doc comment above.
+func (s *PolicyStatsService) SetCounterStore(store *PolicyCounterStore) {
+	s.counterStore = store
 }
 
 // GetPolicyRuleStats returns usage stats for every enabled policy rule,
@@ -87,6 +101,18 @@ func (s *PolicyStatsService) GetPolicyRuleStats(chain string) (model.PolicyRuleS
 	var lastMatchedByLog map[string]string
 	if s.ringBuffer != nil {
 		lastMatchedByLog = s.ringBuffer.LastMatchedByRule()
+	}
+
+	// monitoredTotals is the persisted "Monitor" running total per rule id
+	// (docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md D-6, issue
+	// #141) — a completely separate accounting from counters above (which
+	// stays "since the last successful apply" only). Deliberately never
+	// folded into totalBytes/totalPackets/Percent below (Caution 8): those
+	// remain the exact same "since apply" figures they were before this
+	// feature existed.
+	var monitoredTotals map[string]model.MonitoredCounter
+	if s.counterStore != nil {
+		monitoredTotals = s.counterStore.Totals()
 	}
 
 	var countersSince string
@@ -119,16 +145,24 @@ func (s *PolicyStatsService) GetPolicyRuleStats(chain string) (model.PolicyRuleS
 
 		c := counters[r.ID]
 		stat := model.PolicyRuleStat{
-			RuleID:  r.ID,
-			Name:    r.Name,
-			Chain:   r.Chain,
-			Action:  r.Action,
-			Log:     r.Log,
-			Status:  r.Status,
-			Bytes:   c.Bytes,
-			Packets: c.Packets,
-			Percent: percentOf(c.Bytes, totalBytes),
-			Unused:  c.Bytes == 0 && c.Packets == 0,
+			RuleID:    r.ID,
+			Name:      r.Name,
+			Chain:     r.Chain,
+			Action:    r.Action,
+			Log:       r.Log,
+			Status:    r.Status,
+			Bytes:     c.Bytes,
+			Packets:   c.Packets,
+			Percent:   percentOf(c.Bytes, totalBytes),
+			Unused:    c.Bytes == 0 && c.Packets == 0,
+			Monitored: r.Monitored,
+		}
+		if r.Monitored {
+			if mc, ok := monitoredTotals[r.ID]; ok {
+				stat.MonitoredBytes = mc.Bytes
+				stat.MonitoredPackets = mc.Packets
+				stat.MonitoredSince = mc.StartedAt
+			}
 		}
 
 		// Hybrid "last matched at" (Design decision 3): prefer the precise
