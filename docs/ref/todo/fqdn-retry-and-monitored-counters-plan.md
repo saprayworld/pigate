@@ -1,8 +1,21 @@
 # แผนงาน: FQDN Re-resolve Retry + Persisted Monitored Rule Counters (issue #141)
 
-สถานะ: รอเจ้าของโปรเจกต์อนุมัติ → ส่งให้ ai-developer ทำทีละ Task → ทดสอบรวมทีเดียวโดย ai-qa
+สถานะ: **เจ้าของโปรเจกต์อนุมัติแล้ว (2026-08-14)** → ส่งให้ ai-developer ทำทีละ Task → ทดสอบรวมทีเดียวโดย ai-qa
 
 Branch: `feat/fqdn-retry-and-monitored-counters` (ห้าม commit ลง main; โค้ดทั้งหมดเข้า PR)
+
+ข้อตัดสินใจที่อนุมัติแล้วทั้งหมด (เดิมอยู่ในหัวข้อ 6 "รอเจ้าของตัดสิน"):
+
+1. interval: retry `30` วินาที / steady `300` วินาที / flush counter `300` วินาที — ตามข้อเสนอ D-3
+2. จุดฮุก flush counter ย้ายจาก `real_firewall.go` ไปที่ `FirewallService.SyncFirewallRules()` — ตามข้อเสนอ D-4
+3. sort ผลลัพธ์ FQDN ก่อน cap 8 ตัว (deterministic) — ตามข้อเสนอ D-2
+4. endpoint ใหม่ 2 ตัวใช้ `authRoute` ระดับเดียวกับ toggle-log — ตามข้อเสนอ T-11
+
+และอนุมัติผลการตรวจสอบโค้ดจริงรอบสอง (4 จุดแก้ไข) ที่รวมเข้าในแผนฉบับนี้แล้ว:
+epoch-based counter reset แทน `ZeroRuleBaselines()` ตรงๆ (D-5 / Caution 10),
+role-gate ของ T-16 เปลี่ยนเป็น backend 403 + `useAlert`,
+เพิ่ม `backend/internal/service/firewall_test.go` เข้า T-02,
+และระบุ prop/import ใหม่ที่ต้องเพิ่มใน `RuleStatsDrawer.tsx` ให้ชัดใน T-16
 
 ---
 
@@ -20,21 +33,24 @@ Branch: `feat/fqdn-retry-and-monitored-counters` (ห้าม commit ลง mai
 
 ---
 
-## 1. สภาพปัจจุบัน (จากการสำรวจโค้ดจริง)
+## 1. สภาพปัจจุบัน (จากการสำรวจโค้ดจริง — ตรวจซ้ำครั้งที่ 2 แล้วทุกบรรทัด)
 
 | จุด | ไฟล์ | สรุป |
 |---|---|---|
 | resolve FQDN | `backend/internal/kernel/real_firewall.go` `addressCombos()` (บรรทัด ~1142-1186) | เรียก `lookupIP` (var ชี้ `net.LookupIP`) ตอน ApplyRules เท่านั้น, fail = log warning + ข้าม entry, cap `maxFQDNResolvedIPs=8` โดยเอา "8 ตัวแรกที่ DNS ตอบ" |
-| apply ทั้งชุด | `backend/internal/service/firewall.go` `SyncFirewallRules()` | โหลด DB ทุกอย่าง → `s.firewall.ApplyRules(...)` → `recordApply()` (defer). **ไม่มี mutex กันเรียกซ้อน** |
-| counter ต่อกฎ | `backend/internal/service/traffic_stats.go` `processRuleCounters()` (บรรทัด 921-962) | poll ทุก `flowPollInterval = 10s`, เก็บ `ruleBaseline` (RAM) = ค่าสะสมตั้งแต่ apply ล่าสุด, detect reset ด้วย `cur < base` |
-| แสดงผล | `backend/internal/service/policy_stats.go` → `GET /api/policies/stats` → `frontend/src/services/policyStatsService.ts` → `RuleStatsDrawer.tsx` | Drawer แสดง bytes/packets/percent/lastMatchedAt + ข้อความข้อจำกัด 7 ข้อ |
-| pattern ticker อ้างอิง | `backend/internal/service/dhcp_health_checker.go` | `Start(ctx)` → goroutine + `time.Ticker`, guard 3 ชั้น: `repo.IsMockMode()` → `settings.Enabled` → `bus.IsPaused()` |
-| DB | `backend/internal/db/connection.go` (`firewall_policies` ~บรรทัด 288, migration ADD COLUMN pattern ~บรรทัด 654-700) | migration ใช้วิธีอ่าน `sqlite_master.sql` แล้วเช็คว่ามีคอลัมน์หรือยัง ก่อน `ALTER TABLE` |
-| config file-only key | `backend/internal/config/config.go` | มี pattern ครบ: struct field → `Defaults()` → `key…` const → `orderedKeys` → `applyKey()` → `valueFor()` → range clamp ใน `Resolve()` |
+| apply ทั้งชุด | `backend/internal/service/firewall.go` `SyncFirewallRules()` (บรรทัด 184) | โหลด DB ทุกอย่าง → `s.firewall.ApplyRules(...)` → `recordApply()` (defer, จับ `s.mu`). **ไม่มี mutex กันเรียกซ้อน** |
+| counter ต่อกฎ | `backend/internal/service/traffic_stats.go` `processRuleCounters()` (บรรทัด 927-962), `poll()` (บรรทัด 659-696) | poll ทุก `flowPollInterval = 10s`, เก็บ `ruleBaseline` (RAM, guard ด้วย `ruleMu`) = ค่าสะสมตั้งแต่ apply ล่าสุด, detect reset ด้วย `cur < base` |
+| แสดงผล | `backend/internal/service/policy_stats.go` → `GET /api/policies/stats` → `frontend/src/services/policyStatsService.ts` → `RuleStatsDrawer.tsx` | Drawer เป็น read-only ล้วน (props: open/onOpenChange/rule/stat/countersSince/available) ยังไม่มี `Switch`/`useAlert`/action ใดๆ |
+| pattern ticker อ้างอิง | `backend/internal/service/dhcp_health_checker.go` | `Start(ctx)` → goroutine + `time.Ticker` + `t.Reset()` ตอน interval เปลี่ยน, guard 3 ชั้น: `repo.IsMockMode()` → `settings.Enabled` → `bus.IsPaused()` |
+| DB | `backend/internal/db/connection.go` (`firewall_policies` บรรทัด 288, migration ADD COLUMN pattern บรรทัด 654-700, `PRAGMA foreign_keys=ON` บรรทัด 46) | migration ใช้วิธีอ่าน `sqlite_master.sql` แล้วเช็คว่ามีคอลัมน์หรือยัง ก่อน `ALTER TABLE`; FK cascade ใช้งานได้จริง |
+| config file-only key | `backend/internal/config/config.go` | pattern ครบ: struct field → `Defaults()` → `key…` const → `orderedKeys` (ต่อท้ายเสมอ) → `applyKey()` → `valueFor()` → range clamp+warn ใน `Resolve()` |
+| route ที่ลอกแบบ | `backend/internal/api/router.go` บรรทัด 133-134 | `authRoute("POST /api/policies/{id}/toggle-log")` / `toggle-status` |
+| implementer ของ FirewallManager | `kernel/real_firewall.go`, `kernel/mock.go`, **และ `service/firewall_test.go:11` (`trackingFirewallManager`)** | ตัวที่สามเป็น struct ในเทสที่ implement interface เองแบบไม่ embed mock → เพิ่ม method ใน interface แล้วไฟล์นี้พังทันที |
+| role gate หน้า Firewall Policy | `frontend/src/components/policy/PolicyChainPage.tsx` | **ไม่มี** role/read-only gate เลย (`disabled=` มีแค่ `isApplying` และ `formAction !== "ACCEPT"`) การบังคับสิทธิ์เป็น backend-only (403) |
 
 ---
 
-## 2. การตัดสินใจเชิงออกแบบ (ตอบข้อที่ยังไม่ล็อกใน issue)
+## 2. การตัดสินใจเชิงออกแบบ (อนุมัติแล้วทั้งหมด)
 
 ### D-1 — ticker ต้อง "re-resolve แล้วเทียบ" ไม่ใช่ "reapply ทุกรอบ"
 
@@ -51,31 +67,26 @@ Branch: `feat/fqdn-retry-and-monitored-counters` (ห้าม commit ลง mai
 "กฎที่อยู่ในเคอร์เนลตอนนี้ใช้ IP อะไร" — จับเคสบูตล้มเหลวได้ตรงๆ โดยไม่ต้องเดา และจำกัดเฉพาะ FQDN ที่
 ถูกอ้างโดยกฎที่ enable จริงเท่านั้น (ไม่ยิง DNS ให้ object ที่ไม่มีใครใช้)
 
-### D-2 — ต้อง sort ผลลัพธ์ก่อน cap 8 ตัว (จำเป็น ไม่ใช่ของแถม)
+### D-2 — ต้อง sort ผลลัพธ์ก่อน cap 8 ตัว (อนุมัติแล้ว — จำเป็น ไม่ใช่ของแถม)
 
 ปัจจุบันตัด "8 ตัวแรกที่ DNS ตอบ" ซึ่ง DNS round-robin สลับลำดับทุกครั้ง → ถ้าไม่ sort ก่อน compare
 โดเมนที่มี A record > 8 ตัวจะถูกมองว่า "เปลี่ยน" แทบทุกรอบ และจะ reapply ไม่หยุด
 จึงต้องเปลี่ยนเป็น **sort ascending ตามค่า IP แล้วค่อยตัด 8 ตัวแรก** ทั้งใน path ที่สร้างกฎและ path ที่เทียบ
-(ผลข้างเคียงที่ยอมรับ: โดเมน > 8 A record จะ match ชุด IP ที่ต่ำสุด 8 ตัวแทน "8 ตัวแรกที่ DNS ส่งมา" —
-เป็นพฤติกรรมที่ deterministic ขึ้น และเป็นเงื่อนไขที่ทำให้ change-detection ใช้งานได้จริง)
+(ผลข้างเคียงที่เจ้าของยอมรับแล้ว: โดเมน > 8 A record จะ match ชุด IP ที่ต่ำสุด 8 ตัวแทน "8 ตัวแรกที่ DNS ส่งมา")
 
-### D-3 — ค่า interval ที่เสนอ (พร้อมเหตุผล)
+### D-3 — ค่า interval (อนุมัติแล้วตามค่าที่เสนอ)
 
 | key (file-only, ไม่มี CLI flag) | default | ช่วงที่ยอมรับ | เหตุผล |
 |---|---|---|---|
 | `fqdn-refresh-enabled` | `true` | bool | kill switch เผื่อ FQDN object ทำงานผิดปกติในสนามจริง |
 | `fqdn-refresh-retry-interval-seconds` | `30` | 10..3600 | ใช้เมื่อ **ยังมี FQDN ที่ resolve ไม่ได้** (เคสบูต/เน็ตหลุด) — กู้คืนภายใน ≤30 วิ หลัง DNS พร้อม ต้นทุนแค่ DNS query ที่ dnsmasq cache อยู่แล้ว |
-| `fqdn-refresh-interval-seconds` | `300` | 60..86400 | steady state ที่ทุก FQDN resolve ได้หมด — 5 นาทีตรงกับ TTL ที่พบบ่อยของ A record ทั่วไป และจำกัดจำนวน reapply สูงสุดที่ 12 ครั้ง/ชม. แม้ IP หมุนทุกรอบ (จริงๆ จะน้อยกว่านั้นมาก เพราะ reapply เฉพาะตอน "เปลี่ยนจริง") |
-| `monitored-counter-flush-interval-seconds` | `300` | 30..86400 | worst case ไฟดับ = เสียข้อมูล 5 นาที; เขียน SQLite ≤ 288 transaction/วัน และ **ข้ามการเขียนทั้งหมดเมื่อ delta = 0** จึงแทบไม่กิน write cycle ของ SD |
+| `fqdn-refresh-interval-seconds` | `300` | 60..86400 | steady state ที่ทุก FQDN resolve ได้หมด — 5 นาทีตรงกับ TTL ที่พบบ่อยของ A record ทั่วไป และจำกัดจำนวน reapply สูงสุดที่ 12 ครั้ง/ชม. แม้ IP หมุนทุกรอบ |
+| `monitored-counter-flush-interval-seconds` | `300` | 30..86400 | worst case ไฟดับ = เสียข้อมูล 5 นาที; เขียน SQLite ≤ 288 transaction/วัน และ **ข้ามการเขียนทั้งหมดเมื่อ delta = 0** |
 
 Back-off ทำแบบ 2 ระดับ (ไม่ใช่ exponential เต็มรูป) เพราะสถานะที่มีความหมายจริงมีแค่สองแบบ:
-"ยังมีตัวที่ resolve ไม่ได้" (ต้องถี่) กับ "ครบหมดแล้ว" (ต้องห่าง) — exponential เพิ่มความซับซ้อน/
-เคสทดสอบโดยไม่ได้ประโยชน์เพิ่ม
+"ยังมีตัวที่ resolve ไม่ได้" (ต้องถี่) กับ "ครบหมดแล้ว" (ต้องห่าง)
 
-### D-4 — จุด "flush counter ก่อน ApplyRules" อยู่ที่ service layer ไม่ใช่ `real_firewall.go`
-
-issue เขียนว่า "ก่อน ApplyRules flush" ซึ่งตีความตรงตัวคือแก้ `real_firewall.go` — **แผนนี้เลือกวางฮุกไว้ที่
-`FirewallService.SyncFirewallRules()` บรรทัดก่อนเรียก `s.firewall.ApplyRules(...)` แทน** เพราะ:
+### D-4 — จุด "flush counter ก่อน ApplyRules" อยู่ที่ service layer ไม่ใช่ `real_firewall.go` (อนุมัติแล้ว)
 
 - semantics เหมือนกันเป๊ะ (นับ counter ครบก่อนเคอร์เนลถูก flush) แต่ **ไม่ต้องแตะ `real_firewall.go` เลย**
   สำหรับเรื่องที่ 2 → ลดความเสี่ยง merge conflict ตามที่ issue กังวล (บทเรียนจาก PR #140)
@@ -84,7 +95,7 @@ issue เขียนว่า "ก่อน ApplyRules flush" ซึ่งต�
 
 การ flush นั้นจะ **บังคับ poll counter หนึ่งครั้งทันที** ก่อน drain เพื่อเก็บเศษ ≤10 วิ ที่ poller ปกติยังไม่เห็น
 
-### D-5 — วิธีสะสมค่าที่ "ไม่หาย"
+### D-5 — วิธีสะสมค่าที่ "ไม่หาย" + การ reset baseline แบบ epoch (แก้ไขรอบสอง)
 
 ใช้ delta-accumulation ไม่ใช่ snapshot ค่าดิบ:
 
@@ -97,9 +108,29 @@ PolicyCounterStore.Flush() → drain pendingDeltas → กรองเฉพา�
 
 จังหวะเขียน 2 แบบตาม issue: (ก) `FlushBeforeApply()` เรียกจาก `SyncFirewallRules()` (ข) ticker 5 นาที
 
-หลัง ApplyRules สำเร็จ ต้องเรียก `ZeroRuleBaselines()` เพื่อ set baseline ทุก id เป็น 0 —
-ไม่งั้นถ้าทราฟฟิกแรงจน counter ใหม่โตเกินค่าเก่าก่อน poll รอบถัดไป การ detect reset (`cur < base`)
-จะไม่ทำงานและนับขาด
+**การรีเซ็ต baseline หลัง apply ต้องใช้ epoch ไม่ใช่การ zero ตรงๆ** (นี่คือจุดแก้ที่พบตอนตรวจโค้ดรอบสอง
+และเจ้าของอนุมัติแล้ว) เหตุผล: ถ้าใช้ `ZeroRuleBaselines()` เฉยๆ หลัง `ApplyRules` สำเร็จ จะมี race
+ที่ทำให้ **นับเกิน** ได้ 2 ทาง
+
+1. poller ยิงคั่นระหว่าง `ApplyRules` กับ `ZeroRuleBaselines` → poll เห็น `cur=100` (หลัง flush),
+   `base=5000` → detect reset → เครดิต 100 และตั้ง `base=100`; จากนั้น zero ตั้ง `base=0` →
+   poll ถัดไป `cur=150` เครดิต 150 แทน 50 = เกินมา 100
+2. dump ที่อ่านค่า **ก่อน** apply แต่มาประมวลผล **หลัง** zero → `cur` เป็นค่าเก่าก้อนใหญ่ เทียบกับ
+   `base=0` → เครดิตยอดสะสมทั้งก้อนซ้ำอีกรอบ
+
+กลไกที่ต้องใช้แทน:
+
+- เพิ่ม `applyEpoch uint64` ใต้ `ruleMu` ตัวเดิมของ `TrafficStatsService`
+- `poll()` และ `PollRuleCountersOnce()` อ่าน epoch **ก่อน** เรียก `DumpRuleCounters()` แล้วส่งค่านั้น
+  เข้า `processRuleCounters(counters, deltas, epoch)`
+- `processRuleCounters` เช็คใต้ `ruleMu`: ถ้า epoch ที่ส่งมา != epoch ปัจจุบัน → **ทิ้ง dump ทั้งก้อน**
+  (ไม่แตะ baseline ไม่เครดิต delta ไม่แตะ lastRuleHit) แล้ว return
+- แทน `ZeroRuleBaselines()` ด้วย `EndApply()` ซึ่งทำใต้ `ruleMu` ครั้งเดียวแบบ atomic:
+  set ทุก entry ใน `ruleBaseline` เป็น `{0,0}` (คง key, คง `ruleSeeded=true`) แล้ว `applyEpoch++`
+- `FirewallService` เรียก `EndApply()` หลัง `ApplyRules` คืน nil (ตำแหน่งเดิมตามแผน)
+
+ผลลัพธ์: dump ใดๆ ที่เกิดคร่อมช่วง apply จะถูกทิ้งทั้งก้อน (เสียข้อมูลอย่างมาก 1 tick = 10 วิ ซึ่งยอมรับได้
+เพราะ `FlushBeforeApply` เพิ่งเก็บเศษไปแล้วก่อนหน้านั้น) และไม่มีทางนับเกินเลย
 
 ### D-6 — semantics ของ Monitor (ยืนยันตาม issue)
 
@@ -108,6 +139,14 @@ PolicyCounterStore.Flush() → drain pendingDeltas → กรองเฉพา�
 - ผู้ใช้กด "รีเซ็ตค่า" → zero ยอด + `started_at` = now → **ต้องมี confirm dialog**
 - ปิด Monitor → ลบแถวทิ้ง (ข้อมูลหายถาวร) → **ต้องมี confirm dialog**
 - ลบกฎ → แถวหายตาม `ON DELETE CASCADE`
+
+### D-7 — การบังคับสิทธิ์บนหน้า Firewall Policy (แก้ไขรอบสอง)
+
+หน้า `PolicyChainPage.tsx` **ไม่มี** กลไก role/read-only gate อยู่เลยในปัจจุบัน (ตรวจแล้ว: ไม่มี
+`useAuth`/`readOnly`/`admin_readonly` ในไฟล์นี้) การบังคับสิทธิ์ทั้งหมดเป็น backend-only (403)
+ดังนั้น Task ฝั่ง frontend **ห้าม** อ้าง "pattern disable ตามที่หน้านี้ใช้อยู่แล้ว" เพราะไม่มีอยู่จริง
+สิ่งที่ต้องทำคือ: เรียก API ตามปกติ, ถ้าได้ 403/ error ให้แสดงข้อความผ่าน `useAlert` และ **ไม่เปลี่ยน state
+ของ Switch/ยอดสะสมใน UI** การเพิ่ม role gate จริงทั้งหน้าเป็นงานแยกนอกขอบเขตแผนนี้
 
 ---
 
@@ -140,9 +179,9 @@ PolicyCounterStore.Flush() → drain pendingDeltas → กรองเฉพา�
     "task_id": "T-02",
     "title": "kernel: exported FQDN resolve helper (sort+cap) + snapshot ผลลัพธ์ที่ ApplyRules ใช้จริง",
     "layer": "kernel",
-    "files": ["backend/internal/kernel/real_firewall.go", "backend/internal/kernel/interfaces.go", "backend/internal/kernel/mock.go", "backend/internal/kernel/real_firewall_test.go"],
-    "instruction": "งาน SENSITIVE (แตะ path สร้าง firewall rule) ต้อง review เข้มเป็นพิเศษ และห้ามเปลี่ยนลำดับ/จำนวน/verdict ของ nft rule ที่มีอยู่เดิม (tech_stack_design.md §4.3 โครง 4 section ของ input chain ห้ามขยับ)\n\n1) เพิ่มฟังก์ชัน exported ใน kernel package: ResolveFQDNIPv4(fqdn string) ([]net.IP, error) ที่รวม logic เดิมของ addressCombos ไว้ที่เดียว = เรียก lookupIP → กรองเฉพาะ To4() != nil → **sort ascending ตาม bytes ของ IP** → ตัดที่ maxFQDNResolvedIPs (เขียน doc comment อธิบายว่าทำไมต้อง sort ก่อน cap อ้าง D-2 ของแผนนี้)\n2) แก้ addressCombos ให้เรียก ResolveFQDNIPv4 แทน logic เดิม (log warning ข้อความเดิมทั้งหมดต้องคงไว้)\n3) เพิ่ม type fqdnRecorder (map[string][]string + mutex) ส่งผ่านเป็นพารามิเตอร์เพิ่มจาก ApplyRules → addUserChainRules → addressCombos แบบ nil-safe บันทึก key = ค่า FQDN, value = ลิสต์ IP เป็น string ที่ใช้จริง (**บันทึก key ด้วยแม้ resolve ไม่สำเร็จ โดยให้ value เป็น slice ว่าง** — นี่คือกลไกที่ทำให้ retry ตอนบูตทำงาน)\n4) เก็บ recorder ลง RealFirewall (mutex guard) หลัง conn.Flush() สำเร็จเท่านั้น\n5) เพิ่ม method ใน FirewallManager interface: FQDNResolutions() map[string][]string (คืน copy) implement ทั้ง RealFirewall และ MockFirewall (mock คืน map ว่างก็พอ พร้อม comment ว่า FQDNRefresher ถูกปิดใน mock mode อยู่แล้ว)\n6) unit test: ResolveFQDNIPv4 sort/cap ถูกต้อง (แทน lookupIP ด้วย stub), และ addressCombos ยังคืน combo เท่าเดิมสำหรับ subnet/range",
-    "acceptance": ["go build ผ่าน", "go test ./internal/kernel/... ผ่านทั้งหมด (รวมเทสเดิมที่มีอยู่)", "FirewallManager มี FQDNResolutions() และมีทั้งใน real_*.go และ mock.go", "ไม่มีการเปลี่ยนลำดับ/จำนวน nft rule ในเทสเดิม"],
+    "files": ["backend/internal/kernel/real_firewall.go", "backend/internal/kernel/interfaces.go", "backend/internal/kernel/mock.go", "backend/internal/kernel/real_firewall_test.go", "backend/internal/service/firewall_test.go"],
+    "instruction": "งาน SENSITIVE (แตะ path สร้าง firewall rule) ต้อง review เข้มเป็นพิเศษ และห้ามเปลี่ยนลำดับ/จำนวน/verdict ของ nft rule ที่มีอยู่เดิม (tech_stack_design.md §4.3 โครง 4 section ของ input chain ห้ามขยับ)\n\n1) เพิ่มฟังก์ชัน exported ใน kernel package: ResolveFQDNIPv4(fqdn string) ([]net.IP, error) ที่รวม logic เดิมของ addressCombos ไว้ที่เดียว = เรียก lookupIP → กรองเฉพาะ To4() != nil → **sort ascending ตาม bytes ของ IP** → ตัดที่ maxFQDNResolvedIPs (เขียน doc comment อธิบายว่าทำไมต้อง sort ก่อน cap อ้าง D-2 ของแผนนี้)\n2) แก้ addressCombos ให้เรียก ResolveFQDNIPv4 แทน logic เดิม (log warning ข้อความเดิมทั้งหมดต้องคงไว้)\n3) เพิ่ม type fqdnRecorder (map[string][]string + mutex) ส่งผ่านเป็นพารามิเตอร์เพิ่มจาก ApplyRules → addUserChainRules → addressCombos แบบ nil-safe บันทึก key = ค่า FQDN, value = ลิสต์ IP เป็น string ที่ใช้จริง (**บันทึก key ด้วยแม้ resolve ไม่สำเร็จ โดยให้ value เป็น slice ว่าง** — นี่คือกลไกที่ทำให้ retry ตอนบูตทำงาน)\n4) เก็บ recorder ลง RealFirewall (mutex guard) หลัง conn.Flush() สำเร็จเท่านั้น\n5) เพิ่ม method ใน FirewallManager interface: FQDNResolutions() map[string][]string (คืน copy) implement ทั้ง RealFirewall และ MockFirewall (mock คืน map ว่างก็พอ พร้อม comment ว่า FQDNRefresher ถูกปิดใน mock mode อยู่แล้ว)\n5b) **สำคัญ — มี implementer ตัวที่สามของ FirewallManager คือ trackingFirewallManager ใน backend/internal/service/firewall_test.go บรรทัด 11 ซึ่ง implement interface เองแบบไม่ embed MockFirewall** ต้องเพิ่ม method FQDNResolutions() ให้มันด้วย ไม่งั้นแพ็กเกจ service คอมไพล์ไม่ผ่านทันที\n6) unit test: ResolveFQDNIPv4 sort/cap ถูกต้อง (แทน lookupIP ด้วย stub), และ addressCombos ยังคืน combo เท่าเดิมสำหรับ subnet/range",
+    "acceptance": ["go build ./... ผ่าน (ทั้ง kernel และ service)", "go test ./internal/kernel/... และ ./internal/service/... คอมไพล์และผ่านทั้งหมด (รวมเทสเดิมที่มีอยู่)", "FirewallManager มี FQDNResolutions() และมีครบทั้ง real_firewall.go, mock.go, firewall_test.go", "ไม่มีการเปลี่ยนลำดับ/จำนวน nft rule ในเทสเดิม"],
     "depends_on": ["T-00"]
   },
   {
@@ -150,7 +189,7 @@ PolicyCounterStore.Flush() → drain pendingDeltas → กรองเฉพา�
     "title": "service: serialize การ apply + hook ก่อน/หลัง ApplyRules ใน FirewallService",
     "layer": "service",
     "files": ["backend/internal/service/firewall.go"],
-    "instruction": "งาน SENSITIVE (firewall apply path)\n1) เพิ่ม applyMu sync.Mutex (แยกจาก s.mu เดิมที่ guard timestamp เท่านั้น — ห้ามใช้ตัวเดียวกัน เสี่ยง deadlock) ล็อกครอบ body ของ SyncFirewallRules ทั้งก้อน เพื่อกันการ flush nft table ซ้อนกันเมื่อ ticker ใหม่ทำงานพร้อมกับผู้ใช้กด Apply (ระวัง defer recordApply ที่ใช้ s.mu อยู่แล้ว ต้องไม่ล็อกซ้อนกันจนค้าง)\n2) เพิ่ม optional setter SetPolicyCounterStore(*PolicyCounterStore) และ SetTrafficStats(*TrafficStatsService) แบบ additive-setter pattern เดียวกับ SetRuleNameResolver (ห้ามเปลี่ยน signature ของ NewFirewallService)\n3) ใน SyncFirewallRules: ก่อนบรรทัด s.firewall.ApplyRules(...) ให้เรียก counterStore.FlushBeforeApply() ถ้าไม่ nil (error แค่ log ห้ามทำให้ apply ล้ม); หลัง ApplyRules คืน nil สำเร็จ ให้เรียก trafficStats.ZeroRuleBaselines() ถ้าไม่ nil\n4) เขียน doc comment อธิบายลำดับ flush-before / zero-after อ้าง D-4/D-5 ของแผนนี้",
+    "instruction": "งาน SENSITIVE (firewall apply path)\n1) เพิ่ม applyMu sync.Mutex (แยกจาก s.mu เดิมที่ guard timestamp เท่านั้น — ห้ามใช้ตัวเดียวกัน เสี่ยง deadlock เพราะ recordApply จับ s.mu ผ่าน defer อยู่แล้ว) ล็อกครอบ body ของ SyncFirewallRules ทั้งก้อน เพื่อกันการ flush nft table ซ้อนกันเมื่อ ticker ใหม่ทำงานพร้อมกับผู้ใช้กด Apply\n2) เพิ่ม optional setter SetPolicyCounterStore(*PolicyCounterStore) และ SetTrafficStats(*TrafficStatsService) แบบ additive-setter pattern เดียวกับ SetRuleNameResolver (ห้ามเปลี่ยน signature ของ NewFirewallService)\n3) ใน SyncFirewallRules: ก่อนบรรทัด s.firewall.ApplyRules(...) ให้เรียก counterStore.FlushBeforeApply() ถ้าไม่ nil (error แค่ log ห้ามทำให้ apply ล้ม); **หลัง ApplyRules คืน nil สำเร็จ ให้เรียก trafficStats.EndApply() ถ้าไม่ nil** (ไม่ใช่ ZeroRuleBaselines — ดู D-5 ของแผนนี้ EndApply ทำ zero baseline + เพิ่ม epoch แบบ atomic ใต้ ruleMu ตัวเดียวกัน)\n4) เขียน doc comment อธิบายลำดับ flush-before / EndApply-after อ้าง D-4/D-5 ของแผนนี้ รวมถึงเหตุผลว่าทำไมต้องเป็น epoch ไม่ใช่ zero เฉยๆ",
     "acceptance": ["go build ผ่าน", "go vet ผ่าน", "ไม่มี lock ซ้อนระหว่าง applyMu กับ s.mu", "โค้ดเดิมที่เรียก NewFirewallService ไม่ต้องแก้"],
     "depends_on": ["T-08", "T-09"]
   },
@@ -159,7 +198,7 @@ PolicyCounterStore.Flush() → drain pendingDeltas → กรองเฉพา�
     "title": "service: FQDNRefresher background ticker",
     "layer": "service",
     "files": ["backend/internal/service/fqdn_refresh.go", "backend/internal/service/fqdn_refresh_test.go"],
-    "instruction": "สร้างไฟล์ใหม่ FQDNRefresher เลียนแบบโครงของ dhcp_health_checker.go\n- NewFQDNRefresher(repo *db.Repository, firewall *FirewallService, fwKernel kernel.FirewallManager, bus *NetEventBus, eventLog *EventLogService, enabled bool, steadyInterval, retryInterval time.Duration) และ Start(ctx) ที่ spawn goroutine เดียว\n- ในแต่ละ tick guard ตามลำดับนี้เท่านั้น: !enabled → return; repo.IsMockMode() → return; bus.IsPaused() → return (กัน race กับการ import backup)\n- ตรรกะ tick: อ่าน snapshot := fwKernel.FQDNResolutions(); ถ้า len == 0 ไม่ต้องทำอะไร; วนทุก key เรียก kernel.ResolveFQDNIPv4 (ตัวเดียวกับ T-02) แปลงเป็น []string เทียบแบบ order-sensitive กับค่าใน snapshot; ถ้ามีอย่างน้อยหนึ่ง FQDN ที่ต่าง → เรียก firewall.SyncFirewallRules() หนึ่งครั้ง (ครั้งเดียวต่อ tick ไม่ว่าจะต่างกี่โดเมน) และ log ผ่าน EventLogService (category firewall, severity info, ระบุชื่อโดเมนกับ IP เก่า/ใหม่); ถ้า resolve error ให้ถือว่าผลลัพธ์เป็น slice ว่าง (= ยังไม่พร้อม) ห้าม panic ห้าม return ทั้ง tick\n- back-off: ถ้าหลังจบ tick ยังมีโดเมนที่ผลลัพธ์ว่าง → ใช้ retryInterval, ถ้าครบทุกโดเมนแล้ว → ใช้ steadyInterval; เปลี่ยน cadence ด้วย ticker.Reset() เฉพาะเมื่อค่าต่างจากเดิม (log ตอนสลับโหมด) เหมือน pattern ของ DhcpHealthChecker\n- แยกส่วนตัดสินใจเป็นฟังก์ชัน pure (เช่น diffResolutions(old, new map[string][]string) (changed []string, anyUnresolved bool)) เพื่อให้ unit test ได้โดยไม่ต้องมี kernel/DB\n- unit test ครอบคลุม: (1) เดิมว่าง→resolve ได้ = changed (เคสบูต) (2) เหมือนเดิม = ไม่ changed (3) ลำดับ/จำนวน IP ต่าง = changed (4) resolve ไม่ได้ = anyUnresolved true และไม่ changed",
+    "instruction": "สร้างไฟล์ใหม่ FQDNRefresher เลียนแบบโครงของ dhcp_health_checker.go\n- NewFQDNRefresher(repo *db.Repository, firewall *FirewallService, fwKernel kernel.FirewallManager, bus *NetEventBus, eventLog *EventLogService, enabled bool, steadyInterval, retryInterval time.Duration) และ Start(ctx) ที่ spawn goroutine เดียว\n- ในแต่ละ tick guard ตามลำดับนี้เท่านั้น: !enabled → return; repo.IsMockMode() → return; bus.IsPaused() → return (กัน race กับการ import backup)\n- ตรรกะ tick: อ่าน snapshot := fwKernel.FQDNResolutions(); ถ้า len == 0 ไม่ต้องทำอะไร; วนทุก key เรียก kernel.ResolveFQDNIPv4 (ตัวเดียวกับ T-02) แปลงเป็น []string เทียบแบบ order-sensitive กับค่าใน snapshot; ถ้ามีอย่างน้อยหนึ่ง FQDN ที่ต่าง → เรียก firewall.SyncFirewallRules() หนึ่งครั้ง (ครั้งเดียวต่อ tick ไม่ว่าจะต่างกี่โดเมน) และ log ผ่าน EventLogService (model.EventCategoryFirewall, severity info, ระบุชื่อโดเมนกับ IP เก่า/ใหม่); ถ้า resolve error ให้ถือว่าผลลัพธ์เป็น slice ว่าง (= ยังไม่พร้อม) ห้าม panic ห้าม return ทั้ง tick\n- back-off: ถ้าหลังจบ tick ยังมีโดเมนที่ผลลัพธ์ว่าง → ใช้ retryInterval, ถ้าครบทุกโดเมนแล้ว → ใช้ steadyInterval; เปลี่ยน cadence ด้วย ticker.Reset() เฉพาะเมื่อค่าต่างจากเดิม (log ตอนสลับโหมด) เหมือน pattern ของ DhcpHealthChecker\n- แยกส่วนตัดสินใจเป็นฟังก์ชัน pure (เช่น diffResolutions(old, new map[string][]string) (changed []string, anyUnresolved bool)) เพื่อให้ unit test ได้โดยไม่ต้องมี kernel/DB\n- unit test ครอบคลุม: (1) เดิมว่าง→resolve ได้ = changed (เคสบูต) (2) เหมือนเดิม = ไม่ changed (3) ลำดับ/จำนวน IP ต่าง = changed (4) resolve ไม่ได้ = anyUnresolved true และไม่ changed",
     "acceptance": ["go build ผ่าน", "go test ./internal/service/... -run FQDN ผ่าน", "ไม่มีการเรียก SyncFirewallRules ในรอบที่ผลลัพธ์ไม่เปลี่ยน (พิสูจน์ด้วยเทสของฟังก์ชัน pure)"],
     "depends_on": ["T-02"]
   },
@@ -192,11 +231,11 @@ PolicyCounterStore.Flush() → drain pendingDeltas → กรองเฉพา�
   },
   {
     "task_id": "T-08",
-    "title": "traffic_stats: pending delta accumulator + drain + poll-once + zero-baselines",
+    "title": "traffic_stats: pending delta accumulator + drain + poll-once + epoch-based reset",
     "layer": "service",
     "files": ["backend/internal/service/traffic_stats.go", "backend/internal/service/traffic_stats_test.go"],
-    "instruction": "แก้เท่าที่จำเป็น ห้ามเปลี่ยนพฤติกรรมของ RuleCounterSnapshot/RuleLastHits/GetTrafficDetail เดิม\n1) เพิ่ม field pendingRuleDeltas map[string]model.RuleCounter (guard ด้วย ruleMu ตัวเดิม) ใน processRuleCounters เมื่อคำนวณ delta ได้ (ทั้ง branch ปกติและ branch reset) ให้บวกเข้า pendingRuleDeltas ด้วย\n2) เพิ่ม DrainRuleDeltas() map[string]model.RuleCounter — คืนค่าที่สะสมไว้แล้วเคลียร์ map (มีผู้บริโภคเพียงรายเดียวคือ PolicyCounterStore)\n3) เพิ่ม PollRuleCountersOnce() error — เรียก s.acct.DumpRuleCounters() แล้ว feed เข้า processRuleCounters ทันที (ไม่แตะ bucket/history/rate) ใช้ตอน FlushBeforeApply เพื่อเก็บเศษ <=10 วินาทีก่อนเคอร์เนลถูก flush; ต้องปลอดภัยเมื่อ acct เป็น mock\n4) เพิ่ม ZeroRuleBaselines() — set ทุก entry ใน ruleBaseline เป็น {0,0} (คง key ไว้, คง ruleSeeded = true) เขียน doc comment ว่าเรียกหลัง ApplyRules สำเร็จเท่านั้น และเหตุผลคือกันเคส counter ใหม่โตเกินค่าเก่าจนตรวจ reset ไม่เจอ\n5) unit test: delta ถูกสะสมเข้า pending, drain แล้วว่าง, ZeroRuleBaselines ทำให้ poll ถัดไปนับ cur เต็มจำนวนเป็น delta",
-    "acceptance": ["go build ผ่าน", "go test ./internal/service/... -run TrafficStats ผ่าน", "ไม่มี data race (go test -race ในไฟล์นี้ผ่าน)"],
+    "instruction": "แก้เท่าที่จำเป็น ห้ามเปลี่ยนพฤติกรรมของ RuleCounterSnapshot/RuleLastHits/GetTrafficDetail เดิม\n1) เพิ่ม field pendingRuleDeltas map[string]model.RuleCounter (guard ด้วย ruleMu ตัวเดิม) ใน processRuleCounters เมื่อคำนวณ delta ได้ (ทั้ง branch ปกติและ branch reset) ให้บวกเข้า pendingRuleDeltas ด้วย\n2) เพิ่ม DrainRuleDeltas() map[string]model.RuleCounter — คืนค่าที่สะสมไว้แล้วเคลียร์ map (มีผู้บริโภคเพียงรายเดียวคือ PolicyCounterStore)\n3) **epoch guard (D-5 ของแผน — ห้ามข้าม)**: เพิ่ม field applyEpoch uint64 ใต้ ruleMu; เพิ่ม method ruleEpoch() uint64 (อ่านใต้ ruleMu); เปลี่ยน signature เป็น processRuleCounters(counters map[string]model.RuleCounter, ruleDeltas map[string]model.RuleCounter, epoch uint64) โดยบรรทัดแรกใต้ ruleMu ให้เช็ค if epoch != s.applyEpoch { return } (ทิ้ง dump ทั้งก้อน ไม่แตะ baseline/lastRuleHit/pending); ผู้เรียกทุกที่ (poll() และ PollRuleCountersOnce()) ต้องอ่าน epoch ด้วย ruleEpoch() **ก่อน** เรียก s.acct.DumpRuleCounters() แล้วส่งค่านั้นเข้ามา\n4) เพิ่ม EndApply() — ใต้ ruleMu ครั้งเดียว: set ทุก entry ใน ruleBaseline เป็น {0,0} (คง key ไว้, คง ruleSeeded = true) แล้ว applyEpoch++ เขียน doc comment ว่าเรียกหลัง ApplyRules สำเร็จเท่านั้น และอธิบาย race 2 แบบที่ epoch ป้องกัน (poll คั่นกลาง / dump ที่อ่านค่าก่อน apply แต่ประมวลผลหลัง apply) อ้าง D-5\n5) เพิ่ม PollRuleCountersOnce() error — อ่าน epoch → เรียก s.acct.DumpRuleCounters() → feed เข้า processRuleCounters ทันที (ไม่แตะ bucket/history/rate) ใช้ตอน FlushBeforeApply เพื่อเก็บเศษ <=10 วินาทีก่อนเคอร์เนลถูก flush; ต้องปลอดภัยเมื่อ acct เป็น mock\n6) unit test: delta ถูกสะสมเข้า pending, drain แล้วว่าง, dump ที่ epoch เก่าถูกทิ้งทั้งก้อน, หลัง EndApply แล้ว poll ถัดไปนับ cur เต็มจำนวนเป็น delta และไม่นับซ้ำ",
+    "acceptance": ["go build ผ่าน", "go test ./internal/service/... -run TrafficStats ผ่าน", "ไม่มี data race (go test -race ในไฟล์นี้ผ่าน)", "มีเทสที่พิสูจน์ว่า dump ข้าม epoch ไม่ทำให้ counter นับเกิน"],
     "depends_on": ["T-06"]
   },
   {
@@ -222,7 +261,7 @@ PolicyCounterStore.Flush() → drain pendingDeltas → กรองเฉพา�
     "title": "api: endpoint toggle-monitor และ reset counter",
     "layer": "api",
     "files": ["backend/internal/api/handlers.go", "backend/internal/api/router.go", "backend/internal/api/policy_stats_handler_test.go"],
-    "instruction": "งาน SENSITIVE (เพิ่ม route ที่เปลี่ยน state)\n1) เพิ่ม HandleTogglePolicyMonitor (POST /api/policies/{id}/toggle-monitor) และ HandleResetPolicyMonitorCounter (POST /api/policies/{id}/monitor/reset) ใช้ authRoute เหมือน toggle-log/toggle-status (ไม่ใช่ superAdminRoute) — ทั้งคู่เป็น POST จึงถูก RoleReadOnlyMiddleware/-disable-edit บล็อกโดยอัตโนมัติอยู่แล้ว\n2) validate id ตาม pattern เดิมของ handler กลุ่ม policies, คืน 404 เมื่อไม่พบกฎ, 503 เมื่อ counter store ยังไม่ถูก wire (เลียนแบบ HandleGetPolicyStats ที่จัดการกรณี service เป็น nil)\n3) response คืน PolicyRule ที่อัปเดตแล้ว (toggle) และ 200 พร้อม body ยืนยัน (reset)\n4) เพิ่ม handler test: no session -> 401, id ไม่มีจริง -> 404, mock mode toggle แล้ว GET /api/policies/stats สะท้อนค่า monitored",
+    "instruction": "งาน SENSITIVE (เพิ่ม route ที่เปลี่ยน state)\n1) เพิ่ม HandleTogglePolicyMonitor (POST /api/policies/{id}/toggle-monitor) และ HandleResetPolicyMonitorCounter (POST /api/policies/{id}/monitor/reset) ใช้ authRoute เหมือน toggle-log/toggle-status ที่ router.go บรรทัด 133-134 (ไม่ใช่ superAdminRoute — อนุมัติแล้ว) ทั้งคู่เป็น POST จึงถูก RoleReadOnlyMiddleware/-disable-edit บล็อกโดยอัตโนมัติอยู่แล้ว\n2) validate id ตาม pattern เดิมของ handler กลุ่ม policies, คืน 404 เมื่อไม่พบกฎ, 503 เมื่อ counter store ยังไม่ถูก wire (เลียนแบบ HandleGetPolicyStats ที่จัดการกรณี service เป็น nil)\n3) response คืน PolicyRule ที่อัปเดตแล้ว (toggle) และ 200 พร้อม body ยืนยัน (reset) ; log event ผ่าน s.logEvent ด้วย model.EventCategoryFirewall ตาม pattern ของ firewall.policy_log_toggled\n4) เพิ่ม handler test: no session -> 401, id ไม่มีจริง -> 404, mock mode toggle แล้ว GET /api/policies/stats สะท้อนค่า monitored",
     "acceptance": ["go build ผ่าน", "go test ./internal/api/... ผ่าน", "route ใหม่อยู่ในกลุ่ม 4. Firewall Policies ของ router.go พร้อม comment อ้างแผนนี้"],
     "depends_on": ["T-10"]
   },
@@ -240,7 +279,7 @@ PolicyCounterStore.Flush() → drain pendingDeltas → กรองเฉพา�
     "title": "main.go: wiring ทั้งหมด (ลำดับ startup)",
     "layer": "service",
     "files": ["backend/cmd/pigate/main.go"],
-    "instruction": "1) สร้าง policyCounterStore := service.NewPolicyCounterStore(repo, trafficStatsService, time.Duration(cfg.MonitoredCounterFlushIntervalSeconds)*time.Second) หลัง trafficStatsService ถูกสร้าง แล้วเรียก .Load() (error แค่ log warning ห้ามทำให้ boot ล้ม)\n2) firewallService.SetPolicyCounterStore(...) และ .SetTrafficStats(trafficStatsService) ; policyStatsService.SetCounterStore(...) ; backupService (ถ้ามี setter) รับ store ไปเรียก Reload\n3) policyCounterStore.Start(monitorCtx) วางไว้กลุ่มเดียวกับ trafficStatsService.Start(monitorCtx)\n4) สร้างและ Start FQDNRefresher **หลัง** firewallService.InitApplyConfig() และหลัง netlinkMonitor.Start(...) — วางถัดจาก dhcpHealthChecker.Start(monitorCtx) พร้อม log บรรทัดแนะนำตัวแบบเดียวกัน\n5) ทุกอย่างใช้ monitorCtx เพื่อให้ปิดตอน shutdown",
+    "instruction": "1) สร้าง policyCounterStore := service.NewPolicyCounterStore(repo, trafficStatsService, time.Duration(cfg.MonitoredCounterFlushIntervalSeconds)*time.Second) หลัง trafficStatsService ถูกสร้าง แล้วเรียก .Load() (error แค่ log warning ห้ามทำให้ boot ล้ม)\n2) firewallService.SetPolicyCounterStore(...) และ .SetTrafficStats(trafficStatsService) ; policyStatsService.SetCounterStore(...) ; backupService (ถ้ามี setter) รับ store ไปเรียก Reload\n3) policyCounterStore.Start(monitorCtx) วางไว้กลุ่มเดียวกับ trafficStatsService.Start(monitorCtx)\n4) สร้างและ Start FQDNRefresher **หลัง** firewallService.InitApplyConfig() และหลัง netlinkMonitor.Start(...) — วางถัดจาก dhcpHealthChecker.Start(monitorCtx) พร้อม log บรรทัดแนะนำตัวแบบเดียวกัน ใช้ค่า cfg.FQDNRefreshEnabled / FQDNRefreshIntervalSeconds / FQDNRefreshRetryIntervalSeconds\n5) ทุกอย่างใช้ monitorCtx เพื่อให้ปิดตอน shutdown",
     "acceptance": ["go build ผ่าน", "รัน ./pigate-backend -mock=true แล้ว log ลำดับ startup ครบและไม่มี panic", "FQDNRefresher ไม่ทำงานใน mock mode"],
     "depends_on": ["T-01", "T-03", "T-04", "T-11", "T-12"]
   },
@@ -267,8 +306,8 @@ PolicyCounterStore.Flush() → drain pendingDeltas → กรองเฉพา�
     "title": "frontend: Switch Monitor + ยอดสะสม + ปุ่มรีเซ็ต ใน RuleStatsDrawer",
     "layer": "frontend",
     "files": ["frontend/src/components/policy/RuleStatsDrawer.tsx", "frontend/src/components/policy/PolicyChainPage.tsx"],
-    "instruction": "1) ใน RuleStatsDrawer เพิ่มบล็อกใหม่ (คั่นด้วย border-t เหมือนบล็อกอื่น) ชื่อ 'เก็บสถิติสะสม (Monitor)' ประกอบด้วย: shadcn Switch (import จาก @/components/ui/switch เหมือนที่ PolicyChainPage ใช้), ข้อความอธิบายสั้นๆ ว่าเปิดแล้วยอดจะสะสมต่อเนื่องไม่รีเซ็ตตอน Apply, และเมื่อเปิดอยู่ให้แสดง Bytes/Packets สะสม (fmtBytes/toLocaleString) + 'เก็บมาตั้งแต่' (fmtAbsoluteTime ของ monitoredSince) + ปุ่ม 'รีเซ็ตค่า' (variant outline size sm)\n2) การปิด Switch และการกดรีเซ็ต **ต้องผ่าน confirm() จาก useAlert ทั้งคู่** โดยข้อความต้องบอกชัดว่าข้อมูลจะหายถาวรและกู้คืนไม่ได้ (ปิด Monitor = ลบยอดสะสมทิ้ง)\n3) เพิ่ม prop onChanged?: () => void ให้ Drawer เรียกหลัง toggle/reset สำเร็จ และให้ PolicyChainPage ส่ง callback ที่ refetch policies + stats ทันที (ไม่ต้องรอ poll 10 วิ)\n4) เพิ่มข้อจำกัดข้อใหม่ในกล่อง 'ข้อจำกัดของข้อมูลสถิตินี้' อธิบายว่ายอดในหมวด Monitor เป็นคนละชุดกับตัวเลข 'ตั้งแต่ Apply ล่าสุด' ด้านบน และอาจคลาดเคลื่อนได้สูงสุดตามรอบบันทึก (~5 นาที) หากไฟดับกะทันหัน\n5) ต้องเคารพ docs/rules_of_work.md: ห้าม hardcode สี tailwind แบรนด์/สถานะ (ใช้ text-primary, text-destructive, text-muted-foreground), ห้าม shadow-*/backdrop-blur-*, รองรับ dark/light, ใช้เฉพาะ components/ui ; Drawer ตัวนี้ไม่มี Combobox จึงคง modal behavior เดิมไว้\n6) ถ้าเป็นผู้ใช้ role อ่านอย่างเดียว/โหมด -disable-edit ให้ disable Switch และปุ่มรีเซ็ตตาม pattern ที่หน้านี้ใช้อยู่แล้ว",
-    "acceptance": ["yarn build ผ่าน", "yarn lint ผ่าน", "ไม่มี class สีดิบ/shadow/backdrop-blur เพิ่มเข้ามา", "การปิด Monitor และการรีเซ็ตมี confirm dialog ทั้งคู่"],
+    "instruction": "หมายเหตุสภาพปัจจุบันของไฟล์ (ตรวจแล้ว): RuleStatsDrawer.tsx เป็นคอมโพเนนต์ read-only ล้วน props มีแค่ open/onOpenChange/rule/stat/countersSince/available และ **ยังไม่มี import ของ Switch, useAlert, policyService เลย** ทุกอย่างด้านล่างคือของใหม่ที่ต้องเพิ่มเอง ห้ามสมมติว่ามี pattern อยู่แล้วในไฟล์นี้\n1) เพิ่ม import: Switch จาก @/components/ui/switch, useAlert จาก @/hooks/useAlert, และ policyService (ทั้งสองตัวมีใช้จริงใน PolicyChainPage.tsx ให้ลอกรูปแบบการเรียกจากที่นั่น)\n2) เพิ่ม prop ใหม่ใน RuleStatsDrawerProps: onChanged?: () => void (เรียกหลัง toggle/reset สำเร็จ) และให้ PolicyChainPage ส่ง callback ที่ refetch policies + stats ทันที (ไม่ต้องรอ poll 10 วิ)\n3) เพิ่มบล็อกใหม่ใน Drawer (คั่นด้วย border-t เหมือนบล็อกอื่น) ชื่อ 'เก็บสถิติสะสม (Monitor)' ประกอบด้วย: Switch, ข้อความอธิบายสั้นๆ ว่าเปิดแล้วยอดจะสะสมต่อเนื่องไม่รีเซ็ตตอน Apply, และเมื่อเปิดอยู่ให้แสดง Bytes/Packets สะสม (fmtBytes / toLocaleString) + 'เก็บมาตั้งแต่' (fmtAbsoluteTime ของ monitoredSince) + ปุ่ม 'รีเซ็ตค่า' (variant outline size sm)\n4) การปิด Switch และการกดรีเซ็ต **ต้องผ่าน confirm() จาก useAlert ทั้งคู่** โดยข้อความต้องบอกชัดว่าข้อมูลจะหายถาวรและกู้คืนไม่ได้ (ปิด Monitor = ลบยอดสะสมทิ้ง) ; การเปิด Switch ไม่ต้อง confirm\n5) **สิทธิ์ (D-7 ของแผน)**: หน้านี้ไม่มี role gate ในฝั่ง frontend และแผนนี้ไม่เพิ่ม ให้เรียก API ตามปกติ ถ้าได้ 403/error ให้แสดงข้อความผ่าน alert() ของ useAlert และ **ห้ามเปลี่ยน state ของ Switch/ยอดสะสมใน UI** (revert กลับค่าเดิม) ห้ามพยายาม disable ปุ่มตาม role เพราะข้อมูล role ยังไม่ถูกส่งมาถึงหน้านี้\n6) เพิ่มข้อจำกัดข้อใหม่ในกล่อง 'ข้อจำกัดของข้อมูลสถิตินี้' อธิบายว่ายอดในหมวด Monitor เป็นคนละชุดกับตัวเลข 'ตั้งแต่ Apply ล่าสุด' ด้านบน และอาจคลาดเคลื่อนได้สูงสุดตามรอบบันทึก (~5 นาที) หากไฟดับกะทันหัน\n7) ต้องเคารพ docs/rules_of_work.md: ห้าม hardcode สี tailwind แบรนด์/สถานะ (ใช้ text-primary, text-destructive, text-muted-foreground), ห้าม shadow-*/backdrop-blur-*, รองรับ dark/light, ใช้เฉพาะ components/ui ; Drawer ตัวนี้ไม่มี Combobox จึงคง modal behavior เดิมไว้",
+    "acceptance": ["yarn build ผ่าน", "yarn lint ผ่าน", "ไม่มี class สีดิบ/shadow/backdrop-blur เพิ่มเข้ามา", "การปิด Monitor และการรีเซ็ตมี confirm dialog ทั้งคู่", "เมื่อ API ตอบ 403 UI ไม่เปลี่ยนสถานะและขึ้นข้อความแจ้ง"],
     "depends_on": ["T-15"]
   },
   {
@@ -296,6 +335,9 @@ PolicyCounterStore.Flush() → drain pendingDeltas → กรองเฉพา�
 7. `monitored` เป็น config → ต้องไป export/import ด้วย; ส่วนตัวเลข counter เป็น runtime → **ห้าม** export
 8. เลข monitored bytes ต้องไม่ถูกนำไปคำนวณ `percent`/`totalBytes` ของ response เดิม (คนละหน่วยเวลา)
 9. เอกสาร openapi ต้องอัปเดตพร้อมโค้ด ไม่ปล่อยให้ drift
+10. **ห้าม zero baseline โดยไม่มี epoch** — การเรียก zero ตรงๆ หลัง ApplyRules มี race ที่ทำให้ counter ที่ persist นับเกินได้ 2 ทาง (ดู D-5) ทุกการอ่าน `DumpRuleCounters` ต้องพ่วง epoch ที่อ่านมาก่อน dump เสมอ
+11. **การเพิ่ม method เข้า `kernel.FirewallManager` กระทบ 3 ไฟล์ ไม่ใช่ 2** — `real_firewall.go`, `mock.go` และ `service/firewall_test.go` (`trackingFirewallManager`)
+12. **อย่าอ้าง role-gate ที่ไม่มีอยู่จริงในหน้า Firewall Policy** (D-7) — การบังคับสิทธิ์เป็น backend-only
 
 ---
 
@@ -315,6 +357,7 @@ PolicyCounterStore.Flush() → drain pendingDeltas → กรองเฉพา�
     "FQDN steady state — เมื่อ FQDN ทุกตัว resolve ได้และผลลัพธ์ไม่เปลี่ยน ต้องไม่มี SyncFirewallRules เกิดขึ้นเลยตลอด 10 นาที (ตรวจจาก log ของ RealFirewall/countersSince ที่ต้องไม่ขยับ) และ cadence สลับเป็น 300 วินาทีตามที่ออกแบบ",
     "FQDN หลาย A record — โดเมนที่มี A record มากกว่า 8 ตัว ต้องไม่ทำให้เกิด reapply ซ้ำๆ ทุกรอบ (พิสูจน์ว่า sort+cap ทำงาน)",
     "Monitor persist ข้าม Apply — เปิด Monitor ที่กฎหนึ่ง, สร้างทราฟฟิกให้กฎนั้น, กด Apply Settings → ยอดสะสมในหมวด Monitor ต้อง 'ไม่' กลับไปเป็น 0 และต้อง 'เพิ่มขึ้นแบบต่อเนื่อง' (ตัวเลข 'ตั้งแต่ Apply ล่าสุด' ด้านบนยังรีเซ็ตเป็น 0 ตามเดิมได้ ถือว่าถูกต้อง)",
+    "Monitor ไม่นับเกิน (epoch guard) — กด Apply ซ้ำๆ 5 ครั้งติดในช่วงที่มีทราฟฟิกวิ่งเข้ากฎที่ monitored อยู่ แล้วเทียบยอดสะสมกับปริมาณทราฟฟิกจริงที่ยิงเข้าไป ต้องไม่พบการกระโดดของยอดแบบผิดปกติ (เช่นเพิ่มเป็นเท่าตัวทันทีหลัง Apply)",
     "Monitor persist ข้ามการรีสตาร์ท — restart process แล้วยอดสะสมยังอยู่ครบ (ค่าจาก SQLite) และ 'เก็บมาตั้งแต่' ไม่เปลี่ยน",
     "Monitor ไม่นับกฎที่ปิด Monitor — กฎที่ monitored=false ต้องไม่มีแถวใน policy_rule_counters และไม่มียอดแสดง",
     "รีเซ็ตค่า — กดปุ่มรีเซ็ตต้องขึ้น confirm dialog ก่อนเสมอ; กดยืนยันแล้วยอดกลับเป็น 0 และ 'เก็บมาตั้งแต่' อัปเดตเป็นเวลาปัจจุบัน; กดยกเลิกแล้วข้อมูลต้องไม่เปลี่ยน",
@@ -322,7 +365,7 @@ PolicyCounterStore.Flush() → drain pendingDeltas → กรองเฉพา�
     "ลบกฎที่ monitored อยู่ → แถวใน policy_rule_counters หายตาม (FK cascade) ไม่มีแถวกำพร้าค้าง",
     "SD card write — ในสภาวะไม่มีทราฟฟิกเข้ากฎที่ monitored เลย ต้องไม่มี write transaction ลง policy_rule_counters เกิดขึ้นตลอดหลายรอบ flush",
     "Export/Import — export config ได้ไฟล์ที่มี field monitored ของแต่ละกฎ, import ไฟล์ backup 'รุ่นเก่า' ที่ไม่มี field นี้ต้องผ่านโดยได้ค่า false, และหลัง import ยอดสะสมใน UI ตรงกับ DB (ไม่ค้างค่าเก่าในแคช RAM)",
-    "สิทธิ์ — ผู้ใช้ role admin_readonly หรือโหมด -disable-edit ต้องถูกปฏิเสธ (403) ที่ POST /api/policies/{id}/toggle-monitor และ /monitor/reset และ UI ต้อง disable ปุ่ม/สวิตช์",
+    "สิทธิ์ — ผู้ใช้ role admin_readonly หรือโหมด -disable-edit ต้องถูกปฏิเสธ (403) ที่ POST /api/policies/{id}/toggle-monitor และ /monitor/reset และฝั่ง UI ต้องแสดงข้อความแจ้งพร้อมไม่เปลี่ยนสถานะของ Switch/ยอดสะสม (ไม่ต้องคาดหวังว่าปุ่มจะถูก disable ล่วงหน้า — หน้านี้ไม่มี role gate ฝั่ง frontend ตาม D-7)",
     "ไม่มี session → เรียก endpoint ใหม่ทั้งสองได้ 401",
     "Regression firewall — หลังทุกอย่างทำงาน ตรวจ nft ruleset ว่ายังคงโครง 4 section ของ input chain เดิม, admin access ยังมาก่อน user rule, port-forward/NAT ยังทำงาน, และไม่มีจำนวนกฎเพิ่มขึ้นจาก baseline ก่อน merge (นอกเหนือจากที่ FQDN resolve ได้เพิ่ม)",
     "Regression UI — หน้า Firewall Policy ทั้ง 3 chain ยังใช้งานได้ครบ (สร้าง/แก้/ลบ/reorder/toggle log/status), Drawer สถิติแสดงข้อมูลเดิมครบทุกช่อง, ทั้ง dark และ light mode"
@@ -332,9 +375,9 @@ PolicyCounterStore.Flush() → drain pendingDeltas → กรองเฉพา�
 
 ---
 
-## 6. เรื่องที่ต้องให้เจ้าของโปรเจกต์ตัดสิน (ก่อนเริ่ม T-01)
+## 6. บันทึกการอนุมัติ
 
-1. **ค่า default ของ interval** — เสนอ 30 วินาที (retry) / 300 วินาที (steady) / 300 วินาที (flush counter) ตามเหตุผลใน D-3 ยืนยันหรือปรับ?
-2. **จุดวางฮุก flush counter** — issue ระบุ `real_firewall.go` แต่แผนเสนอย้ายไป `FirewallService.SyncFirewallRules()` (D-4) เพื่อลด merge conflict และรักษา layering ยืนยันไหม?
-3. **การ sort ผลลัพธ์ FQDN ก่อน cap 8 ตัว** (D-2) เปลี่ยนพฤติกรรมเดิมเล็กน้อยสำหรับโดเมนที่มี A record > 8 ตัว — ยอมรับได้ไหม (ถ้าไม่ ต้องเพิ่ม cap เป็นเทียบแบบ set-based ซึ่งซับซ้อนกว่า)
-4. **สิทธิ์ของ endpoint ใหม่** — เสนอ `authRoute` (ระดับเดียวกับ toggle-log) ไม่ใช่ `superAdminRoute` ยืนยันไหม?
+เจ้าของโปรเจกต์อนุมัติเมื่อ 2026-08-14 ครบทั้ง 4 ข้อตัดสินใจ (interval / จุดฮุก flush / sort ก่อน cap /
+`authRoute`) และครบทั้ง 4 จุดแก้ไขจากการตรวจโค้ดรอบสอง (epoch-based reset, D-7 role gate, T-02 เพิ่ม
+`firewall_test.go`, T-16 ระบุ prop/import ใหม่) — แผนฉบับนี้คือฉบับที่ใช้สั่งงานจริง ไม่มีข้อค้างรอการตัดสินใจ
+แล้ว
