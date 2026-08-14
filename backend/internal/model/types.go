@@ -1008,10 +1008,18 @@ type ServiceHit struct {
 //  4. Only new connections (ct state new) and DROPped packets are logged, so
 //     counts are not a full packet/byte tally — see pages/ForwardTraffic.tsx.
 type PolicyRuleEndpoints struct {
-	RuleID             string        `json:"ruleId"`
-	RuleName           string        `json:"ruleName"`
-	Chain              string        `json:"chain"`
-	LogEnabled         bool          `json:"logEnabled"`
+	RuleID     string `json:"ruleId"`
+	RuleName   string `json:"ruleName"`
+	Chain      string `json:"chain"`
+	LogEnabled bool   `json:"logEnabled"`
+	// MatchedEntries is a precise count of scanned log entries when
+	// Source=="buffer" (RingBuffer.AggregateByRule's Matched field). When
+	// Source=="persisted" it is an APPROXIMATION — the sum of the src
+	// direction's returned top-N rows (DB rows + any not-yet-flushed
+	// recorder pending), NOT a SUM across every persisted row for this rule
+	// — deliberately avoiding a full-table aggregate query on every request
+	// (this endpoint is polled every ~10s while the drawer is open). See
+	// GetRuleEndpoints (policy_endpoints.go) for the exact computation.
 	MatchedEntries     int           `json:"matchedEntries"`
 	UniqueSources      int           `json:"uniqueSources"`
 	UniqueDestinations int           `json:"uniqueDestinations"`

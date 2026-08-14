@@ -7125,7 +7125,14 @@ components:
           example: true
         matchedEntries:
           type: integer
-          description: Number of log entries for this rule currently in the buffer.
+          description: >-
+            Number of log entries for this rule. When source="buffer" this
+            is a precise count of entries currently in the traffic-log ring
+            buffer. When source="persisted" this is an APPROXIMATION — the
+            sum of the returned top sources rows only (not a SUM across
+            every persisted row for this rule) — deliberately avoiding a
+            full-table aggregate query on every request, since this
+            endpoint is polled every ~10s while the drawer stays open.
           example: 482
         uniqueSources:
           type: integer

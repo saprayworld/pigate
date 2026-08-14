@@ -20,6 +20,16 @@ func newTestPolicyCounterStoreDeps(t *testing.T) (*db.Repository, *TrafficStatsS
 	}
 	t.Cleanup(func() { sqliteDB.Close() })
 	repo := db.NewRepository(sqliteDB)
+	// PolicyCounterStore tests exercise Flush()'s actual persistence path
+	// (QA finding 1, round 1 of the persisted-rule-endpoints bugfix loop:
+	// Flush() itself now skips all work when IsMockMode() is true, mirroring
+	// the "no writes under -mock=true" requirement in both plans' Final
+	// Acceptance) — db.NewRepository defaults IsMockMode() to true for
+	// safety, so it must be explicitly turned off here for these tests to
+	// still observe real writes. The dedicated mock-mode-skips-writes
+	// behavior is covered by TestPolicyCounterStore_Flush_SkipsAllWritesInMockMode
+	// below, which sets mock mode back to true deliberately.
+	repo.SetMockMode(false, false)
 
 	addr := model.AddressObject{ID: "addr-pcs-src", Name: "PCS_SRC", Type: "subnet", Value: "10.0.0.0/24"}
 	dst := model.AddressObject{ID: "addr-pcs-dst", Name: "PCS_DST", Type: "subnet", Value: "8.8.8.8/32"}
@@ -436,5 +446,69 @@ func TestPolicyCounterStore_EndpointsEvictedFor_TracksEviction(t *testing.T) {
 
 	if got := store.EndpointsEvictedFor("rule-monitored"); got != 2 {
 		t.Fatalf("expected 2 evicted (5 admitted at cap=3, so 2 over cap), got %d", got)
+	}
+}
+
+// TestPolicyCounterStore_Flush_SkipsAllWritesInMockMode is the regression
+// test for QA finding 1 (round 1 of the persisted-rule-endpoints bugfix
+// loop, docs/ref/todo/persisted-rule-endpoints-plan.md Final Acceptance
+// "mock mode"): under -mock=true, Flush() must write NOTHING to either
+// policy_rule_counters or policy_rule_endpoints — not just when called from
+// the periodic ticker (run(), which already checked IsMockMode()), but also
+// when called directly, exactly like FlushBeforeApply() does on every
+// "Apply Settings" click regardless of mock/real mode. This reproduces QA's
+// exact repro: a monitored+logged rule, an event recorded, then Flush()
+// (standing in for FlushBeforeApply) called while mock mode is on.
+func TestPolicyCounterStore_Flush_SkipsAllWritesInMockMode(t *testing.T) {
+	repo, ts, acct := newTestPolicyCounterStoreDeps(t)
+	// Flip back to mock mode (newTestPolicyCounterStoreDeps turns it off by
+	// default so the other tests in this file can observe real writes).
+	repo.SetMockMode(true, false)
+
+	store := NewPolicyCounterStore(repo, ts, time.Hour)
+	if err := store.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	recorder := NewPolicyEndpointRecorder(true, 1000)
+	store.SetEndpointRecorder(recorder, 1000)
+	recorder.SetMonitoredRules(map[string]bool{"rule-monitored": true})
+
+	// Counter delta (bytes/packets).
+	acct.ruleResponses = []map[string]model.RuleCounter{
+		{"rule-monitored": {Bytes: 1000, Packets: 10}}, // seed
+		{"rule-monitored": {Bytes: 1400, Packets: 14}}, // delta 400/4
+	}
+	ts.poll()
+	ts.poll()
+
+	// Endpoint delta (src/dst/svc), mirroring QA's repro exactly.
+	recorder.Record(model.FirewallLog{RuleID: "rule-monitored", Src: "10.0.0.9", Dest: "8.8.4.4", Proto: "TCP", Port: "443", Time: "t1"})
+
+	if err := store.Flush(); err != nil {
+		t.Fatalf("Flush (mock mode): %v", err)
+	}
+
+	// Nothing must have reached policy_rule_counters (still the zeroed row
+	// SetPolicyMonitored seeded, untouched) or policy_rule_endpoints.
+	counters, err := repo.GetPolicyRuleCounters()
+	if err != nil {
+		t.Fatalf("GetPolicyRuleCounters: %v", err)
+	}
+	if len(counters) != 1 || counters[0].Bytes != 0 || counters[0].Packets != 0 {
+		t.Fatalf("expected no counter delta written under mock mode, got %+v", counters)
+	}
+	endpointCounts, err := repo.CountPolicyEndpoints("rule-monitored")
+	if err != nil {
+		t.Fatalf("CountPolicyEndpoints: %v", err)
+	}
+	if len(endpointCounts) != 0 {
+		t.Fatalf("expected no policy_rule_endpoints rows written under mock mode, got %v", endpointCounts)
+	}
+
+	// Also confirm the pending deltas are simply left untouched (not
+	// silently dropped) so a later real (non-mock) Flush would still see
+	// them — Flush returns immediately before ever draining anything.
+	if got := recorder.Drain(); len(got) != 3 {
+		t.Fatalf("expected the pending endpoint delta (src+dst+svc) to still be pending after a mock-mode Flush, got %+v", got)
 	}
 }

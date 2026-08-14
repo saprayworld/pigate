@@ -154,7 +154,20 @@ func (s *PolicyCounterStore) run(ctx context.Context) {
 // per call and reused for both the counter and endpoint filtering passes,
 // and to resync the recorder's monitored-rule set at the end (Caution 6 of
 // the endpoints plan — never call it twice in one Flush).
+//
+// Mock-mode guard (QA finding 1, round 1 of the persisted-rule-endpoints
+// bugfix loop): this check MUST live here, in Flush itself, not just in the
+// periodic run() ticker — FlushBeforeApply (called by
+// FirewallService.SyncFirewallRules on every "Apply Settings", mock or not)
+// calls Flush() directly, bypassing run()'s own IsMockMode() check. Mock
+// kernel counters/log entries are synthetic and meaningless to persist, and
+// the "mock mode" line of both plans' Final Acceptance requires zero writes
+// to policy_rule_counters/policy_rule_endpoints under -mock=true.
 func (s *PolicyCounterStore) Flush() error {
+	if s.repo.IsMockMode() {
+		return nil
+	}
+
 	var counterDeltas map[string]model.RuleCounter
 	if s.trafficStats != nil {
 		counterDeltas = s.trafficStats.DrainRuleDeltas()
