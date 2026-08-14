@@ -10,8 +10,12 @@ import {
 } from "@/components/ui/drawer"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
 import { type PolicyRule } from "@/data-mockup/mockData"
 import { type PolicyRuleStat } from "@/services/policyStatsService"
+import { policyService } from "@/services/policyService"
+import { useAlert } from "@/hooks/useAlert"
+import { getErrorMessage } from "@/lib/errors"
 import {
   policyEndpointsService,
   type EndpointHit,
@@ -38,6 +42,11 @@ interface RuleStatsDrawerProps {
   stat?: PolicyRuleStat
   countersSince?: string
   available: boolean
+  // onChanged (T-16) is called after a Monitor toggle or reset succeeds, so
+  // the caller can refetch policies/stats immediately instead of waiting for
+  // its own poll cadence (docs/ref/todo/
+  // fqdn-retry-and-monitored-counters-plan.md D-6/T-16, issue #141).
+  onChanged?: () => void
 }
 
 function Field({ label, value }: { label: string; value: ReactNode }) {
@@ -123,11 +132,13 @@ function buildTrafficLogPath(rule: PolicyRule, q: string): string {
   return `/logs/local${query}&chain=${encodeURIComponent(rule.chain)}`
 }
 
-export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, countersSince, available }: RuleStatsDrawerProps) {
+export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, countersSince, available, onChanged }: RuleStatsDrawerProps) {
   const navigate = useNavigate()
+  const { alert, confirm } = useAlert()
   const [endpoints, setEndpoints] = useState<PolicyRuleEndpoints | null>(null)
   const [endpointsError, setEndpointsError] = useState<string | null>(null)
   const [endpointsLoading, setEndpointsLoading] = useState(false)
+  const [monitorBusy, setMonitorBusy] = useState(false)
 
   // Fetch on open, refresh every 10s while open, and unsubscribe (abort +
   // clear the interval) on close/unmount so no request or timer is ever left
@@ -172,6 +183,57 @@ export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, counte
       setEndpointsLoading(false)
     }
   }, [open, rule])
+
+  // handleToggleMonitor flips rule.monitored via POST /policies/{id}/toggle-monitor
+  // (T-16). Turning Monitor OFF discards the accumulated total permanently,
+  // so it requires a confirm dialog; turning it ON does not. On any
+  // error (including a 403 from a read-only role/-disable-edit — D-7, this
+  // page has no frontend role gate) the Switch/accumulated total are left
+  // untouched (they're driven entirely by the `rule`/`stat` props, which are
+  // only refreshed via onChanged after a real success) and an alert is
+  // shown instead.
+  const handleToggleMonitor = async () => {
+    if (!rule) return
+    if (rule.monitored) {
+      const ok = await confirm(
+        "ปิดการเก็บสถิติสะสม",
+        "การปิด Monitor จะลบยอดสะสมทั้งหมดของกฎนี้ทิ้งถาวรและกู้คืนไม่ได้ ต้องการดำเนินการต่อหรือไม่?"
+      )
+      if (!ok) return
+    }
+
+    setMonitorBusy(true)
+    try {
+      await policyService.toggleMonitor(rule.id)
+      onChanged?.()
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถเปลี่ยนสถานะการเก็บสถิติสะสมได้: " + getErrorMessage(err))
+    } finally {
+      setMonitorBusy(false)
+    }
+  }
+
+  // handleResetMonitor zeroes the persisted counter — always requires
+  // confirm (data loss, though not as final as turning Monitor off since the
+  // running total keeps accumulating afterward).
+  const handleResetMonitor = async () => {
+    if (!rule) return
+    const ok = await confirm(
+      "รีเซ็ตยอดสะสม",
+      "ยอดสะสม (Bytes/Packets) ของกฎนี้จะถูกรีเซ็ตเป็น 0 และเริ่มนับใหม่ทันที ต้องการดำเนินการต่อหรือไม่?"
+    )
+    if (!ok) return
+
+    setMonitorBusy(true)
+    try {
+      await policyService.resetMonitorCounter(rule.id)
+      onChanged?.()
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถรีเซ็ตยอดสะสมได้: " + getErrorMessage(err))
+    } finally {
+      setMonitorBusy(false)
+    }
+  }
 
   if (!rule) return null
 
@@ -281,6 +343,44 @@ export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, counte
               รวบรวมสถิติตั้งแต่ (Counters since)
             </div>
             <div className="text-sm text-foreground">{countersSince ? fmtAbsoluteTime(countersSince) : "ยังไม่เคย Apply Settings"}</div>
+          </div>
+
+          <div className="space-y-3 border-t border-border/50 pt-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="space-y-0.5">
+                <div className="text-sm font-semibold text-foreground">เก็บสถิติสะสม (Monitor)</div>
+                <p className="text-xs text-muted-foreground">
+                  เปิดแล้วยอดจะสะสมต่อเนื่องไม่รีเซ็ตตอน Apply Settings หรือรีสตาร์ทระบบ
+                </p>
+              </div>
+              <Switch
+                checked={rule.monitored}
+                disabled={monitorBusy}
+                onCheckedChange={() => void handleToggleMonitor()}
+              />
+            </div>
+
+            {rule.monitored ? (
+              <div className="space-y-3 rounded-lg border border-border/50 p-3">
+                <div className="grid grid-cols-2 gap-4">
+                  <Field label="Bytes สะสม" value={fmtBytes(stat?.monitoredBytes ?? 0)} />
+                  <Field label="Packets สะสม" value={(stat?.monitoredPackets ?? 0).toLocaleString()} />
+                </div>
+                <Field
+                  label="เก็บมาตั้งแต่"
+                  value={stat?.monitoredSince ? fmtAbsoluteTime(stat.monitoredSince) : "—"}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="cursor-pointer"
+                  disabled={monitorBusy}
+                  onClick={() => void handleResetMonitor()}
+                >
+                  รีเซ็ตค่า
+                </Button>
+              </div>
+            ) : null}
           </div>
 
           <div className="space-y-3 border-t border-border/50 pt-4">
@@ -410,6 +510,10 @@ export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, counte
               <p>5. Endpoints ที่ตรงกับกฎนี้ต้องเปิด Log ที่กฎนั้นด้วย ไม่งั้นจะไม่มีข้อมูลให้แสดงเลย</p>
               <p>6. ตัวนับ Endpoints คือ "จำนวนครั้งที่พบใน Traffic Log" ไม่ใช่ bytes และครอบคลุมเฉพาะช่วงที่ยังอยู่ใน buffer ของ Traffic Log เท่านั้น — ล้าง Log แล้วข้อมูลนี้จะหายไปด้วย</p>
               <p>7. ชื่อที่แสดงสำหรับ IP จะเลือกจากชื่อ Address Object ที่ตั้งไว้ก่อน ตามด้วยชื่อโดเมนจาก DNS แล้วจึงเป็นชื่อ Host จาก DHCP ตามลำดับ</p>
+              <p>
+                8. ยอดในหมวด "เก็บสถิติสะสม (Monitor)" เป็นคนละชุดข้อมูลกับตัวเลข "ตั้งแต่ Apply ล่าสุด" ด้านบน — สะสมข้าม
+                Apply/รีสตาร์ทระบบ และอาจคลาดเคลื่อนได้สูงสุดตามรอบบันทึกลงฐานข้อมูล (~5 นาที) หากไฟดับกะทันหัน
+              </p>
             </div>
           </div>
         </div>
