@@ -42,6 +42,40 @@ type FirewallService struct {
 	// instead of waiting for the resolver's background ticker (see
 	// docs/ref/todo/traffic-log-rule-name-and-domain-plan.md).
 	ruleNames *RuleNameResolver
+
+	// applyMu serializes the body of SyncFirewallRules (docs/ref/todo/
+	// fqdn-retry-and-monitored-counters-plan.md T-03, issue #141) — the
+	// background FQDNRefresher ticker and a user clicking "Apply" (or any
+	// other caller) must never flush the nft table concurrently. Deliberately
+	// a SEPARATE mutex from mu above: recordApply locks mu via a defer inside
+	// the very function applyMu wraps, so sharing one mutex would deadlock
+	// (plan Caution 3).
+	applyMu sync.Mutex
+
+	// counterStore/trafficStats are optional (nil until
+	// SetPolicyCounterStore/SetTrafficStats are called by main.go), following
+	// the same additive-setter pattern as SetRuleNameResolver above — so
+	// NewFirewallService's signature never changes. When set, SyncFirewallRules
+	// flushes any pending "Monitor" counter deltas to SQLite immediately
+	// before ApplyRules (D-4: same point in time nftables' own counters are
+	// about to reset to 0), and resets TrafficStatsService's rule-counter
+	// baseline via an epoch bump immediately after a successful ApplyRules
+	// (D-5 — EndApply, NOT a bare zero-the-baseline call: see its doc comment
+	// in traffic_stats.go for the double-count race this specifically avoids).
+	counterStore *PolicyCounterStore
+	trafficStats *TrafficStatsService
+}
+
+// SetPolicyCounterStore wires the optional persisted "Monitor" counter store
+// — see the counterStore field doc comment above.
+func (s *FirewallService) SetPolicyCounterStore(store *PolicyCounterStore) {
+	s.counterStore = store
+}
+
+// SetTrafficStats wires the optional TrafficStatsService — see the
+// trafficStats field doc comment above.
+func (s *FirewallService) SetTrafficStats(ts *TrafficStatsService) {
+	s.trafficStats = ts
 }
 
 // SetRuleNameResolver wires an optional RuleNameResolver into the service so
@@ -181,7 +215,27 @@ func (s *FirewallService) DeletePortForward(id string) error {
 // SyncFirewallRules pulls all policies, interfaces, address objects, and service objects
 // from the database and applies them to the kernel via the FirewallManager. Its outcome
 // (error or nil) is always recorded via recordApply — see ApplyHealth.
+//
+// applyMu serializes the whole body against concurrent callers (T-03,
+// Caution 3/5) — the FQDNRefresher ticker and a manual "Apply" click must
+// never race each other into a double nft-table flush.
+//
+// Counter bookkeeping happens at exactly two points, both optional
+// (counterStore/trafficStats may be nil — see their field doc comments):
+//  1. Immediately BEFORE s.firewall.ApplyRules, counterStore.FlushBeforeApply()
+//     persists any pending "Monitor" delta to SQLite (D-4) — nftables' own
+//     counters are about to be zeroed by the flush this call triggers, so
+//     this is the last chance to capture them. A flush failure is only
+//     logged; it must never block the apply itself (Caution 4).
+//  2. Immediately AFTER a successful ApplyRules, trafficStats.EndApply()
+//     atomically zeroes the rule-counter baseline and bumps the apply epoch
+//     (D-5) — never a bare "zero the baseline" call, see EndApply's own doc
+//     comment in traffic_stats.go for the double-count race this avoids
+//     (Caution 10).
 func (s *FirewallService) SyncFirewallRules() (err error) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+
 	defer func() { s.recordApply(err) }()
 
 	rules, err := s.repo.GetPolicies()
@@ -225,8 +279,18 @@ func (s *FirewallService) SyncFirewallRules() (err error) {
 		return fmt.Errorf("failed to load port forwards: %w", err)
 	}
 
+	if s.counterStore != nil {
+		if flushErr := s.counterStore.FlushBeforeApply(); flushErr != nil {
+			log.Printf("[FirewallService] pre-apply Monitor counter flush failed (continuing with apply): %v", flushErr)
+		}
+	}
+
 	if err := s.firewall.ApplyRules(rules, ifaces, addrs, svcs, dhcpServerIfaces, dnsServerIfaces, portForwards); err != nil {
 		return fmt.Errorf("failed to apply firewall rules: %w", err)
+	}
+
+	if s.trafficStats != nil {
+		s.trafficStats.EndApply()
 	}
 	return nil
 }
