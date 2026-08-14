@@ -139,6 +139,7 @@ export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, counte
   const [endpointsError, setEndpointsError] = useState<string | null>(null)
   const [endpointsLoading, setEndpointsLoading] = useState(false)
   const [monitorBusy, setMonitorBusy] = useState(false)
+  const [logToggleBusy, setLogToggleBusy] = useState(false)
 
   // Fetch on open, refresh every 10s while open, and unsubscribe (abort +
   // clear the interval) on close/unmount so no request or timer is ever left
@@ -197,7 +198,7 @@ export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, counte
     if (rule.monitored) {
       const ok = await confirm(
         "ปิดการเก็บสถิติสะสม",
-        "การปิด Monitor จะลบยอดสะสมทั้งหมดของกฎนี้ทิ้งถาวรและกู้คืนไม่ได้ ต้องการดำเนินการต่อหรือไม่?"
+        "การปิด Monitor จะลบยอดสะสมทั้งหมดของกฎนี้ทิ้งถาวรและกู้คืนไม่ได้ รวมถึงรายการ Endpoints (IP/Service) ที่เก็บไว้ทั้งหมดด้วย ต้องการดำเนินการต่อหรือไม่?"
       )
       if (!ok) return
     }
@@ -220,7 +221,7 @@ export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, counte
     if (!rule) return
     const ok = await confirm(
       "รีเซ็ตยอดสะสม",
-      "ยอดสะสม (Bytes/Packets) ของกฎนี้จะถูกรีเซ็ตเป็น 0 และเริ่มนับใหม่ทันที ต้องการดำเนินการต่อหรือไม่?"
+      "ยอดสะสม (Bytes/Packets) ของกฎนี้จะถูกรีเซ็ตเป็น 0 และเริ่มนับใหม่ทันที พร้อมทั้งลบรายการ Endpoints (IP/Service) ที่เก็บไว้ทั้งหมด ต้องการดำเนินการต่อหรือไม่?"
     )
     if (!ok) return
 
@@ -232,6 +233,26 @@ export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, counte
       await alert("ข้อผิดพลาด", "ไม่สามารถรีเซ็ตยอดสะสมได้: " + getErrorMessage(err))
     } finally {
       setMonitorBusy(false)
+    }
+  }
+
+  // handleQuickEnableLog is the "เปิด Log ให้กฎนี้" shortcut button (E-12,
+  // docs/ref/todo/persisted-rule-endpoints-plan.md E-D7, issue #141
+  // follow-up): shown only when Monitor is on but Log is off, so a rule can
+  // be a "collector" without a separate confirm — turning Log on itself
+  // isn't a data-loss action. Same error-handling convention as
+  // handleToggleMonitor/handleResetMonitor: an error just alerts, no local
+  // state is guessed at (onChanged?.() re-fetches on real success only).
+  const handleQuickEnableLog = async () => {
+    if (!rule) return
+    setLogToggleBusy(true)
+    try {
+      await policyService.toggleLog(rule.id)
+      onChanged?.()
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถเปิด Log ให้กฎนี้ได้: " + getErrorMessage(err))
+    } finally {
+      setLogToggleBusy(false)
     }
   }
 
@@ -404,6 +425,33 @@ export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, counte
               และชื่อที่เป็น substring ของกฎอื่นอาจติดมาด้วย
             </p>
 
+            {endpoints ? (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                {endpoints.source === "persisted" ? (
+                  <>
+                    <Badge variant="outline" className="shrink-0 rounded px-1.5 py-0 text-[10px]">
+                      เก็บถาวร
+                    </Badge>
+                    <span>
+                      เก็บมาตั้งแต่ {endpoints.collectingSince ? fmtAbsoluteTime(endpoints.collectingSince) : "—"} — ไม่หายเมื่อ
+                      Apply/รีสตาร์ท/ล้าง Traffic Log
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Badge variant="outline" className="shrink-0 rounded px-1.5 py-0 text-[10px]">
+                      จาก Traffic Log
+                    </Badge>
+                    {endpoints.bufferOldestAt ? <span>ข้อมูลย้อนหลังถึง {fmtAbsoluteTime(endpoints.bufferOldestAt)}</span> : null}
+                  </>
+                )}
+              </div>
+            ) : null}
+
+            {endpoints && endpoints.source === "buffer" && !rule.monitored ? (
+              <p className="text-xs text-muted-foreground">เปิด Monitor ด้านบนเพื่อเก็บรายการนี้แบบถาวร (จะเริ่มนับใหม่จากศูนย์)</p>
+            ) : null}
+
             {endpointsError ? (
               <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive">
                 <Info className="mt-0.5 h-4 w-4 shrink-0" />
@@ -412,17 +460,37 @@ export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, counte
             ) : !endpoints ? (
               <div className="text-xs text-muted-foreground">{endpointsLoading ? "กำลังโหลด..." : "ไม่มีข้อมูล"}</div>
             ) : !endpoints.logEnabled ? (
-              <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/50 p-3 text-xs text-muted-foreground">
-                <Info className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>กฎนี้ยังไม่ได้เปิด Log จึงไม่มีข้อมูล IP/Service ที่ตรงกับกฎนี้ — เปิด Log ที่กฎนี้เพื่อเริ่มเก็บข้อมูล</span>
+              <div className="flex flex-col items-start gap-2 rounded-lg border border-border bg-muted/50 p-3 text-xs text-muted-foreground">
+                <div className="flex items-start gap-2">
+                  <Info className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>
+                    {rule.monitored
+                      ? "เปิด Monitor แล้วแต่กฎนี้ยังไม่ได้เปิด Log จึงยังไม่มีข้อมูล Endpoints ให้เก็บ"
+                      : "กฎนี้ยังไม่ได้เปิด Log จึงไม่มีข้อมูล IP/Service ที่ตรงกับกฎนี้ — เปิด Log ที่กฎนี้เพื่อเริ่มเก็บข้อมูล"}
+                  </span>
+                </div>
+                {rule.monitored ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="cursor-pointer"
+                    disabled={logToggleBusy}
+                    onClick={() => void handleQuickEnableLog()}
+                  >
+                    เปิด Log ให้กฎนี้
+                  </Button>
+                ) : null}
               </div>
             ) : (
               <>
-                {endpoints.bufferOldestAt ? (
-                  <div className="text-xs text-muted-foreground">ข้อมูลย้อนหลังถึง {fmtAbsoluteTime(endpoints.bufferOldestAt)}</div>
-                ) : null}
                 {endpoints.truncated ? (
                   <div className="text-xs text-muted-foreground">แสดงเฉพาะ Top {endpoints.limit} รายการต่อหมวด (มีมากกว่านี้)</div>
+                ) : null}
+                {endpoints.capped ? (
+                  <div className="text-xs text-muted-foreground">
+                    เก็บได้สูงสุด {endpoints.maxPerDirection.toLocaleString()} รายการต่อหมวด — รายการที่ไม่ถูกพบนานที่สุดจะถูกลบออกก่อน
+                    (ลบไปแล้ว {endpoints.evicted.toLocaleString()} รายการ)
+                  </div>
                 ) : null}
 
                 <div className="space-y-2">
@@ -513,6 +581,15 @@ export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, counte
               <p>
                 8. ยอดในหมวด "เก็บสถิติสะสม (Monitor)" เป็นคนละชุดข้อมูลกับตัวเลข "ตั้งแต่ Apply ล่าสุด" ด้านบน — สะสมข้าม
                 Apply/รีสตาร์ทระบบ และอาจคลาดเคลื่อนได้สูงสุดตามรอบบันทึกลงฐานข้อมูล (~5 นาที) หากไฟดับกะทันหัน
+              </p>
+              <p>
+                9. เมื่อเปิด Monitor รายการ Endpoints (IP/Service) จะถูกเก็บถาวรลงฐานข้อมูลด้วยเช่นกัน ภายใต้เพดานจำนวนรายการต่อหมวด
+                — เมื่อเต็มเพดาน รายการที่ไม่ถูกพบนานที่สุดจะถูกลบออกก่อน (LRU) และเริ่มนับใหม่จากศูนย์ ณ วินาทีที่เปิด Monitor
+                ไม่มีการดึงข้อมูลเก่าจาก Traffic Log มาใส่ย้อนหลัง
+              </p>
+              <p>
+                10. ไม่ว่าจะเปิด Monitor หรือไม่ กฎนั้นยังต้องเปิด Log ด้วยเสมอจึงจะมีข้อมูล Endpoints ให้เก็บ
+                (ข้อจำกัดของ NFLOG ไม่ใช่บั๊ก) และการปิด Monitor หรือกดรีเซ็ตค่าจะลบรายการ Endpoints ที่เก็บไว้ทั้งหมดของกฎนั้นทิ้งไปด้วย
               </p>
             </div>
           </div>
