@@ -9,10 +9,14 @@ import { policyService } from "./policyService"
 //  1. Requires the rule's Log flag to be on — logEnabled=false means the
 //     lists are always empty, not an error.
 //  2. count is a number of log entries, not bytes/packets.
-//  3. The data window equals the traffic-log ring buffer's current
-//     contents; clearing the traffic log makes this data disappear
-//     immediately, and a low-traffic rule can be pushed out by a
-//     high-traffic one.
+//  3. When source==="buffer": the data window equals the traffic-log ring
+//     buffer's current contents; clearing the traffic log makes this data
+//     disappear immediately, and a low-traffic rule can be pushed out by a
+//     high-traffic one. When source==="persisted" (docs/ref/todo/
+//     persisted-rule-endpoints-plan.md, issue #141 follow-up) — a rule with
+//     Monitor turned on — data survives Apply/restart/clearing the traffic
+//     log, but only counts from the moment Monitor was turned on/reset (no
+//     backfill from the ring buffer).
 //  4. Only new connections and DROPped packets are logged (same NFLOG
 //     behavior as the Traffic Log pages), so counts are not a full tally.
 // Name precedence for display: addressName (user-defined Address Object)
@@ -57,6 +61,18 @@ export interface PolicyRuleEndpoints {
   sources: EndpointHit[]
   destinations: EndpointHit[]
   services: ServiceHit[]
+
+  // source/collectingSince/capped/evicted/maxPerDirection (docs/ref/todo/
+  // persisted-rule-endpoints-plan.md E-D6, issue #141 follow-up). "persisted"
+  // means this response was read from SQLite (rule has Monitor on) — data
+  // survives Apply/restart/clearing the traffic log, but scannedEntries/
+  // bufferOldestAt have no meaning in that case. "buffer" is the original
+  // ring-buffer-scan behavior, unchanged.
+  source: "persisted" | "buffer"
+  collectingSince?: string
+  capped: boolean
+  evicted: number
+  maxPerDirection: number
 }
 
 // hashId is a small deterministic (non-cryptographic) string hash, used only
@@ -136,6 +152,13 @@ function buildMockService(seed: number, index: number, ownServiceName?: string):
   }
 }
 
+// MOCK_MAX_PER_DIRECTION mirrors the backend's monitored-endpoints-max-per-rule
+// default (config.Defaults().MonitoredEndpointsMaxPerRule == 1000) purely to
+// synthesize a realistic mock API response — this is NOT the same thing as
+// hardcoding the cap in UI logic (RuleStatsDrawer.tsx must read it from this
+// field, never from a literal 1000 of its own).
+const MOCK_MAX_PER_DIRECTION = 1000
+
 async function buildMockEndpoints(ruleId: string, limit: number): Promise<PolicyRuleEndpoints> {
   const rules = await policyService.getAll()
   const rule = rules.find((r) => r.id === ruleId)
@@ -147,6 +170,17 @@ async function buildMockEndpoints(ruleId: string, limit: number): Promise<Policy
   // "enable Log to see data" empty state is exercisable without depending on
   // the actual rule.log flag.
   const logEnabled = rule ? rule.log && h % 5 !== 0 : h % 5 !== 0
+
+  // source/collectingSince/capped/evicted (docs/ref/todo/
+  // persisted-rule-endpoints-plan.md E-D6, issue #141 follow-up): rules with
+  // Monitor on get source="persisted"; a deterministic subset of those (1 in
+  // 3) also simulate having hit the cap, so the UI's capped warning is
+  // exercisable in mock mode without a real backend.
+  const monitored = rule?.monitored === true
+  const source: "persisted" | "buffer" = monitored ? "persisted" : "buffer"
+  const collectingSince = monitored ? isoMinutesAgo(180 + (h % 500)) : undefined
+  const capped = monitored && h % 3 === 0
+  const evicted = capped ? 50 + (h % 900) : 0
 
   if (!logEnabled) {
     return {
@@ -160,11 +194,16 @@ async function buildMockEndpoints(ruleId: string, limit: number): Promise<Policy
       uniqueServices: 0,
       limit,
       truncated: false,
-      scannedEntries: 3000 + (h % 7000),
-      bufferOldestAt: isoMinutesAgo(120),
+      scannedEntries: source === "persisted" ? 0 : 3000 + (h % 7000),
+      bufferOldestAt: source === "persisted" ? undefined : isoMinutesAgo(120),
       sources: [],
       destinations: [],
       services: [],
+      source,
+      collectingSince,
+      capped: false,
+      evicted: 0,
+      maxPerDirection: MOCK_MAX_PER_DIRECTION,
     }
   }
 
@@ -201,11 +240,16 @@ async function buildMockEndpoints(ruleId: string, limit: number): Promise<Policy
     uniqueServices,
     limit,
     truncated,
-    scannedEntries: 3000 + (h % 7000),
-    bufferOldestAt: isoMinutesAgo(120),
+    scannedEntries: source === "persisted" ? 0 : 3000 + (h % 7000),
+    bufferOldestAt: source === "persisted" ? undefined : isoMinutesAgo(120),
     sources,
     destinations,
     services,
+    source,
+    collectingSince,
+    capped,
+    evicted,
+    maxPerDirection: MOCK_MAX_PER_DIRECTION,
   }
 }
 

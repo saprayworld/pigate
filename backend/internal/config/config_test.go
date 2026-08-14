@@ -324,6 +324,8 @@ func TestWriteParseRoundTrip(t *testing.T) {
 	cfg.FQDNRefreshIntervalSeconds = 600
 	cfg.FQDNRefreshRetryIntervalSeconds = 60
 	cfg.MonitoredCounterFlushIntervalSeconds = 120
+	cfg.MonitoredEndpointsEnabled = false
+	cfg.MonitoredEndpointsMaxPerRule = 250
 
 	var buf bytes.Buffer
 	if err := Write(&buf, cfg); err != nil {
@@ -367,8 +369,8 @@ func TestWriteParseRoundTripDefaults(t *testing.T) {
 
 func TestKnownKeys(t *testing.T) {
 	keys := KnownKeys()
-	if len(keys) != 29 {
-		t.Fatalf("expected 29 known keys, got %d: %v", len(keys), keys)
+	if len(keys) != 31 {
+		t.Fatalf("expected 31 known keys, got %d: %v", len(keys), keys)
 	}
 	// "config" and "v" must never be treated as config-file keys.
 	for _, k := range keys {
@@ -472,8 +474,132 @@ func TestKnownKeys(t *testing.T) {
 	if !hasFQDNEnabled || !hasFQDNInterval || !hasFQDNRetry || !hasMonitoredFlush {
 		t.Fatalf("expected fqdn-refresh-enabled/fqdn-refresh-interval-seconds/fqdn-refresh-retry-interval-seconds/monitored-counter-flush-interval-seconds in KnownKeys, got %v", keys)
 	}
-	if keys[len(keys)-1] != "monitored-counter-flush-interval-seconds" {
-		t.Fatalf("expected monitored-counter-flush-interval-seconds to be the last key, got %v", keys)
+	var hasEndpointsEnabled, hasEndpointsMaxPerRule bool
+	for _, k := range keys {
+		switch k {
+		case "monitored-endpoints-enabled":
+			hasEndpointsEnabled = true
+		case "monitored-endpoints-max-per-rule":
+			hasEndpointsMaxPerRule = true
+		}
+	}
+	if !hasEndpointsEnabled || !hasEndpointsMaxPerRule {
+		t.Fatalf("expected monitored-endpoints-enabled/monitored-endpoints-max-per-rule in KnownKeys, got %v", keys)
+	}
+	if keys[len(keys)-2] != "monitored-endpoints-enabled" || keys[len(keys)-1] != "monitored-endpoints-max-per-rule" {
+		t.Fatalf("expected monitored-endpoints-enabled/monitored-endpoints-max-per-rule to be the last two keys, got %v", keys)
+	}
+}
+
+// TestResolve_MonitoredEndpoints covers monitored-endpoints-enabled/
+// monitored-endpoints-max-per-rule's default/override/out-of-range/
+// non-integer behavior (docs/ref/todo/persisted-rule-endpoints-plan.md E-D9,
+// issue #141 follow-up) — same pattern as TestResolve_DenyStatsMaxSourcesPorts
+// above.
+func TestResolve_MonitoredEndpoints(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		cfg, warns, err := Resolve(Defaults(), nil, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if !cfg.MonitoredEndpointsEnabled {
+			t.Fatalf("expected monitored-endpoints-enabled to default to true")
+		}
+		if cfg.MonitoredEndpointsMaxPerRule != 1000 {
+			t.Fatalf("got monitored-endpoints-max-per-rule=%d, want default 1000", cfg.MonitoredEndpointsMaxPerRule)
+		}
+	})
+
+	t.Run("file override", func(t *testing.T) {
+		fileVals := map[string]string{
+			"monitored-endpoints-enabled":      "false",
+			"monitored-endpoints-max-per-rule": "250",
+		}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.MonitoredEndpointsEnabled {
+			t.Fatalf("expected monitored-endpoints-enabled=false to be applied")
+		}
+		if cfg.MonitoredEndpointsMaxPerRule != 250 {
+			t.Fatalf("got monitored-endpoints-max-per-rule=%d, want 250", cfg.MonitoredEndpointsMaxPerRule)
+		}
+	})
+
+	t.Run("out of range clamps to default with warning", func(t *testing.T) {
+		for _, v := range []string{"0", "-1", "19", "5001"} {
+			fileVals := map[string]string{"monitored-endpoints-max-per-rule": v}
+			cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+			if err != nil {
+				t.Fatalf("Resolve(%q) failed: %v", v, err)
+			}
+			if len(warns) != 1 {
+				t.Fatalf("Resolve(%q): expected 1 warning, got %v", v, warns)
+			}
+			if cfg.MonitoredEndpointsMaxPerRule != 1000 {
+				t.Fatalf("Resolve(%q): got %d, want default 1000", v, cfg.MonitoredEndpointsMaxPerRule)
+			}
+		}
+	})
+
+	t.Run("boundary values pass without warning", func(t *testing.T) {
+		for _, v := range []string{"20", "5000"} {
+			fileVals := map[string]string{"monitored-endpoints-max-per-rule": v}
+			cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+			if err != nil {
+				t.Fatalf("Resolve(%q) failed: %v", v, err)
+			}
+			if len(warns) != 0 {
+				t.Fatalf("Resolve(%q): unexpected warnings: %v", v, warns)
+			}
+			want := 20
+			if v == "5000" {
+				want = 5000
+			}
+			if cfg.MonitoredEndpointsMaxPerRule != want {
+				t.Fatalf("Resolve(%q): got %d, want %d", v, cfg.MonitoredEndpointsMaxPerRule, want)
+			}
+		}
+	})
+
+	t.Run("non-integer is a fail-fast error", func(t *testing.T) {
+		fileVals := map[string]string{"monitored-endpoints-max-per-rule": "abc"}
+		if _, _, err := Resolve(Defaults(), fileVals, nil); err == nil {
+			t.Fatalf("expected error for non-integer monitored-endpoints-max-per-rule")
+		}
+	})
+
+	t.Run("non-bool monitored-endpoints-enabled is a fail-fast error", func(t *testing.T) {
+		if _, _, err := Resolve(Defaults(), map[string]string{"monitored-endpoints-enabled": "notabool"}, nil); err == nil {
+			t.Fatalf("expected error for non-bool monitored-endpoints-enabled")
+		}
+	})
+}
+
+// TestWriteParseRoundTrip_MonitoredEndpointsWrittenLast locks in that the two
+// new keys are appended at the very end of the generated file (Caution: must
+// not be inserted alphabetically among existing keys).
+func TestWriteParseRoundTrip_MonitoredEndpointsWrittenLast(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, Defaults()); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 lines, got %d", len(lines))
+	}
+	if lines[len(lines)-2] != "monitored-endpoints-enabled=true" {
+		t.Fatalf("expected monitored-endpoints-enabled=true as second-to-last line, got %q", lines[len(lines)-2])
+	}
+	if lines[len(lines)-1] != "monitored-endpoints-max-per-rule=1000" {
+		t.Fatalf("expected monitored-endpoints-max-per-rule=1000 as last line, got %q", lines[len(lines)-1])
 	}
 }
 

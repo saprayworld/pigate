@@ -830,6 +830,37 @@ type MonitoredCounter struct {
 	Packets   uint64
 	StartedAt string
 	UpdatedAt string
+	// EndpointsEvicted is the cumulative number of policy_rule_endpoints rows
+	// evicted (LRU) for this rule since Monitor was last turned on/reset
+	// (docs/ref/todo/persisted-rule-endpoints-plan.md E-D3/E-D4, issue #141
+	// follow-up) — mirrors the policy_rule_counters.endpoints_evicted column.
+	EndpointsEvicted uint64
+}
+
+// Endpoint direction constants shared by the recorder (service layer),
+// repository (db layer) and model (this file) for policy_rule_endpoints —
+// see docs/ref/todo/persisted-rule-endpoints-plan.md E-D3, issue #141
+// follow-up. Using these constants everywhere (instead of scattering the
+// literal strings "src"/"dst"/"svc" across layers) keeps the CHECK
+// constraint in db/connection.go and Go code in sync.
+const (
+	EndpointDirectionSrc = "src"
+	EndpointDirectionDst = "dst"
+	EndpointDirectionSvc = "svc"
+)
+
+// PersistedEndpoint is one row (existing or pending-in-RAM) of
+// policy_rule_endpoints — docs/ref/todo/persisted-rule-endpoints-plan.md
+// E-D3, issue #141 follow-up. Direction is one of the EndpointDirection*
+// constants above; Key is an IP literal for src/dst or "PROTO/PORT" for svc.
+// FirstSeenAt/LastSeenAt are RFC3339 UTC timestamp strings.
+type PersistedEndpoint struct {
+	RuleID      string
+	Direction   string
+	Key         string
+	Count       int
+	FirstSeenAt string
+	LastSeenAt  string
 }
 
 // TrafficCategorySlice is one Protocol Breakdown segment — a Service-Object-
@@ -958,15 +989,22 @@ type ServiceHit struct {
 }
 
 // PolicyRuleEndpoints is the /api/policies/{id}/endpoints response — per-rule
-// "who matched this rule" troubleshooting view, derived entirely by scanning
-// the in-memory traffic-log ring buffer on request (Option A, plan §2
-// decision 1; no persistence, no background aggregator). Hard limitations
-// (surfaced in the UI, not hidden):
+// "who matched this rule" troubleshooting view. Originally derived entirely
+// by scanning the in-memory traffic-log ring buffer on request (Option A,
+// docs/ref/todo/firewall-rule-matched-endpoints-plan.md §2 decision 1); now
+// extended (docs/ref/todo/persisted-rule-endpoints-plan.md E-D6, issue #141
+// follow-up) with a second, persisted source of truth for rules that have
+// Monitor enabled — see Source below. Hard limitations (surfaced in the UI,
+// not hidden):
 //  1. Only rules with Log enabled ever have data (LogEnabled=false means the
-//     lists are always empty, not an error).
+//     lists are always empty, not an error) — true in BOTH modes (E-D7).
 //  2. Counts are log-entry counts, not bytes — NFLOG carries no packet size.
-//  3. The data window equals the ring buffer's current capacity/contents;
-//     clearing the traffic log makes this data disappear immediately.
+//  3. When Source=="buffer": the data window equals the ring buffer's
+//     current capacity/contents; clearing the traffic log makes this data
+//     disappear immediately. When Source=="persisted": data survives
+//     Apply/restart/clearing the traffic log, but only counts from the
+//     moment Monitor was turned on (or last reset) — no backfill from the
+//     ring buffer (E-D6).
 //  4. Only new connections (ct state new) and DROPped packets are logged, so
 //     counts are not a full packet/byte tally — see pages/ForwardTraffic.tsx.
 type PolicyRuleEndpoints struct {
@@ -985,6 +1023,34 @@ type PolicyRuleEndpoints struct {
 	Sources            []EndpointHit `json:"sources"`
 	Destinations       []EndpointHit `json:"destinations"`
 	Services           []ServiceHit  `json:"services"`
+
+	// Source/CollectingSince/Capped/Evicted/MaxPerDirection are new fields
+	// added by docs/ref/todo/persisted-rule-endpoints-plan.md E-D6 (issue
+	// #141 follow-up).
+	//
+	// Source is "persisted" when this response was read from the
+	// policy_rule_endpoints SQLite table (rule has Monitor enabled and the
+	// feature's kill switch is on) or "buffer" for the original ring-buffer
+	// scan behavior (unchanged). When Source=="persisted", ScannedEntries is
+	// always 0 and BufferOldestAt is always "" — they only have meaning for
+	// the buffer path.
+	Source string `json:"source"`
+	// CollectingSince is an RFC3339 UTC timestamp string ("this rule's
+	// Monitor started_at"), set only when Source=="persisted". Data begins
+	// counting from zero at this instant — never backfilled from data the
+	// ring buffer already had (E-D6).
+	CollectingSince string `json:"collectingSince,omitempty"`
+	// Capped is true when at least one direction (src/dst/svc) currently
+	// holds exactly MaxPerDirection rows, meaning LRU eviction is actively
+	// discarding the least-recently-seen entries for that direction.
+	Capped bool `json:"capped"`
+	// Evicted is the cumulative count of rows evicted for this rule since
+	// Monitor was last turned on/reset (policy_rule_counters.endpoints_evicted).
+	Evicted int `json:"evicted"`
+	// MaxPerDirection is the cap (rows per (rule, direction) pair) in effect
+	// — surfaces monitored-endpoints-max-per-rule so the UI never has to
+	// hardcode the number (Caution 14 of the plan above).
+	MaxPerDirection int `json:"maxPerDirection"`
 }
 
 // TrafficDetail is the /api/dashboard/traffic-detail response backing the
