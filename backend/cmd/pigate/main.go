@@ -281,6 +281,25 @@ func main() {
 	firewallService.SetPolicyCounterStore(policyCounterStore)
 	firewallService.SetTrafficStats(trafficStatsService)
 
+	// Persisted rule endpoints (docs/ref/todo/persisted-rule-endpoints-plan.md
+	// E-08, issue #141 follow-up) — the RAM recorder fed by the stampAndPush
+	// hook below, and drained by policyCounterStore's existing flush cycle
+	// (no new ticker/goroutine — E-D5). MonitoredEndpointsEnabled/
+	// MonitoredEndpointsMaxPerRule are file-only config (E-D9).
+	endpointRecorder := service.NewPolicyEndpointRecorder(cfg.MonitoredEndpointsEnabled, cfg.MonitoredEndpointsMaxPerRule)
+	policyCounterStore.SetEndpointRecorder(endpointRecorder, cfg.MonitoredEndpointsMaxPerRule)
+	// Prime the recorder's monitored-rule set right after policyCounterStore.
+	// Load() above, so the first ~flush-interval of uptime after a restart
+	// doesn't silently miss traffic for rules that were already monitored
+	// before this boot (Record() never queries the DB itself — E-D1). A
+	// failure here only warns: the recorder just starts with an empty set,
+	// self-healing at the very next Flush() tick.
+	if ids, err := repo.GetMonitoredPolicyIDs(); err != nil {
+		log.Printf("[Main] Warning: failed to prime endpoint recorder's monitored-rule set: %v", err)
+	} else {
+		endpointRecorder.SetMonitoredRules(ids)
+	}
+
 	// Statistics page (Top Source Hosts / Top Destinations / Top
 	// Conversations / Top Denied — docs/ref/todo/statistics-page-plan.md).
 	// No ticker/goroutine of its own: byte figures ride TrafficStatsService's
@@ -461,6 +480,10 @@ func main() {
 	// stats response (docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md
 	// T-10).
 	policyStatsService.SetCounterStore(policyCounterStore)
+	// SetEndpointStore wires the persisted rule-endpoints read path (docs/
+	// ref/todo/persisted-rule-endpoints-plan.md E-08, issue #141 follow-up)
+	// so GetRuleEndpoints can serve source="persisted" for monitored rules.
+	policyStatsService.SetEndpointStore(policyCounterStore, endpointRecorder, cfg.MonitoredEndpointsEnabled, cfg.MonitoredEndpointsMaxPerRule)
 	server.SetPolicyStatsService(policyStatsService)
 	// SetPolicyCounterStore wires the toggle-monitor/monitor-reset endpoints
 	// (docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md T-11).
@@ -532,6 +555,12 @@ func main() {
 		// ringBuffer.Add and be O(1)/non-blocking/panic-free: this closure
 		// runs on the NFLOG read loop (plan Caution 4).
 		statisticsService.RecordFirewallLog(entry)
+		// Feeds the persisted rule-endpoints RAM recorder (docs/ref/todo/
+		// persisted-rule-endpoints-plan.md E-08, issue #141 follow-up). Same
+		// hard constraints as RecordFirewallLog above (this is a sibling hook
+		// on the same NFLOG read loop): must stay O(1), non-blocking, no I/O,
+		// no DB query, never panic. Deliberately last in this closure.
+		endpointRecorder.Record(entry)
 	}
 
 	// Start the forward-traffic log watcher. It feeds the shared ring buffer that

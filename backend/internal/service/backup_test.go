@@ -1419,3 +1419,99 @@ func TestBackupService_SetCounterStoreReloadsAfterImport(t *testing.T) {
 		t.Fatalf("expected cache reloaded to the post-import DB value (0), got %+v", got)
 	}
 }
+
+// TestImportDoesNotExportEndpointsTable is E-09 of docs/ref/todo/
+// persisted-rule-endpoints-plan.md (issue #141 follow-up), mirroring
+// TestImportDoesNotExportCounterTable above: policy_rule_endpoints is
+// runtime data and model.BackupConfig has no field for it, so a distinctive
+// endpoint key/IP value seeded into that table must never appear in the
+// exported backup JSON.
+func TestImportDoesNotExportEndpointsTable(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+	if err := repo.SetPolicyMonitored("pol-1", true); err != nil {
+		t.Fatalf("SetPolicyMonitored: %v", err)
+	}
+	const distinctiveIP = "203.0.113.77"
+	if _, err := repo.AddPolicyEndpointDeltas([]model.PersistedEndpoint{
+		{RuleID: "pol-1", Direction: model.EndpointDirectionSrc, Key: distinctiveIP, Count: 3, FirstSeenAt: "2026-01-01T00:00:00Z", LastSeenAt: "2026-01-01T00:00:00Z"},
+	}, 1000); err != nil {
+		t.Fatalf("AddPolicyEndpointDeltas: %v", err)
+	}
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), distinctiveIP) {
+		t.Fatalf("expected the runtime endpoint IP to NEVER appear in the exported backup, got: %s", raw)
+	}
+}
+
+// TestBackupService_SetCounterStoreReloadsRecorderAfterImport is E-09: Import
+// must clear the RAM endpoint recorder's pending data and resync its
+// monitored-rule set to the post-import DB, via the same
+// PolicyCounterStore.Reload() call E-06 already extended for this — a stray
+// pending delta from a rule that existed only in the pre-import DB must
+// never reach the DB on the next flush after import.
+func TestBackupService_SetCounterStoreReloadsRecorderAfterImport(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+	if err := repo.SetPolicyMonitored("pol-1", true); err != nil {
+		t.Fatalf("SetPolicyMonitored: %v", err)
+	}
+
+	acct := &fakeTrafficAccounting{}
+	ts := NewTrafficStatsService(acct, repo, &fakeDhcpForTraffic{}, kernel.NewMockSystemStats(), 0, 0, 0)
+	store := NewPolicyCounterStore(repo, ts, time.Hour)
+	if err := store.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	recorder := NewPolicyEndpointRecorder(true, 1000)
+	store.SetEndpointRecorder(recorder, 1000)
+	recorder.SetMonitoredRules(map[string]bool{"pol-1": true})
+	bs.SetCounterStore(store)
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Pending data accumulates in RAM right before import (simulating traffic
+	// that arrived in the window between export and import completing).
+	recorder.Record(model.FirewallLog{RuleID: "pol-1", Src: "198.51.100.5", Time: "2026-01-01T00:00:00Z"})
+
+	if _, err := bs.Import(raw, model.ImportOptions{}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	// The pending delta captured before import must have been discarded by
+	// Reload() — draining now must be empty, and nothing must have been
+	// written to policy_rule_endpoints for that stray key.
+	if got := recorder.Drain(); len(got) != 0 {
+		t.Fatalf("expected Reload (via Import) to have cleared pending recorder data, got %+v", got)
+	}
+	rows, err := repo.GetTopPolicyEndpoints("pol-1", model.EndpointDirectionSrc, 10)
+	if err != nil {
+		t.Fatalf("GetTopPolicyEndpoints: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("expected no endpoint rows written for the pre-import stray pending delta, got %+v", rows)
+	}
+
+	// The recorder's monitored set must still reflect the post-import DB
+	// state (pol-1 is still monitored=true in this fixture), so a fresh
+	// Record must be accepted.
+	recorder.Record(model.FirewallLog{RuleID: "pol-1", Src: "198.51.100.6", Time: "2026-01-01T00:01:00Z"})
+	if got := recorder.Drain(); len(got) != 1 {
+		t.Fatalf("expected recorder's monitored set to be resynced after import, got %+v", got)
+	}
+}
