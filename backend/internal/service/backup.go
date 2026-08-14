@@ -32,6 +32,22 @@ type BackupService struct {
 	hostnameService   *HostnameService
 	timeService       *TimeService
 	monitor           *NetlinkMonitor
+
+	// counterStore is the optional PolicyCounterStore (docs/ref/todo/
+	// fqdn-retry-and-monitored-counters-plan.md T-12, issue #141), wired
+	// post-construction via SetCounterStore (additive-setter pattern,
+	// consistent with e.g. PolicyStatsService.SetDomainLookup) so
+	// NewBackupService's already-long parameter list never changes. When
+	// set, Import calls Reload() after a successful restore so the RAM
+	// cache reflects the DB's post-import policy_rule_counters state
+	// instead of stale pre-import values.
+	counterStore *PolicyCounterStore
+}
+
+// SetCounterStore wires the optional PolicyCounterStore — see the
+// counterStore field doc comment above.
+func (s *BackupService) SetCounterStore(store *PolicyCounterStore) {
+	s.counterStore = store
 }
 
 func NewBackupService(
@@ -272,6 +288,19 @@ func (s *BackupService) Import(raw []byte, opts model.ImportOptions) (*model.Imp
 	// Atomic restore. On any error the original DB is untouched.
 	if err := s.repo.RestoreConfig(cfg, opts.IncludeUsers); err != nil {
 		return nil, fmt.Errorf("restore failed (no changes applied): %w", err)
+	}
+
+	// The RAM cache PolicyCounterStore keeps must reflect the DB's
+	// post-import policy_rule_counters state (RestoreConfig above just
+	// replaced firewall_policies/policy_rule_counters wholesale) — never the
+	// pre-import numbers (docs/ref/todo/
+	// fqdn-retry-and-monitored-counters-plan.md T-12). Best-effort: a reload
+	// failure is a warning, not a fatal import error, since the DB itself
+	// (source of truth) already restored correctly.
+	if s.counterStore != nil {
+		if err := s.counterStore.Reload(); err != nil {
+			log.Printf("[Import] failed to reload Monitor counter cache after import: %v", err)
+		}
 	}
 
 	// Guard against the actor locking themselves out, and figure out whose
