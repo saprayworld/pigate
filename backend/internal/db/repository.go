@@ -1164,6 +1164,13 @@ func (r *Repository) SetPolicyMonitored(id string, monitored bool) error {
 		if _, err := tx.Exec("DELETE FROM policy_rule_counters WHERE policy_id = ?", id); err != nil {
 			return err
 		}
+		// FK cascade does NOT delete policy_rule_endpoints here — its FK is
+		// tied to firewall_policies, not policy_rule_counters (docs/ref/todo/
+		// persisted-rule-endpoints-plan.md E-D8, issue #141 follow-up), so it
+		// must be deleted explicitly in this same transaction.
+		if _, err := tx.Exec("DELETE FROM policy_rule_endpoints WHERE policy_id = ?", id); err != nil {
+			return err
+		}
 	}
 
 	return tx.Commit()
@@ -1171,7 +1178,7 @@ func (r *Repository) SetPolicyMonitored(id string, monitored bool) error {
 
 // GetPolicyRuleCounters returns every persisted monitored-rule counter row.
 func (r *Repository) GetPolicyRuleCounters() ([]model.MonitoredCounter, error) {
-	rows, err := r.db.Query("SELECT policy_id, bytes, packets, started_at, updated_at FROM policy_rule_counters")
+	rows, err := r.db.Query("SELECT policy_id, bytes, packets, started_at, updated_at, endpoints_evicted FROM policy_rule_counters")
 	if err != nil {
 		return nil, err
 	}
@@ -1180,8 +1187,8 @@ func (r *Repository) GetPolicyRuleCounters() ([]model.MonitoredCounter, error) {
 	var out []model.MonitoredCounter
 	for rows.Next() {
 		var c model.MonitoredCounter
-		var bytesVal, packetsVal int64
-		if err := rows.Scan(&c.RuleID, &bytesVal, &packetsVal, &c.StartedAt, &c.UpdatedAt); err != nil {
+		var bytesVal, packetsVal, evictedVal int64
+		if err := rows.Scan(&c.RuleID, &bytesVal, &packetsVal, &c.StartedAt, &c.UpdatedAt, &evictedVal); err != nil {
 			return nil, err
 		}
 		// SQLite INTEGER is signed 64-bit — a negative value here can only
@@ -1196,8 +1203,13 @@ func (r *Repository) GetPolicyRuleCounters() ([]model.MonitoredCounter, error) {
 			log.Printf("[Repository] Warning: policy_rule_counters.packets for %q is negative (%d), treating as 0", c.RuleID, packetsVal)
 			packetsVal = 0
 		}
+		if evictedVal < 0 {
+			log.Printf("[Repository] Warning: policy_rule_counters.endpoints_evicted for %q is negative (%d), treating as 0", c.RuleID, evictedVal)
+			evictedVal = 0
+		}
 		c.Bytes = uint64(bytesVal)
 		c.Packets = uint64(packetsVal)
+		c.EndpointsEvicted = uint64(evictedVal)
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -1256,12 +1268,21 @@ func (r *Repository) AddPolicyRuleCounterDeltas(deltas map[string]model.RuleCoun
 }
 
 // ResetPolicyRuleCounter zeroes an existing monitored rule's persisted
-// counter and resets started_at to now (D-6: the "รีเซ็ตค่า" button). No-op
+// counter (bytes/packets/endpoints_evicted) and resets started_at to now
+// (D-6: the "รีเซ็ตค่า" button), and — since docs/ref/todo/
+// persisted-rule-endpoints-plan.md E-D8 (issue #141 follow-up) — deletes all
+// of that rule's policy_rule_endpoints rows in the SAME transaction. No-op
 // (returns sql.ErrNoRows) if the rule isn't currently monitored/has no row.
 func (r *Repository) ResetPolicyRuleCounter(id string) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := r.db.Exec(
-		"UPDATE policy_rule_counters SET bytes = 0, packets = 0, started_at = ?, updated_at = ? WHERE policy_id = ?",
+	res, err := tx.Exec(
+		"UPDATE policy_rule_counters SET bytes = 0, packets = 0, endpoints_evicted = 0, started_at = ?, updated_at = ? WHERE policy_id = ?",
 		now, now, id,
 	)
 	if err != nil {
@@ -1270,7 +1291,227 @@ func (r *Repository) ResetPolicyRuleCounter(id string) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return sql.ErrNoRows
 	}
-	return nil
+	if _, err := tx.Exec("DELETE FROM policy_rule_endpoints WHERE policy_id = ?", id); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// =========================================================================
+// Persisted rule endpoints (docs/ref/todo/persisted-rule-endpoints-plan.md
+// E-04, issue #141 follow-up)
+// =========================================================================
+
+// AddPolicyEndpointDeltas upserts each delta into policy_rule_endpoints in a
+// single transaction (count += delta.Count, last_seen_at = delta.LastSeenAt,
+// first_seen_at left untouched on update — Caution 7 of the plan), then
+// performs LRU eviction limited to exactly the (policy_id, direction) pairs
+// touched by this batch and only when a pair's row count exceeds
+// maxPerDirection (Caution 4/5 — never scans/deletes unrelated rows, never
+// opens a DELETE when not over cap). Returns a map of policy_id -> number of
+// rows evicted in this call (also credited onto
+// policy_rule_counters.endpoints_evicted for each affected policy).
+//
+// Returns immediately without opening a transaction if deltas is empty
+// (Caution 4 — no write for a no-op flush). Deltas referencing a policy_id
+// that no longer exists (FK violation — the rule was deleted after the
+// delta was captured in RAM) are skipped individually via per-statement
+// error inspection; any other error aborts the whole transaction. Callers
+// are expected to pre-filter deltas by GetMonitoredPolicyIDs() (E-06) — this
+// FK handling is defense-in-depth, not the primary guard (Caution 6).
+//
+// Performance (Caution 13): with the default cap of 1000 rows per (policy,
+// direction), a single flush can carry up to ~3000 upserts for one busy
+// rule — this uses tx.Prepare once outside the loop and issues no
+// additional per-row queries beyond the single UPSERT statement (no SELECT
+// existence check).
+func (r *Repository) AddPolicyEndpointDeltas(deltas []model.PersistedEndpoint, maxPerDirection int) (map[string]int, error) {
+	if len(deltas) == 0 {
+		return nil, nil
+	}
+
+	// Deterministic order for reproducible tests/logs.
+	sorted := make([]model.PersistedEndpoint, len(deltas))
+	copy(sorted, deltas)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].RuleID != sorted[j].RuleID {
+			return sorted[i].RuleID < sorted[j].RuleID
+		}
+		if sorted[i].Direction != sorted[j].Direction {
+			return sorted[i].Direction < sorted[j].Direction
+		}
+		return sorted[i].Key < sorted[j].Key
+	})
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	upsertStmt, err := tx.Prepare(
+		`INSERT INTO policy_rule_endpoints (policy_id, direction, endpoint_key, count, first_seen_at, last_seen_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(policy_id, direction, endpoint_key)
+		 DO UPDATE SET count = count + excluded.count, last_seen_at = excluded.last_seen_at`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer upsertStmt.Close()
+
+	// Track the distinct (policy_id, direction) pairs actually touched, in
+	// insertion order, so eviction only ever looks at those pairs.
+	type pairKey struct{ policyID, direction string }
+	var touchedOrder []pairKey
+	touchedSeen := make(map[pairKey]bool)
+
+	for _, d := range sorted {
+		if d.Count == 0 {
+			continue
+		}
+		if _, err := upsertStmt.Exec(d.RuleID, d.Direction, d.Key, d.Count, d.FirstSeenAt, d.LastSeenAt); err != nil {
+			if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+				log.Printf("[Repository] Skipping policy_rule_endpoints upsert for deleted policy %q: %v", d.RuleID, err)
+				continue
+			}
+			return nil, err
+		}
+		pk := pairKey{d.RuleID, d.Direction}
+		if !touchedSeen[pk] {
+			touchedSeen[pk] = true
+			touchedOrder = append(touchedOrder, pk)
+		}
+	}
+
+	countStmt, err := tx.Prepare("SELECT COUNT(*) FROM policy_rule_endpoints WHERE policy_id = ? AND direction = ?")
+	if err != nil {
+		return nil, err
+	}
+	defer countStmt.Close()
+
+	evictStmt, err := tx.Prepare(
+		`DELETE FROM policy_rule_endpoints
+		 WHERE policy_id = ? AND direction = ? AND endpoint_key IN (
+			 SELECT endpoint_key FROM policy_rule_endpoints
+			 WHERE policy_id = ? AND direction = ?
+			 ORDER BY last_seen_at ASC, count ASC, endpoint_key ASC
+			 LIMIT ?
+		 )`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer evictStmt.Close()
+
+	evictedByPolicy := make(map[string]int)
+	for _, pk := range touchedOrder {
+		var n int
+		if err := countStmt.QueryRow(pk.policyID, pk.direction).Scan(&n); err != nil {
+			return nil, err
+		}
+		if n <= maxPerDirection {
+			continue
+		}
+		over := n - maxPerDirection
+		res, err := evictStmt.Exec(pk.policyID, pk.direction, pk.policyID, pk.direction, over)
+		if err != nil {
+			return nil, err
+		}
+		deleted, _ := res.RowsAffected()
+		if deleted > 0 {
+			evictedByPolicy[pk.policyID] += int(deleted)
+		}
+	}
+
+	if len(evictedByPolicy) > 0 {
+		evictUpdateStmt, err := tx.Prepare("UPDATE policy_rule_counters SET endpoints_evicted = endpoints_evicted + ? WHERE policy_id = ?")
+		if err != nil {
+			return nil, err
+		}
+		defer evictUpdateStmt.Close()
+
+		policyIDs := make([]string, 0, len(evictedByPolicy))
+		for id := range evictedByPolicy {
+			policyIDs = append(policyIDs, id)
+		}
+		sort.Strings(policyIDs)
+		for _, id := range policyIDs {
+			if _, err := evictUpdateStmt.Exec(evictedByPolicy[id], id); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return evictedByPolicy, nil
+}
+
+// GetTopPolicyEndpoints returns up to limit rows for one (policyID,
+// direction) pair, ordered by count desc then endpoint_key asc — sorting is
+// done in SQL (never by pulling all rows into Go), per docs/ref/todo/
+// persisted-rule-endpoints-plan.md E-D6 (issue #141 follow-up).
+func (r *Repository) GetTopPolicyEndpoints(policyID, direction string, limit int) ([]model.PersistedEndpoint, error) {
+	rows, err := r.db.Query(
+		`SELECT policy_id, direction, endpoint_key, count, first_seen_at, last_seen_at
+		 FROM policy_rule_endpoints
+		 WHERE policy_id = ? AND direction = ?
+		 ORDER BY count DESC, endpoint_key ASC
+		 LIMIT ?`,
+		policyID, direction, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []model.PersistedEndpoint
+	for rows.Next() {
+		var e model.PersistedEndpoint
+		if err := rows.Scan(&e.RuleID, &e.Direction, &e.Key, &e.Count, &e.FirstSeenAt, &e.LastSeenAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// CountPolicyEndpoints returns the row count per direction ('src'/'dst'/'svc')
+// for one policy — used for UniqueSources/UniqueDestinations/UniqueServices
+// when the response source is "persisted". Directions with zero rows are
+// simply absent from the returned map (caller treats a missing key as 0).
+func (r *Repository) CountPolicyEndpoints(policyID string) (map[string]int, error) {
+	rows, err := r.db.Query(
+		"SELECT direction, COUNT(*) FROM policy_rule_endpoints WHERE policy_id = ? GROUP BY direction",
+		policyID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]int)
+	for rows.Next() {
+		var direction string
+		var n int
+		if err := rows.Scan(&direction, &n); err != nil {
+			return nil, err
+		}
+		out[direction] = n
+	}
+	return out, rows.Err()
+}
+
+// DeletePolicyEndpoints deletes every policy_rule_endpoints row for one
+// policy. Exposed standalone in addition to being folded into
+// SetPolicyMonitored/ResetPolicyRuleCounter's transactions, for callers that
+// need it in isolation (e.g. tests).
+func (r *Repository) DeletePolicyEndpoints(policyID string) error {
+	_, err := r.db.Exec("DELETE FROM policy_rule_endpoints WHERE policy_id = ?", policyID)
+	return err
 }
 
 // =========================================================================
