@@ -257,3 +257,184 @@ func TestPolicyCounterStore_LoadReadsPersistedState(t *testing.T) {
 		t.Fatalf("expected Load to restore 50/5, got %+v", got)
 	}
 }
+
+// TestPolicyCounterStore_FlushEndpoints_OnlyMonitoredRulesPersisted covers
+// E-06 of docs/ref/todo/persisted-rule-endpoints-plan.md (issue #141
+// follow-up): endpoints are flushed only for monitored rules, in the same
+// Flush() call as the counter delta.
+func TestPolicyCounterStore_FlushEndpoints_OnlyMonitoredRulesPersisted(t *testing.T) {
+	repo, ts, _ := newTestPolicyCounterStoreDeps(t)
+	store := NewPolicyCounterStore(repo, ts, time.Hour)
+	recorder := NewPolicyEndpointRecorder(true, 1000)
+	store.SetEndpointRecorder(recorder, 1000)
+	recorder.SetMonitoredRules(map[string]bool{"rule-monitored": true, "rule-unmonitored": true})
+
+	recorder.Record(model.FirewallLog{RuleID: "rule-monitored", Src: "10.0.0.5", Time: "t1"})
+	recorder.Record(model.FirewallLog{RuleID: "rule-unmonitored", Src: "10.0.0.6", Time: "t2"})
+
+	if err := store.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	rows, err := repo.GetTopPolicyEndpoints("rule-monitored", model.EndpointDirectionSrc, 10)
+	if err != nil {
+		t.Fatalf("GetTopPolicyEndpoints: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Key != "10.0.0.5" {
+		t.Fatalf("expected the monitored rule's endpoint persisted, got %+v", rows)
+	}
+
+	unmonRows, err := repo.GetTopPolicyEndpoints("rule-unmonitored", model.EndpointDirectionSrc, 10)
+	if err != nil {
+		t.Fatalf("GetTopPolicyEndpoints (unmonitored): %v", err)
+	}
+	if len(unmonRows) != 0 {
+		t.Fatalf("expected no endpoint rows for an unmonitored rule, got %+v", unmonRows)
+	}
+}
+
+// TestPolicyCounterStore_FlushEndpoints_NoDeltaNoWrite locks in Caution 4 of
+// the endpoints plan: a Flush with nothing pending (neither counters nor
+// endpoints) must not touch the DB at all.
+func TestPolicyCounterStore_FlushEndpoints_NoDeltaNoWrite(t *testing.T) {
+	repo, ts, _ := newTestPolicyCounterStoreDeps(t)
+	store := NewPolicyCounterStore(repo, ts, time.Hour)
+	recorder := NewPolicyEndpointRecorder(true, 1000)
+	store.SetEndpointRecorder(recorder, 1000)
+
+	if err := store.Flush(); err != nil {
+		t.Fatalf("Flush (nothing pending): %v", err)
+	}
+	counts, err := repo.CountPolicyEndpoints("rule-monitored")
+	if err != nil {
+		t.Fatalf("CountPolicyEndpoints: %v", err)
+	}
+	if len(counts) != 0 {
+		t.Fatalf("expected no endpoint rows written, got %v", counts)
+	}
+}
+
+// TestPolicyCounterStore_SetMonitored_ClearsRecorderPendingOnDisable covers
+// the E-D8 semantics: turning Monitor off discards the recorder's pending
+// data for that rule so it can't flow back in on the next flush.
+func TestPolicyCounterStore_SetMonitored_ClearsRecorderPendingOnDisable(t *testing.T) {
+	repo, ts, _ := newTestPolicyCounterStoreDeps(t)
+	store := NewPolicyCounterStore(repo, ts, time.Hour)
+	recorder := NewPolicyEndpointRecorder(true, 1000)
+	store.SetEndpointRecorder(recorder, 1000)
+	recorder.SetMonitoredRules(map[string]bool{"rule-monitored": true})
+
+	recorder.Record(model.FirewallLog{RuleID: "rule-monitored", Src: "10.0.0.5", Time: "t1"})
+
+	if err := store.SetMonitored("rule-monitored", false); err != nil {
+		t.Fatalf("SetMonitored(false): %v", err)
+	}
+
+	// The pending delta must have been discarded, not silently flushed
+	// during SetMonitored's pre-toggle Flush AND not persisted since the
+	// rule was already about to become unmonitored.
+	rows, err := repo.GetTopPolicyEndpoints("rule-monitored", model.EndpointDirectionSrc, 10)
+	if err != nil {
+		t.Fatalf("GetTopPolicyEndpoints: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("expected no endpoint rows after disabling Monitor, got %+v", rows)
+	}
+
+	// A stray Record() call after disabling must not be counted (recorder's
+	// monitored set was resynced).
+	recorder.Record(model.FirewallLog{RuleID: "rule-monitored", Src: "10.0.0.9", Time: "t2"})
+	if got := recorder.Drain(); len(got) != 0 {
+		t.Fatalf("expected recorder to ignore a rule no longer monitored, got %+v", got)
+	}
+}
+
+// TestPolicyCounterStore_ResetRule_ClearsRecorderPending covers resetting a
+// rule's counter also clearing the recorder's pending endpoint data.
+func TestPolicyCounterStore_ResetRule_ClearsRecorderPending(t *testing.T) {
+	repo, ts, _ := newTestPolicyCounterStoreDeps(t)
+	store := NewPolicyCounterStore(repo, ts, time.Hour)
+	recorder := NewPolicyEndpointRecorder(true, 1000)
+	store.SetEndpointRecorder(recorder, 1000)
+	recorder.SetMonitoredRules(map[string]bool{"rule-monitored": true})
+
+	// First flush some data through so there's something to reset.
+	recorder.Record(model.FirewallLog{RuleID: "rule-monitored", Src: "10.0.0.5", Time: "t1"})
+	if err := store.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	// New pending data accumulates after the flush.
+	recorder.Record(model.FirewallLog{RuleID: "rule-monitored", Src: "10.0.0.6", Time: "t2"})
+
+	if err := store.ResetRule("rule-monitored"); err != nil {
+		t.Fatalf("ResetRule: %v", err)
+	}
+
+	rows, err := repo.GetTopPolicyEndpoints("rule-monitored", model.EndpointDirectionSrc, 10)
+	if err != nil {
+		t.Fatalf("GetTopPolicyEndpoints: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("expected reset to clear all endpoint rows (including any pending flushed during ResetRule's pre-flush), got %+v", rows)
+	}
+}
+
+// TestPolicyCounterStore_Reload_ResetsRecorder covers the E-D8 import-backup
+// semantics: Reload() must clear the recorder's pending state and resync its
+// monitored-rule set from the freshly-loaded DB.
+func TestPolicyCounterStore_Reload_ResetsRecorder(t *testing.T) {
+	repo, ts, _ := newTestPolicyCounterStoreDeps(t)
+	store := NewPolicyCounterStore(repo, ts, time.Hour)
+	recorder := NewPolicyEndpointRecorder(true, 1000)
+	store.SetEndpointRecorder(recorder, 1000)
+	recorder.SetMonitoredRules(map[string]bool{"rule-monitored": true})
+
+	recorder.Record(model.FirewallLog{RuleID: "rule-monitored", Src: "10.0.0.5", Time: "t1"})
+
+	if err := store.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	if got := recorder.Drain(); len(got) != 0 {
+		t.Fatalf("expected Reload to have cleared pending recorder data, got %+v", got)
+	}
+
+	// The recorder's monitored set should still include rule-monitored
+	// (still monitored=1 in DB after reload), so a fresh Record must work.
+	recorder.Record(model.FirewallLog{RuleID: "rule-monitored", Src: "10.0.0.7", Time: "t2"})
+	if got := recorder.Drain(); len(got) != 1 {
+		t.Fatalf("expected recorder's monitored set to be resynced after Reload, got %+v", got)
+	}
+}
+
+// TestPolicyCounterStore_EndpointsEvictedFor_TracksEviction covers E-D4/E-06:
+// eviction counts returned by the repository are folded into the cache.
+func TestPolicyCounterStore_EndpointsEvictedFor_TracksEviction(t *testing.T) {
+	repo, ts, _ := newTestPolicyCounterStoreDeps(t)
+	store := NewPolicyCounterStore(repo, ts, time.Hour)
+	if err := store.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Admission cap (RAM) is intentionally larger than the DB cap passed to
+	// SetEndpointRecorder, so all 5 keys reach the flush and the eviction
+	// this test wants to observe happens at the DB layer, not the RAM layer.
+	recorder := NewPolicyEndpointRecorder(true, 10)
+	store.SetEndpointRecorder(recorder, 3)
+	recorder.SetMonitoredRules(map[string]bool{"rule-monitored": true})
+
+	for i := 0; i < 5; i++ {
+		recorder.Record(model.FirewallLog{
+			RuleID: "rule-monitored",
+			Src:    "10.0.2." + string(rune('0'+i)),
+			Time:   "t" + string(rune('0'+i)),
+		})
+	}
+	if err := store.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	if got := store.EndpointsEvictedFor("rule-monitored"); got != 2 {
+		t.Fatalf("expected 2 evicted (5 admitted at cap=3, so 2 over cap), got %d", got)
+	}
+}
