@@ -280,7 +280,7 @@ func TestAddressCombos_FQDNExpandsToOneComboPerResolvedIPv4(t *testing.T) {
 		"EXAMPLE": {ID: "a2", Name: "EXAMPLE", Entries: []model.AddressEntry{{Type: "fqdn", Value: "example.test"}}},
 	}
 
-	combos, err := addressCombos("EXAMPLE", addrs)
+	combos, err := addressCombos("EXAMPLE", addrs, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -315,7 +315,7 @@ func TestAddressCombos_FQDNResolvedIPsAreCapped(t *testing.T) {
 		"BIGFAN": {ID: "a3", Name: "BIGFAN", Entries: []model.AddressEntry{{Type: "fqdn", Value: "bigfanout.test"}}},
 	}
 
-	combos, err := addressCombos("BIGFAN", addrs)
+	combos, err := addressCombos("BIGFAN", addrs, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestAddressCombos_FQDNResolveFailureSkipsOnlyThatEntry(t *testing.T) {
 		}},
 	}
 
-	combos, err := addressCombos("MIXED", addrs)
+	combos, err := addressCombos("MIXED", addrs, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

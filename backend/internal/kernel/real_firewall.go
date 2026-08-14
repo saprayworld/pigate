@@ -1,14 +1,17 @@
 package kernel
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
 	"pigate/internal/model"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
@@ -68,6 +71,94 @@ var lookupIP = net.LookupIP
 // addresses, it never fails the apply.
 const maxFQDNResolvedIPs = 8
 
+// ResolveFQDNIPv4 resolves fqdn via lookupIP, keeps only IPv4 answers, sorts
+// them ascending by raw IP bytes, and caps the result at maxFQDNResolvedIPs.
+// This is the single shared resolve helper for both the ApplyRules path
+// (addressCombos below) and the background FQDNRefresher ticker
+// (service/fqdn_refresh.go) — both must use identical logic, or the
+// refresher would perpetually see "changed" results that ApplyRules itself
+// never actually used (docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md
+// D-1).
+//
+// Sorting BEFORE capping is required, not optional (plan D-2/Caution 2): DNS
+// round-robin reorders the answer set on every query, so naively capping
+// "the first N answers as returned by the resolver" would make a domain
+// with more than maxFQDNResolvedIPs A records look "changed" on almost
+// every refresh tick, causing an endless reapply loop. Sorting first makes
+// the capped set deterministic across repeated queries as long as the
+// underlying answer set hasn't actually changed (the accepted trade-off:
+// such a domain matches its lowest maxFQDNResolvedIPs IPv4 addresses,
+// rather than "whichever 8 the resolver happened to answer with first").
+func ResolveFQDNIPv4(fqdn string) ([]net.IP, error) {
+	ips, err := lookupIP(fqdn)
+	if err != nil {
+		return nil, err
+	}
+	var ipv4s []net.IP
+	for _, ip := range ips {
+		if ip4 := ip.To4(); ip4 != nil {
+			ipv4s = append(ipv4s, ip4)
+		}
+	}
+	sort.Slice(ipv4s, func(i, j int) bool {
+		return bytes.Compare(ipv4s[i], ipv4s[j]) < 0
+	})
+	if len(ipv4s) > maxFQDNResolvedIPs {
+		log.Printf("[RealFirewall] Warning: FQDN %q resolved to %d IPv4 addresses, only matching the first %d (sorted ascending, see maxFQDNResolvedIPs)", fqdn, len(ipv4s), maxFQDNResolvedIPs)
+		ipv4s = ipv4s[:maxFQDNResolvedIPs]
+	}
+	return ipv4s, nil
+}
+
+// fqdnRecorder captures, for one ApplyRules pass, the exact FQDN -> resolved
+// IPv4 (as strings) list actually used to build the nft rules just applied.
+// Threaded as a plain parameter (not a struct field) from ApplyRules down
+// through addUserChainRules to addressCombos, and is nil-safe throughout —
+// any caller (including existing tests) that doesn't care about it can pass
+// nil. A key is recorded even when resolution fails or yields no IPv4
+// address (empty slice value) — that is precisely the "still needs a retry"
+// signal FQDNRefresher (service/fqdn_refresh.go) needs, distinct from "no
+// enabled rule references this FQDN at all" (docs/ref/todo/
+// fqdn-retry-and-monitored-counters-plan.md D-1).
+type fqdnRecorder struct {
+	mu   sync.Mutex
+	data map[string][]string
+}
+
+func newFQDNRecorder() *fqdnRecorder {
+	return &fqdnRecorder{data: make(map[string][]string)}
+}
+
+// record is nil-safe: rec may legitimately be nil in test call sites that
+// don't care about FQDN tracking.
+func (r *fqdnRecorder) record(fqdn string, ips []string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cp := make([]string, len(ips))
+	copy(cp, ips)
+	r.data[fqdn] = cp
+}
+
+// snapshot returns a deep copy of the recorded data. Safe to call on a nil
+// receiver (returns nil).
+func (r *fqdnRecorder) snapshot() map[string][]string {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string][]string, len(r.data))
+	for k, v := range r.data {
+		cp := make([]string, len(v))
+		copy(cp, v)
+		out[k] = cp
+	}
+	return out
+}
+
 // maxLogPrefixBytes bounds the combined "<base><r=token> " log prefix so it
 // stays well under nftables/NFLOG's own log-prefix limit (128 bytes).
 const maxLogPrefixBytes = 120
@@ -103,13 +194,35 @@ type RealFirewall struct {
 	// via SetMaxExpandedRulesPerPolicy below — never hardcode a cap at the
 	// point of use (plan Caution 15).
 	maxExpandedRulesPerPolicy int
+
+	// fqdnMu guards fqdnData — the FQDN -> resolved IPv4 snapshot recorded
+	// by the most recent successful ApplyRules (docs/ref/todo/
+	// fqdn-retry-and-monitored-counters-plan.md D-1). Deliberately its own
+	// mutex, unrelated to any nftables/netlink connection state.
+	fqdnMu   sync.Mutex
+	fqdnData map[string][]string
 }
 
 func NewRealFirewall(dockerCompat bool) *RealFirewall {
 	return &RealFirewall{
 		dockerCompat:              dockerCompat,
 		maxExpandedRulesPerPolicy: 4096,
+		fqdnData:                  make(map[string][]string),
 	}
+}
+
+// FQDNResolutions implements kernel.FirewallManager.FQDNResolutions — see
+// the interface doc comment (interfaces.go) for semantics.
+func (rf *RealFirewall) FQDNResolutions() map[string][]string {
+	rf.fqdnMu.Lock()
+	defer rf.fqdnMu.Unlock()
+	out := make(map[string][]string, len(rf.fqdnData))
+	for k, v := range rf.fqdnData {
+		cp := make([]string, len(v))
+		copy(cp, v)
+		out[k] = cp
+	}
+	return out
 }
 
 // SetMaxExpandedRulesPerPolicy overrides the per-PolicyRule nft rule
@@ -153,6 +266,14 @@ func (rf *RealFirewall) ApplyRules(
 	for _, s := range svcs {
 		svcsMap[s.Name] = s
 	}
+
+	// fqdnRec captures the FQDN -> resolved IPv4 snapshot this apply pass
+	// actually uses, so FQDNResolutions() (and therefore FQDNRefresher, see
+	// docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md D-1) reflects
+	// ground truth. Only stored into rf.fqdnData below after conn.Flush()
+	// succeeds — a failed apply must not overwrite the last known-good
+	// snapshot.
+	fqdnRec := newFQDNRecorder()
 
 	// 2. Setup the main "pigate" filter table (inet family to cover IPv4 and IPv6)
 	table := conn.AddTable(&nftables.Table{
@@ -485,7 +606,7 @@ func (rf *RealFirewall) ApplyRules(
 	// that a bad rule here cannot lock the operator out of the web UI/SSH
 	// (plan section 2.2, Caution 8).
 	addUserChainRules(conn, table, inputChain, model.PolicyChainInput, rules, addrsMap, svcsMap,
-		"[PiGate] INP ACCEPT: ", "[PiGate] INP DROP  : ", rf.maxExpandedRulesPerPolicy)
+		"[PiGate] INP ACCEPT: ", "[PiGate] INP DROP  : ", rf.maxExpandedRulesPerPolicy, fqdnRec)
 
 	// --- Section 4: Final Drop Log ---
 	// Highest-volume log point in the whole file (catches every unsolicited
@@ -594,7 +715,7 @@ func (rf *RealFirewall) ApplyRules(
 
 	// User rules in forward
 	addUserChainRules(conn, table, forwardChain, model.PolicyChainForward, rules, addrsMap, svcsMap,
-		"[PiGate] FWD ACCEPT: ", "[PiGate] FWD DROP  : ", rf.maxExpandedRulesPerPolicy)
+		"[PiGate] FWD ACCEPT: ", "[PiGate] FWD DROP  : ", rf.maxExpandedRulesPerPolicy, fqdnRec)
 
 	// Final Drop Log in forward — also to the NFLOG group (see forwardLogExpr).
 	conn.AddRule(&nftables.Rule{
@@ -666,7 +787,7 @@ func (rf *RealFirewall) ApplyRules(
 	// chain policy is accept, so anything not matched by a user DROP rule
 	// above simply falls through to the implicit accept.
 	addUserChainRules(conn, table, outputChain, model.PolicyChainOutput, rules, addrsMap, svcsMap,
-		"[PiGate] OUT ACCEPT: ", "[PiGate] OUT DROP  : ", rf.maxExpandedRulesPerPolicy)
+		"[PiGate] OUT ACCEPT: ", "[PiGate] OUT DROP  : ", rf.maxExpandedRulesPerPolicy, fqdnRec)
 
 	// 6. Setup NAT table and chain for policy-based source NAT.
 	// Source NAT is now driven per firewall policy (the policy's "NAT" toggle),
@@ -740,6 +861,12 @@ func (rf *RealFirewall) ApplyRules(
 		log.Printf("[RealFirewall] Error committing rules to kernel: %v", err)
 		return fmt.Errorf("failed to flush nftables rules: %w", err)
 	}
+
+	// Only replace the FQDN snapshot after a successful flush (D-1): a
+	// failed apply must not overwrite the last known-good resolution state.
+	rf.fqdnMu.Lock()
+	rf.fqdnData = fqdnRec.snapshot()
+	rf.fqdnMu.Unlock()
 
 	log.Printf("[RealFirewall] Successfully applied firewall rules to Linux kernel")
 	return nil
@@ -1139,7 +1266,10 @@ func comboDesc(c addrCombo) string {
 // A resolve failure, or a resolve that yields no IPv4 address, only skips
 // that one entry (logged as a warning) — other entries of the same object
 // still expand normally (plan Caution 3).
-func addressCombos(name string, addrsMap map[string]model.AddressObject) ([]addrCombo, error) {
+// fqdnRec is nil-safe (see fqdnRecorder doc comment) — pass nil from any
+// call site that doesn't need to track FQDN resolution results (e.g. tests
+// exercising subnet/range entries only).
+func addressCombos(name string, addrsMap map[string]model.AddressObject, fqdnRec *fqdnRecorder) ([]addrCombo, error) {
 	if name == "" || name == "ALL" {
 		return []addrCombo{{hasFilter: false}}, nil
 	}
@@ -1158,26 +1288,23 @@ func addressCombos(name string, addrsMap map[string]model.AddressObject) ([]addr
 			continue
 		}
 
-		ips, err := lookupIP(e.Value)
+		ipv4s, err := ResolveFQDNIPv4(e.Value)
 		if err != nil {
 			log.Printf("[RealFirewall] Warning: address object %q: failed to resolve FQDN %q, skipping this entry: %v", name, e.Value, err)
+			fqdnRec.record(e.Value, nil)
 			continue
-		}
-		var ipv4s []net.IP
-		for _, ip := range ips {
-			if ip4 := ip.To4(); ip4 != nil {
-				ipv4s = append(ipv4s, ip4)
-			}
 		}
 		if len(ipv4s) == 0 {
 			log.Printf("[RealFirewall] Warning: address object %q: FQDN %q resolved no IPv4 address, skipping this entry", name, e.Value)
+			fqdnRec.record(e.Value, nil)
 			continue
 		}
-		if len(ipv4s) > maxFQDNResolvedIPs {
-			log.Printf("[RealFirewall] Warning: address object %q: FQDN %q resolved to %d IPv4 addresses, only matching the first %d (see maxFQDNResolvedIPs)", name, e.Value, len(ipv4s), maxFQDNResolvedIPs)
-			ipv4s = ipv4s[:maxFQDNResolvedIPs]
-		}
 		log.Printf("[RealFirewall] address object %q: resolved FQDN %s to %d IPv4 address(es): %v", name, e.Value, len(ipv4s), ipv4s)
+		ipStrs := make([]string, len(ipv4s))
+		for i, ip := range ipv4s {
+			ipStrs[i] = ip.String()
+		}
+		fqdnRec.record(e.Value, ipStrs)
 		for _, ip := range ipv4s {
 			combos = append(combos, addrCombo{hasFilter: true, objName: name, entry: e, resolvedFQDNIP: ip})
 		}
@@ -1319,6 +1446,7 @@ func addUserChainRules(
 	svcsMap map[string]model.ServiceObject,
 	acceptLogPrefix, dropLogPrefix string,
 	maxExpandedRulesPerPolicy int,
+	fqdnRec *fqdnRecorder,
 ) {
 	for _, r := range rules {
 		if !r.Status || r.Chain != chainName {
@@ -1356,13 +1484,13 @@ func addUserChainRules(
 			// Object-not-found is a hard error for the whole name (matches
 			// the old addrsMap[name] miss) — skip just this name, other
 			// sources/destinations/services of the same rule still apply.
-			srcCombos, err := addressCombos(src, addrsMap)
+			srcCombos, err := addressCombos(src, addrsMap, fqdnRec)
 			if err != nil {
 				log.Printf("[RealFirewall] Skip %s rule %q source %q: %v", chainName, r.Name, src, err)
 				continue
 			}
 			for _, dest := range destinations {
-				destCombos, err := addressCombos(dest, addrsMap)
+				destCombos, err := addressCombos(dest, addrsMap, fqdnRec)
 				if err != nil {
 					log.Printf("[RealFirewall] Skip %s rule %q destination %q: %v", chainName, r.Name, dest, err)
 					continue

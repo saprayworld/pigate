@@ -277,6 +277,21 @@ type PolicyRule struct {
 	Nat          bool     `json:"nat"`    // Source NAT (masquerade to outgoing interface address)
 	Status       bool     `json:"status"` // Enabled/Disabled
 	Priority     int      `json:"-"`      // Ordering precedence
+	// Monitored opts this rule into persisted traffic counters (bytes/packets)
+	// that accumulate in SQLite across ApplyRules/restarts instead of
+	// resetting on every apply, unlike the ephemeral "since last apply"
+	// counters (docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md D-6,
+	// issue #141). An independent flag — no interaction with chain/action.
+	// `omitempty` is deliberate here (unlike Log/Nat/Status above, which
+	// predate the backup-checksum feature): PolicyRule is embedded in
+	// model.BackupConfig.Policies, and BackupService's import re-marshals
+	// the decoded config to verify its checksum BEFORE any field
+	// normalization runs (see backup.go's decodeBackup Caution 1) — a
+	// pre-#141 backup file has no "monitored" key at all, so omitting it
+	// when false (the zero value every such file decodes to) keeps the
+	// re-marshaled bytes identical to the original, exactly like
+	// AddressObject.Entries/ServiceObject.Entries above.
+	Monitored bool `json:"monitored,omitempty"`
 }
 
 // PolicyRuleInput represents input parameters to create or edit a rule
@@ -292,6 +307,8 @@ type PolicyRuleInput struct {
 	Log          bool     `json:"log"`
 	Nat          bool     `json:"nat"` // Source NAT (masquerade to outgoing interface address)
 	Status       bool     `json:"status"`
+	// Monitored — see PolicyRule.Monitored doc comment above.
+	Monitored bool `json:"monitored"`
 }
 
 // PortForward represents a DNAT / port-forward entry (FortiGate VIP style).
@@ -801,6 +818,20 @@ type RuleCounter struct {
 	Packets uint64
 }
 
+// MonitoredCounter is one rule's persisted, opt-in traffic counter (docs/
+// ref/todo/fqdn-retry-and-monitored-counters-plan.md D-5/D-6, issue #141).
+// Unlike RuleCounter (ephemeral, resets on every ApplyRules), this
+// accumulates across applies and process restarts until the user explicitly
+// resets it or turns Monitor off (which deletes the row). StartedAt/
+// UpdatedAt are RFC3339 UTC timestamp strings.
+type MonitoredCounter struct {
+	RuleID    string
+	Bytes     uint64
+	Packets   uint64
+	StartedAt string
+	UpdatedAt string
+}
+
 // TrafficCategorySlice is one Protocol Breakdown segment — a Service-Object-
 // defined category (or "Other") with its share of ObservedBytes.
 type TrafficCategorySlice struct {
@@ -862,6 +893,16 @@ type PolicyRuleStat struct {
 	// (fallback: the 10s nft-counter poller observed a delta — ±10s accuracy),
 	// or "" when LastMatchedAt is empty.
 	LastMatchedSource string `json:"lastMatchedSource,omitempty"`
+	// Monitored/MonitoredBytes/MonitoredPackets/MonitoredSince surface the
+	// persisted opt-in counter (docs/ref/todo/
+	// fqdn-retry-and-monitored-counters-plan.md D-6, issue #141) — a
+	// separate accounting from Bytes/Packets/Percent above, which remain
+	// "since the last successful apply" only. MonitoredSince is an RFC3339
+	// UTC timestamp string ("started_at"), empty when Monitored is false.
+	Monitored        bool   `json:"monitored"`
+	MonitoredBytes   uint64 `json:"monitoredBytes,omitempty"`
+	MonitoredPackets uint64 `json:"monitoredPackets,omitempty"`
+	MonitoredSince   string `json:"monitoredSince,omitempty"`
 }
 
 // PolicyRuleStats is the full /api/policies/stats response. TotalBytes is the

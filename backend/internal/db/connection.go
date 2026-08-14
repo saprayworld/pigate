@@ -294,7 +294,8 @@ func migrate(db *sql.DB) error {
 			action TEXT NOT NULL CHECK(action IN ('ACCEPT', 'DROP')),
 			log INTEGER DEFAULT 0 CHECK(log IN (0, 1)),
 			status INTEGER DEFAULT 1 CHECK(status IN (0, 1)),
-			priority INTEGER NOT NULL
+			priority INTEGER NOT NULL,
+			monitored INTEGER NOT NULL DEFAULT 0 CHECK(monitored IN (0, 1))
 		);`,
 
 		`CREATE TABLE IF NOT EXISTS policy_addresses (
@@ -312,6 +313,15 @@ func migrate(db *sql.DB) error {
 			PRIMARY KEY (policy_id, service_id),
 			FOREIGN KEY (policy_id) REFERENCES firewall_policies(id) ON DELETE CASCADE,
 			FOREIGN KEY (service_id) REFERENCES service_objects(id) ON DELETE RESTRICT
+		);`,
+
+		`CREATE TABLE IF NOT EXISTS policy_rule_counters (
+			policy_id TEXT PRIMARY KEY,
+			bytes INTEGER NOT NULL DEFAULT 0,
+			packets INTEGER NOT NULL DEFAULT 0,
+			started_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY (policy_id) REFERENCES firewall_policies(id) ON DELETE CASCADE
 		);`,
 
 		`CREATE TABLE IF NOT EXISTS port_forwards (
@@ -693,6 +703,23 @@ func migrate(db *sql.DB) error {
 		if !strings.Contains(sqlCreatePoliciesChain, "'output'") {
 			if _, err = db.Exec("ALTER TABLE firewall_policies ADD COLUMN chain TEXT NOT NULL DEFAULT 'forward' CHECK(chain IN ('forward', 'input', 'output'))"); err != nil {
 				return fmt.Errorf("failed to add chain column to firewall_policies table: %w", err)
+			}
+		}
+	}
+
+	// Persisted "Monitor" opt-in counters (docs/ref/todo/
+	// fqdn-retry-and-monitored-counters-plan.md T-05, issue #141). Add a
+	// per-policy `monitored` flag to firewall_policies. Detect via the
+	// column name "monitored" (unambiguous — no other column/constraint in
+	// this table's CREATE statement contains that substring). No backfill
+	// beyond the column DEFAULT of 0 — a fresh upgrade never auto-enables
+	// monitoring on any existing rule.
+	var sqlCreatePoliciesMonitored string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='firewall_policies'").Scan(&sqlCreatePoliciesMonitored)
+	if err == nil {
+		if !strings.Contains(sqlCreatePoliciesMonitored, "monitored") {
+			if _, err = db.Exec("ALTER TABLE firewall_policies ADD COLUMN monitored INTEGER NOT NULL DEFAULT 0 CHECK(monitored IN (0, 1))"); err != nil {
+				return fmt.Errorf("failed to add monitored column to firewall_policies table: %w", err)
 			}
 		}
 	}

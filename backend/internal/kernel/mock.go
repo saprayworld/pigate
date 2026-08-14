@@ -92,6 +92,16 @@ func (m *MockFirewall) ApplyRules(
 	return nil
 }
 
+// FQDNResolutions implements kernel.FirewallManager.FQDNResolutions. Always
+// returns an empty (non-nil) map — MockFirewall never resolves FQDN entries
+// (see the ApplyRules doc comment above), and FQDNRefresher itself is never
+// started in mock mode (repo.IsMockMode() guard, docs/ref/todo/
+// fqdn-retry-and-monitored-counters-plan.md D-1/Caution 5), so this exists
+// purely to satisfy the FirewallManager interface.
+func (m *MockFirewall) FQDNResolutions() map[string][]string {
+	return map[string][]string{}
+}
+
 // MockNetwork implements NetworkManager for local testing
 type MockNetwork struct{}
 
