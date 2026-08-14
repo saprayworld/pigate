@@ -1852,26 +1852,37 @@ paths:
       summary: Top IPs/services observed matching one rule (troubleshooting)
       description: >
         "Which IP/service hit this rule" for the per-rule usage details
-        drawer (docs/ref/todo/firewall-rule-matched-endpoints-plan.md),
-        aggregated live by scanning the in-memory traffic-log ring buffer on
-        every request (no persistence, no background aggregator). Four hard
-        limitations:
+        drawer (docs/ref/todo/firewall-rule-matched-endpoints-plan.md).
+        Originally aggregated live by scanning the in-memory traffic-log
+        ring buffer on every request (no persistence, no background
+        aggregator); since docs/ref/todo/persisted-rule-endpoints-plan.md
+        (issue #141 follow-up) a rule with Monitor enabled instead reads
+        this data from SQLite, which survives Apply Settings, a process
+        restart, and clearing the Traffic Log — see the `source` field on
+        `PolicyRuleEndpoints` for exactly which mode a given response used.
+        Four hard limitations (true in BOTH modes unless noted):
 
         (1) REQUIRES `log` ENABLED — a rule with `log: false` always returns
         `logEnabled: false` and empty lists; there is no other way to see
-        which packets matched it. (2) COUNTS ARE LOG ENTRIES, NOT BYTES — the
-        underlying NFLOG capture carries no packet size, so `count` on every
-        entry is "number of log events", not traffic volume (byte/packet
-        totals live in GET /policies/stats instead). (3) THE DATA WINDOW
-        EQUALS THE RING BUFFER — results only cover whatever is still in the
-        traffic-log buffer right now (see `bufferOldestAt`/`scannedEntries`);
-        clearing the traffic log (or the buffer simply rolling over under
-        heavy traffic) makes older matches disappear immediately, and a
-        low-traffic rule can be pushed out entirely by a high-traffic one.
-        (4) ONLY NEW CONNECTIONS AND DROPS ARE LOGGED — same NFLOG behavior
-        as the Traffic Log pages: established/related traffic on an already
-        -open connection is never logged again, so counts are not a full
-        packet tally.
+        which packets matched it (this is an NFLOG limitation, not specific
+        to either source mode — even a monitored rule collects nothing until
+        its own `log` flag is turned on). (2) COUNTS ARE LOG ENTRIES, NOT
+        BYTES — the underlying NFLOG capture carries no packet size, so
+        `count` on every entry is "number of log events", not traffic volume
+        (byte/packet totals live in GET /policies/stats instead). (3) THE
+        DATA WINDOW: for `source: "buffer"`, results only cover whatever is
+        still in the traffic-log buffer right now (see
+        `bufferOldestAt`/`scannedEntries`); clearing the traffic log (or the
+        buffer simply rolling over under heavy traffic) makes older matches
+        disappear immediately, and a low-traffic rule can be pushed out
+        entirely by a high-traffic one. For `source: "persisted"`, data
+        instead accumulates in SQLite under a per-direction cap
+        (`maxPerDirection`, LRU-evicted — see `capped`/`evicted`) starting
+        from the moment Monitor was turned on (or last reset) — there is no
+        backfill of data the buffer already had. (4) ONLY NEW CONNECTIONS
+        AND DROPS ARE LOGGED — same NFLOG behavior as the Traffic Log pages:
+        established/related traffic on an already-open connection is never
+        logged again, so counts are not a full packet tally.
 
         Name resolution precedence differs deliberately from the Traffic Log
         pages: for each IP, a user-defined Address Object name
@@ -7054,8 +7065,30 @@ components:
       description: >-
         Response of GET /policies/{id}/endpoints — see that endpoint's
         description for the 4 hard limitations (requires log enabled, counts
-        are log entries not bytes, data window equals the ring buffer, only
-        new-connections/drops are logged).
+        are log entries not bytes, data window equals the ring buffer for
+        source="buffer", only new-connections/drops are logged).
+
+        Since docs/ref/todo/persisted-rule-endpoints-plan.md (issue #141
+        follow-up) this response has two possible sources, indicated by the
+        `source` field:
+
+        - `source: "persisted"` — the rule has Monitor turned on (and the
+          monitored-endpoints-enabled kill switch is on), so this data comes
+          from SQLite (the policy_rule_endpoints table) instead of the
+          traffic-log ring buffer. It survives Apply Settings, a process
+          restart, and clearing the Traffic Log — none of those reset it.
+          Counting starts from zero at the moment Monitor was turned on (or
+          last reset) — there is no backfill from data the ring buffer
+          already had, so `scannedEntries`/`bufferOldestAt` are meaningless
+          in this mode and are simply omitted/zero.
+        - `source: "buffer"` — the original behavior: a single scan of the
+          in-memory traffic-log ring buffer. This is what every rule gets
+          when Monitor is off, or when monitored-endpoints-enabled is false.
+
+        Both modes still require the rule's `log` flag to be on before any
+        data is collected at all (`logEnabled: false` means the lists below
+        are always empty, not an error) — this is an NFLOG limitation, not a
+        bug, and is unaffected by which source mode is active.
       required:
         - ruleId
         - ruleName
@@ -7071,6 +7104,10 @@ components:
         - sources
         - destinations
         - services
+        - source
+        - capped
+        - evicted
+        - maxPerDirection
       properties:
         ruleId:
           type: string
@@ -7109,7 +7146,10 @@ components:
           example: true
         scannedEntries:
           type: integer
-          description: Size of the traffic-log buffer actually scanned (every chain/rule combined).
+          description: >-
+            Size of the traffic-log buffer actually scanned (every
+            chain/rule combined). Always 0 when source="persisted" (no
+            buffer scan happens in that mode).
           example: 10000
         bufferOldestAt:
           type: string
@@ -7117,7 +7157,8 @@ components:
           description: >-
             Timestamp of the oldest entry currently in the whole buffer —
             the edge of this endpoint's data window. Omitted if the buffer
-            is empty.
+            is empty, and always omitted when source="persisted" (no
+            meaning in that mode).
         sources:
           type: array
           items:
@@ -7130,6 +7171,49 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ServiceHit'
+        source:
+          type: string
+          enum: [persisted, buffer]
+          description: >-
+            Where this response's data came from — see the schema
+            description above. "persisted" means the rule has Monitor on and
+            the data is read from SQLite (survives Apply/restart/clearing
+            the Traffic Log); "buffer" is the original ring-buffer-scan
+            behavior.
+          example: buffer
+        collectingSince:
+          type: string
+          format: date-time
+          description: >-
+            Only present when source="persisted" — the moment Monitor was
+            turned on for this rule (or last reset), i.e. "data has been
+            collected since this timestamp, with no backfill from before
+            it". Mirrors the rule's persisted-counter started_at.
+        capped:
+          type: boolean
+          description: >-
+            true when at least one direction (sources/destinations/services)
+            currently holds exactly maxPerDirection rows — the cap has been
+            reached and the least-recently-seen entries are being evicted to
+            make room for new ones. Always false when source="buffer" (the
+            cap only applies to the persisted table).
+          example: false
+        evicted:
+          type: integer
+          description: >-
+            Cumulative number of rows evicted (LRU) for this rule since
+            Monitor was last turned on/reset. Always 0 when
+            source="buffer".
+          example: 0
+        maxPerDirection:
+          type: integer
+          description: >-
+            The effective cap (rows per direction) in effect —
+            monitored-endpoints-max-per-rule, default 1000. Surfaced here so
+            clients never need to hardcode this number. Present regardless
+            of source, so the UI can always describe the cap even for a rule
+            that isn't monitored yet.
+          example: 1000
 
     PolicyRuleInput:
       type: object
