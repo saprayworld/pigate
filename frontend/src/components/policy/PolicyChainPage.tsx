@@ -502,6 +502,27 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
     }
   }, [chain])
 
+  // handleStatsChanged is passed to RuleStatsDrawer's onChanged (T-16) — after
+  // a Monitor toggle/reset succeeds, refetch policies + stats immediately
+  // instead of waiting up to 10s for the next poll tick, and keep the open
+  // drawer's `rule` prop in sync (statsRule is a snapshot object, not a live
+  // reference into `rules`) so its Switch reflects the just-toggled state.
+  const handleStatsChanged = async () => {
+    try {
+      const stats = await policyStatsService.getStats(chain)
+      setPolicyStats(stats)
+    } catch (err) {
+      console.error("Failed to refresh policy usage statistics:", err)
+    }
+    try {
+      const policyData = await policyService.getAll(chain)
+      setRules(policyData)
+      setStatsRule((prev) => (prev ? policyData.find((r) => r.id === prev.id) ?? prev : prev))
+    } catch (err) {
+      console.error("Failed to refresh policies:", err)
+    }
+  }
+
   const handleApplySettings = async () => {
     setIsApplying(true)
     setShowApplySuccess(false)
@@ -607,7 +628,13 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
       action: formAction,
       log: formLog,
       nat: showNat && formAction === "ACCEPT" ? formNat : false,
-      status: formStatus
+      status: formStatus,
+      // This form has no Monitor control (it's a dedicated toggle-monitor
+      // action, docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md
+      // D-7/T-16) — always carry the existing value forward on edit so a
+      // plain edit can never silently turn Monitor off; new rules start
+      // unmonitored.
+      monitored: editingRule?.monitored ?? false
     }
 
     try {
@@ -1252,6 +1279,7 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
         stat={statsRule ? statsById.get(statsRule.id) : undefined}
         countersSince={policyStats?.countersSince}
         available={policyStats?.available ?? false}
+        onChanged={handleStatsChanged}
       />
     </div>
   )

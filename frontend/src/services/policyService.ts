@@ -215,6 +215,49 @@ export const policyService = {
     return response.json();
   },
 
+  // Toggle the persisted "Monitor" opt-in on a rule (docs/ref/todo/
+  // fqdn-retry-and-monitored-counters-plan.md D-6/T-11, issue #141). Turning
+  // it on starts a persisted running total from 0; turning it off discards
+  // it permanently (the caller is responsible for a confirm dialog before
+  // calling this with the intent to turn it off).
+  toggleMonitor: async (id: string): Promise<PolicyRule> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const current = getLocalPolicies();
+      const updatedList = current.map((r) =>
+        r.id === id ? { ...r, monitored: !r.monitored } : r
+      );
+      saveLocalPolicies(updatedList);
+      syncReferences();
+      return updatedList.find((r) => r.id === id)!;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/policies/${id}/toggle-monitor`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      await parseError(response, `Failed to toggle monitor: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  // Reset a rule's persisted Monitor counter back to 0 (docs/ref/todo/
+  // fqdn-retry-and-monitored-counters-plan.md D-6/T-11). Caller is
+  // responsible for a confirm dialog before calling this.
+  resetMonitorCounter: async (id: string): Promise<void> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/policies/${id}/monitor/reset`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      await parseError(response, `Failed to reset monitor counter: ${response.statusText}`);
+    }
+  },
+
   // Apply settings to Kernel (nftables reload)
   apply: async (): Promise<boolean> => {
     if (IS_MOCK_MODE) {
