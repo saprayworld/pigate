@@ -320,6 +320,10 @@ func TestWriteParseRoundTrip(t *testing.T) {
 	cfg.TrafficLogBufferCapacity = 20000
 	cfg.MaxObjectEntries = 128
 	cfg.MaxExpandedRulesPerPolicy = 8192
+	cfg.FQDNRefreshEnabled = false
+	cfg.FQDNRefreshIntervalSeconds = 600
+	cfg.FQDNRefreshRetryIntervalSeconds = 60
+	cfg.MonitoredCounterFlushIntervalSeconds = 120
 
 	var buf bytes.Buffer
 	if err := Write(&buf, cfg); err != nil {
@@ -363,8 +367,8 @@ func TestWriteParseRoundTripDefaults(t *testing.T) {
 
 func TestKnownKeys(t *testing.T) {
 	keys := KnownKeys()
-	if len(keys) != 25 {
-		t.Fatalf("expected 25 known keys, got %d: %v", len(keys), keys)
+	if len(keys) != 29 {
+		t.Fatalf("expected 29 known keys, got %d: %v", len(keys), keys)
 	}
 	// "config" and "v" must never be treated as config-file keys.
 	for _, k := range keys {
@@ -452,8 +456,24 @@ func TestKnownKeys(t *testing.T) {
 	if !hasMaxObjectEntries || !hasMaxExpandedRulesPerPolicy {
 		t.Fatalf("expected max-object-entries/max-expanded-rules-per-policy in KnownKeys, got %v", keys)
 	}
-	if keys[len(keys)-1] != "max-expanded-rules-per-policy" {
-		t.Fatalf("expected max-expanded-rules-per-policy to be the last key, got %v", keys)
+	var hasFQDNEnabled, hasFQDNInterval, hasFQDNRetry, hasMonitoredFlush bool
+	for _, k := range keys {
+		switch k {
+		case "fqdn-refresh-enabled":
+			hasFQDNEnabled = true
+		case "fqdn-refresh-interval-seconds":
+			hasFQDNInterval = true
+		case "fqdn-refresh-retry-interval-seconds":
+			hasFQDNRetry = true
+		case "monitored-counter-flush-interval-seconds":
+			hasMonitoredFlush = true
+		}
+	}
+	if !hasFQDNEnabled || !hasFQDNInterval || !hasFQDNRetry || !hasMonitoredFlush {
+		t.Fatalf("expected fqdn-refresh-enabled/fqdn-refresh-interval-seconds/fqdn-refresh-retry-interval-seconds/monitored-counter-flush-interval-seconds in KnownKeys, got %v", keys)
+	}
+	if keys[len(keys)-1] != "monitored-counter-flush-interval-seconds" {
+		t.Fatalf("expected monitored-counter-flush-interval-seconds to be the last key, got %v", keys)
 	}
 }
 
@@ -535,6 +555,120 @@ func TestResolve_DenyStatsMaxSourcesPorts(t *testing.T) {
 		fileVals := map[string]string{"deny-stats-max-sources": "not-a-number"}
 		if _, _, err := Resolve(Defaults(), fileVals, nil); err == nil {
 			t.Fatalf("expected error for non-integer deny-stats-max-sources")
+		}
+	})
+}
+
+// TestResolve_FQDNRefreshAndMonitoredCounterFlush covers the four new
+// file-only keys' default/override/out-of-range/non-integer behavior
+// (docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md D-3, issue #141)
+// — same pattern as TestResolve_DenyStatsMaxSourcesPorts above.
+func TestResolve_FQDNRefreshAndMonitoredCounterFlush(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		cfg, warns, err := Resolve(Defaults(), nil, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if !cfg.FQDNRefreshEnabled {
+			t.Fatalf("expected fqdn-refresh-enabled to default to true")
+		}
+		if cfg.FQDNRefreshIntervalSeconds != 300 {
+			t.Fatalf("got fqdn-refresh-interval-seconds=%d, want default 300", cfg.FQDNRefreshIntervalSeconds)
+		}
+		if cfg.FQDNRefreshRetryIntervalSeconds != 30 {
+			t.Fatalf("got fqdn-refresh-retry-interval-seconds=%d, want default 30", cfg.FQDNRefreshRetryIntervalSeconds)
+		}
+		if cfg.MonitoredCounterFlushIntervalSeconds != 300 {
+			t.Fatalf("got monitored-counter-flush-interval-seconds=%d, want default 300", cfg.MonitoredCounterFlushIntervalSeconds)
+		}
+	})
+
+	t.Run("file override", func(t *testing.T) {
+		fileVals := map[string]string{
+			"fqdn-refresh-enabled":                     "false",
+			"fqdn-refresh-interval-seconds":            "600",
+			"fqdn-refresh-retry-interval-seconds":      "45",
+			"monitored-counter-flush-interval-seconds": "120",
+		}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.FQDNRefreshEnabled {
+			t.Fatalf("expected fqdn-refresh-enabled=false to be applied")
+		}
+		if cfg.FQDNRefreshIntervalSeconds != 600 || cfg.FQDNRefreshRetryIntervalSeconds != 45 || cfg.MonitoredCounterFlushIntervalSeconds != 120 {
+			t.Fatalf("got %+v", cfg)
+		}
+	})
+
+	t.Run("out of range clamps to default with warning", func(t *testing.T) {
+		fileVals := map[string]string{
+			"fqdn-refresh-interval-seconds":            "10",
+			"fqdn-refresh-retry-interval-seconds":      "5",
+			"monitored-counter-flush-interval-seconds": "1",
+		}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 3 {
+			t.Fatalf("expected 3 warnings, got %v", warns)
+		}
+		if cfg.FQDNRefreshIntervalSeconds != 300 || cfg.FQDNRefreshRetryIntervalSeconds != 30 || cfg.MonitoredCounterFlushIntervalSeconds != 300 {
+			t.Fatalf("got %+v, want defaults", cfg)
+		}
+	})
+
+	t.Run("boundary values pass without warning", func(t *testing.T) {
+		fileVals := map[string]string{
+			"fqdn-refresh-interval-seconds":            "60",
+			"fqdn-refresh-retry-interval-seconds":      "10",
+			"monitored-counter-flush-interval-seconds": "30",
+		}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.FQDNRefreshIntervalSeconds != 60 || cfg.FQDNRefreshRetryIntervalSeconds != 10 || cfg.MonitoredCounterFlushIntervalSeconds != 30 {
+			t.Fatalf("got %+v", cfg)
+		}
+
+		fileVals = map[string]string{
+			"fqdn-refresh-interval-seconds":            "86400",
+			"fqdn-refresh-retry-interval-seconds":      "3600",
+			"monitored-counter-flush-interval-seconds": "86400",
+		}
+		cfg, warns, err = Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.FQDNRefreshIntervalSeconds != 86400 || cfg.FQDNRefreshRetryIntervalSeconds != 3600 || cfg.MonitoredCounterFlushIntervalSeconds != 86400 {
+			t.Fatalf("got %+v", cfg)
+		}
+	})
+
+	t.Run("non-integer is a fail-fast error", func(t *testing.T) {
+		if _, _, err := Resolve(Defaults(), map[string]string{"fqdn-refresh-interval-seconds": "abc"}, nil); err == nil {
+			t.Fatalf("expected error for non-integer fqdn-refresh-interval-seconds")
+		}
+	})
+
+	t.Run("non-bool fqdn-refresh-enabled is a fail-fast error", func(t *testing.T) {
+		if _, _, err := Resolve(Defaults(), map[string]string{"fqdn-refresh-enabled": "notabool"}, nil); err == nil {
+			t.Fatalf("expected error for non-bool fqdn-refresh-enabled")
 		}
 	})
 }
