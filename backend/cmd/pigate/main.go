@@ -267,6 +267,20 @@ func main() {
 	// (docs/ref/todo/dashboard-active-sessions-graph-plan.md Step 5).
 	systemStatusService.SetSessionCurrentFn(trafficStatsService.SessionCurrent)
 
+	// Persisted, opt-in "Monitor" per-rule counters (docs/ref/todo/
+	// fqdn-retry-and-monitored-counters-plan.md D-5/D-6, issue #141) — built
+	// right after trafficStatsService, which it drains deltas from.
+	// MonitoredCounterFlushIntervalSeconds is file-only config (D-3). Load()
+	// seeds the RAM cache from whatever is already in SQLite; a failure here
+	// only warns (an empty cache just means totals start at 0 for this boot,
+	// same as a genuinely fresh DB — never worth blocking startup over).
+	policyCounterStore := service.NewPolicyCounterStore(repo, trafficStatsService, time.Duration(cfg.MonitoredCounterFlushIntervalSeconds)*time.Second)
+	if err := policyCounterStore.Load(); err != nil {
+		log.Printf("[Main] Warning: failed to load persisted Monitor counters: %v", err)
+	}
+	firewallService.SetPolicyCounterStore(policyCounterStore)
+	firewallService.SetTrafficStats(trafficStatsService)
+
 	// Statistics page (Top Source Hosts / Top Destinations / Top
 	// Conversations / Top Denied — docs/ref/todo/statistics-page-plan.md).
 	// No ticker/goroutine of its own: byte figures ride TrafficStatsService's
@@ -424,6 +438,11 @@ func main() {
 		qosService, dhcpServerService, dhcpcdService, hostnameService, timeService,
 		netlinkMonitor,
 	)
+	// SetCounterStore wires the persisted Monitor counter store so a config
+	// import reloads its RAM cache from the post-import DB state (docs/ref/
+	// todo/fqdn-retry-and-monitored-counters-plan.md T-12) — additive, same
+	// pattern as the other Set* calls below.
+	backupService.SetCounterStore(policyCounterStore)
 
 	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker, wifiPresetService, systemServiceService, capabilityService, trafficStatsService, statisticsService, ipInfoService)
 
@@ -438,7 +457,14 @@ func main() {
 	// (constructed before policyStatsService), same additive-setter pattern
 	// as statisticsService.SetLogBuffer(ringBuffer) further up.
 	policyStatsService.SetDomainLookup(statisticsService.LookupDomains)
+	// SetCounterStore wires the persisted Monitor counter store into the
+	// stats response (docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md
+	// T-10).
+	policyStatsService.SetCounterStore(policyCounterStore)
 	server.SetPolicyStatsService(policyStatsService)
+	// SetPolicyCounterStore wires the toggle-monitor/monitor-reset endpoints
+	// (docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md T-11).
+	server.SetPolicyCounterStore(policyCounterStore)
 
 	// Apply config form database to kernel
 
@@ -554,6 +580,13 @@ func main() {
 	// systemStatusService above.
 	log.Printf("[Main] Starting dashboard traffic-detail collector...")
 	trafficStatsService.Start(monitorCtx)
+
+	// Persisted Monitor counter flush ticker (docs/ref/todo/
+	// fqdn-retry-and-monitored-counters-plan.md D-5, issue #141) — shares
+	// monitorCtx so it stops on shutdown, same as trafficStatsService above.
+	// Ticks are skipped in mock mode internally (see PolicyCounterStore.run).
+	log.Printf("[Main] Starting persisted Monitor counter flush ticker...")
+	policyCounterStore.Start(monitorCtx)
 
 	// Conntrack DESTROY event watcher — augments the poller above with
 	// per-flow byte counts at teardown, closing the gap for flows that start
@@ -672,6 +705,22 @@ func main() {
 	// part of the startup-apply sequence above.
 	log.Printf("[Main] Starting DHCP health-checker (link-local/no-IP self-heal)...")
 	dhcpHealthChecker.Start(monitorCtx)
+
+	// FQDN re-resolve retry ticker (docs/ref/todo/
+	// fqdn-retry-and-monitored-counters-plan.md D-1, issue #141) — started
+	// last, after firewallService.InitApplyConfig() (so there is an initial
+	// FQDNResolutions() snapshot to compare against) and after
+	// netlinkMonitor.Start (so its bus.IsPaused() guard reads real state).
+	// Disabled/skipped internally in mock mode (repo.IsMockMode()) and via
+	// the fqdn-refresh-enabled kill switch.
+	log.Printf("[Main] Starting FQDN re-resolve retry ticker (steady=%ds retry=%ds enabled=%t)...",
+		cfg.FQDNRefreshIntervalSeconds, cfg.FQDNRefreshRetryIntervalSeconds, cfg.FQDNRefreshEnabled)
+	fqdnRefresher := service.NewFQDNRefresher(repo, firewallService, fw, eventBus, eventLogService,
+		cfg.FQDNRefreshEnabled,
+		time.Duration(cfg.FQDNRefreshIntervalSeconds)*time.Second,
+		time.Duration(cfg.FQDNRefreshRetryIntervalSeconds)*time.Second,
+	)
+	fqdnRefresher.Start(monitorCtx)
 
 	handler := api.RegisterRoutes(server)
 
