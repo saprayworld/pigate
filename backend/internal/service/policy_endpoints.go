@@ -33,12 +33,23 @@ type endpointCount struct {
 	c   logs.Counted
 }
 
-// GetRuleEndpoints answers "which IPs/services matched this rule" by
-// scanning the traffic-log ring buffer once (RingBuffer.AggregateByRule,
-// T-02) and resolving names (T-03/T-04) for the top N of each category. It
-// never touches the kernel, never starts a goroutine, and never calls the
-// repository or a lookup function more than once per request — see plan T-05
-// and the "ห้าม" list there.
+// GetRuleEndpoints answers "which IPs/services matched this rule" from one
+// of two sources (docs/ref/todo/persisted-rule-endpoints-plan.md E-D6, issue
+// #141 follow-up):
+//
+//   - source="persisted": when the rule has Monitor enabled and the
+//     monitored-endpoints-enabled kill switch is on, data comes from the
+//     policy_rule_endpoints SQLite table (survives Apply/restart/clearing
+//     the traffic log) plus whatever the RAM recorder hasn't flushed yet.
+//   - source="buffer": the original behavior (docs/ref/todo/
+//     firewall-rule-matched-endpoints-plan.md) — a single scan of the
+//     traffic-log ring buffer (RingBuffer.AggregateByRule). Unconditional
+//     for a rule that isn't monitored, or when the kill switch is off.
+//
+// Both paths funnel through the exact same ranking (topEndpointCounts) and
+// name-resolution code below — the only thing that differs between them is
+// where the map[string]logs.Counted tallies come from (Caution 11: the
+// buffer path's behavior/output must be byte-for-byte unchanged).
 func (s *PolicyStatsService) GetRuleEndpoints(ruleID string, limit int) (model.PolicyRuleEndpoints, error) {
 	if limit < minEndpointsLimit || limit > maxEndpointsLimit {
 		limit = defaultEndpointsLimit
@@ -64,16 +75,70 @@ func (s *PolicyStatsService) GetRuleEndpoints(ruleID string, limit int) (model.P
 		return model.PolicyRuleEndpoints{}, ErrPolicyRuleNotFound
 	}
 
-	var agg logs.RuleAggregate
-	if s.ringBuffer != nil {
-		agg = s.ringBuffer.AggregateByRule(rule.ID)
+	usePersisted := s.endpointsEnabled && rule.Monitored && s.endpointStore != nil
+
+	var srcCounts, dstCounts, svcCounts map[string]logs.Counted
+	var uniqueSources, uniqueDests, uniqueServices int
+	var scannedEntries int
+	var bufferOldestAt string
+	respSource := "buffer"
+	var collectingSince string
+	var capped bool
+	var evicted int
+	maxPerDirection := s.endpointsMaxPerDirection
+	if maxPerDirection <= 0 {
+		maxPerDirection = defaultMaxEndpointsPerDirection
 	}
 
-	uniqueSources, uniqueDests, uniqueServices := len(agg.Sources), len(agg.Dests), len(agg.Services)
+	var matchedEntriesFromBuffer int
 
-	srcTop := topEndpointCounts(agg.Sources, limit)
-	destTop := topEndpointCounts(agg.Dests, limit)
-	svcTop := topEndpointCounts(agg.Services, limit)
+	if usePersisted {
+		respSource = "persisted"
+
+		srcCounts, err = s.persistedDirectionCounts(rule.ID, model.EndpointDirectionSrc, limit)
+		if err != nil {
+			return model.PolicyRuleEndpoints{}, err
+		}
+		dstCounts, err = s.persistedDirectionCounts(rule.ID, model.EndpointDirectionDst, limit)
+		if err != nil {
+			return model.PolicyRuleEndpoints{}, err
+		}
+		svcCounts, err = s.persistedDirectionCounts(rule.ID, model.EndpointDirectionSvc, limit)
+		if err != nil {
+			return model.PolicyRuleEndpoints{}, err
+		}
+
+		directionRowCounts, err := s.repo.CountPolicyEndpoints(rule.ID)
+		if err != nil {
+			return model.PolicyRuleEndpoints{}, err
+		}
+		uniqueSources = directionRowCounts[model.EndpointDirectionSrc]
+		uniqueDests = directionRowCounts[model.EndpointDirectionDst]
+		uniqueServices = directionRowCounts[model.EndpointDirectionSvc]
+		capped = uniqueSources >= maxPerDirection || uniqueDests >= maxPerDirection || uniqueServices >= maxPerDirection
+
+		if totals := s.endpointStore.Totals(); totals != nil {
+			collectingSince = totals[rule.ID].StartedAt
+		}
+		evicted = s.endpointStore.EndpointsEvictedFor(rule.ID)
+		// scannedEntries/bufferOldestAt stay at their zero value — they only
+		// have meaning for the buffer path (model.PolicyRuleEndpoints doc
+		// comment).
+	} else {
+		var agg logs.RuleAggregate
+		if s.ringBuffer != nil {
+			agg = s.ringBuffer.AggregateByRule(rule.ID)
+		}
+		srcCounts, dstCounts, svcCounts = agg.Sources, agg.Dests, agg.Services
+		uniqueSources, uniqueDests, uniqueServices = len(agg.Sources), len(agg.Dests), len(agg.Services)
+		scannedEntries = agg.Scanned
+		bufferOldestAt = agg.OldestTime
+		matchedEntriesFromBuffer = agg.Matched
+	}
+
+	srcTop := topEndpointCounts(srcCounts, limit)
+	destTop := topEndpointCounts(dstCounts, limit)
+	svcTop := topEndpointCounts(svcCounts, limit)
 
 	truncated := uniqueSources > len(srcTop) || uniqueDests > len(destTop) || uniqueServices > len(svcTop)
 
@@ -153,23 +218,86 @@ func (s *PolicyStatsService) GetRuleEndpoints(ruleID string, limit int) (model.P
 		})
 	}
 
+	// MatchedEntries: buffer path keeps its exact original meaning (Matched
+	// from AggregateByRule — a precise count of scanned log entries). The
+	// persisted path has no cheap equivalent (that would require summing
+	// every row for the src direction, not just the top-N this handler
+	// already fetched) — an approximation using the sum of the returned top
+	// sources is used instead, which is the closest meaning achievable
+	// without an extra full-table query (docs/ref/todo/
+	// persisted-rule-endpoints-plan.md E-07: "เป็นค่าประมาณเมื่อมาจากข้อมูล
+	// persist").
+	matchedEntries := matchedEntriesFromBuffer
+	if usePersisted {
+		for _, e := range srcTop {
+			matchedEntries += e.c.Count
+		}
+	}
+
 	return model.PolicyRuleEndpoints{
 		RuleID:             rule.ID,
 		RuleName:           rule.Name,
 		Chain:              rule.Chain,
 		LogEnabled:         rule.Log,
-		MatchedEntries:     agg.Matched,
+		MatchedEntries:     matchedEntries,
 		UniqueSources:      uniqueSources,
 		UniqueDestinations: uniqueDests,
 		UniqueServices:     uniqueServices,
 		Limit:              limit,
 		Truncated:          truncated,
-		ScannedEntries:     agg.Scanned,
-		BufferOldestAt:     agg.OldestTime,
+		ScannedEntries:     scannedEntries,
+		BufferOldestAt:     bufferOldestAt,
 		Sources:            sources,
 		Destinations:       destinations,
 		Services:           services,
+		Source:             respSource,
+		CollectingSince:    collectingSince,
+		Capped:             capped,
+		Evicted:            evicted,
+		MaxPerDirection:    maxPerDirection,
 	}, nil
+}
+
+// persistedDirectionCounts builds the map[string]logs.Counted tally for one
+// direction of the persisted path — top-N rows from
+// repo.GetTopPolicyEndpoints plus whatever the RAM recorder hasn't flushed
+// yet (docs/ref/todo/persisted-rule-endpoints-plan.md E-D6: without folding
+// in pending, a rule that just had Monitor turned on would show an empty
+// table for up to one flush interval). Pending counts are added onto a
+// matching DB row's count, or inserted as a brand-new entry when the DB
+// hasn't seen that key yet; first_seen_at always prefers whichever source
+// already has data for that key (DB row wins if both exist, since it is by
+// definition older).
+func (s *PolicyStatsService) persistedDirectionCounts(ruleID, direction string, limit int) (map[string]logs.Counted, error) {
+	rows, err := s.repo.GetTopPolicyEndpoints(ruleID, direction, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]logs.Counted, len(rows))
+	for _, row := range rows {
+		out[row.Key] = logs.Counted{Count: row.Count, FirstSeen: row.FirstSeenAt, LastSeen: row.LastSeenAt}
+	}
+
+	if s.endpointRecorder == nil {
+		return out, nil
+	}
+	pendingByDir := s.endpointRecorder.Pending(ruleID)
+	if pendingByDir == nil {
+		return out, nil
+	}
+	for key, p := range pendingByDir[direction] {
+		c, exists := out[key]
+		if !exists {
+			out[key] = logs.Counted{Count: p.Count, FirstSeen: p.FirstSeenAt, LastSeen: p.LastSeenAt}
+			continue
+		}
+		c.Count += p.Count
+		if p.LastSeenAt > c.LastSeen {
+			c.LastSeen = p.LastSeenAt
+		}
+		out[key] = c
+	}
+	return out, nil
 }
 
 // topEndpointCounts sorts m's entries by Count desc, key asc (deterministic

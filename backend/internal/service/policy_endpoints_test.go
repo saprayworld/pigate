@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"pigate/internal/db"
 	"pigate/internal/kernel"
@@ -242,5 +243,202 @@ func TestGetRuleEndpoints_DomainLookupWiredToRealStatisticsService(t *testing.T)
 	hit := got.Destinations[0]
 	if hit.Domain != "www.google.com" {
 		t.Fatalf("expected Domain to be populated via the real StatisticsService.LookupDomains wiring (this is the exact bug ai-qa flagged), got %+v", hit)
+	}
+}
+
+// newPersistedEndpointsTestServices wires a PolicyCounterStore + a
+// PolicyEndpointRecorder into a PolicyStatsService, mirroring cmd/pigate/
+// main.go's E-08 wiring, for the persisted-source tests below (docs/ref/todo/
+// persisted-rule-endpoints-plan.md E-07, issue #141 follow-up).
+func newPersistedEndpointsTestServices(t *testing.T) (*db.Repository, *logs.RingBuffer, *PolicyStatsService, *PolicyCounterStore, *PolicyEndpointRecorder) {
+	t.Helper()
+	repo, _, _, ringBuffer, statsSvc := newPolicyStatsTestServices(t, &fakeTrafficAccounting{})
+	counterStore := NewPolicyCounterStore(repo, nil, time.Hour)
+	if err := counterStore.Load(); err != nil {
+		t.Fatalf("PolicyCounterStore.Load: %v", err)
+	}
+	recorder := NewPolicyEndpointRecorder(true, 1000)
+	counterStore.SetEndpointRecorder(recorder, 1000)
+	statsSvc.SetEndpointStore(counterStore, recorder, true, 1000)
+	return repo, ringBuffer, statsSvc, counterStore, recorder
+}
+
+// TestGetRuleEndpoints_PersistedSource_MonitoredRuleReadsFromDB covers the
+// core E-D6 contract: a monitored rule with data already flushed to
+// policy_rule_endpoints reads from there (source="persisted"), not the ring
+// buffer, and the ring buffer's contents are ignored entirely.
+func TestGetRuleEndpoints_PersistedSource_MonitoredRuleReadsFromDB(t *testing.T) {
+	repo, ringBuffer, statsSvc, counterStore, _ := newPersistedEndpointsTestServices(t)
+	mustCreatePolicy(t, repo, model.PolicyRule{ID: "rule-1", Name: "R1", Chain: model.PolicyChainForward, Status: true, Log: true, Monitored: true})
+	if err := counterStore.Load(); err != nil { // pick up the counter row CreatePolicy seeded
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Ring buffer has unrelated stale data that must NOT leak into the
+	// persisted response (E-D6: never add the two sources together).
+	ringBuffer.Add(model.FirewallLog{RuleID: "rule-1", Src: "192.168.9.9", Dest: "-", Proto: "TCP", Port: "22", Time: "2026-01-01T00:00:00Z"})
+
+	if _, err := repo.AddPolicyEndpointDeltas([]model.PersistedEndpoint{
+		{RuleID: "rule-1", Direction: model.EndpointDirectionSrc, Key: "10.0.0.5", Count: 7, FirstSeenAt: "2026-01-01T00:00:00Z", LastSeenAt: "2026-01-01T00:05:00Z"},
+		{RuleID: "rule-1", Direction: model.EndpointDirectionDst, Key: "8.8.8.8", Count: 4, FirstSeenAt: "2026-01-01T00:00:00Z", LastSeenAt: "2026-01-01T00:05:00Z"},
+		{RuleID: "rule-1", Direction: model.EndpointDirectionSvc, Key: "UDP/53", Count: 4, FirstSeenAt: "2026-01-01T00:00:00Z", LastSeenAt: "2026-01-01T00:05:00Z"},
+	}, 1000); err != nil {
+		t.Fatalf("AddPolicyEndpointDeltas: %v", err)
+	}
+
+	got, err := statsSvc.GetRuleEndpoints("rule-1", 10)
+	if err != nil {
+		t.Fatalf("GetRuleEndpoints: %v", err)
+	}
+	if got.Source != "persisted" {
+		t.Fatalf("expected source=persisted, got %q", got.Source)
+	}
+	if got.CollectingSince == "" {
+		t.Fatal("expected CollectingSince to be set for a persisted response")
+	}
+	if got.ScannedEntries != 0 || got.BufferOldestAt != "" {
+		t.Fatalf("expected ScannedEntries=0/BufferOldestAt=\"\" for persisted source, got %+v", got)
+	}
+	if got.MaxPerDirection != 1000 {
+		t.Fatalf("expected MaxPerDirection=1000, got %d", got.MaxPerDirection)
+	}
+	if len(got.Sources) != 1 || got.Sources[0].IP != "10.0.0.5" || got.Sources[0].Count != 7 {
+		t.Fatalf("expected the persisted source row (not the ring buffer's 192.168.9.9), got %+v", got.Sources)
+	}
+	if len(got.Destinations) != 1 || got.Destinations[0].IP != "8.8.8.8" || got.Destinations[0].Count != 4 {
+		t.Fatalf("unexpected destinations: %+v", got.Destinations)
+	}
+	if len(got.Services) != 1 || got.Services[0].Proto != "UDP" || got.Services[0].Port != "53" || got.Services[0].Count != 4 {
+		t.Fatalf("unexpected services: %+v", got.Services)
+	}
+}
+
+// TestGetRuleEndpoints_PersistedSource_PendingFoldedIn covers the "see it
+// immediately, no wait for the next flush" requirement (E-D6): data still
+// sitting in the RAM recorder (not yet flushed) must be folded into the
+// persisted response.
+func TestGetRuleEndpoints_PersistedSource_PendingFoldedIn(t *testing.T) {
+	repo, _, statsSvc, counterStore, recorder := newPersistedEndpointsTestServices(t)
+	mustCreatePolicy(t, repo, model.PolicyRule{ID: "rule-1", Name: "R1", Chain: model.PolicyChainForward, Status: true, Log: true, Monitored: true})
+	if err := counterStore.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	recorder.SetMonitoredRules(map[string]bool{"rule-1": true})
+
+	// Flushed row for 10.0.0.5.
+	if _, err := repo.AddPolicyEndpointDeltas([]model.PersistedEndpoint{
+		{RuleID: "rule-1", Direction: model.EndpointDirectionSrc, Key: "10.0.0.5", Count: 2, FirstSeenAt: "2026-01-01T00:00:00Z", LastSeenAt: "2026-01-01T00:01:00Z"},
+	}, 1000); err != nil {
+		t.Fatalf("AddPolicyEndpointDeltas: %v", err)
+	}
+	// Pending (not yet flushed): more hits on the same key, plus a brand-new
+	// key never seen by the DB.
+	recorder.Record(model.FirewallLog{RuleID: "rule-1", Src: "10.0.0.5", Time: "2026-01-01T00:02:00Z"})
+	recorder.Record(model.FirewallLog{RuleID: "rule-1", Src: "10.0.0.6", Time: "2026-01-01T00:02:00Z"})
+
+	got, err := statsSvc.GetRuleEndpoints("rule-1", 10)
+	if err != nil {
+		t.Fatalf("GetRuleEndpoints: %v", err)
+	}
+	byIP := make(map[string]int)
+	for _, s := range got.Sources {
+		byIP[s.IP] = s.Count
+	}
+	if byIP["10.0.0.5"] != 3 {
+		t.Fatalf("expected 10.0.0.5 to be DB(2)+pending(1)=3, got %+v", got.Sources)
+	}
+	if byIP["10.0.0.6"] != 1 {
+		t.Fatalf("expected pending-only key 10.0.0.6 count=1, got %+v", got.Sources)
+	}
+}
+
+// TestGetRuleEndpoints_UnmonitoredRuleStaysOnBuffer_EvenWithEndpointStoreWired
+// is the Caution 11 regression guard: wiring SetEndpointStore must not
+// change behavior for a rule that isn't monitored — must still read from the
+// ring buffer.
+func TestGetRuleEndpoints_UnmonitoredRuleStaysOnBuffer_EvenWithEndpointStoreWired(t *testing.T) {
+	repo, ringBuffer, statsSvc, _, _ := newPersistedEndpointsTestServices(t)
+	mustCreatePolicy(t, repo, model.PolicyRule{ID: "rule-1", Name: "R1", Chain: model.PolicyChainForward, Status: true, Log: true, Monitored: false})
+	ringBuffer.Add(model.FirewallLog{RuleID: "rule-1", Src: "10.0.0.1", Dest: "-", Proto: "TCP", Port: "443", Time: "2026-01-01T00:00:00Z"})
+
+	got, err := statsSvc.GetRuleEndpoints("rule-1", 10)
+	if err != nil {
+		t.Fatalf("GetRuleEndpoints: %v", err)
+	}
+	if got.Source != "buffer" {
+		t.Fatalf("expected source=buffer for an unmonitored rule, got %q", got.Source)
+	}
+	if len(got.Sources) != 1 || got.Sources[0].IP != "10.0.0.1" {
+		t.Fatalf("expected the ring-buffer source, got %+v", got.Sources)
+	}
+}
+
+// TestGetRuleEndpoints_KillSwitchForcesBufferEvenWhenMonitored covers the
+// monitored-endpoints-enabled kill switch (E-D9): even a monitored rule with
+// persisted rows must fall back to the buffer path when disabled.
+func TestGetRuleEndpoints_KillSwitchForcesBufferEvenWhenMonitored(t *testing.T) {
+	repo, ringBuffer, statsSvc, counterStore, _ := newPersistedEndpointsTestServices(t)
+	mustCreatePolicy(t, repo, model.PolicyRule{ID: "rule-1", Name: "R1", Chain: model.PolicyChainForward, Status: true, Log: true, Monitored: true})
+	if err := counterStore.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := repo.AddPolicyEndpointDeltas([]model.PersistedEndpoint{
+		{RuleID: "rule-1", Direction: model.EndpointDirectionSrc, Key: "10.0.0.5", Count: 1, FirstSeenAt: "2026-01-01T00:00:00Z", LastSeenAt: "2026-01-01T00:00:00Z"},
+	}, 1000); err != nil {
+		t.Fatalf("AddPolicyEndpointDeltas: %v", err)
+	}
+	ringBuffer.Add(model.FirewallLog{RuleID: "rule-1", Src: "192.168.1.1", Dest: "-", Proto: "TCP", Port: "443", Time: "2026-01-01T00:00:00Z"})
+
+	// Re-wire with the kill switch off (recorder untouched).
+	statsSvc.SetEndpointStore(counterStore, nil, false, 1000)
+
+	got, err := statsSvc.GetRuleEndpoints("rule-1", 10)
+	if err != nil {
+		t.Fatalf("GetRuleEndpoints: %v", err)
+	}
+	if got.Source != "buffer" {
+		t.Fatalf("expected source=buffer with the kill switch off, got %q", got.Source)
+	}
+	if len(got.Sources) != 1 || got.Sources[0].IP != "192.168.1.1" {
+		t.Fatalf("expected the ring-buffer source when kill switch is off, got %+v", got.Sources)
+	}
+}
+
+// TestGetRuleEndpoints_CappedAndEvictedSurfaced covers Capped/Evicted/
+// MaxPerDirection in the response.
+func TestGetRuleEndpoints_CappedAndEvictedSurfaced(t *testing.T) {
+	repo, _, statsSvc, counterStore, recorder := newPersistedEndpointsTestServices(t)
+	mustCreatePolicy(t, repo, model.PolicyRule{ID: "rule-1", Name: "R1", Chain: model.PolicyChainForward, Status: true, Log: true, Monitored: true})
+	if err := counterStore.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Re-wire with a tiny cap so this test runs fast.
+	counterStore.SetEndpointRecorder(recorder, 2)
+	statsSvc.SetEndpointStore(counterStore, recorder, true, 2)
+
+	// 3 distinct src keys through a cap of 2 -> 1 must be evicted.
+	if _, err := repo.AddPolicyEndpointDeltas([]model.PersistedEndpoint{
+		{RuleID: "rule-1", Direction: model.EndpointDirectionSrc, Key: "10.0.0.1", Count: 1, FirstSeenAt: "2026-01-01T00:00:01Z", LastSeenAt: "2026-01-01T00:00:01Z"},
+		{RuleID: "rule-1", Direction: model.EndpointDirectionSrc, Key: "10.0.0.2", Count: 1, FirstSeenAt: "2026-01-01T00:00:02Z", LastSeenAt: "2026-01-01T00:00:02Z"},
+		{RuleID: "rule-1", Direction: model.EndpointDirectionSrc, Key: "10.0.0.3", Count: 1, FirstSeenAt: "2026-01-01T00:00:03Z", LastSeenAt: "2026-01-01T00:00:03Z"},
+	}, 2); err != nil {
+		t.Fatalf("AddPolicyEndpointDeltas: %v", err)
+	}
+	if err := counterStore.Load(); err != nil { // refresh cache so EndpointsEvictedFor sees the eviction credit written above
+		t.Fatalf("Load: %v", err)
+	}
+
+	got, err := statsSvc.GetRuleEndpoints("rule-1", 10)
+	if err != nil {
+		t.Fatalf("GetRuleEndpoints: %v", err)
+	}
+	if got.MaxPerDirection != 2 {
+		t.Fatalf("expected MaxPerDirection=2, got %d", got.MaxPerDirection)
+	}
+	if !got.Capped {
+		t.Fatalf("expected Capped=true (src direction at cap), got %+v", got)
+	}
+	if got.Evicted != 1 {
+		t.Fatalf("expected Evicted=1, got %d", got.Evicted)
 	}
 }

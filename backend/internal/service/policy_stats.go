@@ -47,6 +47,18 @@ type PolicyStatsService struct {
 	// nil, every rule's Monitored/MonitoredBytes/MonitoredPackets/
 	// MonitoredSince stay at their zero value.
 	counterStore *PolicyCounterStore
+
+	// endpointStore/endpointRecorder/endpointsEnabled/endpointsMaxPerDirection
+	// back GetRuleEndpoints' "persisted" source path (docs/ref/todo/
+	// persisted-rule-endpoints-plan.md E-07, issue #141 follow-up), wired
+	// post-construction via SetEndpointStore for the same reason as
+	// domainLookup/counterStore above. When endpointsEnabled is false or
+	// endpointStore is nil, GetRuleEndpoints always falls back to the
+	// original ring-buffer scan (source="buffer") — E-D6.
+	endpointStore            *PolicyCounterStore
+	endpointRecorder         *PolicyEndpointRecorder
+	endpointsEnabled         bool
+	endpointsMaxPerDirection int
 }
 
 // NewPolicyStatsService constructs the service. Any dependency may be nil in
@@ -72,6 +84,25 @@ func (s *PolicyStatsService) SetDomainLookup(fn func([]string) map[string]string
 // the counterStore field doc comment above.
 func (s *PolicyStatsService) SetCounterStore(store *PolicyCounterStore) {
 	s.counterStore = store
+}
+
+// SetEndpointStore wires the persisted rule-endpoints dependencies used by
+// GetRuleEndpoints (docs/ref/todo/persisted-rule-endpoints-plan.md E-07,
+// issue #141 follow-up) — store is the same *PolicyCounterStore passed to
+// SetCounterStore (it also owns EndpointsEvictedFor); recorder is the RAM
+// accumulator whose not-yet-flushed pending data must be folded in so a
+// just-enabled Monitor rule shows data immediately (E-D6); enabled is the
+// monitored-endpoints-enabled kill switch; maxPerDirection is the effective
+// cap (monitored-endpoints-max-per-rule), surfaced in the response so the UI
+// never hardcodes it (Caution 14).
+func (s *PolicyStatsService) SetEndpointStore(store *PolicyCounterStore, recorder *PolicyEndpointRecorder, enabled bool, maxPerDirection int) {
+	if maxPerDirection <= 0 {
+		maxPerDirection = defaultMaxEndpointsPerDirection
+	}
+	s.endpointStore = store
+	s.endpointRecorder = recorder
+	s.endpointsEnabled = enabled
+	s.endpointsMaxPerDirection = maxPerDirection
 }
 
 // GetPolicyRuleStats returns usage stats for every enabled policy rule,
