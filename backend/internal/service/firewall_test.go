@@ -37,6 +37,13 @@ func (t *trackingFirewallManager) ApplyRules(
 	return nil
 }
 
+// FQDNResolutions satisfies kernel.FirewallManager (docs/ref/todo/
+// fqdn-retry-and-monitored-counters-plan.md T-02, Caution 11) — this test
+// double never resolves FQDN entries, so an empty map is sufficient.
+func (t *trackingFirewallManager) FQDNResolutions() map[string][]string {
+	return map[string][]string{}
+}
+
 func TestFirewallService_Policies(t *testing.T) {
 	sqliteDB, err := db.InitDB(":memory:")
 	if err != nil {

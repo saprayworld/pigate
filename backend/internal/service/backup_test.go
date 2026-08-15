@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"pigate/internal/db"
 	"pigate/internal/kernel"
@@ -1209,5 +1210,308 @@ func TestImportLegacyDNSServerSettingsBackupDefaultsUpstreamToSystem(t *testing.
 	}
 	if len(settings.UpstreamServers) != 0 {
 		t.Errorf("UpstreamServers = %v, want empty", settings.UpstreamServers)
+	}
+}
+
+// TestExportImportRoundTripsMonitoredField covers T-12 (docs/ref/todo/
+// fqdn-retry-and-monitored-counters-plan.md, issue #141): exporting a
+// monitored policy must carry the flag, and importing it must restore
+// monitored=true (round-trip, not just marshal-level).
+func TestExportImportRoundTripsMonitoredField(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+	if err := repo.SetPolicyMonitored("pol-1", true); err != nil {
+		t.Fatalf("SetPolicyMonitored: %v", err)
+	}
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	var found bool
+	for _, p := range file.Config.Policies {
+		if p.ID == "pol-1" {
+			found = true
+			if !p.Monitored {
+				t.Fatalf("expected exported pol-1 to have monitored=true")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("pol-1 not found in export")
+	}
+
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	if _, err := bs.Import(raw, model.ImportOptions{}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	imported, err := repo.GetPolicyByID("pol-1")
+	if err != nil || imported == nil {
+		t.Fatalf("get imported policy: %v", err)
+	}
+	if !imported.Monitored {
+		t.Fatalf("expected imported pol-1 to have monitored=true")
+	}
+
+	monitoredIDs, err := repo.GetMonitoredPolicyIDs()
+	if err != nil {
+		t.Fatalf("GetMonitoredPolicyIDs: %v", err)
+	}
+	if !monitoredIDs["pol-1"] {
+		t.Fatalf("expected pol-1 to be in GetMonitoredPolicyIDs after import")
+	}
+	counters, err := repo.GetPolicyRuleCounters()
+	if err != nil {
+		t.Fatalf("GetPolicyRuleCounters: %v", err)
+	}
+	var hasRow bool
+	for _, c := range counters {
+		if c.RuleID == "pol-1" {
+			hasRow = true
+		}
+	}
+	if !hasRow {
+		t.Fatalf("expected a fresh policy_rule_counters row for pol-1 after import, got %+v", counters)
+	}
+}
+
+// TestImportLegacyBackupWithoutMonitoredKeyChecksumRegression mirrors
+// TestImportLegacyBackupWithoutEntriesKeyChecksumRegression: a backup file
+// that predates the `monitored` field (issue #141) must still import
+// successfully (checksum must still verify) and every policy must decode as
+// monitored=false.
+func TestImportLegacyBackupWithoutMonitoredKeyChecksumRegression(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	sum, err := configChecksum(*file.Config)
+	if err != nil {
+		t.Fatalf("configChecksum: %v", err)
+	}
+	file.Meta.Checksum = sum
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// Load-bearing assertion: a policy with monitored=false (every policy in
+	// this fixture, since none were toggled) must marshal WITHOUT a
+	// "monitored" key at all — this is what breaks if omitempty is ever
+	// removed from PolicyRule.Monitored.
+	if strings.Contains(string(raw), `"monitored"`) {
+		t.Fatalf("test setup invalid (or omitempty was removed from PolicyRule.Monitored): raw backup still contains a monitored key: %s", raw)
+	}
+
+	res, err := bs.Import(raw, model.ImportOptions{})
+	if err != nil {
+		t.Fatalf("import of legacy backup without a monitored key must succeed (checksum must still verify), got: %v", err)
+	}
+	if res.Counts["policies"] == 0 {
+		t.Errorf("expected policies to be imported, got count 0")
+	}
+
+	imported, err := repo.GetPolicyByID("pol-1")
+	if err != nil || imported == nil {
+		t.Fatalf("get imported policy: %v", err)
+	}
+	if imported.Monitored {
+		t.Errorf("expected legacy-imported pol-1 to default monitored=false")
+	}
+	monitoredIDs, err := repo.GetMonitoredPolicyIDs()
+	if err != nil {
+		t.Fatalf("GetMonitoredPolicyIDs: %v", err)
+	}
+	if len(monitoredIDs) != 0 {
+		t.Fatalf("expected no monitored policies after a legacy import, got %v", monitoredIDs)
+	}
+}
+
+// TestImportDoesNotExportCounterTable asserts policy_rule_counters itself is
+// never part of the exported/imported config shape (Caution 7) — this is a
+// compile-time-adjacent check: model.BackupConfig has no field for it, so
+// this test just documents/locks in the invariant by asserting the export
+// JSON never contains the table's column names as a top-level backup key.
+func TestImportDoesNotExportCounterTable(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+	if err := repo.SetPolicyMonitored("pol-1", true); err != nil {
+		t.Fatalf("SetPolicyMonitored: %v", err)
+	}
+	if err := repo.AddPolicyRuleCounterDeltas(map[string]model.RuleCounter{"pol-1": {Bytes: 12345, Packets: 10}}); err != nil {
+		t.Fatalf("AddPolicyRuleCounterDeltas: %v", err)
+	}
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "12345") {
+		t.Fatalf("expected the runtime counter value to NEVER appear in the exported backup, got: %s", raw)
+	}
+}
+
+// TestBackupService_SetCounterStoreReloadsAfterImport asserts Import calls
+// PolicyCounterStore.Reload() after a successful restore, so the RAM cache
+// reflects the DB's post-import state instead of stale pre-import values.
+func TestBackupService_SetCounterStoreReloadsAfterImport(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+	if err := repo.SetPolicyMonitored("pol-1", true); err != nil {
+		t.Fatalf("SetPolicyMonitored: %v", err)
+	}
+	if err := repo.AddPolicyRuleCounterDeltas(map[string]model.RuleCounter{"pol-1": {Bytes: 500, Packets: 5}}); err != nil {
+		t.Fatalf("AddPolicyRuleCounterDeltas: %v", err)
+	}
+
+	acct := &fakeTrafficAccounting{}
+	ts := NewTrafficStatsService(acct, repo, &fakeDhcpForTraffic{}, kernel.NewMockSystemStats(), 0, 0, 0)
+	store := NewPolicyCounterStore(repo, ts, time.Hour)
+	if err := store.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if store.Totals()["pol-1"].Bytes != 500 {
+		t.Fatalf("expected pre-import cache to hold 500, got %+v", store.Totals()["pol-1"])
+	}
+	bs.SetCounterStore(store)
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Mutate the DB counter value directly (simulating time passing between
+	// export and import) so we can distinguish "reloaded from DB" from
+	// "stale cache untouched".
+	if err := repo.ResetPolicyRuleCounter("pol-1"); err != nil {
+		t.Fatalf("ResetPolicyRuleCounter: %v", err)
+	}
+	if err := repo.AddPolicyRuleCounterDeltas(map[string]model.RuleCounter{"pol-1": {Bytes: 999, Packets: 9}}); err != nil {
+		t.Fatalf("AddPolicyRuleCounterDeltas: %v", err)
+	}
+
+	if _, err := bs.Import(raw, model.ImportOptions{}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	// Import restores policy_rule_counters to a fresh zeroed row (D-6 —
+	// backup never carries the runtime counter value itself, Caution 7), so
+	// after Reload the cache must reflect that fresh DB state (0), not the
+	// pre-import 500 nor the 999 written directly above (which RestoreConfig
+	// overwrote).
+	got := store.Totals()["pol-1"]
+	if got.Bytes != 0 {
+		t.Fatalf("expected cache reloaded to the post-import DB value (0), got %+v", got)
+	}
+}
+
+// TestImportDoesNotExportEndpointsTable is E-09 of docs/ref/todo/
+// persisted-rule-endpoints-plan.md (issue #141 follow-up), mirroring
+// TestImportDoesNotExportCounterTable above: policy_rule_endpoints is
+// runtime data and model.BackupConfig has no field for it, so a distinctive
+// endpoint key/IP value seeded into that table must never appear in the
+// exported backup JSON.
+func TestImportDoesNotExportEndpointsTable(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+	if err := repo.SetPolicyMonitored("pol-1", true); err != nil {
+		t.Fatalf("SetPolicyMonitored: %v", err)
+	}
+	const distinctiveIP = "203.0.113.77"
+	if _, err := repo.AddPolicyEndpointDeltas([]model.PersistedEndpoint{
+		{RuleID: "pol-1", Direction: model.EndpointDirectionSrc, Key: distinctiveIP, Count: 3, FirstSeenAt: "2026-01-01T00:00:00Z", LastSeenAt: "2026-01-01T00:00:00Z"},
+	}, 1000); err != nil {
+		t.Fatalf("AddPolicyEndpointDeltas: %v", err)
+	}
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), distinctiveIP) {
+		t.Fatalf("expected the runtime endpoint IP to NEVER appear in the exported backup, got: %s", raw)
+	}
+}
+
+// TestBackupService_SetCounterStoreReloadsRecorderAfterImport is E-09: Import
+// must clear the RAM endpoint recorder's pending data and resync its
+// monitored-rule set to the post-import DB, via the same
+// PolicyCounterStore.Reload() call E-06 already extended for this — a stray
+// pending delta from a rule that existed only in the pre-import DB must
+// never reach the DB on the next flush after import.
+func TestBackupService_SetCounterStoreReloadsRecorderAfterImport(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+	if err := repo.SetPolicyMonitored("pol-1", true); err != nil {
+		t.Fatalf("SetPolicyMonitored: %v", err)
+	}
+
+	acct := &fakeTrafficAccounting{}
+	ts := NewTrafficStatsService(acct, repo, &fakeDhcpForTraffic{}, kernel.NewMockSystemStats(), 0, 0, 0)
+	store := NewPolicyCounterStore(repo, ts, time.Hour)
+	if err := store.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	recorder := NewPolicyEndpointRecorder(true, 1000)
+	store.SetEndpointRecorder(recorder, 1000)
+	recorder.SetMonitoredRules(map[string]bool{"pol-1": true})
+	bs.SetCounterStore(store)
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Pending data accumulates in RAM right before import (simulating traffic
+	// that arrived in the window between export and import completing).
+	recorder.Record(model.FirewallLog{RuleID: "pol-1", Src: "198.51.100.5", Time: "2026-01-01T00:00:00Z"})
+
+	if _, err := bs.Import(raw, model.ImportOptions{}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	// The pending delta captured before import must have been discarded by
+	// Reload() — draining now must be empty, and nothing must have been
+	// written to policy_rule_endpoints for that stray key.
+	if got := recorder.Drain(); len(got) != 0 {
+		t.Fatalf("expected Reload (via Import) to have cleared pending recorder data, got %+v", got)
+	}
+	rows, err := repo.GetTopPolicyEndpoints("pol-1", model.EndpointDirectionSrc, 10)
+	if err != nil {
+		t.Fatalf("GetTopPolicyEndpoints: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("expected no endpoint rows written for the pre-import stray pending delta, got %+v", rows)
+	}
+
+	// The recorder's monitored set must still reflect the post-import DB
+	// state (pol-1 is still monitored=true in this fixture), so a fresh
+	// Record must be accepted.
+	recorder.Record(model.FirewallLog{RuleID: "pol-1", Src: "198.51.100.6", Time: "2026-01-01T00:01:00Z"})
+	if got := recorder.Drain(); len(got) != 1 {
+		t.Fatalf("expected recorder's monitored set to be resynced after import, got %+v", got)
 	}
 }

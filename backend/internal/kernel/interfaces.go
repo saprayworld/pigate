@@ -18,6 +18,18 @@ type FirewallManager interface {
 		dnsServerIfaces []string,
 		portForwards []model.PortForward,
 	) error
+
+	// FQDNResolutions returns a copy of the FQDN -> resolved IPv4 (as
+	// strings) map that reflects exactly what the most recent successful
+	// ApplyRules call used to build the currently-applied nft rules (docs/
+	// ref/todo/fqdn-retry-and-monitored-counters-plan.md D-1, issue #141).
+	// Only FQDN address-object entries actually referenced by an enabled
+	// PolicyRule are present. A key with an empty slice value means that
+	// FQDN failed to resolve (or resolved to no IPv4 address) on the last
+	// apply — this is the signal FQDNRefresher polls to know when to retry.
+	// Never returns nil; an empty map means either no FQDN entries are in
+	// use, or ApplyRules hasn't succeeded yet.
+	FQDNResolutions() map[string][]string
 }
 
 // TrafficLogManager streams packet PASS/DROP events for all three firewall

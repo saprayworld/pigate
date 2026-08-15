@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -1416,5 +1417,323 @@ func TestObjectEntries_BackfillFromLegacyDBIsIdempotent(t *testing.T) {
 	}
 	if got := countRows(third, "service_object_ports"); got != svcParentCount {
 		t.Fatalf("backfill not idempotent: expected %d service_object_ports rows after a second reboot, got %d", svcParentCount, got)
+	}
+}
+
+// TestPolicyRuleCounters_MonitoredCRUD covers the persisted "Monitor"
+// counter CRUD added for docs/ref/todo/
+// fqdn-retry-and-monitored-counters-plan.md T-07 (issue #141): toggling
+// monitored keeps the policy_rule_counters row in lockstep, deltas
+// accumulate, zero-delta flushes are a no-op, and reset zeroes the total.
+func TestPolicyRuleCounters_MonitoredCRUD(t *testing.T) {
+	sqliteDB, err := InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer sqliteDB.Close()
+	repo := NewRepository(sqliteDB)
+
+	addr := model.AddressObject{ID: "addr-mon-src", Name: "MON_SRC", Type: "subnet", Value: "10.0.0.0/24"}
+	dst := model.AddressObject{ID: "addr-mon-dst", Name: "MON_DST", Type: "subnet", Value: "8.8.8.8/32"}
+	svc := model.ServiceObject{ID: "svc-mon", Name: "MON_SVC", Protocol: "UDP", Port: "53", Type: "custom"}
+	if err := repo.CreateAddress(addr); err != nil {
+		t.Fatalf("CreateAddress: %v", err)
+	}
+	if err := repo.CreateAddress(dst); err != nil {
+		t.Fatalf("CreateAddress: %v", err)
+	}
+	if err := repo.CreateService(svc); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+
+	rule := model.PolicyRule{
+		ID: "rule-mon-1", Name: "Monitored Rule",
+		Source: []string{"MON_SRC"}, Destination: []string{"MON_DST"}, Service: []string{"MON_SVC"},
+		Action: "ACCEPT", Status: true,
+	}
+	if err := repo.CreatePolicy(rule); err != nil {
+		t.Fatalf("CreatePolicy: %v", err)
+	}
+
+	// Not monitored yet: no ids, no rows.
+	ids, err := repo.GetMonitoredPolicyIDs()
+	if err != nil {
+		t.Fatalf("GetMonitoredPolicyIDs: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("expected no monitored ids yet, got %v", ids)
+	}
+
+	// Enable monitoring.
+	if err := repo.SetPolicyMonitored("rule-mon-1", true); err != nil {
+		t.Fatalf("SetPolicyMonitored(true): %v", err)
+	}
+	ids, err = repo.GetMonitoredPolicyIDs()
+	if err != nil {
+		t.Fatalf("GetMonitoredPolicyIDs: %v", err)
+	}
+	if !ids["rule-mon-1"] {
+		t.Fatalf("expected rule-mon-1 to be monitored, got %v", ids)
+	}
+	counters, err := repo.GetPolicyRuleCounters()
+	if err != nil {
+		t.Fatalf("GetPolicyRuleCounters: %v", err)
+	}
+	if len(counters) != 1 || counters[0].RuleID != "rule-mon-1" || counters[0].Bytes != 0 {
+		t.Fatalf("expected a single zeroed counter row, got %+v", counters)
+	}
+	startedAt := counters[0].StartedAt
+
+	// Zero-delta flush must be a true no-op (Caution 6): updated_at must not
+	// even change.
+	if err := repo.AddPolicyRuleCounterDeltas(map[string]model.RuleCounter{"rule-mon-1": {Bytes: 0, Packets: 0}}); err != nil {
+		t.Fatalf("AddPolicyRuleCounterDeltas(zero): %v", err)
+	}
+	after, _ := repo.GetPolicyRuleCounters()
+	if after[0].UpdatedAt != counters[0].UpdatedAt {
+		t.Fatalf("zero-delta flush must not write updated_at: before=%q after=%q", counters[0].UpdatedAt, after[0].UpdatedAt)
+	}
+
+	// Non-zero delta accumulates; unknown ids are silently skipped.
+	if err := repo.AddPolicyRuleCounterDeltas(map[string]model.RuleCounter{
+		"rule-mon-1":          {Bytes: 100, Packets: 2},
+		"rule-does-not-exist": {Bytes: 999, Packets: 9},
+	}); err != nil {
+		t.Fatalf("AddPolicyRuleCounterDeltas: %v", err)
+	}
+	if err := repo.AddPolicyRuleCounterDeltas(map[string]model.RuleCounter{"rule-mon-1": {Bytes: 50, Packets: 1}}); err != nil {
+		t.Fatalf("AddPolicyRuleCounterDeltas (second): %v", err)
+	}
+	counters, err = repo.GetPolicyRuleCounters()
+	if err != nil {
+		t.Fatalf("GetPolicyRuleCounters: %v", err)
+	}
+	if len(counters) != 1 || counters[0].Bytes != 150 || counters[0].Packets != 3 {
+		t.Fatalf("expected accumulated bytes=150 packets=3, got %+v", counters)
+	}
+	if counters[0].StartedAt != startedAt {
+		t.Fatalf("StartedAt must not change on delta accumulation: got %q, want %q", counters[0].StartedAt, startedAt)
+	}
+
+	// Reset zeroes bytes/packets and refreshes started_at.
+	if err := repo.ResetPolicyRuleCounter("rule-mon-1"); err != nil {
+		t.Fatalf("ResetPolicyRuleCounter: %v", err)
+	}
+	counters, _ = repo.GetPolicyRuleCounters()
+	if counters[0].Bytes != 0 || counters[0].Packets != 0 {
+		t.Fatalf("expected reset counter to be zeroed, got %+v", counters[0])
+	}
+
+	// Disable monitoring: row must be deleted.
+	if err := repo.SetPolicyMonitored("rule-mon-1", false); err != nil {
+		t.Fatalf("SetPolicyMonitored(false): %v", err)
+	}
+	counters, err = repo.GetPolicyRuleCounters()
+	if err != nil {
+		t.Fatalf("GetPolicyRuleCounters: %v", err)
+	}
+	if len(counters) != 0 {
+		t.Fatalf("expected no counter rows after disabling monitor, got %+v", counters)
+	}
+	ids, _ = repo.GetMonitoredPolicyIDs()
+	if len(ids) != 0 {
+		t.Fatalf("expected no monitored ids after disabling monitor, got %v", ids)
+	}
+
+	// SetPolicyMonitored on an unknown id is an error.
+	if err := repo.SetPolicyMonitored("rule-does-not-exist", true); err == nil {
+		t.Fatalf("expected error for SetPolicyMonitored on unknown id")
+	}
+
+	// Deleting a monitored rule cascades the counter row.
+	if err := repo.SetPolicyMonitored("rule-mon-1", true); err != nil {
+		t.Fatalf("SetPolicyMonitored(true) again: %v", err)
+	}
+	if err := repo.DeletePolicy("rule-mon-1"); err != nil {
+		t.Fatalf("DeletePolicy: %v", err)
+	}
+	counters, _ = repo.GetPolicyRuleCounters()
+	if len(counters) != 0 {
+		t.Fatalf("expected FK cascade to remove the counter row on delete, got %+v", counters)
+	}
+}
+
+// TestPolicyRuleEndpoints_UpsertEvictionAndCascade covers E-04 of
+// docs/ref/todo/persisted-rule-endpoints-plan.md (issue #141 follow-up):
+// UPSERT accumulation without clobbering first_seen_at, LRU eviction that
+// only fires once over cap and leaves exactly cap rows, no DELETE issued
+// while under cap, SetPolicyMonitored(false)/ResetPolicyRuleCounter clearing
+// endpoints in the same transaction, and FK cascade on policy delete.
+func TestPolicyRuleEndpoints_UpsertEvictionAndCascade(t *testing.T) {
+	sqliteDB, err := InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer sqliteDB.Close()
+	repo := NewRepository(sqliteDB)
+
+	addr := model.AddressObject{ID: "addr-ep-src", Name: "EP_SRC", Type: "subnet", Value: "10.0.0.0/24"}
+	dst := model.AddressObject{ID: "addr-ep-dst", Name: "EP_DST", Type: "subnet", Value: "8.8.8.8/32"}
+	svc := model.ServiceObject{ID: "svc-ep", Name: "EP_SVC", Protocol: "UDP", Port: "53", Type: "custom"}
+	if err := repo.CreateAddress(addr); err != nil {
+		t.Fatalf("CreateAddress: %v", err)
+	}
+	if err := repo.CreateAddress(dst); err != nil {
+		t.Fatalf("CreateAddress: %v", err)
+	}
+	if err := repo.CreateService(svc); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	rule := model.PolicyRule{
+		ID: "rule-ep-1", Name: "Endpoints Rule",
+		Source: []string{"EP_SRC"}, Destination: []string{"EP_DST"}, Service: []string{"EP_SVC"},
+		Action: "ACCEPT", Status: true,
+	}
+	if err := repo.CreatePolicy(rule); err != nil {
+		t.Fatalf("CreatePolicy: %v", err)
+	}
+	if err := repo.SetPolicyMonitored("rule-ep-1", true); err != nil {
+		t.Fatalf("SetPolicyMonitored(true): %v", err)
+	}
+
+	// Upsert one entry, then upsert the same key again: count accumulates,
+	// first_seen_at must not be overwritten, last_seen_at must update.
+	first := model.PersistedEndpoint{
+		RuleID: "rule-ep-1", Direction: model.EndpointDirectionSrc, Key: "10.0.0.5",
+		Count: 3, FirstSeenAt: "2026-01-01T00:00:00Z", LastSeenAt: "2026-01-01T00:00:00Z",
+	}
+	if _, err := repo.AddPolicyEndpointDeltas([]model.PersistedEndpoint{first}, 1000); err != nil {
+		t.Fatalf("AddPolicyEndpointDeltas: %v", err)
+	}
+	second := model.PersistedEndpoint{
+		RuleID: "rule-ep-1", Direction: model.EndpointDirectionSrc, Key: "10.0.0.5",
+		Count: 2, FirstSeenAt: "2026-01-01T01:00:00Z", LastSeenAt: "2026-01-01T01:00:00Z",
+	}
+	if _, err := repo.AddPolicyEndpointDeltas([]model.PersistedEndpoint{second}, 1000); err != nil {
+		t.Fatalf("AddPolicyEndpointDeltas (second): %v", err)
+	}
+	rows, err := repo.GetTopPolicyEndpoints("rule-ep-1", model.EndpointDirectionSrc, 10)
+	if err != nil {
+		t.Fatalf("GetTopPolicyEndpoints: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Count != 5 {
+		t.Fatalf("expected accumulated count=5, got %+v", rows)
+	}
+	if rows[0].FirstSeenAt != "2026-01-01T00:00:00Z" {
+		t.Fatalf("first_seen_at must not be overwritten by upsert, got %q", rows[0].FirstSeenAt)
+	}
+	if rows[0].LastSeenAt != "2026-01-01T01:00:00Z" {
+		t.Fatalf("last_seen_at must be updated by upsert, got %q", rows[0].LastSeenAt)
+	}
+
+	// Under cap: no eviction should happen (cap=1000, only 1 row).
+	counters, _ := repo.GetPolicyRuleCounters()
+	if len(counters) != 1 || counters[0].EndpointsEvicted != 0 {
+		t.Fatalf("expected endpoints_evicted=0 while under cap, got %+v", counters)
+	}
+
+	// Eviction: cap=3, insert 5 distinct keys with increasing last_seen_at,
+	// so the two oldest ("k0","k1") must be evicted, "k2".."k4" survive.
+	var deltas []model.PersistedEndpoint
+	for i := 0; i < 5; i++ {
+		deltas = append(deltas, model.PersistedEndpoint{
+			RuleID:      "rule-ep-1",
+			Direction:   model.EndpointDirectionDst,
+			Key:         fmt.Sprintf("10.0.1.%d", i),
+			Count:       1,
+			FirstSeenAt: fmt.Sprintf("2026-01-02T00:00:0%dZ", i),
+			LastSeenAt:  fmt.Sprintf("2026-01-02T00:00:0%dZ", i),
+		})
+	}
+	evicted, err := repo.AddPolicyEndpointDeltas(deltas, 3)
+	if err != nil {
+		t.Fatalf("AddPolicyEndpointDeltas (evict): %v", err)
+	}
+	if evicted["rule-ep-1"] != 2 {
+		t.Fatalf("expected 2 rows evicted, got %v", evicted)
+	}
+	dstRows, err := repo.GetTopPolicyEndpoints("rule-ep-1", model.EndpointDirectionDst, 10)
+	if err != nil {
+		t.Fatalf("GetTopPolicyEndpoints (dst): %v", err)
+	}
+	if len(dstRows) != 3 {
+		t.Fatalf("expected exactly 3 dst rows left after eviction (cap=3), got %d: %+v", len(dstRows), dstRows)
+	}
+	survivors := make(map[string]bool)
+	for _, r := range dstRows {
+		survivors[r.Key] = true
+	}
+	if survivors["10.0.1.0"] || survivors["10.0.1.1"] {
+		t.Fatalf("expected the two oldest (lowest last_seen_at) keys evicted, got survivors %+v", dstRows)
+	}
+	if !survivors["10.0.1.2"] || !survivors["10.0.1.3"] || !survivors["10.0.1.4"] {
+		t.Fatalf("expected the three newest keys to survive, got %+v", dstRows)
+	}
+	counters, _ = repo.GetPolicyRuleCounters()
+	if len(counters) != 1 || counters[0].EndpointsEvicted != 2 {
+		t.Fatalf("expected endpoints_evicted=2 to be credited, got %+v", counters)
+	}
+
+	// CountPolicyEndpoints reflects both directions.
+	counts, err := repo.CountPolicyEndpoints("rule-ep-1")
+	if err != nil {
+		t.Fatalf("CountPolicyEndpoints: %v", err)
+	}
+	if counts[model.EndpointDirectionSrc] != 1 || counts[model.EndpointDirectionDst] != 3 {
+		t.Fatalf("expected src=1 dst=3, got %v", counts)
+	}
+
+	// Reset clears endpoints and zeroes endpoints_evicted, in the same
+	// transaction as the counter reset.
+	if err := repo.ResetPolicyRuleCounter("rule-ep-1"); err != nil {
+		t.Fatalf("ResetPolicyRuleCounter: %v", err)
+	}
+	counts, _ = repo.CountPolicyEndpoints("rule-ep-1")
+	if len(counts) != 0 {
+		t.Fatalf("expected no endpoint rows after reset, got %v", counts)
+	}
+	counters, _ = repo.GetPolicyRuleCounters()
+	if counters[0].EndpointsEvicted != 0 {
+		t.Fatalf("expected endpoints_evicted reset to 0, got %+v", counters[0])
+	}
+
+	// Re-seed then disable monitoring: endpoints must be deleted in the same
+	// transaction as the counter row (FK cascade does NOT do this — E-D8).
+	if _, err := repo.AddPolicyEndpointDeltas([]model.PersistedEndpoint{{
+		RuleID: "rule-ep-1", Direction: model.EndpointDirectionSvc, Key: "UDP/53",
+		Count: 1, FirstSeenAt: "2026-01-03T00:00:00Z", LastSeenAt: "2026-01-03T00:00:00Z",
+	}}, 1000); err != nil {
+		t.Fatalf("AddPolicyEndpointDeltas (re-seed): %v", err)
+	}
+	if err := repo.SetPolicyMonitored("rule-ep-1", false); err != nil {
+		t.Fatalf("SetPolicyMonitored(false): %v", err)
+	}
+	counts, _ = repo.CountPolicyEndpoints("rule-ep-1")
+	if len(counts) != 0 {
+		t.Fatalf("expected no endpoint rows after disabling monitor, got %v", counts)
+	}
+
+	// Re-seed then delete the policy entirely: FK cascade must remove
+	// endpoints along with the counter row.
+	if err := repo.SetPolicyMonitored("rule-ep-1", true); err != nil {
+		t.Fatalf("SetPolicyMonitored(true) again: %v", err)
+	}
+	if _, err := repo.AddPolicyEndpointDeltas([]model.PersistedEndpoint{{
+		RuleID: "rule-ep-1", Direction: model.EndpointDirectionSrc, Key: "10.0.0.9",
+		Count: 1, FirstSeenAt: "2026-01-04T00:00:00Z", LastSeenAt: "2026-01-04T00:00:00Z",
+	}}, 1000); err != nil {
+		t.Fatalf("AddPolicyEndpointDeltas (pre-delete seed): %v", err)
+	}
+	if err := repo.DeletePolicy("rule-ep-1"); err != nil {
+		t.Fatalf("DeletePolicy: %v", err)
+	}
+	counts, _ = repo.CountPolicyEndpoints("rule-ep-1")
+	if len(counts) != 0 {
+		t.Fatalf("expected FK cascade to remove endpoint rows on delete, got %v", counts)
+	}
+
+	// Empty deltas must not open a transaction / must not error.
+	if evicted, err := repo.AddPolicyEndpointDeltas(nil, 1000); err != nil || evicted != nil {
+		t.Fatalf("AddPolicyEndpointDeltas(nil): expected (nil, nil), got (%v, %v)", evicted, err)
 	}
 }

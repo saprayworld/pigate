@@ -127,6 +127,10 @@ export interface PolicyRule {
   log: boolean
   nat: boolean // Source NAT (masquerade to outgoing interface address)
   status: boolean // true = Enabled, false = Disabled
+  // monitored opts this rule into persisted traffic counters that accumulate
+  // across Apply/restart instead of resetting on every apply (docs/ref/todo/
+  // fqdn-retry-and-monitored-counters-plan.md D-6, issue #141).
+  monitored: boolean
 }
 
 // Initial mockup rules for Firewall Policy

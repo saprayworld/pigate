@@ -28,6 +28,16 @@ export interface PolicyRuleStat {
   unused: boolean
   lastMatchedAt?: string
   lastMatchedSource?: "log" | "counter"
+  // monitored/monitoredBytes/monitoredPackets/monitoredSince surface the
+  // persisted opt-in counter (docs/ref/todo/
+  // fqdn-retry-and-monitored-counters-plan.md D-6, issue #141) — a separate
+  // accounting from bytes/packets/percent above, which remain "since the
+  // last successful apply" only. monitoredSince is empty when monitored is
+  // false.
+  monitored: boolean
+  monitoredBytes?: number
+  monitoredPackets?: number
+  monitoredSince?: string
 }
 
 export interface PolicyRuleStats {
@@ -71,7 +81,20 @@ function buildMockStats(rules: PolicyRule[], chain?: PolicyChain): PolicyRuleSta
       lastMatchedSource = r.log ? "log" : "counter"
     }
 
-    return { rule: r, bytes, packets, unused, lastMatchedAt, lastMatchedSource }
+    // Monitored totals are always synthesized to be >= the since-apply bytes
+    // above (a persisted running total across many applies must never look
+    // smaller than "since the last apply" — that would be nonsensical), and
+    // monitoredSince is always well in the past so it's visibly distinct
+    // from countersSince below.
+    const monitoredBytes = r.monitored ? bytes + 50000 + (h % 200000) : undefined
+    const monitoredPackets = r.monitored
+      ? packets + Math.max(1, Math.round((50000 + (h % 200000)) / (64 + (h % 900))))
+      : undefined
+    const monitoredSince = r.monitored
+      ? new Date(Date.now() - (3600 + (h % 604800)) * 1000).toISOString()
+      : undefined
+
+    return { rule: r, bytes, packets, unused, lastMatchedAt, lastMatchedSource, monitoredBytes, monitoredPackets, monitoredSince }
   })
 
   const totalBytes = synthesized.reduce((sum, s) => sum + s.bytes, 0)
@@ -92,6 +115,10 @@ function buildMockStats(rules: PolicyRule[], chain?: PolicyChain): PolicyRuleSta
       unused: s.unused,
       lastMatchedAt: s.lastMatchedAt,
       lastMatchedSource: s.lastMatchedSource,
+      monitored: s.rule.monitored,
+      monitoredBytes: s.monitoredBytes,
+      monitoredPackets: s.monitoredPackets,
+      monitoredSince: s.monitoredSince,
     }))
     .sort((a, b) => b.bytes - a.bytes || a.ruleId.localeCompare(b.ruleId))
 

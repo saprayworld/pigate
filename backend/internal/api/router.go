@@ -132,6 +132,11 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("PUT /api/policies/reorder", s.HandleReorderPolicies)
 	authRoute("POST /api/policies/{id}/toggle-log", s.HandleTogglePolicyLog)
 	authRoute("POST /api/policies/{id}/toggle-status", s.HandleTogglePolicyStatus)
+	// Persisted "Monitor" opt-in counters (docs/ref/todo/
+	// fqdn-retry-and-monitored-counters-plan.md D-6/T-11, issue #141) — same
+	// authRoute level as toggle-log/toggle-status just above.
+	authRoute("POST /api/policies/{id}/toggle-monitor", s.HandleTogglePolicyMonitor)
+	authRoute("POST /api/policies/{id}/monitor/reset", s.HandleResetPolicyMonitorCounter)
 	authRoute("POST /api/policies/apply", s.HandleApplyPolicies)
 
 	// 4.1 Port Forwarding (DNAT / Virtual IP). Flat path per convention (like

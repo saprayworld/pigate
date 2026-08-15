@@ -294,7 +294,8 @@ func migrate(db *sql.DB) error {
 			action TEXT NOT NULL CHECK(action IN ('ACCEPT', 'DROP')),
 			log INTEGER DEFAULT 0 CHECK(log IN (0, 1)),
 			status INTEGER DEFAULT 1 CHECK(status IN (0, 1)),
-			priority INTEGER NOT NULL
+			priority INTEGER NOT NULL,
+			monitored INTEGER NOT NULL DEFAULT 0 CHECK(monitored IN (0, 1))
 		);`,
 
 		`CREATE TABLE IF NOT EXISTS policy_addresses (
@@ -313,6 +314,33 @@ func migrate(db *sql.DB) error {
 			FOREIGN KEY (policy_id) REFERENCES firewall_policies(id) ON DELETE CASCADE,
 			FOREIGN KEY (service_id) REFERENCES service_objects(id) ON DELETE RESTRICT
 		);`,
+
+		`CREATE TABLE IF NOT EXISTS policy_rule_counters (
+			policy_id TEXT PRIMARY KEY,
+			bytes INTEGER NOT NULL DEFAULT 0,
+			packets INTEGER NOT NULL DEFAULT 0,
+			started_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			endpoints_evicted INTEGER NOT NULL DEFAULT 0,
+			FOREIGN KEY (policy_id) REFERENCES firewall_policies(id) ON DELETE CASCADE
+		);`,
+
+		// Persisted rule endpoints (docs/ref/todo/persisted-rule-endpoints-plan.md
+		// E-D3, issue #141 follow-up). One row per unique (policy, direction,
+		// endpoint_key) seen while the policy has Monitor enabled and Log
+		// enabled. `direction` is 'src'/'dst'/'svc'; `endpoint_key` is an IP
+		// literal for src/dst or "PROTO/PORT" for svc.
+		`CREATE TABLE IF NOT EXISTS policy_rule_endpoints (
+			policy_id TEXT NOT NULL,
+			direction TEXT NOT NULL CHECK(direction IN ('src', 'dst', 'svc')),
+			endpoint_key TEXT NOT NULL,
+			count INTEGER NOT NULL DEFAULT 0,
+			first_seen_at TEXT NOT NULL,
+			last_seen_at TEXT NOT NULL,
+			PRIMARY KEY (policy_id, direction, endpoint_key),
+			FOREIGN KEY (policy_id) REFERENCES firewall_policies(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_policy_rule_endpoints_lru ON policy_rule_endpoints(policy_id, direction, last_seen_at);`,
 
 		`CREATE TABLE IF NOT EXISTS port_forwards (
 			id TEXT PRIMARY KEY,
@@ -693,6 +721,39 @@ func migrate(db *sql.DB) error {
 		if !strings.Contains(sqlCreatePoliciesChain, "'output'") {
 			if _, err = db.Exec("ALTER TABLE firewall_policies ADD COLUMN chain TEXT NOT NULL DEFAULT 'forward' CHECK(chain IN ('forward', 'input', 'output'))"); err != nil {
 				return fmt.Errorf("failed to add chain column to firewall_policies table: %w", err)
+			}
+		}
+	}
+
+	// Persisted "Monitor" opt-in counters (docs/ref/todo/
+	// fqdn-retry-and-monitored-counters-plan.md T-05, issue #141). Add a
+	// per-policy `monitored` flag to firewall_policies. Detect via the
+	// column name "monitored" (unambiguous — no other column/constraint in
+	// this table's CREATE statement contains that substring). No backfill
+	// beyond the column DEFAULT of 0 — a fresh upgrade never auto-enables
+	// monitoring on any existing rule.
+	var sqlCreatePoliciesMonitored string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='firewall_policies'").Scan(&sqlCreatePoliciesMonitored)
+	if err == nil {
+		if !strings.Contains(sqlCreatePoliciesMonitored, "monitored") {
+			if _, err = db.Exec("ALTER TABLE firewall_policies ADD COLUMN monitored INTEGER NOT NULL DEFAULT 0 CHECK(monitored IN (0, 1))"); err != nil {
+				return fmt.Errorf("failed to add monitored column to firewall_policies table: %w", err)
+			}
+		}
+	}
+
+	// Persisted rule endpoints (docs/ref/todo/persisted-rule-endpoints-plan.md
+	// E-D3, issue #141 follow-up). Add `endpoints_evicted` to
+	// policy_rule_counters (a dev machine may already have this table from
+	// before this migration, created without the column). Detect via the
+	// column name "endpoints_evicted" (unambiguous). No backfill beyond the
+	// column DEFAULT of 0.
+	var sqlCreateRuleCountersEvicted string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='policy_rule_counters'").Scan(&sqlCreateRuleCountersEvicted)
+	if err == nil {
+		if !strings.Contains(sqlCreateRuleCountersEvicted, "endpoints_evicted") {
+			if _, err = db.Exec("ALTER TABLE policy_rule_counters ADD COLUMN endpoints_evicted INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return fmt.Errorf("failed to add endpoints_evicted column to policy_rule_counters table: %w", err)
 			}
 		}
 	}

@@ -175,6 +175,37 @@ type Config struct {
 	// only on process restart, like TrafficLogBufferCapacity above.
 	MaxObjectEntries          int
 	MaxExpandedRulesPerPolicy int
+
+	// FQDNRefreshEnabled/FQDNRefreshIntervalSeconds/
+	// FQDNRefreshRetryIntervalSeconds/MonitoredCounterFlushIntervalSeconds are
+	// also file-only (no matching CLI flag) — docs/ref/todo/
+	// fqdn-retry-and-monitored-counters-plan.md (issue #141) D-3.
+	// FQDNRefreshEnabled is a kill switch for the background FQDN
+	// re-resolve ticker (service/fqdn_refresh.go). The two interval fields
+	// control its two-speed cadence: FQDNRefreshRetryIntervalSeconds is used
+	// while at least one FQDN address object still fails to resolve (boot/DNS
+	// outage recovery), FQDNRefreshIntervalSeconds once all FQDNs resolve
+	// (steady state). MonitoredCounterFlushIntervalSeconds controls how often
+	// PolicyCounterStore (service/policy_counter_store.go) drains accumulated
+	// per-rule deltas into SQLite.
+	FQDNRefreshEnabled                   bool
+	FQDNRefreshIntervalSeconds           int
+	FQDNRefreshRetryIntervalSeconds      int
+	MonitoredCounterFlushIntervalSeconds int
+
+	// MonitoredEndpointsEnabled/MonitoredEndpointsMaxPerRule are also
+	// file-only (no matching CLI flag) — docs/ref/todo/
+	// persisted-rule-endpoints-plan.md (issue #141 follow-up) E-D9.
+	// MonitoredEndpointsEnabled is a kill switch for the whole persisted
+	// rule-endpoints feature (PolicyEndpointRecorder + policy_rule_endpoints
+	// table); when false, GetRuleEndpoints always falls back to the ring
+	// buffer, exactly like before this feature existed.
+	// MonitoredEndpointsMaxPerRule is the cap (LRU eviction) on rows kept per
+	// (policy, direction) pair, both in the RAM recorder's admission cap and
+	// in the persisted table — must be kept in sync everywhere per Caution 14
+	// of that plan (no other layer may hardcode this number).
+	MonitoredEndpointsEnabled    bool
+	MonitoredEndpointsMaxPerRule int
 }
 
 // Defaults returns the Config populated with the exact same defaults as the
@@ -233,6 +264,18 @@ func Defaults() Config {
 		// must be kept in sync with model.DefaultMaxObjectEntries.
 		MaxObjectEntries:          64,
 		MaxExpandedRulesPerPolicy: 4096,
+
+		// Owner-confirmed defaults (D-3, docs/ref/todo/
+		// fqdn-retry-and-monitored-counters-plan.md, issue #141).
+		FQDNRefreshEnabled:                   true,
+		FQDNRefreshIntervalSeconds:           300,
+		FQDNRefreshRetryIntervalSeconds:      30,
+		MonitoredCounterFlushIntervalSeconds: 300,
+
+		// Owner-confirmed defaults (docs/ref/todo/
+		// persisted-rule-endpoints-plan.md E-D9/E-D4, issue #141 follow-up).
+		MonitoredEndpointsEnabled:    true,
+		MonitoredEndpointsMaxPerRule: 1000,
 	}
 }
 
@@ -287,6 +330,22 @@ const (
 	// §2.1/T-00A).
 	keyMaxObjectEntries          = "max-object-entries"
 	keyMaxExpandedRulesPerPolicy = "max-expanded-rules-per-policy"
+
+	// keyFQDNRefreshEnabled/keyFQDNRefreshIntervalSeconds/
+	// keyFQDNRefreshRetryIntervalSeconds/
+	// keyMonitoredCounterFlushIntervalSeconds are also file-only (no CLI
+	// flag — docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md D-3,
+	// issue #141).
+	keyFQDNRefreshEnabled                   = "fqdn-refresh-enabled"
+	keyFQDNRefreshIntervalSeconds           = "fqdn-refresh-interval-seconds"
+	keyFQDNRefreshRetryIntervalSeconds      = "fqdn-refresh-retry-interval-seconds"
+	keyMonitoredCounterFlushIntervalSeconds = "monitored-counter-flush-interval-seconds"
+
+	// keyMonitoredEndpointsEnabled/keyMonitoredEndpointsMaxPerRule are also
+	// file-only (no CLI flag — docs/ref/todo/persisted-rule-endpoints-plan.md
+	// E-D9, issue #141 follow-up).
+	keyMonitoredEndpointsEnabled    = "monitored-endpoints-enabled"
+	keyMonitoredEndpointsMaxPerRule = "monitored-endpoints-max-per-rule"
 )
 
 // maxDNSStatsPairsCap/maxDNSStatsClientsCap are RAM-guard sanity ceilings for
@@ -363,6 +422,33 @@ const (
 	maxMaxExpandedRulesPerPolicy = 65536
 )
 
+// minFQDNRefreshIntervalSeconds/maxFQDNRefreshIntervalSeconds,
+// minFQDNRefreshRetryIntervalSeconds/maxFQDNRefreshRetryIntervalSeconds and
+// minMonitoredCounterFlushIntervalSeconds/
+// maxMonitoredCounterFlushIntervalSeconds are the accepted ranges for the
+// FQDN refresher and monitored-counter-flush intervals (docs/ref/todo/
+// fqdn-retry-and-monitored-counters-plan.md D-3, issue #141).
+const (
+	minFQDNRefreshIntervalSeconds      = 60
+	maxFQDNRefreshIntervalSeconds      = 86400
+	minFQDNRefreshRetryIntervalSeconds = 10
+	maxFQDNRefreshRetryIntervalSeconds = 3600
+
+	minMonitoredCounterFlushIntervalSeconds = 30
+	maxMonitoredCounterFlushIntervalSeconds = 86400
+)
+
+// minMonitoredEndpointsMaxPerRule/maxMonitoredEndpointsMaxPerRule are the
+// accepted range for monitored-endpoints-max-per-rule (docs/ref/todo/
+// persisted-rule-endpoints-plan.md E-D4, issue #141 follow-up). 20 is the
+// leanest mode for small/old SD cards; 5000 is the ceiling that still lets a
+// single flush transaction finish quickly (see the plan's §5 resource
+// budget table).
+const (
+	minMonitoredEndpointsMaxPerRule = 20
+	maxMonitoredEndpointsMaxPerRule = 5000
+)
+
 // orderedKeys is the fixed key order used by Write (and reused by KnownKeys)
 // so the generated file is stable/diffable across runs.
 var orderedKeys = []string{
@@ -412,6 +498,22 @@ var orderedKeys = []string{
 	// cleanly across upgrades.
 	keyMaxObjectEntries,
 	keyMaxExpandedRulesPerPolicy,
+	// Appended at the very end, after max-expanded-rules-per-policy, per
+	// docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md (issue #141) —
+	// keeping new keys strictly appended (rather than alphabetized among the
+	// existing ones) keeps already-generated pigate.conf files diffing
+	// cleanly across upgrades.
+	keyFQDNRefreshEnabled,
+	keyFQDNRefreshIntervalSeconds,
+	keyFQDNRefreshRetryIntervalSeconds,
+	keyMonitoredCounterFlushIntervalSeconds,
+	// Appended at the very end, after monitored-counter-flush-interval-seconds,
+	// per docs/ref/todo/persisted-rule-endpoints-plan.md (issue #141
+	// follow-up) — keeping new keys strictly appended (rather than
+	// alphabetized among the existing ones) keeps already-generated
+	// pigate.conf files diffing cleanly across upgrades.
+	keyMonitoredEndpointsEnabled,
+	keyMonitoredEndpointsMaxPerRule,
 }
 
 // KnownKeys returns the list of recognized config/flag keys, in the fixed
@@ -585,6 +687,31 @@ func Resolve(defaults Config, fileVals, explicit map[string]string) (Config, []s
 		cfg.MaxExpandedRulesPerPolicy = defaults.MaxExpandedRulesPerPolicy
 	}
 
+	if cfg.FQDNRefreshIntervalSeconds < minFQDNRefreshIntervalSeconds || cfg.FQDNRefreshIntervalSeconds > maxFQDNRefreshIntervalSeconds {
+		warnings = append(warnings, fmt.Sprintf(
+			"fqdn-refresh-interval-seconds=%d out of range (%d..%d), using default %d",
+			cfg.FQDNRefreshIntervalSeconds, minFQDNRefreshIntervalSeconds, maxFQDNRefreshIntervalSeconds, defaults.FQDNRefreshIntervalSeconds))
+		cfg.FQDNRefreshIntervalSeconds = defaults.FQDNRefreshIntervalSeconds
+	}
+	if cfg.FQDNRefreshRetryIntervalSeconds < minFQDNRefreshRetryIntervalSeconds || cfg.FQDNRefreshRetryIntervalSeconds > maxFQDNRefreshRetryIntervalSeconds {
+		warnings = append(warnings, fmt.Sprintf(
+			"fqdn-refresh-retry-interval-seconds=%d out of range (%d..%d), using default %d",
+			cfg.FQDNRefreshRetryIntervalSeconds, minFQDNRefreshRetryIntervalSeconds, maxFQDNRefreshRetryIntervalSeconds, defaults.FQDNRefreshRetryIntervalSeconds))
+		cfg.FQDNRefreshRetryIntervalSeconds = defaults.FQDNRefreshRetryIntervalSeconds
+	}
+	if cfg.MonitoredCounterFlushIntervalSeconds < minMonitoredCounterFlushIntervalSeconds || cfg.MonitoredCounterFlushIntervalSeconds > maxMonitoredCounterFlushIntervalSeconds {
+		warnings = append(warnings, fmt.Sprintf(
+			"monitored-counter-flush-interval-seconds=%d out of range (%d..%d), using default %d",
+			cfg.MonitoredCounterFlushIntervalSeconds, minMonitoredCounterFlushIntervalSeconds, maxMonitoredCounterFlushIntervalSeconds, defaults.MonitoredCounterFlushIntervalSeconds))
+		cfg.MonitoredCounterFlushIntervalSeconds = defaults.MonitoredCounterFlushIntervalSeconds
+	}
+	if cfg.MonitoredEndpointsMaxPerRule < minMonitoredEndpointsMaxPerRule || cfg.MonitoredEndpointsMaxPerRule > maxMonitoredEndpointsMaxPerRule {
+		warnings = append(warnings, fmt.Sprintf(
+			"monitored-endpoints-max-per-rule=%d out of range (%d..%d), using default %d",
+			cfg.MonitoredEndpointsMaxPerRule, minMonitoredEndpointsMaxPerRule, maxMonitoredEndpointsMaxPerRule, defaults.MonitoredEndpointsMaxPerRule))
+		cfg.MonitoredEndpointsMaxPerRule = defaults.MonitoredEndpointsMaxPerRule
+	}
+
 	return cfg, warnings, nil
 }
 
@@ -746,6 +873,46 @@ func applyKey(cfg *Config, key, value string) error {
 			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
 		}
 		cfg.MaxExpandedRulesPerPolicy = n
+	case keyFQDNRefreshEnabled:
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid bool for %q: %q: %w", key, value, err)
+		}
+		cfg.FQDNRefreshEnabled = b
+	case keyFQDNRefreshIntervalSeconds:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		// Range-checking is deliberately NOT done here — see Resolve's
+		// post-processing pass (clamp + warn, not fail-fast).
+		cfg.FQDNRefreshIntervalSeconds = n
+	case keyFQDNRefreshRetryIntervalSeconds:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		cfg.FQDNRefreshRetryIntervalSeconds = n
+	case keyMonitoredCounterFlushIntervalSeconds:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		cfg.MonitoredCounterFlushIntervalSeconds = n
+	case keyMonitoredEndpointsEnabled:
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid bool for %q: %q: %w", key, value, err)
+		}
+		cfg.MonitoredEndpointsEnabled = b
+	case keyMonitoredEndpointsMaxPerRule:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		// Range-checking is deliberately NOT done here — see Resolve's
+		// post-processing pass (clamp + warn, not fail-fast).
+		cfg.MonitoredEndpointsMaxPerRule = n
 	default:
 		// Unreachable: callers only invoke applyKey for keys that passed
 		// isKnownKey. Kept as a safety net rather than a silent no-op.
@@ -808,6 +975,18 @@ func keyValue(cfg Config, key string) string {
 		return strconv.Itoa(cfg.MaxObjectEntries)
 	case keyMaxExpandedRulesPerPolicy:
 		return strconv.Itoa(cfg.MaxExpandedRulesPerPolicy)
+	case keyFQDNRefreshEnabled:
+		return strconv.FormatBool(cfg.FQDNRefreshEnabled)
+	case keyFQDNRefreshIntervalSeconds:
+		return strconv.Itoa(cfg.FQDNRefreshIntervalSeconds)
+	case keyFQDNRefreshRetryIntervalSeconds:
+		return strconv.Itoa(cfg.FQDNRefreshRetryIntervalSeconds)
+	case keyMonitoredCounterFlushIntervalSeconds:
+		return strconv.Itoa(cfg.MonitoredCounterFlushIntervalSeconds)
+	case keyMonitoredEndpointsEnabled:
+		return strconv.FormatBool(cfg.MonitoredEndpointsEnabled)
+	case keyMonitoredEndpointsMaxPerRule:
+		return strconv.Itoa(cfg.MonitoredEndpointsMaxPerRule)
 	default:
 		return ""
 	}

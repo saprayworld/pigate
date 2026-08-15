@@ -320,6 +320,12 @@ func TestWriteParseRoundTrip(t *testing.T) {
 	cfg.TrafficLogBufferCapacity = 20000
 	cfg.MaxObjectEntries = 128
 	cfg.MaxExpandedRulesPerPolicy = 8192
+	cfg.FQDNRefreshEnabled = false
+	cfg.FQDNRefreshIntervalSeconds = 600
+	cfg.FQDNRefreshRetryIntervalSeconds = 60
+	cfg.MonitoredCounterFlushIntervalSeconds = 120
+	cfg.MonitoredEndpointsEnabled = false
+	cfg.MonitoredEndpointsMaxPerRule = 250
 
 	var buf bytes.Buffer
 	if err := Write(&buf, cfg); err != nil {
@@ -363,8 +369,8 @@ func TestWriteParseRoundTripDefaults(t *testing.T) {
 
 func TestKnownKeys(t *testing.T) {
 	keys := KnownKeys()
-	if len(keys) != 25 {
-		t.Fatalf("expected 25 known keys, got %d: %v", len(keys), keys)
+	if len(keys) != 31 {
+		t.Fatalf("expected 31 known keys, got %d: %v", len(keys), keys)
 	}
 	// "config" and "v" must never be treated as config-file keys.
 	for _, k := range keys {
@@ -452,8 +458,148 @@ func TestKnownKeys(t *testing.T) {
 	if !hasMaxObjectEntries || !hasMaxExpandedRulesPerPolicy {
 		t.Fatalf("expected max-object-entries/max-expanded-rules-per-policy in KnownKeys, got %v", keys)
 	}
-	if keys[len(keys)-1] != "max-expanded-rules-per-policy" {
-		t.Fatalf("expected max-expanded-rules-per-policy to be the last key, got %v", keys)
+	var hasFQDNEnabled, hasFQDNInterval, hasFQDNRetry, hasMonitoredFlush bool
+	for _, k := range keys {
+		switch k {
+		case "fqdn-refresh-enabled":
+			hasFQDNEnabled = true
+		case "fqdn-refresh-interval-seconds":
+			hasFQDNInterval = true
+		case "fqdn-refresh-retry-interval-seconds":
+			hasFQDNRetry = true
+		case "monitored-counter-flush-interval-seconds":
+			hasMonitoredFlush = true
+		}
+	}
+	if !hasFQDNEnabled || !hasFQDNInterval || !hasFQDNRetry || !hasMonitoredFlush {
+		t.Fatalf("expected fqdn-refresh-enabled/fqdn-refresh-interval-seconds/fqdn-refresh-retry-interval-seconds/monitored-counter-flush-interval-seconds in KnownKeys, got %v", keys)
+	}
+	var hasEndpointsEnabled, hasEndpointsMaxPerRule bool
+	for _, k := range keys {
+		switch k {
+		case "monitored-endpoints-enabled":
+			hasEndpointsEnabled = true
+		case "monitored-endpoints-max-per-rule":
+			hasEndpointsMaxPerRule = true
+		}
+	}
+	if !hasEndpointsEnabled || !hasEndpointsMaxPerRule {
+		t.Fatalf("expected monitored-endpoints-enabled/monitored-endpoints-max-per-rule in KnownKeys, got %v", keys)
+	}
+	if keys[len(keys)-2] != "monitored-endpoints-enabled" || keys[len(keys)-1] != "monitored-endpoints-max-per-rule" {
+		t.Fatalf("expected monitored-endpoints-enabled/monitored-endpoints-max-per-rule to be the last two keys, got %v", keys)
+	}
+}
+
+// TestResolve_MonitoredEndpoints covers monitored-endpoints-enabled/
+// monitored-endpoints-max-per-rule's default/override/out-of-range/
+// non-integer behavior (docs/ref/todo/persisted-rule-endpoints-plan.md E-D9,
+// issue #141 follow-up) — same pattern as TestResolve_DenyStatsMaxSourcesPorts
+// above.
+func TestResolve_MonitoredEndpoints(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		cfg, warns, err := Resolve(Defaults(), nil, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if !cfg.MonitoredEndpointsEnabled {
+			t.Fatalf("expected monitored-endpoints-enabled to default to true")
+		}
+		if cfg.MonitoredEndpointsMaxPerRule != 1000 {
+			t.Fatalf("got monitored-endpoints-max-per-rule=%d, want default 1000", cfg.MonitoredEndpointsMaxPerRule)
+		}
+	})
+
+	t.Run("file override", func(t *testing.T) {
+		fileVals := map[string]string{
+			"monitored-endpoints-enabled":      "false",
+			"monitored-endpoints-max-per-rule": "250",
+		}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.MonitoredEndpointsEnabled {
+			t.Fatalf("expected monitored-endpoints-enabled=false to be applied")
+		}
+		if cfg.MonitoredEndpointsMaxPerRule != 250 {
+			t.Fatalf("got monitored-endpoints-max-per-rule=%d, want 250", cfg.MonitoredEndpointsMaxPerRule)
+		}
+	})
+
+	t.Run("out of range clamps to default with warning", func(t *testing.T) {
+		for _, v := range []string{"0", "-1", "19", "5001"} {
+			fileVals := map[string]string{"monitored-endpoints-max-per-rule": v}
+			cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+			if err != nil {
+				t.Fatalf("Resolve(%q) failed: %v", v, err)
+			}
+			if len(warns) != 1 {
+				t.Fatalf("Resolve(%q): expected 1 warning, got %v", v, warns)
+			}
+			if cfg.MonitoredEndpointsMaxPerRule != 1000 {
+				t.Fatalf("Resolve(%q): got %d, want default 1000", v, cfg.MonitoredEndpointsMaxPerRule)
+			}
+		}
+	})
+
+	t.Run("boundary values pass without warning", func(t *testing.T) {
+		for _, v := range []string{"20", "5000"} {
+			fileVals := map[string]string{"monitored-endpoints-max-per-rule": v}
+			cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+			if err != nil {
+				t.Fatalf("Resolve(%q) failed: %v", v, err)
+			}
+			if len(warns) != 0 {
+				t.Fatalf("Resolve(%q): unexpected warnings: %v", v, warns)
+			}
+			want := 20
+			if v == "5000" {
+				want = 5000
+			}
+			if cfg.MonitoredEndpointsMaxPerRule != want {
+				t.Fatalf("Resolve(%q): got %d, want %d", v, cfg.MonitoredEndpointsMaxPerRule, want)
+			}
+		}
+	})
+
+	t.Run("non-integer is a fail-fast error", func(t *testing.T) {
+		fileVals := map[string]string{"monitored-endpoints-max-per-rule": "abc"}
+		if _, _, err := Resolve(Defaults(), fileVals, nil); err == nil {
+			t.Fatalf("expected error for non-integer monitored-endpoints-max-per-rule")
+		}
+	})
+
+	t.Run("non-bool monitored-endpoints-enabled is a fail-fast error", func(t *testing.T) {
+		if _, _, err := Resolve(Defaults(), map[string]string{"monitored-endpoints-enabled": "notabool"}, nil); err == nil {
+			t.Fatalf("expected error for non-bool monitored-endpoints-enabled")
+		}
+	})
+}
+
+// TestWriteParseRoundTrip_MonitoredEndpointsWrittenLast locks in that the two
+// new keys are appended at the very end of the generated file (Caution: must
+// not be inserted alphabetically among existing keys).
+func TestWriteParseRoundTrip_MonitoredEndpointsWrittenLast(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, Defaults()); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 lines, got %d", len(lines))
+	}
+	if lines[len(lines)-2] != "monitored-endpoints-enabled=true" {
+		t.Fatalf("expected monitored-endpoints-enabled=true as second-to-last line, got %q", lines[len(lines)-2])
+	}
+	if lines[len(lines)-1] != "monitored-endpoints-max-per-rule=1000" {
+		t.Fatalf("expected monitored-endpoints-max-per-rule=1000 as last line, got %q", lines[len(lines)-1])
 	}
 }
 
@@ -535,6 +681,120 @@ func TestResolve_DenyStatsMaxSourcesPorts(t *testing.T) {
 		fileVals := map[string]string{"deny-stats-max-sources": "not-a-number"}
 		if _, _, err := Resolve(Defaults(), fileVals, nil); err == nil {
 			t.Fatalf("expected error for non-integer deny-stats-max-sources")
+		}
+	})
+}
+
+// TestResolve_FQDNRefreshAndMonitoredCounterFlush covers the four new
+// file-only keys' default/override/out-of-range/non-integer behavior
+// (docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md D-3, issue #141)
+// — same pattern as TestResolve_DenyStatsMaxSourcesPorts above.
+func TestResolve_FQDNRefreshAndMonitoredCounterFlush(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		cfg, warns, err := Resolve(Defaults(), nil, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if !cfg.FQDNRefreshEnabled {
+			t.Fatalf("expected fqdn-refresh-enabled to default to true")
+		}
+		if cfg.FQDNRefreshIntervalSeconds != 300 {
+			t.Fatalf("got fqdn-refresh-interval-seconds=%d, want default 300", cfg.FQDNRefreshIntervalSeconds)
+		}
+		if cfg.FQDNRefreshRetryIntervalSeconds != 30 {
+			t.Fatalf("got fqdn-refresh-retry-interval-seconds=%d, want default 30", cfg.FQDNRefreshRetryIntervalSeconds)
+		}
+		if cfg.MonitoredCounterFlushIntervalSeconds != 300 {
+			t.Fatalf("got monitored-counter-flush-interval-seconds=%d, want default 300", cfg.MonitoredCounterFlushIntervalSeconds)
+		}
+	})
+
+	t.Run("file override", func(t *testing.T) {
+		fileVals := map[string]string{
+			"fqdn-refresh-enabled":                     "false",
+			"fqdn-refresh-interval-seconds":            "600",
+			"fqdn-refresh-retry-interval-seconds":      "45",
+			"monitored-counter-flush-interval-seconds": "120",
+		}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.FQDNRefreshEnabled {
+			t.Fatalf("expected fqdn-refresh-enabled=false to be applied")
+		}
+		if cfg.FQDNRefreshIntervalSeconds != 600 || cfg.FQDNRefreshRetryIntervalSeconds != 45 || cfg.MonitoredCounterFlushIntervalSeconds != 120 {
+			t.Fatalf("got %+v", cfg)
+		}
+	})
+
+	t.Run("out of range clamps to default with warning", func(t *testing.T) {
+		fileVals := map[string]string{
+			"fqdn-refresh-interval-seconds":            "10",
+			"fqdn-refresh-retry-interval-seconds":      "5",
+			"monitored-counter-flush-interval-seconds": "1",
+		}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 3 {
+			t.Fatalf("expected 3 warnings, got %v", warns)
+		}
+		if cfg.FQDNRefreshIntervalSeconds != 300 || cfg.FQDNRefreshRetryIntervalSeconds != 30 || cfg.MonitoredCounterFlushIntervalSeconds != 300 {
+			t.Fatalf("got %+v, want defaults", cfg)
+		}
+	})
+
+	t.Run("boundary values pass without warning", func(t *testing.T) {
+		fileVals := map[string]string{
+			"fqdn-refresh-interval-seconds":            "60",
+			"fqdn-refresh-retry-interval-seconds":      "10",
+			"monitored-counter-flush-interval-seconds": "30",
+		}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.FQDNRefreshIntervalSeconds != 60 || cfg.FQDNRefreshRetryIntervalSeconds != 10 || cfg.MonitoredCounterFlushIntervalSeconds != 30 {
+			t.Fatalf("got %+v", cfg)
+		}
+
+		fileVals = map[string]string{
+			"fqdn-refresh-interval-seconds":            "86400",
+			"fqdn-refresh-retry-interval-seconds":      "3600",
+			"monitored-counter-flush-interval-seconds": "86400",
+		}
+		cfg, warns, err = Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.FQDNRefreshIntervalSeconds != 86400 || cfg.FQDNRefreshRetryIntervalSeconds != 3600 || cfg.MonitoredCounterFlushIntervalSeconds != 86400 {
+			t.Fatalf("got %+v", cfg)
+		}
+	})
+
+	t.Run("non-integer is a fail-fast error", func(t *testing.T) {
+		if _, _, err := Resolve(Defaults(), map[string]string{"fqdn-refresh-interval-seconds": "abc"}, nil); err == nil {
+			t.Fatalf("expected error for non-integer fqdn-refresh-interval-seconds")
+		}
+	})
+
+	t.Run("non-bool fqdn-refresh-enabled is a fail-fast error", func(t *testing.T) {
+		if _, _, err := Resolve(Defaults(), map[string]string{"fqdn-refresh-enabled": "notabool"}, nil); err == nil {
+			t.Fatalf("expected error for non-bool fqdn-refresh-enabled")
 		}
 	})
 }
