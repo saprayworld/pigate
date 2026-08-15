@@ -118,8 +118,20 @@ export interface PolicyRule {
   id: string
   name: string
   chain: PolicyChain
+  // Deprecated: compat mirror of inInterfaces[0]/outInterfaces[0] only,
+  // kept for old localStorage data / API responses that predate
+  // multi-interface support. Never read directly for rendering/logic —
+  // use inInterfaces/outInterfaces (see policyService.normalizeInterfaces)
+  // instead. docs/ref/todo/multi-interface-firewall-rule-plan.md.
   inInterface: string // e.g. "ALL", "eth0", "wlan0"
   outInterface: string // e.g. "ALL", "eth0", "wlan0"
+  // inInterfaces/outInterfaces are the source of truth (multi-interface
+  // support, docs/ref/todo/multi-interface-firewall-rule-plan.md).
+  // Optional so old localStorage/backup data without these keys still
+  // type-checks; policyService.normalizeInterfaces seeds them from the
+  // legacy scalar fields above when missing.
+  inInterfaces?: string[]
+  outInterfaces?: string[]
   source: string[]
   destination: string[]
   service: string[]

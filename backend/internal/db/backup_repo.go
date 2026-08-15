@@ -106,6 +106,12 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 	wipes := []string{
 		"DELETE FROM policy_services",
 		"DELETE FROM policy_addresses",
+		// policy_interfaces (docs/ref/todo/multi-interface-firewall-rule-plan.md
+		// §2.3, T-05) has ON DELETE CASCADE from firewall_policies, but is
+		// listed explicitly for the same reason policy_services/
+		// policy_addresses are: match the existing wipe pattern's clarity over
+		// implicit cascade behavior.
+		"DELETE FROM policy_interfaces",
 		"DELETE FROM firewall_policies",
 		"DELETE FROM port_forwards",
 		"DELETE FROM address_objects WHERE system = 0",
@@ -182,6 +188,36 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 	for _, p := range cfg.Policies {
 		chain := model.NormalizePolicyChain(p.Chain)
 		chainPriority[chain]++
+		// InInterfaces/OutInterfaces (docs/ref/todo/
+		// multi-interface-firewall-rule-plan.md §2.3, T-05): normalize here,
+		// AFTER the checksum verification that already ran earlier in
+		// BackupService.Import (see decodeBackup Caution 1) — never move this
+		// normalization before the checksum check. Old backups that predate
+		// these fields have empty InInterfaces/OutInterfaces here; Normalize
+		// seeds them from the legacy scalar InInterface/OutInterface (or
+		// "ALL" if that is empty too), giving byte-identical behavior to
+		// pre-feature backups.
+		p.Chain = chain
+		model.NormalizePolicyRuleInterfaces(&p)
+		// Enforce the same per-direction interfaces cap the normal
+		// CreatePolicy/UpdatePolicy path enforces (docs/ref/todo/
+		// multi-interface-firewall-rule-plan.md §2.2, Caution 7: "เพดานต้อง
+		// มาจาก config จุดเดียว — บังคับที่ repository เท่านั้น"). RestoreConfig
+		// writes policy_interfaces directly via replacePolicyInterfaces below,
+		// bypassing CreatePolicy/UpdatePolicy entirely, so without this check
+		// here a crafted/foreign backup file could persist a policy with an
+		// unbounded number of interfaces per direction — buildRuleExpressions'
+		// in x out cartesian expansion (kernel/real_firewall.go) only enforces
+		// max-expanded-rules-per-policy AFTER building the full expansion in
+		// memory, so an unbounded interface count is a real memory/CPU DoS at
+		// apply time, not just a bloated ruleset. Reject and roll back the
+		// whole import (fail-closed) rather than silently truncating.
+		if err := model.ValidatePolicyInterfaces(p.InInterfaces, r.maxPolicyInterfacesPerDirection); err != nil {
+			return fmt.Errorf("restore policy %q inInterfaces: %w", p.Name, err)
+		}
+		if err := model.ValidatePolicyInterfaces(p.OutInterfaces, r.maxPolicyInterfacesPerDirection); err != nil {
+			return fmt.Errorf("restore policy %q outInterfaces: %w", p.Name, err)
+		}
 		logVal, natVal, statVal := boolToInt(p.Log), boolToInt(p.Nat), boolToInt(p.Status)
 		// monitored (docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md
 		// T-12, issue #141) round-trips through backup export/import like
@@ -208,6 +244,12 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 		}
 		if err := restorePolicyRelations(tx, p); err != nil {
 			return err
+		}
+		if err := replacePolicyInterfaces(tx, p.ID, "in", p.InInterfaces); err != nil {
+			return fmt.Errorf("restore policy %q interfaces (in): %w", p.Name, err)
+		}
+		if err := replacePolicyInterfaces(tx, p.ID, "out", p.OutInterfaces); err != nil {
+			return fmt.Errorf("restore policy %q interfaces (out): %w", p.Name, err)
 		}
 	}
 

@@ -128,6 +128,12 @@ func main() {
 	// design. Read once at startup; changing the key only takes effect on
 	// the next restart.
 	repo.SetObjectLimits(cfg.MaxObjectEntries)
+	// Per-direction PolicyRule interfaces cap comes from the file-only
+	// max-policy-interfaces-per-direction config key (docs/ref/todo/
+	// multi-interface-firewall-rule-plan.md §2.2, D-2) — no CLI flag by
+	// design. Read once at startup; changing the key only takes effect on
+	// the next restart.
+	repo.SetPolicyInterfaceLimit(cfg.MaxPolicyInterfacesPerDirection)
 
 	// 4. Instantiate Kernel managers (Force Mock layer for now)
 	var fw kernel.FirewallManager

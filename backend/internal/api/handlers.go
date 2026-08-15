@@ -1741,6 +1741,10 @@ func (s *Server) HandleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
 		return
 	}
+	// Accept both the new list fields (inInterfaces/outInterfaces) and the
+	// legacy scalar (inInterface/outInterface); when both are present the
+	// list wins (docs/ref/todo/multi-interface-firewall-rule-plan.md §2.5).
+	model.NormalizePolicyRuleInputInterfaces(&input)
 
 	id, err := randomID("rule-")
 	if err != nil {
@@ -1748,18 +1752,20 @@ func (s *Server) HandleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rule := model.PolicyRule{
-		ID:           id,
-		Name:         input.Name,
-		Chain:        input.Chain,
-		InInterface:  input.InInterface,
-		OutInterface: input.OutInterface,
-		Source:       input.Source,
-		Destination:  input.Destination,
-		Service:      input.Service,
-		Action:       input.Action,
-		Log:          input.Log,
-		Nat:          input.Nat,
-		Status:       input.Status,
+		ID:            id,
+		Name:          input.Name,
+		Chain:         input.Chain,
+		InInterface:   input.InInterface,
+		OutInterface:  input.OutInterface,
+		InInterfaces:  input.InInterfaces,
+		OutInterfaces: input.OutInterfaces,
+		Source:        input.Source,
+		Destination:   input.Destination,
+		Service:       input.Service,
+		Action:        input.Action,
+		Log:           input.Log,
+		Nat:           input.Nat,
+		Status:        input.Status,
 	}
 
 	if err := s.firewallService.CreatePolicy(rule); err != nil {
@@ -1780,11 +1786,33 @@ func (s *Server) HandleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var input model.PolicyRuleInput
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+	// Body is read into a byte slice (rather than json.NewDecoder(r.Body)
+	// directly) so it can be unmarshaled twice: once into the typed
+	// PolicyRuleInput, and once into a raw key-presence map. The latter is
+	// needed because a PUT that omits inInterfaces/inInterface entirely must
+	// keep the rule's existing interfaces (same "don't clear on omission"
+	// contract as `chain` above), but an *empty* string/list is a
+	// legitimate, distinct value (interpreted as "ALL" by Normalize) — a
+	// simple zero-value check on the decoded struct cannot tell "key absent"
+	// apart from "key present but empty" the way a raw JSON key-presence
+	// check can (docs/ref/todo/multi-interface-firewall-rule-plan.md §2.5).
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
 		return
 	}
+	var input model.PolicyRuleInput
+	if err := json.Unmarshal(bodyBytes, &input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+	var rawFields map[string]json.RawMessage
+	// Best-effort: bodyBytes already unmarshaled successfully above as a
+	// PolicyRuleInput, so this only fails for pathological inputs (e.g. a
+	// bare JSON array/scalar instead of an object) — treat that the same as
+	// "no interface keys present" (preserve existing) rather than erroring a
+	// request that otherwise decoded fine.
+	_ = json.Unmarshal(bodyBytes, &rawFields)
 
 	// Caution 2: an empty/omitted chain in the request body must keep the
 	// rule's existing chain, never silently fall back to "forward" — a client
@@ -1795,19 +1823,43 @@ func (s *Server) HandleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		chain = existing.Chain
 	}
 
+	// Resolve inInterface(s)/outInterface(s) the same list-wins-over-scalar
+	// way HandleCreatePolicy does, but only when the client sent at least
+	// one of the two keys for that direction; otherwise carry the existing
+	// rule's interfaces forward untouched (PUT must never widen a rule to
+	// ALL just because an old client didn't know about this field).
+	normalizedInput := input
+	model.NormalizePolicyRuleInputInterfaces(&normalizedInput)
+
+	_, hasInList := rawFields["inInterfaces"]
+	_, hasInScalar := rawFields["inInterface"]
+	inInterface, inInterfaces := existing.InInterface, existing.InInterfaces
+	if hasInList || hasInScalar {
+		inInterface, inInterfaces = normalizedInput.InInterface, normalizedInput.InInterfaces
+	}
+
+	_, hasOutList := rawFields["outInterfaces"]
+	_, hasOutScalar := rawFields["outInterface"]
+	outInterface, outInterfaces := existing.OutInterface, existing.OutInterfaces
+	if hasOutList || hasOutScalar {
+		outInterface, outInterfaces = normalizedInput.OutInterface, normalizedInput.OutInterfaces
+	}
+
 	rule := model.PolicyRule{
-		ID:           id,
-		Name:         input.Name,
-		Chain:        chain,
-		InInterface:  input.InInterface,
-		OutInterface: input.OutInterface,
-		Source:       input.Source,
-		Destination:  input.Destination,
-		Service:      input.Service,
-		Action:       input.Action,
-		Log:          input.Log,
-		Nat:          input.Nat,
-		Status:       input.Status,
+		ID:            id,
+		Name:          input.Name,
+		Chain:         chain,
+		InInterface:   inInterface,
+		OutInterface:  outInterface,
+		InInterfaces:  inInterfaces,
+		OutInterfaces: outInterfaces,
+		Source:        input.Source,
+		Destination:   input.Destination,
+		Service:       input.Service,
+		Action:        input.Action,
+		Log:           input.Log,
+		Nat:           input.Nat,
+		Status:        input.Status,
 		// The general edit form has no Monitor control (it's a dedicated
 		// toggle-monitor endpoint, docs/ref/todo/
 		// fqdn-retry-and-monitored-counters-plan.md T-11) — always carry the

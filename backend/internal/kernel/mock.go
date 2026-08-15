@@ -74,8 +74,14 @@ func (m *MockFirewall) ApplyRules(
 		if r.Status {
 			statusStr = "ENABLED"
 		}
-		log.Printf("  [%s][%s] Name: %s, In: %s, Out: %s, Src: %v, Dest: %v, Svc: %v, Action: %s, Log: %t",
-			statusStr, model.NormalizePolicyChain(r.Chain), r.Name, r.InInterface, r.OutInterface, r.Source, r.Destination, r.Service, r.Action, r.Log)
+		// Normalize before logging so mock mode reflects the same
+		// multi-interface list the real kernel expands rules against
+		// (docs/ref/todo/multi-interface-firewall-rule-plan.md §2.4, T-07) —
+		// mock never expands rules per interface, it just needs to show the
+		// full list instead of the (possibly stale) legacy scalar mirror.
+		model.NormalizePolicyRuleInterfaces(&r)
+		log.Printf("  [%s][%s] Name: %s, In: %v, Out: %v, Src: %v, Dest: %v, Svc: %v, Action: %s, Log: %t",
+			statusStr, model.NormalizePolicyChain(r.Chain), r.Name, r.InInterfaces, r.OutInterfaces, r.Source, r.Destination, r.Service, r.Action, r.Log)
 	}
 	for _, pf := range portForwards {
 		statusStr := "DISABLED"

@@ -189,7 +189,9 @@ table ip pigate_nat {
 ```
    * **การประยุกต์แบบไดนามิก (Dynamic Binding)**: Go Backend จะตรวจสอบรายชื่อการ์ดเครือข่ายจากฐานข้อมูลที่มีหน้าที่เป็น WAN (`Role = WAN`) และสร้างกฎ Masquerade สำหรับอินเทอร์เฟซเหล่านั้นโดยอัตโนมัติเมื่อสั่ง Apply Settings
 
-5. **Port Forwarding (DNAT)**:
+5. **Multi-Interface Policy Rules (In/Out หลายอินเทอร์เฟซต่อกฎ)**: `PolicyRule` หนึ่งข้อผูก In Interface และ Out Interface ได้หลายตัว (ไม่ใช่แค่ตัวเดียวหรือ `ALL` เหมือนเดิม — เก็บใน field ใหม่ `InInterfaces`/`OutInterfaces`, คอลัมน์ `in_interface`/`out_interface` เดิมยังอยู่เป็น mirror ของสมาชิกตัวแรกเพื่อ backward compatibility) ชั้น kernel (`buildRuleExpressions`) ขยายกฎ 1 ข้อของผู้ใช้เป็น **1 nftables rule ต่อคู่ (in × out)** ตามแบบ cartesian expansion เดียวกับที่ใช้อยู่แล้วกับ Address/Service Object หลายค่า (ไม่ใช้ nftables anonymous/named set) — กฎทุกตัวที่ขยายออกมายังถูก append ที่ตำแหน่งเดิมของ chain (ไม่กระทบโครงสร้าง 4 ส่วนของ input chain ในหัวข้อ 1 ด้านบน) และยังถูกนับรวมอยู่ภายใต้เพดาน `max-expanded-rules-per-policy` เดียวกับที่คุมการคูณของ source × destination × service อยู่แล้ว (ตัวคูณของ interface เป็นอีกมิติหนึ่งที่ถูกคูณเข้าไปในเพดานเดิม ไม่ใช่เพดานแยก) เพดานจำนวนอินเทอร์เฟซที่อนุญาตต่อทิศทาง (ไม่ใช่จำนวนกฎที่ขยาย) ปรับได้ผ่าน config key `max-policy-interfaces-per-direction` (ค่าเริ่มต้น 8) ดู `docs/ref/todo/multi-interface-firewall-rule-plan.md` สำหรับรายละเอียดออกแบบเต็ม
+
+6. **Port Forwarding (DNAT)**:
    * **กลไกการทำงาน**: การส่งต่อพอร์ตจาก WAN เข้าสู่โฮสต์ภายใน LAN (Destination NAT) สร้างเป็น chain แยก `prerouting` ที่ทำงาน**ก่อน**การตัดสินใจ routing เพื่อให้แพ็กเก็ตถูกส่งต่อไปยัง IP ภายในที่ถูกต้อง — สร้างเป็น nftables expression ของ `google/nftables` โดยตรง ไม่ใช่ shell string จึงไม่มีช่องให้ inject
    * ทุกค่า (interface, protocol, IP ปลายทาง, ช่วงพอร์ต) ผ่านการ validate ที่ชั้น service/repository ก่อน persist ลง DB และก่อน apply ลง kernel เสมอ
 
