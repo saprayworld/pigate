@@ -760,6 +760,82 @@ func (s *Server) HandleGetIPInfo(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, result)
 }
 
+// referenceDefaultLimit/referenceMaxLimit back clampQueryLimit for the two
+// reference-popover handlers below (docs/ref/todo/reference-popover-plan.md
+// Step 3) — mirrors service/statistics_reference.go's
+// referenceDefaultLimit/referenceMaxLimit consts (kept separate on purpose,
+// same "HTTP layer decides what an invalid/out-of-range limit means" split
+// as trafficTopHostsDefaultLimit/-MaxLimit above).
+const (
+	referenceDefaultLimit = 3
+	referenceMaxLimit     = 10
+)
+
+// HandleGetIPReference backs the reference popover's IP hover summary
+// (docs/ref/todo/reference-popover-plan.md Step 3) — a lightweight sibling
+// of HandleGetDNSIPDomains/HandleGetTrafficHostDetail, deliberately returning
+// only the top few domain references + counts (never a full drill-down
+// payload) since a hover popover can fire dozens of times a minute.
+//
+// 🔒 `ip` MUST parse via netip.ParseAddr, exactly like every other IP-taking
+// statistics endpoint in this file — on failure this returns 400 with a
+// generic message and NEVER calls the service; the raw client-supplied
+// string is never echoed back. The parsed address is re-serialized via
+// addr.String() before being passed down so a non-canonical IPv6 literal
+// hits the same index/scope-classification key the rest of the DNS
+// statistics endpoints use.
+//
+// `scope` (public vs LAN) is decided entirely inside the service by
+// isGloballyRoutable — this handler never accepts or forwards a `scope`
+// query parameter even if the client sends one (plan §2.3: a security
+// boundary, not a UX guard). `window` is likewise silently ignored: unlike
+// every other statistics endpoint, this route never calls statsWindowParam
+// at all — the response's window is always the fixed 1h the service
+// hardcodes (plan §2.4/Q4). `limit` is clamped via clampQueryLimit, never
+// rejected, same convention as every other limit-taking endpoint here.
+func (s *Server) HandleGetIPReference(w http.ResponseWriter, r *http.Request) {
+	raw := r.URL.Query().Get("ip")
+	if raw == "" {
+		s.writeError(w, http.StatusBadRequest, "invalid ip")
+		return
+	}
+	addr, err := netip.ParseAddr(raw)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid ip")
+		return
+	}
+	ip := addr.String()
+	limit := clampQueryLimit(r, referenceDefaultLimit, referenceMaxLimit)
+
+	s.writeJSON(w, http.StatusOK, s.statistics.GetIPReference(ip, limit))
+}
+
+// HandleGetDomainReference backs the reference popover's Domain hover
+// summary (docs/ref/todo/reference-popover-plan.md Step 3) — the domain-side
+// sibling of HandleGetIPReference above, same "top few entries only" shape.
+//
+// `domain` is untrusted client input, validated/normalized via
+// model.NormalizeQueryDomain exactly like HandleGetDNSDomainClients; on
+// failure this returns 400 with a generic message and the raw value is never
+// echoed back. `window`/`scope` are not accepted (same as
+// HandleGetIPReference — this route has no scope concept at all, a domain is
+// always looked up the same way). `limit` is clamped, never rejected.
+func (s *Server) HandleGetDomainReference(w http.ResponseWriter, r *http.Request) {
+	raw := r.URL.Query().Get("domain")
+	if raw == "" {
+		s.writeError(w, http.StatusBadRequest, "domain is required")
+		return
+	}
+	domain, ok := model.NormalizeQueryDomain(raw)
+	if !ok {
+		s.writeError(w, http.StatusBadRequest, "invalid domain")
+		return
+	}
+	limit := clampQueryLimit(r, referenceDefaultLimit, referenceMaxLimit)
+
+	s.writeJSON(w, http.StatusOK, s.statistics.GetDomainReference(domain, limit))
+}
+
 // dnsUnknownClientParam is the one non-IP value HandleGetDNSClientDomains
 // accepts for `client` — must match the dnsUnknownClient constant the
 // service's ring uses as its reserved bucket key

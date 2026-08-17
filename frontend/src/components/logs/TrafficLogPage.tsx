@@ -33,6 +33,10 @@ import {
   type TrafficLog,
   type TrafficLogBufferUsage,
 } from "@/services/trafficLogService"
+import { ReferenceHoverProvider } from "@/components/reference/ReferenceHoverProvider"
+import { ReferenceTrigger } from "@/components/reference/ReferenceTrigger"
+import { IpReferenceContent } from "@/components/reference/IpReferenceContent"
+import { CombinedReferenceContent } from "@/components/reference/CombinedReferenceContent"
 
 const PAGE_SIZE = 500
 const MAX_ROWS = 5000
@@ -150,14 +154,25 @@ function RuleCell({ ruleId, ruleName }: { ruleId?: string; ruleName?: string }) 
 /* IP cell: the address itself, plus an optional muted subtext line showing
  * the domain (from the DNS query cache) or, failing that, a DHCP hostname
  * — both resolved fresh on every fetch (enrich-on-read), never cached
- * client-side. */
+ * client-side. Wrapped in a ReferenceTrigger (docs/ref/todo/
+ * reference-popover-plan.md Step 10) so hovering it opens the reference
+ * popover — a row that has BOTH an ip and a resolved domain gets ONE
+ * combined popover (plan §0 item 3), not two separate ones. This never
+ * renders its own Popover Root (MAX_ROWS=5000 below) — see
+ * ReferenceHoverProvider, mounted once around the whole page. */
 function IpCell({ ip, domain, hostname }: { ip: string; domain?: string; hostname?: string }) {
   const sub = domain || hostname
   return (
-    <div className="font-mono text-xs">
-      <div>{ip}</div>
-      {sub && <div className="font-sans text-[10px] text-muted-foreground">{sub}</div>}
-    </div>
+    <ReferenceTrigger
+      content={() =>
+        domain ? <CombinedReferenceContent ip={ip} domain={domain} /> : <IpReferenceContent key={ip} ip={ip} />
+      }
+    >
+      <div className="font-mono text-xs">
+        <div>{ip}</div>
+        {sub && <div className="font-sans text-[10px] text-muted-foreground">{sub}</div>}
+      </div>
+    </ReferenceTrigger>
   )
 }
 
@@ -330,6 +345,7 @@ export function TrafficLogPage({
   }
 
   return (
+    <ReferenceHoverProvider>
     <div className="space-y-4">
       <CapabilityBanner id="firewall" />
 
@@ -511,5 +527,6 @@ export function TrafficLogPage({
         </CardContent>
       </Card>
     </div>
+    </ReferenceHoverProvider>
   )
 }

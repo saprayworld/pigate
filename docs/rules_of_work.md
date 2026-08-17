@@ -51,6 +51,18 @@
   * Drawer/Dialog ที่ข้างในมีเพียง **native `<select>` หรือ shadcn `Select` (Radix) ปกติ ไม่ต้องทำอะไรพิเศษ** — ทดสอบจริงแล้ว (2026-07-08) ว่า dropdown เหล่านี้คลิกได้ตามปกติภายใต้ modal ค่า default
 * **เหตุผล:** คงพฤติกรรม modal (คลิกนอก/Esc/scroll-lock) ของ overlay ไว้ครบทุกหน้า แทนที่จะปิด pointer blocker ทั้งใบด้วย `modal={false}` แบบเดิม
 
+### 1.4 กฎการใช้งาน Reference Popover (hover ที่ IP/Domain/Address Object)
+
+ฟีเจอร์ popover สรุปข้อมูลอ้างอิงเมื่อ hover ค่าที่เป็น IP/Domain/ชื่อ Address Object (docs/ref/todo/reference-popover-plan.md) มีชิ้นส่วนใช้ร่วมกันอยู่ที่ `frontend/src/components/reference/`, `frontend/src/hooks/useHoverPopover.ts`, `frontend/src/hooks/reference-context.ts`, และ `frontend/src/services/referenceService.ts` — เมื่อจะเพิ่มจุด hover ใหม่ (เช่น ตารางใหม่/หน้าใหม่) ต้องทำตามกติกาต่อไปนี้:
+
+* **ห้ามสร้าง Radix `<Popover>` Root ต่อแถวตาราง** — ตารางบางหน้ามีได้ถึง 5,000 แถว (เช่น `TrafficLogPage.tsx`) การสร้าง Popover Root ต่อเซลล์จะทำให้หน้าค้าง ให้ห่อขอบเขตที่ต้องการ (หน้า/ตาราง/ส่วนของ Drawer) ด้วย `<ReferenceHoverProvider>` เพียงครั้งเดียว แล้วให้แต่ละเซลล์ใช้ `<ReferenceTrigger>` เรียกเข้า context แทน (ตรวจสอบใน React DevTools ว่ามี Popover Root ไม่เกิน 2 ตัวต่อ provider หนึ่งอัน)
+* **รองรับ popover ได้สูงสุด 2 ระดับเท่านั้น** (`level={1}` ค่าเริ่มต้น, `level={2}` สำหรับ entry ย่อยที่เปิดจากภายใน popover ระดับ 1 เช่น Address Object entries) — ห้ามทำเป็น stack แบบ recursive ไม่จำกัดระดับ
+* **ดีเลย์มาตรฐาน:** ระดับ 1 เปิดหลัง hover ค้าง **1000ms**, ระดับ 2 เปิดหลัง **~300ms** (ผู้ใช้แสดงเจตนาแล้วจากการเปิดระดับ 1) — ปิดหลังเมาส์ออกทั้ง trigger และ popover จริง ๆ ด้วย grace period **~200ms** (hover-bridge: ลากเมาส์จาก trigger เข้า popover ไม่ปิด)
+* **touch ห้ามเปิดด้วย hover**, **focus (คีย์บอร์ด) เปิดทันทีไม่มีดีเลย์**, **Escape/scroll ปิดทันที** — ดูรายละเอียดที่ `useHoverPopover.ts`
+* **`Popover`/`PopoverContent` ต้องใส่ `onOpenAutoFocus={(e) => e.preventDefault()}` เสมอ** — และถ้าหน้านั้นมี Combobox/Drawer อยู่ด้วย (เช่น `PolicyChainPage.tsx`) ต้องปิด popover ทั้ง stack ทันทีที่ Drawer/Dialog เปิด (ดูตัวอย่าง `ReferenceHoverProvider`'s `closeWhen` prop) ก่อนเพื่อไม่ให้ชนกับ focus/pointer blocker ตามกติกาข้อ 1.3.2
+* **หน้า/ตารางที่เป็น Radix Portal ของตัวเอง (เช่นเนื้อหาใน `<DrawerContent>`) ต้องมี `<ReferenceHoverProvider>` เป็นของตัวเอง** แยกจาก provider ของหน้าแม่ — ไม่งั้น popover ของ Drawer จะ mount ก่อน DOM ของ Drawer เอง ทำให้ z-index ตกไปอยู่หลัง overlay ของ Drawer
+* **ข้อมูล domain↔IP ที่แสดงใน popover เป็น display-only และ poisonable** (มาจาก dnsmasq answer log ที่ LAN client ควบคุมได้) — ห้ามใช้ผลจาก popover ไปตัดสิน firewall rule generation, policy matching, routing หรือ QoS ใด ๆ (ดู `docs/tech_stack_design.md` §8 และ doc comment ใน `backend/internal/model/statistics_reference.go`)
+
 ---
 
 ## 2. กฎการเลือกใช้สไตล์และโทนสี (Styling & Theme Rules)
