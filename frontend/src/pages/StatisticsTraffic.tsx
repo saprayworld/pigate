@@ -11,6 +11,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { trafficStatisticsService, type TopHost, type TrafficTopHosts } from "@/services/trafficStatisticsService"
 import { useStatsWindow, StatsWindowTabs, type StatsWindow } from "@/components/statistics/DnsStatsShared"
 import { HostLabel } from "@/components/statistics/HostCells"
+import { ReferenceHoverProvider } from "@/components/reference/ReferenceHoverProvider"
+import { HostReferenceTrigger } from "@/components/reference/HostReferenceTrigger"
 import { TrafficTrendCard } from "@/components/statistics/TrafficTrendCard"
 import { TopHostsShareCard } from "@/components/statistics/TopHostsShareCard"
 import { CapacityIndicator } from "@/components/statistics/CapacityIndicator"
@@ -137,7 +139,9 @@ function HostsTable({
                         title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
                       >
                         <TableCell className="py-3 text-xs">
-                          <HostLabel host={h} />
+                          <HostReferenceTrigger ip={h.ip} domain={h.domain} className="min-w-0">
+                            <HostLabel host={h} />
+                          </HostReferenceTrigger>
                         </TableCell>
                         <TableCell className="py-3 text-right font-mono text-xs text-primary">{fmtBytes(h.bytesDown)}</TableCell>
                         <TableCell className="py-3 text-right font-mono text-xs text-muted-foreground">{fmtBytes(h.bytesUp)}</TableCell>
@@ -247,6 +251,7 @@ export default function StatisticsTraffic() {
   const currentRateBpsDown = lastPoint ? Math.round((lastPoint.bytesDown * 8) / lastSpan) : 0
 
   return (
+    <ReferenceHoverProvider>
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -385,5 +390,6 @@ export default function StatisticsTraffic() {
         (ต้นทาง-ปลายทาง-โปรโตคอล-พอร์ต) รวมทุกการเชื่อมต่อของบริการเดียวกันเข้าด้วยกัน ไม่ใช่การเชื่อมต่อ TCP รายเส้น
       </p>
     </div>
+    </ReferenceHoverProvider>
   )
 }

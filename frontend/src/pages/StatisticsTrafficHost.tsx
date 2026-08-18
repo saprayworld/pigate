@@ -29,6 +29,8 @@ import {
   useSortableRows,
   useTextFilter,
 } from "@/components/statistics/TrafficStatsShared"
+import { ReferenceHoverProvider } from "@/components/reference/ReferenceHoverProvider"
+import { HostReferenceTrigger } from "@/components/reference/HostReferenceTrigger"
 
 // /statistics/traffic/host/:ip — page 2 of the Statistics -> Traffic feature
 // (docs/ref/todo/statistics-traffic-page-plan.md T-10): a single IP's
@@ -193,7 +195,7 @@ function ConversationTable({
               {topPeers.map((p) => (
                 <div key={p.ip} className="space-y-1">
                   <div className="flex items-center justify-between gap-3 text-xs">
-                    <span className="min-w-0">
+                    <HostReferenceTrigger ip={p.ip} domain={p.domain} className="min-w-0">
                       {p.domain || (p.hostname && p.hostname !== p.ip) ? (
                         <>
                           <span className="block truncate">{p.domain || p.hostname}</span>
@@ -202,7 +204,7 @@ function ConversationTable({
                       ) : (
                         <span className="block truncate">{p.ip}</span>
                       )}
-                    </span>
+                    </HostReferenceTrigger>
                     <span className="shrink-0 font-mono text-muted-foreground">
                       {fmtBytes(p.bytes)} · {p.percent}%
                     </span>
@@ -286,17 +288,19 @@ function ConversationTable({
                       title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
                     >
                       <TableCell className="py-3 text-xs">
-                        {r.peerDomain ? (
-                          <>
-                            <div className="truncate">{r.peerDomain}</div>
-                            <div className="font-mono text-[10px] text-muted-foreground">{ip}</div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="truncate">{hostname}</div>
-                            {hostname !== ip && <div className="font-mono text-[10px] text-muted-foreground">{ip}</div>}
-                          </>
-                        )}
+                        <HostReferenceTrigger ip={ip} domain={r.peerDomain}>
+                          {r.peerDomain ? (
+                            <>
+                              <div className="truncate">{r.peerDomain}</div>
+                              <div className="font-mono text-[10px] text-muted-foreground">{ip}</div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="truncate">{hostname}</div>
+                              {hostname !== ip && <div className="font-mono text-[10px] text-muted-foreground">{ip}</div>}
+                            </>
+                          )}
+                        </HostReferenceTrigger>
                       </TableCell>
                       <TableCell className="py-3 font-mono text-xs">{r.proto}</TableCell>
                       <TableCell className="py-3 text-right font-mono text-xs">{r.dstPort}</TableCell>
@@ -415,6 +419,7 @@ export default function StatisticsTrafficHost() {
   const title = data?.hostname && data.hostname !== ip ? data.hostname : ip
 
   return (
+    <ReferenceHoverProvider>
     <div className="space-y-4">
       <div>
         <Button asChild variant="outline" size="sm" className="cursor-pointer gap-1.5">
@@ -525,5 +530,6 @@ export default function StatisticsTrafficHost() {
         (restart pigate แล้วจะเริ่มนับใหม่)
       </p>
     </div>
+    </ReferenceHoverProvider>
   )
 }

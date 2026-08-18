@@ -32,6 +32,8 @@ import { TrafficTrendCard } from "@/components/statistics/TrafficTrendCard"
 import { TopHostsShareCard } from "@/components/statistics/TopHostsShareCard"
 import { CapacityIndicator } from "@/components/statistics/CapacityIndicator"
 import { capacityService, type RingCapacity } from "@/services/capacityService"
+import { ReferenceHoverProvider } from "@/components/reference/ReferenceHoverProvider"
+import { HostReferenceTrigger } from "@/components/reference/HostReferenceTrigger"
 
 const REFRESH_INTERVAL = 10_000
 
@@ -94,12 +96,14 @@ function TopHostsCard({
           hosts.map((h) => (
             <div key={h.ip} className="space-y-1">
               <div className="flex items-center justify-between gap-3 text-sm">
-                <HostLabel
-                  host={h}
-                  onClick={() =>
-                    navigate(`/statistics/traffic/host/${encodeURIComponent(h.ip)}?window=${window_}&role=${role}`)
-                  }
-                />
+                <HostReferenceTrigger ip={h.ip} domain={h.domain}>
+                  <HostLabel
+                    host={h}
+                    onClick={() =>
+                      navigate(`/statistics/traffic/host/${encodeURIComponent(h.ip)}?window=${window_}&role=${role}`)
+                    }
+                  />
+                </HostReferenceTrigger>
                 <span className="shrink-0 text-right">
                   <span className="block font-mono text-xs text-muted-foreground">
                     {fmtBytes(h.bytes)} · {h.percent}%
@@ -153,46 +157,50 @@ function TopConversationsCard({
                 {conversations.map((c, i) => (
                   <TableRow key={`${c.srcIp}-${c.dstIp}-${c.proto}-${c.dstPort}-${i}`}>
                     <TableCell className="text-xs">
-                      <button
-                        type="button"
-                        onClick={() => goToHost(c.srcIp, "src")}
-                        title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
-                        className="block max-w-full cursor-pointer truncate text-left hover:text-primary hover:underline"
-                      >
-                        {c.srcHostname}
-                      </button>
-                      {c.srcHostname !== c.srcIp && (
-                        <div className="font-mono text-[10px] text-muted-foreground">{c.srcIp}</div>
-                      )}
+                      <HostReferenceTrigger ip={c.srcIp}>
+                        <button
+                          type="button"
+                          onClick={() => goToHost(c.srcIp, "src")}
+                          title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
+                          className="block max-w-full cursor-pointer truncate text-left hover:text-primary hover:underline"
+                        >
+                          {c.srcHostname}
+                        </button>
+                        {c.srcHostname !== c.srcIp && (
+                          <div className="font-mono text-[10px] text-muted-foreground">{c.srcIp}</div>
+                        )}
+                      </HostReferenceTrigger>
                     </TableCell>
                     <TableCell className="text-xs">
-                      {c.dstDomain ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => goToHost(c.dstIp, "dst")}
-                            title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
-                            className="block max-w-full cursor-pointer truncate text-left hover:text-primary hover:underline"
-                          >
-                            {c.dstDomain}
-                          </button>
-                          <div className="font-mono text-[10px] text-muted-foreground">{c.dstIp}</div>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => goToHost(c.dstIp, "dst")}
-                            title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
-                            className="block max-w-full cursor-pointer truncate text-left hover:text-primary hover:underline"
-                          >
-                            {c.dstHostname}
-                          </button>
-                          {c.dstHostname !== c.dstIp && (
+                      <HostReferenceTrigger ip={c.dstIp} domain={c.dstDomain}>
+                        {c.dstDomain ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => goToHost(c.dstIp, "dst")}
+                              title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
+                              className="block max-w-full cursor-pointer truncate text-left hover:text-primary hover:underline"
+                            >
+                              {c.dstDomain}
+                            </button>
                             <div className="font-mono text-[10px] text-muted-foreground">{c.dstIp}</div>
-                          )}
-                        </>
-                      )}
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => goToHost(c.dstIp, "dst")}
+                              title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
+                              className="block max-w-full cursor-pointer truncate text-left hover:text-primary hover:underline"
+                            >
+                              {c.dstHostname}
+                            </button>
+                            {c.dstHostname !== c.dstIp && (
+                              <div className="font-mono text-[10px] text-muted-foreground">{c.dstIp}</div>
+                            )}
+                          </>
+                        )}
+                      </HostReferenceTrigger>
                     </TableCell>
                     <TableCell className="text-xs font-mono">{c.proto}</TableCell>
                     <TableCell className="text-right text-xs font-mono">{c.dstPort}</TableCell>
@@ -253,16 +261,18 @@ function TopDomainsCard({
               <div key={d.domain} className="space-y-1">
                 <div className="flex items-center justify-between gap-3 text-sm">
                   <span className="flex min-w-0 items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        navigate(`/statistics/dns/domain/${encodeURIComponent(d.domain)}?window=${window_}`)
-                      }
-                      title="คลิกเพื่อดูว่าเครื่องไหนถามโดเมนนี้บ้าง"
-                      className="min-w-0 cursor-pointer truncate text-left text-foreground/90 hover:text-primary hover:underline"
-                    >
-                      {d.domain}
-                    </button>
+                    <HostReferenceTrigger domain={d.domain} className="min-w-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          navigate(`/statistics/dns/domain/${encodeURIComponent(d.domain)}?window=${window_}`)
+                        }
+                        title="คลิกเพื่อดูว่าเครื่องไหนถามโดเมนนี้บ้าง"
+                        className="min-w-0 cursor-pointer truncate text-left text-foreground/90 hover:text-primary hover:underline"
+                      >
+                        {d.domain}
+                      </button>
+                    </HostReferenceTrigger>
                     <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{d.queryType}</span>
                   </span>
                   <span className="shrink-0 font-mono text-xs text-muted-foreground">
@@ -313,12 +323,12 @@ function TopDeniedCard({
               sources.map((s) => (
                 <div key={s.ip} className="space-y-1">
                   <div className="flex items-center justify-between gap-3 text-sm">
-                    <span className="flex min-w-0 items-center gap-2">
+                    <HostReferenceTrigger ip={s.ip} className="flex min-w-0 items-center gap-2">
                       <span className="truncate text-foreground/90">{s.hostname}</span>
                       {s.hostname !== s.ip && (
                         <span className="shrink-0 font-mono text-xs text-muted-foreground">{s.ip}</span>
                       )}
-                    </span>
+                    </HostReferenceTrigger>
                     <span className="shrink-0 font-mono text-xs text-muted-foreground">
                       {s.count} · {s.percent}%
                     </span>
@@ -421,6 +431,7 @@ export default function StatisticsOverview() {
       stats.topDomains.length > 0)
 
   return (
+    <ReferenceHoverProvider>
     <div className="space-y-4">
       {/* Page header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -546,5 +557,6 @@ export default function StatisticsOverview() {
         Auto-refresh ทุก 10 วินาที · Observed: {stats ? fmtBytes(stats.observedBytes) : "-"}
       </p>
     </div>
+    </ReferenceHoverProvider>
   )
 }
