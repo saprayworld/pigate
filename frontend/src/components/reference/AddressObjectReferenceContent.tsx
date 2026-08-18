@@ -108,7 +108,7 @@ export function AddressObjectReferenceContent({ object }: { object: AddressObjec
       )}
 
       <div className="pt-1">
-        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate("/policy/addresses")}>
+        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(`/policy/addresses?q=${encodeURIComponent(object.name)}`)}>
           ดู Address Objects
         </Button>
       </div>

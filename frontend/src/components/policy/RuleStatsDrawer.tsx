@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from "react"
+import { type ReactNode, useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router"
 import { Activity, Ban, Info, ExternalLink } from "lucide-react"
 import {
@@ -11,7 +11,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { type PolicyRule } from "@/data-mockup/mockData"
+import { type PolicyRule, type ServiceObject } from "@/data-mockup/mockData"
 import { type PolicyRuleStat } from "@/services/policyStatsService"
 import { policyService } from "@/services/policyService"
 import { useAlert } from "@/hooks/useAlert"
@@ -29,6 +29,7 @@ import { ReferenceHoverProvider } from "@/components/reference/ReferenceHoverPro
 import { ReferenceTrigger } from "@/components/reference/ReferenceTrigger"
 import { IpReferenceContent } from "@/components/reference/IpReferenceContent"
 import { CombinedReferenceContent } from "@/components/reference/CombinedReferenceContent"
+import { ServiceObjectReferenceContent, type ServiceObjectReferenceObject } from "@/components/reference/ServiceObjectReferenceContent"
 
 // Endpoints panel refresh cadence while the drawer stays open (T-10).
 const ENDPOINTS_REFRESH_MS = 10_000
@@ -51,6 +52,12 @@ interface RuleStatsDrawerProps {
   // its own poll cadence (docs/ref/todo/
   // fqdn-retry-and-monitored-counters-plan.md D-6/T-16, issue #141).
   onChanged?: () => void
+  // serviceObjects (docs/ref/todo/service-object-popover-plan.md Step 4) —
+  // the same array PolicyChainPage already loads/holds for the Service
+  // column popover, passed straight through so the Top Service card below
+  // can look names up in a Map instead of fetching/`.find()`-ing on its own.
+  // Defaults to [] so other call sites of this drawer keep compiling.
+  serviceObjects?: ServiceObject[]
 }
 
 function Field({ label, value }: { label: string; value: ReactNode }) {
@@ -72,6 +79,13 @@ function Field({ label, value }: { label: string; value: ReactNode }) {
 // EndpointHit always has an ip, so every row gets one; a row with a known
 // domain gets CombinedReferenceContent, otherwise plain IpReferenceContent.
 // Pure wrapper, no change to the row's own markup/logic.
+// serviceObject (docs/ref/todo/service-object-popover-plan.md Step 4) is the
+// Top Service card's equivalent: when there's no `ip` (the source/dest
+// rows always have one, Top Service rows never do) but a matching
+// ServiceObject was found, the row gets a ServiceObjectReferenceContent
+// popover instead. Priority: `ip` wins first (existing behavior, untouched),
+// then `serviceObject`, then plain/no popover — exactly as before for rows
+// that pass neither.
 function EndpointRow({
   primary,
   secondary,
@@ -81,6 +95,7 @@ function EndpointRow({
   onViewLogs,
   ip,
   domain,
+  serviceObject,
 }: {
   primary: string
   secondary: string
@@ -90,6 +105,7 @@ function EndpointRow({
   onViewLogs?: () => void
   ip?: string
   domain?: string
+  serviceObject?: ServiceObjectReferenceObject
 }) {
   const nameBlock = (
     <div className="min-w-0 space-y-0.5">
@@ -113,6 +129,13 @@ function EndpointRow({
           content={() =>
             domain ? <CombinedReferenceContent ip={ip} domain={domain} /> : <IpReferenceContent key={ip} ip={ip} />
           }
+        >
+          {nameBlock}
+        </ReferenceTrigger>
+      ) : serviceObject ? (
+        <ReferenceTrigger
+          className="min-w-0"
+          content={() => <ServiceObjectReferenceContent object={serviceObject} />}
         >
           {nameBlock}
         </ReferenceTrigger>
@@ -160,9 +183,17 @@ function buildTrafficLogPath(rule: PolicyRule, q: string): string {
   return `/logs/local${query}&chain=${encodeURIComponent(rule.chain)}`
 }
 
-export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, countersSince, available, onChanged }: RuleStatsDrawerProps) {
+export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, countersSince, available, onChanged, serviceObjects = [] }: RuleStatsDrawerProps) {
   const navigate = useNavigate()
   const { alert, confirm } = useAlert()
+  // serviceByName (docs/ref/todo/service-object-popover-plan.md Step 4) —
+  // same Map + useMemo pattern as PolicyChainPage's serviceByName, built
+  // once from the `serviceObjects` prop; never a per-hover `.find()` scan.
+  const serviceByName = useMemo(() => {
+    const m = new Map<string, ServiceObject>()
+    serviceObjects.forEach((s) => m.set(s.name, s))
+    return m
+  }, [serviceObjects])
   const [endpoints, setEndpoints] = useState<PolicyRuleEndpoints | null>(null)
   const [endpointsError, setEndpointsError] = useState<string | null>(null)
   const [endpointsLoading, setEndpointsLoading] = useState(false)
@@ -596,6 +627,7 @@ export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, counte
                           lastSeenAt={hit.lastSeenAt}
                           fromRule={hit.fromRule}
                           onViewLogs={() => viewLogsFor(hit.proto === "ICMP" && hit.port === "-" ? hit.proto : hit.port)}
+                          serviceObject={hit.serviceName ? serviceByName.get(hit.serviceName) : undefined}
                         />
                       ))}
                     </div>

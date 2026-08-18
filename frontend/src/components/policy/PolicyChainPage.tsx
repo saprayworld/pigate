@@ -42,6 +42,7 @@ import { ReferenceTrigger } from "@/components/reference/ReferenceTrigger"
 import { IpReferenceContent } from "@/components/reference/IpReferenceContent"
 import { DomainReferenceContent } from "@/components/reference/DomainReferenceContent"
 import { AddressObjectReferenceContent } from "@/components/reference/AddressObjectReferenceContent"
+import { ServiceObjectReferenceContent } from "@/components/reference/ServiceObjectReferenceContent"
 
 // shadcn UI component imports
 import {
@@ -233,6 +234,35 @@ function AddressReferenceBadge({ value, addressByName }: { value: string; addres
   )
 }
 
+// ServiceReferenceBadge (docs/ref/todo/service-object-popover-plan.md Step 3)
+// renders a Service/Port badge with the reference popover wired in: "ALL"
+// and a name not found in `serviceByName` never get a handler bound at all
+// (same "ไม่ผูก handler" rule as AddressReferenceBadge above); a name found
+// in `serviceByName` opens ServiceObjectReferenceContent — a pure
+// presentational, no-network-request popover (Service Objects have no
+// reference data of their own, unlike Address Objects, so there is no
+// level-2 drill-in here). The badge className below is copied verbatim from
+// the pre-existing inline badge in the Service column and MUST stay
+// byte-for-byte identical (plan §5 Caution 6).
+function ServiceReferenceBadge({ value, serviceByName }: { value: string; serviceByName: Map<string, ServiceObject> }) {
+  const badge = (
+    <Badge
+      variant="outline"
+      className="rounded border-primary/20 bg-primary/10 px-1.5 py-0.5 font-mono text-[11px] font-medium text-primary"
+    >
+      {value}
+    </Badge>
+  )
+  if (value === "ALL") return badge
+
+  const obj = serviceByName.get(value)
+  if (!obj) return badge
+
+  return (
+    <ReferenceTrigger content={() => <ServiceObjectReferenceContent object={obj} />}>{badge}</ReferenceTrigger>
+  )
+}
+
 // Props for Sortable Row component
 interface SortableRowProps {
   rule: PolicyRule
@@ -241,6 +271,7 @@ interface SortableRowProps {
   stat?: PolicyRuleStat
   statsAvailable: boolean
   addressByName: Map<string, AddressObject>
+  serviceByName: Map<string, ServiceObject>
   onEdit: (rule: PolicyRule) => void
   onDelete: (id: string) => void
   onToggleStatus: (id: string) => void
@@ -249,7 +280,7 @@ interface SortableRowProps {
 }
 
 // Drag & Drop Row component
-function SortableRow({ rule, index, interfaces, stat, statsAvailable, addressByName, onEdit, onDelete, onToggleStatus, onToggleLog, onViewStats }: SortableRowProps) {
+function SortableRow({ rule, index, interfaces, stat, statsAvailable, addressByName, serviceByName, onEdit, onDelete, onToggleStatus, onToggleLog, onViewStats }: SortableRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: rule.id })
 
   const style = {
@@ -327,13 +358,7 @@ function SortableRow({ rule, index, interfaces, stat, statsAvailable, addressByN
       <TableCell className="py-3">
         <div className="flex flex-wrap gap-1">
           {rule.service.map((svc, i) => (
-            <Badge
-              key={i}
-              variant="outline"
-              className="rounded border-primary/20 bg-primary/10 px-1.5 py-0.5 font-mono text-[11px] font-medium text-primary"
-            >
-              {svc}
-            </Badge>
+            <ServiceReferenceBadge key={i} value={svc} serviceByName={serviceByName} />
           ))}
         </div>
       </TableCell>
@@ -509,6 +534,17 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
     addressObjects.forEach((a) => m.set(a.name, a))
     return m
   }, [addressObjects])
+
+  // serviceByName (docs/ref/todo/service-object-popover-plan.md Step 3) — a
+  // name -> ServiceObject lookup for the reference popover on the Service/
+  // Port badges below, built with the SAME useMemo-from-serviceObjects
+  // pattern as addressByName above (never a fresh serviceObjectService.
+  // getAll() call, never a per-hover .find() scan — plan §2.3/§5 Caution 5).
+  const serviceByName = useMemo(() => {
+    const m = new Map<string, ServiceObject>()
+    serviceObjects.forEach((s) => m.set(s.name, s))
+    return m
+  }, [serviceObjects])
 
   // Generate options dynamically from current address and service objects
   const sourceOptions = useMemo(() => {
@@ -1026,6 +1062,7 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
                           stat={statsById.get(rule.id)}
                           statsAvailable={policyStats?.available ?? false}
                           addressByName={addressByName}
+                          serviceByName={serviceByName}
                           onEdit={openEditModal}
                           onDelete={handleDeleteRule}
                           onToggleStatus={handleToggleStatus}
@@ -1447,6 +1484,7 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
         countersSince={policyStats?.countersSince}
         available={policyStats?.available ?? false}
         onChanged={handleStatsChanged}
+        serviceObjects={serviceObjects}
       />
     </div>
     </ReferenceHoverProvider>

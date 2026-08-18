@@ -62,6 +62,8 @@
 * **`Popover`/`PopoverContent` ต้องใส่ `onOpenAutoFocus={(e) => e.preventDefault()}` เสมอ** — และถ้าหน้านั้นมี Combobox/Drawer อยู่ด้วย (เช่น `PolicyChainPage.tsx`) ต้องปิด popover ทั้ง stack ทันทีที่ Drawer/Dialog เปิด (ดูตัวอย่าง `ReferenceHoverProvider`'s `closeWhen` prop) ก่อนเพื่อไม่ให้ชนกับ focus/pointer blocker ตามกติกาข้อ 1.3.2
 * **หน้า/ตารางที่เป็น Radix Portal ของตัวเอง (เช่นเนื้อหาใน `<DrawerContent>`) ต้องมี `<ReferenceHoverProvider>` เป็นของตัวเอง** แยกจาก provider ของหน้าแม่ — ไม่งั้น popover ของ Drawer จะ mount ก่อน DOM ของ Drawer เอง ทำให้ z-index ตกไปอยู่หลัง overlay ของ Drawer
 * **ข้อมูล domain↔IP ที่แสดงใน popover เป็น display-only และ poisonable** (มาจาก dnsmasq answer log ที่ LAN client ควบคุมได้) — ห้ามใช้ผลจาก popover ไปตัดสิน firewall rule generation, policy matching, routing หรือ QoS ใด ๆ (ดู `docs/tech_stack_design.md` §8 และ doc comment ใน `backend/internal/model/statistics_reference.go`)
+* **content ที่ไม่มีข้อมูล runtime ปลายทางให้ดึงเพิ่ม (เช่น Service Object ที่มีแค่ protocol/port ไม่มี reference data ผูกอยู่) ต้องเป็น presentational ล้วน** — ห้ามยิง API และห้ามมี popover ระดับ 2 (ดู `ServiceObjectReferenceContent.tsx`, docs/ref/todo/service-object-popover-plan.md §2.1)
+* **ปุ่ม "ดู … Objects" ท้าย popover ทุกตัวต้องส่ง `?q=<ชื่อ object>`** (`?q=${encodeURIComponent(object.name)}`) และหน้าปลายทางต้อง seed ตัวกรองจาก `?q=` ตอนโหลดแบบ seed-then-sync (`setSearchParams(..., { replace: true })`, `q` ว่าง = ลบ param ทิ้ง — ห้าม push history ทุกตัวอักษร) เป็นกติกากลาง ไม่ใช่ทางเลือกรายหน้า (ดูแม่แบบ `DnsServer.tsx`'s `?tab=`, ตัวอย่างคู่ `/policy/addresses?q=` และ `/policy/services?q=`)
 
 ---
 
