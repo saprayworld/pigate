@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react"
+import { useSearchParams } from "react-router"
 import { getErrorMessage } from "@/lib/errors"
 import {
   BookOpen,
@@ -87,7 +88,29 @@ export default function Addresses() {
   // --- State ---
   const [addresses, setAddresses] = useState<AddressObject[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [searchQuery, setSearchQuery] = useState("")
+  // `?q=` deep-link (docs/ref/todo/service-object-popover-plan.md Step 2B):
+  // seeds the initial searchQuery on mount only; searchQuery stays the
+  // single source of truth for the filter below. updateSearchQuery keeps
+  // the URL in sync on every keystroke via { replace: true } (mirrors
+  // DnsServer.tsx's ?tab= pattern) so Back doesn't step through history one
+  // character at a time, and clearing the box removes the param entirely.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [searchQuery, setSearchQueryState] = useState(() => searchParams.get("q") ?? "")
+  const updateSearchQuery = (value: string) => {
+    setSearchQueryState(value)
+    setSearchParams(
+      (prev) => {
+        const params = new URLSearchParams(prev)
+        if (value) {
+          params.set("q", value)
+        } else {
+          params.delete("q")
+        }
+        return params
+      },
+      { replace: true }
+    )
+  }
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<"all" | "subnet" | "range" | "fqdn">("all")
 
   // Selection state for checkboxes
@@ -419,7 +442,7 @@ export default function Addresses() {
               <Input
                 type="text"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => updateSearchQuery(e.target.value)}
                 placeholder="ค้นหาชื่อ หรือที่อยู่ไอพี..."
                 className="h-8 pl-8 text-xs"
               />
