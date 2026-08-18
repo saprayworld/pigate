@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -644,6 +645,62 @@ func TestImportRejectsDhcpConfigInjection(t *testing.T) {
 	for _, c := range afterCfgs {
 		if c.ID == "dhcp-evil" {
 			t.Errorf("injected DHCP config leaked into DB")
+		}
+	}
+}
+
+// TestImportRejectsPolicyInterfacesOverCap ensures a crafted (or foreign,
+// higher-cap) backup carrying a policy rule whose InInterfaces/OutInterfaces
+// exceed max-policy-interfaces-per-direction is rejected before any DB
+// mutation — RestoreConfig writes policy_interfaces directly, bypassing
+// CreatePolicy/UpdatePolicy's cap enforcement entirely, so the cap must also
+// be enforced inside RestoreConfig itself (docs/ref/todo/
+// multi-interface-firewall-rule-plan.md §2.2, Caution 7). Without this check,
+// an unbounded interface count expands into an unbounded in x out cartesian
+// product in kernel/real_firewall.go's buildRuleExpressions before the
+// max-expanded-rules-per-policy cap is even checked — a memory/CPU DoS at
+// apply time (QA finding, Critical).
+func TestImportRejectsPolicyInterfacesOverCap(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo)
+
+	file, err := bs.Export(false, "")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	// Default cap is model.DefaultMaxPolicyInterfacesPerDirection (8) — this
+	// test env never calls repo.SetPolicyInterfaceLimit, so 8 applies. Seed
+	// 20 distinct in-interfaces, well over the cap.
+	overCapIfaces := make([]string, 20)
+	for i := range overCapIfaces {
+		overCapIfaces[i] = fmt.Sprintf("eth%d", i)
+	}
+	file.Config.Policies = append(file.Config.Policies, model.PolicyRule{
+		ID: "pol-overcap", Name: "OverCapIfaces", Chain: "forward",
+		InInterfaces: overCapIfaces, OutInterfaces: []string{"ALL"},
+		Source: []string{"ALL"}, Destination: []string{"ALL"}, Service: []string{"ALL"},
+		Action: "ACCEPT", Status: true,
+	})
+	sum, _ := configChecksum(*file.Config)
+	file.Meta.Checksum = sum
+	raw, _ := json.Marshal(file)
+
+	beforePolicies, _ := repo.GetPolicies()
+
+	if _, err := bs.Import(raw, model.ImportOptions{}); err == nil {
+		t.Fatalf("expected import to be rejected: policy interfaces exceed the configured cap")
+	}
+
+	// Transaction must have rolled back entirely: no new policy, and no
+	// policy_interfaces rows for the rejected policy.
+	afterPolicies, _ := repo.GetPolicies()
+	if len(afterPolicies) != len(beforePolicies) {
+		t.Errorf("rollback failed: policies before=%d after=%d", len(beforePolicies), len(afterPolicies))
+	}
+	for _, p := range afterPolicies {
+		if p.ID == "pol-overcap" {
+			t.Errorf("over-cap policy leaked into DB despite rejected import")
 		}
 	}
 }

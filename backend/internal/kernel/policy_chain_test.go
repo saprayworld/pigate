@@ -2,11 +2,15 @@ package kernel
 
 import (
 	"net"
+	"reflect"
+	"strings"
 	"testing"
 
 	"pigate/internal/model"
 
+	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
+	"github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
 )
 
@@ -67,7 +71,7 @@ func TestBuildRuleExpressions_NoFwmarkOnInputOutput(t *testing.T) {
 	for _, chain := range []string{model.PolicyChainInput, model.PolicyChainOutput} {
 		ruleSets, err := buildRuleExpressions(
 			chain,
-			"eth0", "eth0", // both set; effective interface is trimmed internally
+			[]string{"eth0"}, []string{"eth0"}, // both set; effective interface is trimmed internally
 			lanCombo(), lanCombo(), sshCombo(),
 			"ACCEPT", false, true, /* nat=true */
 			"[PiGate] TEST ACCEPT: ",
@@ -86,7 +90,7 @@ func TestBuildRuleExpressions_NoFwmarkOnInputOutput(t *testing.T) {
 	// the existing behaviour this test is contrasting against).
 	ruleSets, err := buildRuleExpressions(
 		model.PolicyChainForward,
-		"eth0", "eth1",
+		[]string{"eth0"}, []string{"eth1"},
 		lanCombo(), lanCombo(), sshCombo(),
 		"ACCEPT", false, true,
 		"[PiGate] FWD ACCEPT: ",
@@ -109,7 +113,7 @@ func TestBuildRuleExpressions_InputOutputSingleRuleWithNflog(t *testing.T) {
 	for _, chain := range []string{model.PolicyChainInput, model.PolicyChainOutput} {
 		ruleSets, err := buildRuleExpressions(
 			chain,
-			"", "", lanCombo(), lanCombo(), sshCombo(),
+			nil, nil, lanCombo(), lanCombo(), sshCombo(),
 			"DROP", true /* logEnabled */, false,
 			"[PiGate] TEST DROP  : ",
 		)
@@ -164,7 +168,7 @@ func TestBuildRuleExpressions_LimitNeverWithVerdict(t *testing.T) {
 				for _, nat := range natOptions {
 					ruleSets, err := buildRuleExpressions(
 						chain,
-						"eth0", "eth0",
+						[]string{"eth0"}, []string{"eth0"},
 						lanCombo(), lanCombo(), sshCombo(),
 						action, logEnabled, nat,
 						"[PiGate] TEST : ",
@@ -213,7 +217,7 @@ func TestBuildRuleExpressions_LimitNeverWithVerdict(t *testing.T) {
 func TestBuildRuleExpressions_ForwardKeepsSingleRuleWithLog(t *testing.T) {
 	ruleSets, err := buildRuleExpressions(
 		model.PolicyChainForward,
-		"", "", lanCombo(), lanCombo(), sshCombo(),
+		nil, nil, lanCombo(), lanCombo(), sshCombo(),
 		"DROP", true, false,
 		"[PiGate] FWD DROP  : ",
 	)
@@ -364,7 +368,7 @@ func TestBuildRuleExpressions_FQDNComboMatchesResolvedIP(t *testing.T) {
 
 	ruleSets, err := buildRuleExpressions(
 		model.PolicyChainForward,
-		"", "",
+		nil, nil,
 		fqdnCombo, addrCombo{hasFilter: false}, sshCombo(),
 		"ACCEPT", false, false,
 		"[PiGate] FWD ACCEPT: ",
@@ -397,7 +401,7 @@ func TestBuildRuleExpressions_FQDNComboMatchesResolvedIP(t *testing.T) {
 func TestBuildRuleExpressions_SingleValueAddressStillYieldsOneRule(t *testing.T) {
 	ruleSets, err := buildRuleExpressions(
 		model.PolicyChainForward,
-		"", "",
+		nil, nil,
 		lanCombo(), addrCombo{hasFilter: false}, sshCombo(),
 		"ACCEPT", false, false,
 		"[PiGate] FWD ACCEPT: ",
@@ -407,5 +411,188 @@ func TestBuildRuleExpressions_SingleValueAddressStillYieldsOneRule(t *testing.T)
 	}
 	if len(ruleSets) != 1 {
 		t.Fatalf("expected exactly 1 rule for a single-value subnet object, got %d: %+v", len(ruleSets), ruleSets)
+	}
+}
+
+// TestBuildRuleExpressions_SingleInterfaceByteIdentical is a regression guard
+// (docs/ref/todo/multi-interface-firewall-rule-plan.md T-06/T-10, plan
+// Caution 3): a single-interface (or ALL/empty) in/out list must still
+// produce exactly the same iifname/oifname exprs as before this function
+// accepted lists.
+func TestBuildRuleExpressions_SingleInterfaceByteIdentical(t *testing.T) {
+	ruleSets, err := buildRuleExpressions(
+		model.PolicyChainForward,
+		[]string{"eth0"}, []string{"eth1"},
+		lanCombo(), lanCombo(), sshCombo(),
+		"ACCEPT", false, false,
+		"[PiGate] FWD ACCEPT: ",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ruleSets) != 1 {
+		t.Fatalf("expected exactly 1 rule for single in/out interfaces, got %d: %+v", len(ruleSets), ruleSets)
+	}
+	exprs := ruleSets[0]
+	var iifCmp, oifCmp *expr.Cmp
+	for i, e := range exprs {
+		if m, ok := e.(*expr.Meta); ok && m.Key == expr.MetaKeyIIFNAME {
+			iifCmp = exprs[i+1].(*expr.Cmp)
+		}
+		if m, ok := e.(*expr.Meta); ok && m.Key == expr.MetaKeyOIFNAME {
+			oifCmp = exprs[i+1].(*expr.Cmp)
+		}
+	}
+	if iifCmp == nil || string(iifCmp.Data[:4]) != "eth0" {
+		t.Errorf("expected iifname cmp for eth0, got %+v", iifCmp)
+	}
+	if oifCmp == nil || string(oifCmp.Data[:4]) != "eth1" {
+		t.Errorf("expected oifname cmp for eth1, got %+v", oifCmp)
+	}
+
+	// ALL / empty must not emit any iifname/oifname expr at all.
+	ruleSetsAll, err := buildRuleExpressions(
+		model.PolicyChainForward,
+		[]string{"ALL"}, nil,
+		lanCombo(), lanCombo(), sshCombo(),
+		"ACCEPT", false, false,
+		"[PiGate] FWD ACCEPT: ",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ruleSetsAll) != 1 {
+		t.Fatalf("expected exactly 1 rule for ALL/empty interfaces, got %d", len(ruleSetsAll))
+	}
+	for _, e := range ruleSetsAll[0] {
+		if m, ok := e.(*expr.Meta); ok && (m.Key == expr.MetaKeyIIFNAME || m.Key == expr.MetaKeyOIFNAME) {
+			t.Errorf("expected no iifname/oifname expr for ALL/empty interfaces, got %+v", ruleSetsAll[0])
+		}
+	}
+}
+
+// TestBuildRuleExpressions_MultiInterfaceCartesian is the core D-1 Option A
+// assertion: in=[eth0,wlan0], out=[eth1] on the forward chain must produce
+// exactly 2 rulesets (one per in x out pair), each carrying the correct
+// iifname/oifname match.
+func TestBuildRuleExpressions_MultiInterfaceCartesian(t *testing.T) {
+	ruleSets, err := buildRuleExpressions(
+		model.PolicyChainForward,
+		[]string{"eth0", "wlan0"}, []string{"eth1"},
+		lanCombo(), lanCombo(), sshCombo(),
+		"ACCEPT", false, false,
+		"[PiGate] FWD ACCEPT: ",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ruleSets) != 2 {
+		t.Fatalf("expected exactly 2 rulesets (2 in x 1 out), got %d: %+v", len(ruleSets), ruleSets)
+	}
+
+	var gotIn []string
+	for _, exprs := range ruleSets {
+		var iifName, oifName string
+		for i, e := range exprs {
+			if m, ok := e.(*expr.Meta); ok && m.Key == expr.MetaKeyIIFNAME {
+				iifName = strings.TrimRight(string(exprs[i+1].(*expr.Cmp).Data), "\x00")
+			}
+			if m, ok := e.(*expr.Meta); ok && m.Key == expr.MetaKeyOIFNAME {
+				oifName = strings.TrimRight(string(exprs[i+1].(*expr.Cmp).Data), "\x00")
+			}
+		}
+		if oifName != "eth1" {
+			t.Errorf("expected oifname=eth1 on every ruleset, got %q", oifName)
+		}
+		gotIn = append(gotIn, iifName)
+	}
+	if !reflect.DeepEqual(gotIn, []string{"eth0", "wlan0"}) {
+		t.Errorf("expected iifname order [eth0 wlan0] (in as outer loop), got %v", gotIn)
+	}
+}
+
+// TestBuildRuleExpressions_InputChainIgnoresOutInterfaces asserts the
+// chain-scoped list clearing still holds with multiple interfaces: passing a
+// multi-value outIfaces on the input chain must not produce any oifname expr
+// or multiply the ruleset count.
+func TestBuildRuleExpressions_InputChainIgnoresOutInterfaces(t *testing.T) {
+	ruleSets, err := buildRuleExpressions(
+		model.PolicyChainInput,
+		[]string{"eth0", "wlan0"}, []string{"eth1", "eth2"},
+		lanCombo(), lanCombo(), sshCombo(),
+		"ACCEPT", false, false,
+		"[PiGate] INP ACCEPT: ",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ruleSets) != 2 {
+		t.Fatalf("expected exactly 2 rulesets (2 in x 1 ignored-out), got %d: %+v", len(ruleSets), ruleSets)
+	}
+	for _, exprs := range ruleSets {
+		for _, e := range exprs {
+			if m, ok := e.(*expr.Meta); ok && m.Key == expr.MetaKeyOIFNAME {
+				t.Errorf("input chain must never emit an oifname expr, got %+v", exprs)
+			}
+		}
+	}
+}
+
+// TestAddUserChainRules_ExpansionCapAppliesAcrossInterfacePairs asserts the
+// existing maxExpandedRulesPerPolicy cap still truncates expansion once the
+// new in x out multiplier is added to the source x dest x service cartesian
+// product (plan Caution 2: "ห้าม bypass"). Uses nftables.WithTestDial (the
+// same pattern the google/nftables package's own tests use) so AddRule's
+// buffered netlink messages can be counted via Flush without touching a real
+// netlink socket.
+func TestAddUserChainRules_ExpansionCapAppliesAcrossInterfacePairs(t *testing.T) {
+	rule := model.PolicyRule{
+		ID:           "cap-test",
+		Name:         "cap test",
+		Chain:        model.PolicyChainForward,
+		Status:       true,
+		Action:       "ACCEPT",
+		InInterfaces: []string{"eth0", "eth1", "wlan0"}, // 3 in x 1 out = 3 combos per (src,dst,svc)
+		Source:       []string{"LAN"},
+		Destination:  []string{"LAN"},
+		Service:      []string{"SSH"},
+	}
+	addrsMap := map[string]model.AddressObject{
+		"LAN": {ID: "a1", Name: "LAN", Type: "subnet", Value: "192.168.1.0/24"},
+	}
+	svcsMap := map[string]model.ServiceObject{
+		"SSH": {ID: "s1", Name: "SSH", Protocol: "TCP", Port: "22"},
+	}
+
+	newRuleHeaderType := netlink.HeaderType((unix.NFNL_SUBSYS_NFTABLES << 8) | unix.NFT_MSG_NEWRULE)
+	var newRuleCount int
+	conn, err := nftables.New(nftables.WithTestDial(
+		func(req []netlink.Message) ([]netlink.Message, error) {
+			for _, msg := range req {
+				if msg.Header.Type == newRuleHeaderType {
+					newRuleCount++
+				}
+			}
+			return req, nil
+		}))
+	if err != nil {
+		t.Fatalf("nftables.New: %v", err)
+	}
+
+	table := conn.AddTable(&nftables.Table{Family: nftables.TableFamilyINet, Name: "pigate_test"})
+	chain := conn.AddChain(&nftables.Chain{Name: "forward_test", Table: table})
+
+	addUserChainRules(conn, table, chain, model.PolicyChainForward, []model.PolicyRule{rule}, addrsMap, svcsMap,
+		"[PiGate] FWD ACCEPT: ", "[PiGate] FWD DROP  : ", 2 /* cap smaller than the 3 in x out combos */, nil)
+
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	if newRuleCount > 2 {
+		t.Errorf("expected addUserChainRules to stop at the cap (2), got %d rules added", newRuleCount)
+	}
+	if newRuleCount == 0 {
+		t.Errorf("expected at least 1 rule to be added before hitting the cap")
 	}
 }

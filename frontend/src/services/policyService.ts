@@ -12,6 +12,26 @@ function normalizeChain(rules: PolicyRule[]): PolicyRule[] {
   return rules.map((r) => (r.chain ? r : { ...r, chain: "forward" as PolicyChain }));
 }
 
+// Rows saved before multi-interface support shipped have no
+// inInterfaces/outInterfaces at all (only the legacy scalar inInterface/
+// outInterface) — seed the list fields from the scalar (or "ALL" if the
+// scalar itself is empty) so every consumer can rely on
+// inInterfaces/outInterfaces always being a non-empty array, mirroring the
+// backend's model.NormalizePolicyRuleInterfaces (docs/ref/todo/
+// multi-interface-firewall-rule-plan.md §2.6, T-12).
+function normalizeInterfaces(rules: PolicyRule[]): PolicyRule[] {
+  return rules.map((r) => {
+    if (r.inInterfaces && r.inInterfaces.length > 0 && r.outInterfaces && r.outInterfaces.length > 0) {
+      return r;
+    }
+    return {
+      ...r,
+      inInterfaces: r.inInterfaces && r.inInterfaces.length > 0 ? r.inInterfaces : [r.inInterface || "ALL"],
+      outInterfaces: r.outInterfaces && r.outInterfaces.length > 0 ? r.outInterfaces : [r.outInterface || "ALL"],
+    };
+  });
+}
+
 // Helper to get data from LocalStorage (initializes with initialPolicyRules if empty)
 function getLocalPolicies(): PolicyRule[] {
   const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -20,7 +40,7 @@ function getLocalPolicies(): PolicyRule[] {
     return initialPolicyRules;
   }
   try {
-    return normalizeChain(JSON.parse(stored));
+    return normalizeInterfaces(normalizeChain(JSON.parse(stored)));
   } catch (e) {
     console.error("Failed to parse local policies, resetting to mock data:", e);
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(initialPolicyRules));
@@ -94,10 +114,12 @@ export const policyService = {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 350));
       const current = getLocalPolicies();
-      const newRule: PolicyRule = {
-        ...rule,
-        id: "rule-" + Math.random().toString(36).substring(2, 9),
-      };
+      const newRule: PolicyRule = normalizeInterfaces([
+        {
+          ...rule,
+          id: "rule-" + Math.random().toString(36).substring(2, 9),
+        },
+      ])[0];
       saveLocalPolicies([...current, newRule]);
       syncReferences();
       return newRule;
@@ -128,10 +150,12 @@ export const policyService = {
       if (!target) {
         throw new Error(`Policy rule with id ${id} not found`);
       }
-      const updatedRule: PolicyRule = {
-        ...target,
-        ...rule,
-      };
+      const updatedRule: PolicyRule = normalizeInterfaces([
+        {
+          ...target,
+          ...rule,
+        },
+      ])[0];
       const updatedList = current.map((r) => (r.id === id ? updatedRule : r));
       saveLocalPolicies(updatedList);
       syncReferences();

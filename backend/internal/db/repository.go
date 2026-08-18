@@ -32,16 +32,26 @@ type Repository struct {
 	// multi-value-address-service-objects-plan.md §2.1, D-3) — never
 	// hardcode the cap at the point of use.
 	maxObjectEntries int
+	// maxPolicyInterfacesPerDirection is the per-direction interfaces cap
+	// enforced by model.ValidatePolicyInterfaces in CreatePolicy/UpdatePolicy
+	// below — the only layer in the system allowed to enforce this cap (see
+	// docs/ref/todo/multi-interface-firewall-rule-plan.md §2.2, Caution 7).
+	// Defaults to model.DefaultMaxPolicyInterfacesPerDirection but is meant
+	// to be overridden at startup via SetPolicyInterfaceLimit from
+	// cfg.MaxPolicyInterfacesPerDirection (config key
+	// "max-policy-interfaces-per-direction").
+	maxPolicyInterfacesPerDirection int
 }
 
 func NewRepository(db *sql.DB) *Repository {
 	return &Repository{
-		db:                     db,
-		mockMode:               true, // default to true for safety
-		mockFromReal:           false,
-		allowEditSystemRoutes:  false,
-		prioritizeKernelRoutes: false, // default to false
-		maxObjectEntries:       model.DefaultMaxObjectEntries,
+		db:                              db,
+		mockMode:                        true, // default to true for safety
+		mockFromReal:                    false,
+		allowEditSystemRoutes:           false,
+		prioritizeKernelRoutes:          false, // default to false
+		maxObjectEntries:                model.DefaultMaxObjectEntries,
+		maxPolicyInterfacesPerDirection: model.DefaultMaxPolicyInterfacesPerDirection,
 	}
 }
 
@@ -50,6 +60,14 @@ func NewRepository(db *sql.DB) *Repository {
 // resolution (pattern mirrors SetMockMode/SetAllowEditSystemRoutes above).
 func (r *Repository) SetObjectLimits(maxObjectEntries int) {
 	r.maxObjectEntries = maxObjectEntries
+}
+
+// SetPolicyInterfaceLimit sets the per-direction interfaces cap for
+// PolicyRule.InInterfaces/OutInterfaces. Called by cmd/pigate/main.go with
+// cfg.MaxPolicyInterfacesPerDirection after config resolution (pattern
+// mirrors SetObjectLimits above).
+func (r *Repository) SetPolicyInterfaceLimit(n int) {
+	r.maxPolicyInterfacesPerDirection = n
 }
 
 func (r *Repository) SetMockMode(mockMode bool, mockFromReal bool) {
@@ -756,6 +774,52 @@ func (r *Repository) ServiceNameExists(name string) (bool, error) {
 // FIREWALL POLICIES
 // =========================================================================
 
+// loadPolicyInterfaces loads every policy_interfaces row (ordered by
+// policy_id, direction, seq) and groups them in memory by policy_id and
+// direction. Single query up front (instead of one query per policy inside a
+// loop over still-open rows) — same rationale as loadAddressEntries/
+// loadServiceEntries above (docs/ref/todo/
+// multi-interface-firewall-rule-plan.md §2.3, T-04: "ห้าม query ในลูป").
+func (r *Repository) loadPolicyInterfaces(policyID string) (map[string]map[string][]string, error) {
+	query := "SELECT policy_id, direction, name FROM policy_interfaces"
+	args := []interface{}{}
+	if policyID != "" {
+		query += " WHERE policy_id = ?"
+		args = append(args, policyID)
+	}
+	query += " ORDER BY policy_id ASC, direction ASC, seq ASC"
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]map[string][]string)
+	for rows.Next() {
+		var id, direction, name string
+		if err := rows.Scan(&id, &direction, &name); err != nil {
+			return nil, err
+		}
+		if out[id] == nil {
+			out[id] = make(map[string][]string, 2)
+		}
+		out[id][direction] = append(out[id][direction], name)
+	}
+	return out, rows.Err()
+}
+
+// applyPolicyInterfaces sets p.InInterfaces/OutInterfaces from the
+// pre-loaded byPolicy map (falling back to the legacy scalar columns when a
+// policy somehow has no child rows yet) and normalizes.
+func applyPolicyInterfaces(p *model.PolicyRule, byPolicy map[string]map[string][]string) {
+	if dirs, ok := byPolicy[p.ID]; ok {
+		p.InInterfaces = dirs["in"]
+		p.OutInterfaces = dirs["out"]
+	}
+	model.NormalizePolicyRuleInterfaces(p)
+}
+
 func (r *Repository) GetPolicies() ([]model.PolicyRule, error) {
 	rows, err := r.db.Query("SELECT id, name, chain, in_interface, out_interface, action, log, nat, status, monitored FROM firewall_policies ORDER BY chain ASC, priority ASC")
 	if err != nil {
@@ -780,9 +844,9 @@ func (r *Repository) GetPolicies() ([]model.PolicyRule, error) {
 
 		// Load Sources & Destinations
 		addrRows, err := r.db.Query(`
-			SELECT ao.name, pa.association_type 
-			FROM policy_addresses pa 
-			JOIN address_objects ao ON pa.address_id = ao.id 
+			SELECT ao.name, pa.association_type
+			FROM policy_addresses pa
+			JOIN address_objects ao ON pa.address_id = ao.id
 			WHERE pa.policy_id = ?`, p.ID)
 		if err == nil {
 			for addrRows.Next() {
@@ -800,9 +864,9 @@ func (r *Repository) GetPolicies() ([]model.PolicyRule, error) {
 
 		// Load Services
 		svcRows, err := r.db.Query(`
-			SELECT so.name 
-			FROM policy_services ps 
-			JOIN service_objects so ON ps.service_id = so.id 
+			SELECT so.name
+			FROM policy_services ps
+			JOIN service_objects so ON ps.service_id = so.id
 			WHERE ps.policy_id = ?`, p.ID)
 		if err == nil {
 			for svcRows.Next() {
@@ -816,6 +880,18 @@ func (r *Repository) GetPolicies() ([]model.PolicyRule, error) {
 
 		list = append(list, p)
 	}
+
+	// Load every child interface row up front (single query) and group in
+	// memory, rather than querying per-row while the parent rows cursor is
+	// open.
+	ifacesByPolicy, err := r.loadPolicyInterfaces("")
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		applyPolicyInterfaces(&list[i], ifacesByPolicy)
+	}
+
 	return list, nil
 }
 
@@ -840,9 +916,9 @@ func (r *Repository) GetPolicyByID(id string) (*model.PolicyRule, error) {
 
 	// Load Sources/Destinations
 	addrRows, err := r.db.Query(`
-		SELECT ao.name, pa.association_type 
-		FROM policy_addresses pa 
-		JOIN address_objects ao ON pa.address_id = ao.id 
+		SELECT ao.name, pa.association_type
+		FROM policy_addresses pa
+		JOIN address_objects ao ON pa.address_id = ao.id
 		WHERE pa.policy_id = ?`, p.ID)
 	if err == nil {
 		defer addrRows.Close()
@@ -860,9 +936,9 @@ func (r *Repository) GetPolicyByID(id string) (*model.PolicyRule, error) {
 
 	// Load Services
 	svcRows, err := r.db.Query(`
-		SELECT so.name 
-		FROM policy_services ps 
-		JOIN service_objects so ON ps.service_id = so.id 
+		SELECT so.name
+		FROM policy_services ps
+		JOIN service_objects so ON ps.service_id = so.id
 		WHERE ps.policy_id = ?`, p.ID)
 	if err == nil {
 		defer svcRows.Close()
@@ -873,6 +949,12 @@ func (r *Repository) GetPolicyByID(id string) (*model.PolicyRule, error) {
 			}
 		}
 	}
+
+	ifacesByPolicy, err := r.loadPolicyInterfaces(p.ID)
+	if err != nil {
+		return nil, err
+	}
+	applyPolicyInterfaces(&p, ifacesByPolicy)
 
 	return &p, nil
 }
@@ -895,8 +977,19 @@ func (r *Repository) CreatePolicy(p model.PolicyRule) error {
 	}
 
 	p.Chain = model.NormalizePolicyChain(p.Chain)
+	model.NormalizePolicyRuleInterfaces(&p)
 	if err := model.ValidatePolicyRule(p); err != nil {
 		return err
+	}
+	// Repository is the only layer that enforces the configurable
+	// per-direction interfaces cap (docs/ref/todo/
+	// multi-interface-firewall-rule-plan.md §2.2, Caution 7) — never
+	// hardcode this cap at the service/api/kernel layers.
+	if err := model.ValidatePolicyInterfaces(p.InInterfaces, r.maxPolicyInterfacesPerDirection); err != nil {
+		return fmt.Errorf("inInterfaces: %w", err)
+	}
+	if err := model.ValidatePolicyInterfaces(p.OutInterfaces, r.maxPolicyInterfacesPerDirection); err != nil {
+		return fmt.Errorf("outInterfaces: %w", err)
 	}
 
 	tx, err := r.db.Begin()
@@ -959,6 +1052,13 @@ func (r *Repository) CreatePolicy(p model.PolicyRule) error {
 		return err
 	}
 
+	if err := replacePolicyInterfaces(tx, p.ID, "in", p.InInterfaces); err != nil {
+		return err
+	}
+	if err := replacePolicyInterfaces(tx, p.ID, "out", p.OutInterfaces); err != nil {
+		return err
+	}
+
 	return tx.Commit()
 }
 
@@ -980,8 +1080,19 @@ func (r *Repository) UpdatePolicy(p model.PolicyRule) error {
 	}
 
 	p.Chain = model.NormalizePolicyChain(p.Chain)
+	model.NormalizePolicyRuleInterfaces(&p)
 	if err := model.ValidatePolicyRule(p); err != nil {
 		return err
+	}
+	// Repository is the only layer that enforces the configurable
+	// per-direction interfaces cap (docs/ref/todo/
+	// multi-interface-firewall-rule-plan.md §2.2, Caution 7) — never
+	// hardcode this cap at the service/api/kernel layers.
+	if err := model.ValidatePolicyInterfaces(p.InInterfaces, r.maxPolicyInterfacesPerDirection); err != nil {
+		return fmt.Errorf("inInterfaces: %w", err)
+	}
+	if err := model.ValidatePolicyInterfaces(p.OutInterfaces, r.maxPolicyInterfacesPerDirection); err != nil {
+		return fmt.Errorf("outInterfaces: %w", err)
 	}
 
 	tx, err := r.db.Begin()
@@ -1013,6 +1124,13 @@ func (r *Repository) UpdatePolicy(p model.PolicyRule) error {
 		return err
 	}
 
+	if err := replacePolicyInterfaces(tx, p.ID, "in", p.InInterfaces); err != nil {
+		return err
+	}
+	if err := replacePolicyInterfaces(tx, p.ID, "out", p.OutInterfaces); err != nil {
+		return err
+	}
+
 	// Delete old references
 	_, err = tx.Exec("DELETE FROM policy_addresses WHERE policy_id = ?", p.ID)
 	if err != nil {
@@ -1029,6 +1147,24 @@ func (r *Repository) UpdatePolicy(p model.PolicyRule) error {
 	}
 
 	return tx.Commit()
+}
+
+// replacePolicyInterfaces deletes every existing policy_interfaces row for
+// (policyID, direction) and re-inserts names as seq 1..N, within tx. Must be
+// called only after model.ValidatePolicyRule/ValidatePolicyInterfaces have
+// already succeeded (fail-closed — no partial writes on invalid input).
+// direction must be "in" or "out" (see the CHECK constraint on the table).
+func replacePolicyInterfaces(tx *sql.Tx, policyID, direction string, names []string) error {
+	if _, err := tx.Exec("DELETE FROM policy_interfaces WHERE policy_id = ? AND direction = ?", policyID, direction); err != nil {
+		return err
+	}
+	for i, name := range names {
+		if _, err := tx.Exec("INSERT INTO policy_interfaces (policy_id, direction, seq, name) VALUES (?, ?, ?, ?)",
+			policyID, direction, i+1, name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Repository) savePolicyRelations(tx *sql.Tx, policyID string, sources, destinations, services []string) error {

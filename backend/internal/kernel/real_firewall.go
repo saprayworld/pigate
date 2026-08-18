@@ -1453,6 +1453,14 @@ func addUserChainRules(
 			continue
 		}
 
+		// Guard against being called with not-yet-normalized data (e.g. a
+		// caller that hasn't run model.NormalizePolicyRuleInterfaces on r
+		// yet) — InInterfaces/OutInterfaces must be populated (falling back
+		// to the legacy scalar InInterface/OutInterface, or "ALL") before
+		// buildRuleExpressions below (docs/ref/todo/
+		// multi-interface-firewall-rule-plan.md §2.4, T-06).
+		model.NormalizePolicyRuleInterfaces(&r)
+
 		// Tag every nft rule this DB rule expands into with its DB id, so the
 		// traffic-detail collector can sum nftables' own per-rule counter back
 		// to the DB rule it belongs to (docs/ref/todo/dashboard-traffic-detail-plan.md
@@ -1526,7 +1534,7 @@ func addUserChainRules(
 								// entry of the same object still gets generated (plan Caution 3).
 								ruleSets, err := buildRuleExpressions(
 									chainName,
-									r.InInterface, r.OutInterface,
+									r.InInterfaces, r.OutInterfaces,
 									sc, dc, vc,
 									r.Action, r.Log, r.Nat, logPrefix,
 								)
@@ -1535,7 +1543,19 @@ func addUserChainRules(
 										chainName, r.Name, comboDesc(sc), comboDesc(dc), svcComboDesc(vc), err)
 									continue
 								}
+								// A single (sc, dc, vc) triple can now expand into more than
+								// one nft rule (D-1 Option A: one per in x out interface
+								// pair, docs/ref/todo/multi-interface-firewall-rule-plan.md
+								// §2.4) — re-check the cap on every individual ruleset, not
+								// just once before the buildRuleExpressions call above, so a
+								// single triple with many interface pairs cannot overshoot
+								// maxExpandedRulesPerPolicy (plan Caution 2: "ห้าม bypass").
 								for _, exprs := range ruleSets {
+									if expandedCount >= maxExpandedRulesPerPolicy {
+										log.Printf("[RealFirewall] Policy rule %q (id=%s, chain=%s) hit the nft rule expansion cap (%d) mid-interface-expansion; truncating further expansion for this rule — raise the %q config key to allow more",
+											r.Name, r.ID, chainName, maxExpandedRulesPerPolicy, "max-expanded-rules-per-policy")
+										break srcLoop
+									}
 									conn.AddRule(&nftables.Rule{
 										Table:    table,
 										Chain:    nfChain,
@@ -1553,9 +1573,52 @@ func addUserChainRules(
 	}
 }
 
+// normalizeIfaceMatchList converts a direction's interface list into the set
+// of values buildRuleExpressions should actually loop over when emitting nft
+// rules. A nil/empty list or a list that is exactly ["ALL"] means "no
+// restriction on this direction" and is represented as a single "" sentinel
+// entry — the caller must skip emitting any iifname/oifname expr for that
+// entry, which reproduces the pre-multi-interface behavior byte-for-byte for
+// the common single-interface-or-ALL case (docs/ref/todo/
+// multi-interface-firewall-rule-plan.md §2.4, D-1 Option A).
+func normalizeIfaceMatchList(names []string) []string {
+	if len(names) == 0 {
+		return []string{""}
+	}
+	if len(names) == 1 && (names[0] == "" || names[0] == "ALL") {
+		return []string{""}
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if n == "" || n == "ALL" {
+			continue
+		}
+		out = append(out, n)
+	}
+	if len(out) == 0 {
+		return []string{""}
+	}
+	return out
+}
+
+// buildRuleExpressions builds the nftables rule(s) for one (interface
+// pair(s), address, service, protocol) combination of a user PolicyRule. See
+// the doc comment block above (moved here to stay attached to the function)
+// for the chain-scoping rules for iifname/oifname/fwmark/logging.
+//
+// inIfaces/outIfaces are the (already-normalized) per-direction interface
+// lists — D-1 Option A (docs/ref/todo/multi-interface-firewall-rule-plan.md
+// §2.4): buildRuleExpressions returns one []expr.Any per (in, out) pair in
+// the cartesian product of the two lists (in as the outer loop, out as the
+// inner loop), so 1 nft rule is emitted per pair rather than trying to
+// express "any of several interfaces" with a single rule/set. A list that is
+// empty or exactly ["ALL"] contributes exactly one "no restriction" entry
+// (see normalizeIfaceMatchList), so the single-interface/ALL case still
+// yields exactly one ruleset with byte-identical exprs to before this
+// function took lists.
 func buildRuleExpressions(
 	chain string,
-	inInterface, outInterface string,
+	inIfaces, outIfaces []string,
 	src, dest addrCombo,
 	svc svcCombo,
 	action string,
@@ -1565,27 +1628,22 @@ func buildRuleExpressions(
 ) ([][]expr.Any, error) {
 	// Chain-scoped interface fields: input has no meaningful egress
 	// interface, output has no meaningful ingress interface.
-	effInInterface, effOutInterface := inInterface, outInterface
+	effInIfaces, effOutIfaces := inIfaces, outIfaces
 	if chain == model.PolicyChainInput {
-		effOutInterface = ""
+		effOutIfaces = nil
 	}
 	if chain == model.PolicyChainOutput {
-		effInInterface = ""
+		effInIfaces = nil
 	}
 
-	var exprs []expr.Any
+	inList := normalizeIfaceMatchList(effInIfaces)
+	outList := normalizeIfaceMatchList(effOutIfaces)
 
-	// 1. Input Interface
-	if effInInterface != "" && effInInterface != "ALL" {
-		exprs = append(exprs, &expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1})
-		exprs = append(exprs, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName(effInInterface)})
-	}
-
-	// 2. Output Interface
-	if effOutInterface != "" && effOutInterface != "ALL" {
-		exprs = append(exprs, &expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1})
-		exprs = append(exprs, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName(effOutInterface)})
-	}
+	// Build the interface-independent tail of the match expressions (source/
+	// destination IP + service/protocol) exactly once — every (in, out) pair
+	// below shares the identical tail, only the iifname/oifname prefix
+	// differs per pair.
+	var tailExprs []expr.Any
 
 	// 3. Source IP
 	if src.hasFilter {
@@ -1593,7 +1651,7 @@ func buildRuleExpressions(
 		if err != nil {
 			return nil, err
 		}
-		exprs = append(exprs, srcExprs...)
+		tailExprs = append(tailExprs, srcExprs...)
 	}
 
 	// 4. Destination IP
@@ -1602,7 +1660,7 @@ func buildRuleExpressions(
 		if err != nil {
 			return nil, err
 		}
-		exprs = append(exprs, destExprs...)
+		tailExprs = append(tailExprs, destExprs...)
 	}
 
 	// 5. Service / Protocol
@@ -1620,13 +1678,13 @@ func buildRuleExpressions(
 		}
 
 		// Match IP protocol
-		exprs = append(exprs, &expr.Payload{
+		tailExprs = append(tailExprs, &expr.Payload{
 			DestRegister: 1,
 			Base:         expr.PayloadBaseNetworkHeader,
 			Offset:       9,
 			Len:          1,
 		})
-		exprs = append(exprs, &expr.Cmp{
+		tailExprs = append(tailExprs, &expr.Cmp{
 			Op:       expr.CmpOpEq,
 			Register: 1,
 			Data:     []byte{protoVal},
@@ -1643,13 +1701,13 @@ func buildRuleExpressions(
 					}
 					portBytes := []byte{byte(portNum >> 8), byte(portNum & 0xFF)}
 
-					exprs = append(exprs, &expr.Payload{
+					tailExprs = append(tailExprs, &expr.Payload{
 						DestRegister: 1,
 						Base:         expr.PayloadBaseTransportHeader,
 						Offset:       2,
 						Len:          2,
 					})
-					exprs = append(exprs, &expr.Cmp{
+					tailExprs = append(tailExprs, &expr.Cmp{
 						Op:       expr.CmpOpEq,
 						Register: 1,
 						Data:     portBytes,
@@ -1666,18 +1724,18 @@ func buildRuleExpressions(
 					startBytes := []byte{byte(startPort >> 8), byte(startPort & 0xFF)}
 					endBytes := []byte{byte(endPort >> 8), byte(endPort & 0xFF)}
 
-					exprs = append(exprs, &expr.Payload{
+					tailExprs = append(tailExprs, &expr.Payload{
 						DestRegister: 1,
 						Base:         expr.PayloadBaseTransportHeader,
 						Offset:       2,
 						Len:          2,
 					})
-					exprs = append(exprs, &expr.Cmp{
+					tailExprs = append(tailExprs, &expr.Cmp{
 						Op:       expr.CmpOpGte,
 						Register: 1,
 						Data:     startBytes,
 					})
-					exprs = append(exprs, &expr.Cmp{
+					tailExprs = append(tailExprs, &expr.Cmp{
 						Op:       expr.CmpOpLte,
 						Register: 1,
 						Data:     endBytes,
@@ -1694,44 +1752,73 @@ func buildRuleExpressions(
 		return &expr.Verdict{Kind: expr.VerdictDrop}
 	}
 
-	if chain == model.PolicyChainForward {
-		// Forward chain: counter, then (if enabled) an NFLOG log expr — NFLOG
-		// writes to an in-RAM ring buffer, not journald/SD card, so no rate
-		// limiting is required and combining log+verdict in one rule is
-		// safe. Then the fwmark for policy-based source NAT, then verdict.
-		fwdExprs := append([]expr.Any{}, exprs...)
-		fwdExprs = append(fwdExprs, &expr.Counter{})
-		if logEnabled {
-			fwdExprs = append(fwdExprs, forwardLogExpr(logPrefix))
+	// D-1 Option A cartesian expansion: one ruleset per (in, out) pair, in as
+	// the outer loop and out as the inner loop (plan §2.4). Every pair shares
+	// the identical tailExprs (src/dest/svc match) and the identical
+	// chain-specific suffix (counter/log/nat/verdict) built below — only the
+	// iifname/oifname prefix differs per pair.
+	results := make([][]expr.Any, 0, len(inList)*len(outList))
+	for _, in := range inList {
+		for _, out := range outList {
+			var exprs []expr.Any
+
+			// 1. Input Interface
+			if in != "" {
+				exprs = append(exprs, &expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1})
+				exprs = append(exprs, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName(in)})
+			}
+
+			// 2. Output Interface
+			if out != "" {
+				exprs = append(exprs, &expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1})
+				exprs = append(exprs, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: padInterfaceName(out)})
+			}
+
+			exprs = append(exprs, tailExprs...)
+
+			if chain == model.PolicyChainForward {
+				// Forward chain: counter, then (if enabled) an NFLOG log expr — NFLOG
+				// writes to an in-RAM ring buffer, not journald/SD card, so no rate
+				// limiting is required and combining log+verdict in one rule is
+				// safe. Then the fwmark for policy-based source NAT, then verdict.
+				fwdExprs := append([]expr.Any{}, exprs...)
+				fwdExprs = append(fwdExprs, &expr.Counter{})
+				if logEnabled {
+					fwdExprs = append(fwdExprs, forwardLogExpr(logPrefix))
+				}
+				// Source NAT mark (policy-based NAT, forward chain only — Caution:
+				// "ห้ามใส่ fwmark/NAT ในขา input/output"). When the policy has NAT
+				// enabled and accepts the traffic, tag the packet with fwmark 0x1;
+				// the pigate_nat postrouting chain masquerades every packet carrying
+				// this mark to the outgoing interface address ("Use Outgoing
+				// Interface Address"). Only meaningful on ACCEPT — a DROPped packet
+				// never reaches postrouting, so we skip the mark for anything else.
+				if nat && action == "ACCEPT" {
+					fwdExprs = append(fwdExprs, &expr.Immediate{Register: 1, Data: []byte{0x01, 0x00, 0x00, 0x00}})
+					fwdExprs = append(fwdExprs, &expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 1})
+				}
+				fwdExprs = append(fwdExprs, verdictExpr())
+				results = append(results, fwdExprs)
+				continue
+			}
+
+			// input/output chain: now that the log goes to NFLOG group
+			// LocalNflogGroup (in-RAM, no SD card write) instead of printk, there is
+			// no need to rate-limit it, so it can share a single rule with the
+			// counter+verdict exactly like the forward branch above (plan §2.6). No
+			// fwmark/NAT here (input/output are never subject to policy-based
+			// source NAT — Caution: "ห้ามใส่ fwmark/NAT ในขา input/output").
+			localExprs := append([]expr.Any{}, exprs...)
+			localExprs = append(localExprs, &expr.Counter{})
+			if logEnabled {
+				localExprs = append(localExprs, localLogExpr(logPrefix))
+			}
+			localExprs = append(localExprs, verdictExpr())
+			results = append(results, localExprs)
 		}
-		// Source NAT mark (policy-based NAT, forward chain only — Caution:
-		// "ห้ามใส่ fwmark/NAT ในขา input/output"). When the policy has NAT
-		// enabled and accepts the traffic, tag the packet with fwmark 0x1;
-		// the pigate_nat postrouting chain masquerades every packet carrying
-		// this mark to the outgoing interface address ("Use Outgoing
-		// Interface Address"). Only meaningful on ACCEPT — a DROPped packet
-		// never reaches postrouting, so we skip the mark for anything else.
-		if nat && action == "ACCEPT" {
-			fwdExprs = append(fwdExprs, &expr.Immediate{Register: 1, Data: []byte{0x01, 0x00, 0x00, 0x00}})
-			fwdExprs = append(fwdExprs, &expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 1})
-		}
-		fwdExprs = append(fwdExprs, verdictExpr())
-		return [][]expr.Any{fwdExprs}, nil
 	}
 
-	// input/output chain: now that the log goes to NFLOG group
-	// LocalNflogGroup (in-RAM, no SD card write) instead of printk, there is
-	// no need to rate-limit it, so it can share a single rule with the
-	// counter+verdict exactly like the forward branch above (plan §2.6). No
-	// fwmark/NAT here (input/output are never subject to policy-based
-	// source NAT — Caution: "ห้ามใส่ fwmark/NAT ในขา input/output").
-	localExprs := append([]expr.Any{}, exprs...)
-	localExprs = append(localExprs, &expr.Counter{})
-	if logEnabled {
-		localExprs = append(localExprs, localLogExpr(logPrefix))
-	}
-	localExprs = append(localExprs, verdictExpr())
-	return [][]expr.Any{localExprs}, nil
+	return results, nil
 }
 
 func addAdminAccessRules(

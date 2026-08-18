@@ -7250,10 +7250,50 @@ components:
           example: forward
         inInterface:
           type: string
+          deprecated: true
+          description: >-
+            Deprecated: compat mirror of inInterfaces[0] only, kept for
+            clients that predate multi-interface support. If the request
+            includes inInterfaces, that list wins and this field is
+            ignored. On PUT, if the request includes neither inInterfaces
+            nor inInterface, the rule's existing in-interfaces are kept
+            unchanged (never silently widened to "ALL").
           example: eth0
         outInterface:
           type: string
+          deprecated: true
+          description: >-
+            Deprecated: compat mirror of outInterfaces[0] only. See
+            inInterface's description above (same list-wins and
+            PUT-preserves-existing-when-omitted rules, for the out
+            direction).
           example: wlan0
+        inInterfaces:
+          type: array
+          items:
+            type: string
+          description: >-
+            The in-interface list — the source of truth (docs/ref/todo/
+            multi-interface-firewall-rule-plan.md). Empty or exactly
+            ["ALL"] means "any interface". Every entry other than "ALL"
+            must be a valid interface name (letters, digits, '.', '_',
+            '-', max 15 characters), and the number of entries per
+            direction is capped by the file-only config key
+            max-policy-interfaces-per-direction (default 8) — exceeding
+            it, or sending an invalid name, returns HTTP 400. On PUT, if
+            neither this field nor inInterface is present in the request
+            body, the rule's existing in-interfaces are kept unchanged.
+          example: [eth0, wlan0]
+        outInterfaces:
+          type: array
+          items:
+            type: string
+          description: >-
+            The out-interface list — see inInterfaces above for the full
+            semantics (source of truth, ALL/empty meaning, name/count
+            limits, list-wins-over-scalar precedence, PUT-preserves-when-
+            omitted).
+          example: [eth1]
         source:
           type: array
           items:

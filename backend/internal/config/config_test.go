@@ -369,8 +369,8 @@ func TestWriteParseRoundTripDefaults(t *testing.T) {
 
 func TestKnownKeys(t *testing.T) {
 	keys := KnownKeys()
-	if len(keys) != 31 {
-		t.Fatalf("expected 31 known keys, got %d: %v", len(keys), keys)
+	if len(keys) != 32 {
+		t.Fatalf("expected 32 known keys, got %d: %v", len(keys), keys)
 	}
 	// "config" and "v" must never be treated as config-file keys.
 	for _, k := range keys {
@@ -486,8 +486,20 @@ func TestKnownKeys(t *testing.T) {
 	if !hasEndpointsEnabled || !hasEndpointsMaxPerRule {
 		t.Fatalf("expected monitored-endpoints-enabled/monitored-endpoints-max-per-rule in KnownKeys, got %v", keys)
 	}
-	if keys[len(keys)-2] != "monitored-endpoints-enabled" || keys[len(keys)-1] != "monitored-endpoints-max-per-rule" {
-		t.Fatalf("expected monitored-endpoints-enabled/monitored-endpoints-max-per-rule to be the last two keys, got %v", keys)
+	if keys[len(keys)-3] != "monitored-endpoints-enabled" || keys[len(keys)-2] != "monitored-endpoints-max-per-rule" {
+		t.Fatalf("expected monitored-endpoints-enabled/monitored-endpoints-max-per-rule to be the third/second-to-last keys, got %v", keys)
+	}
+	var hasMaxPolicyInterfacesPerDirection bool
+	for _, k := range keys {
+		if k == "max-policy-interfaces-per-direction" {
+			hasMaxPolicyInterfacesPerDirection = true
+		}
+	}
+	if !hasMaxPolicyInterfacesPerDirection {
+		t.Fatalf("expected max-policy-interfaces-per-direction in KnownKeys, got %v", keys)
+	}
+	if keys[len(keys)-1] != "max-policy-interfaces-per-direction" {
+		t.Fatalf("expected max-policy-interfaces-per-direction to be the last key, got %v", keys)
 	}
 }
 
@@ -584,23 +596,113 @@ func TestResolve_MonitoredEndpoints(t *testing.T) {
 }
 
 // TestWriteParseRoundTrip_MonitoredEndpointsWrittenLast locks in that the two
-// new keys are appended at the very end of the generated file (Caution: must
-// not be inserted alphabetically among existing keys).
+// monitored-endpoints keys are still appended right before the newer
+// max-policy-interfaces-per-direction key at the very end of the generated
+// file (Caution: must not be inserted alphabetically among existing keys).
 func TestWriteParseRoundTrip_MonitoredEndpointsWrittenLast(t *testing.T) {
 	var buf bytes.Buffer
 	if err := Write(&buf, Defaults()); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	if len(lines) < 2 {
-		t.Fatalf("expected at least 2 lines, got %d", len(lines))
+	if len(lines) < 3 {
+		t.Fatalf("expected at least 3 lines, got %d", len(lines))
 	}
-	if lines[len(lines)-2] != "monitored-endpoints-enabled=true" {
-		t.Fatalf("expected monitored-endpoints-enabled=true as second-to-last line, got %q", lines[len(lines)-2])
+	if lines[len(lines)-3] != "monitored-endpoints-enabled=true" {
+		t.Fatalf("expected monitored-endpoints-enabled=true as third-to-last line, got %q", lines[len(lines)-3])
 	}
-	if lines[len(lines)-1] != "monitored-endpoints-max-per-rule=1000" {
-		t.Fatalf("expected monitored-endpoints-max-per-rule=1000 as last line, got %q", lines[len(lines)-1])
+	if lines[len(lines)-2] != "monitored-endpoints-max-per-rule=1000" {
+		t.Fatalf("expected monitored-endpoints-max-per-rule=1000 as second-to-last line, got %q", lines[len(lines)-2])
 	}
+}
+
+// TestWriteParseRoundTrip_MaxPolicyInterfacesPerDirectionWrittenLast locks in
+// that the newest file-only key (docs/ref/todo/
+// multi-interface-firewall-rule-plan.md §2.2, D-2) is appended at the very
+// end of the generated file.
+func TestWriteParseRoundTrip_MaxPolicyInterfacesPerDirectionWrittenLast(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, Defaults()); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) < 1 {
+		t.Fatalf("expected at least 1 line, got %d", len(lines))
+	}
+	if lines[len(lines)-1] != "max-policy-interfaces-per-direction=8" {
+		t.Fatalf("expected max-policy-interfaces-per-direction=8 as last line, got %q", lines[len(lines)-1])
+	}
+}
+
+// TestResolve_MaxPolicyInterfacesPerDirection covers docs/ref/todo/
+// multi-interface-firewall-rule-plan.md T-02/T-10: default 8, file override,
+// clamp+warn out of range (1..64), and fail-fast on a non-integer value.
+func TestResolve_MaxPolicyInterfacesPerDirection(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		cfg, warns, err := Resolve(Defaults(), nil, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.MaxPolicyInterfacesPerDirection != 8 {
+			t.Fatalf("got max-policy-interfaces-per-direction=%d, want default 8", cfg.MaxPolicyInterfacesPerDirection)
+		}
+	})
+
+	t.Run("file override", func(t *testing.T) {
+		cfg, warns, err := Resolve(Defaults(), map[string]string{"max-policy-interfaces-per-direction": "20"}, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.MaxPolicyInterfacesPerDirection != 20 {
+			t.Fatalf("got max-policy-interfaces-per-direction=%d, want 20", cfg.MaxPolicyInterfacesPerDirection)
+		}
+	})
+
+	t.Run("out of range clamps to default with warning", func(t *testing.T) {
+		for _, v := range []string{"0", "-1", "65", "999"} {
+			cfg, warns, err := Resolve(Defaults(), map[string]string{"max-policy-interfaces-per-direction": v}, nil)
+			if err != nil {
+				t.Fatalf("Resolve(%q) failed: %v", v, err)
+			}
+			if len(warns) != 1 {
+				t.Fatalf("Resolve(%q): expected 1 warning, got %v", v, warns)
+			}
+			if cfg.MaxPolicyInterfacesPerDirection != 8 {
+				t.Fatalf("Resolve(%q): got %d, want default 8", v, cfg.MaxPolicyInterfacesPerDirection)
+			}
+		}
+	})
+
+	t.Run("boundary values pass without warning", func(t *testing.T) {
+		for _, v := range []string{"1", "64"} {
+			cfg, warns, err := Resolve(Defaults(), map[string]string{"max-policy-interfaces-per-direction": v}, nil)
+			if err != nil {
+				t.Fatalf("Resolve(%q) failed: %v", v, err)
+			}
+			if len(warns) != 0 {
+				t.Fatalf("Resolve(%q): unexpected warnings: %v", v, warns)
+			}
+			want := 1
+			if v == "64" {
+				want = 64
+			}
+			if cfg.MaxPolicyInterfacesPerDirection != want {
+				t.Fatalf("Resolve(%q): got %d, want %d", v, cfg.MaxPolicyInterfacesPerDirection, want)
+			}
+		}
+	})
+
+	t.Run("non-integer is a fail-fast error", func(t *testing.T) {
+		if _, _, err := Resolve(Defaults(), map[string]string{"max-policy-interfaces-per-direction": "abc"}, nil); err == nil {
+			t.Fatalf("expected error for non-integer max-policy-interfaces-per-direction")
+		}
+	})
 }
 
 // TestIPInfoEnabledDefaultFalse locks in plan T-06's explicit requirement

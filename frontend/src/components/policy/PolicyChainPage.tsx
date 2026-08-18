@@ -130,6 +130,34 @@ function ifaceLabel(val: string | undefined, interfaces: NetworkInterface[]) {
   return formatIfaceLabel(v, interfaces)
 }
 
+// Helper: resolve a rule's interface list for a given direction, falling
+// back to the legacy scalar field for rules loaded before multi-interface
+// support (docs/ref/todo/multi-interface-firewall-rule-plan.md §2.6) — mirrors
+// policyService.normalizeInterfaces but kept local since this only needs a
+// read-only view, not a mutation.
+function ruleIfaceList(list: string[] | undefined, scalar: string | undefined): string[] {
+  if (list && list.length > 0) return list
+  return [scalar || "ALL"]
+}
+
+// Helper: resolve the next multi-select interface value against the ALL
+// exclusivity rule (docs/ref/todo/multi-interface-firewall-rule-plan.md
+// §2.6) — selecting ALL clears every other choice, and picking any other
+// interface while ALL is selected drops ALL. An empty selection (e.g. the
+// user removed the last chip) falls back to ["ALL"].
+function resolveIfaceSelection(prev: string[], next: string[]): string[] {
+  const hadAll = prev.includes("ALL")
+  const hasAllNow = next.includes("ALL")
+  if (hasAllNow && !hadAll) {
+    return ["ALL"]
+  }
+  if (hadAll && next.length > 1) {
+    return next.filter((v) => v !== "ALL")
+  }
+  if (next.length === 0) return ["ALL"]
+  return next
+}
+
 // UsageCell renders the "Usage" column for one rule: "—" for disabled rules
 // (never created in nftables, no counter to show — plan Final acceptance),
 // a loading placeholder while stats haven't loaded yet, an "Unused" badge for
@@ -208,18 +236,26 @@ function SortableRow({ rule, index, interfaces, stat, statsAvailable, onEdit, on
       {/* 2. Name */}
       <TableCell className="py-3 text-sm font-medium text-foreground">{rule.name}</TableCell>
 
-      {/* 2.1 In Interface */}
+      {/* 2.1 In Interface(s) */}
       <TableCell className="py-3">
-        <Badge variant="secondary" className="rounded px-2 py-0.5 font-mono text-xs whitespace-nowrap">
-          {ifaceLabel(rule.inInterface, interfaces)}
-        </Badge>
+        <div className="flex flex-wrap gap-1">
+          {ruleIfaceList(rule.inInterfaces, rule.inInterface).map((v, i) => (
+            <Badge key={i} variant="secondary" className="rounded px-2 py-0.5 font-mono text-xs whitespace-nowrap">
+              {ifaceLabel(v, interfaces)}
+            </Badge>
+          ))}
+        </div>
       </TableCell>
 
-      {/* 2.2 Out Interface */}
+      {/* 2.2 Out Interface(s) */}
       <TableCell className="py-3">
-        <Badge variant="secondary" className="rounded px-2 py-0.5 font-mono text-xs whitespace-nowrap">
-          {ifaceLabel(rule.outInterface, interfaces)}
-        </Badge>
+        <div className="flex flex-wrap gap-1">
+          {ruleIfaceList(rule.outInterfaces, rule.outInterface).map((v, i) => (
+            <Badge key={i} variant="secondary" className="rounded px-2 py-0.5 font-mono text-xs whitespace-nowrap">
+              {ifaceLabel(v, interfaces)}
+            </Badge>
+          ))}
+        </div>
       </TableCell>
 
       {/* 3. Source */}
@@ -559,6 +595,8 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
   const sourceAnchor = useComboboxAnchor()
   const destAnchor = useComboboxAnchor()
   const serviceAnchor = useComboboxAnchor()
+  const inIfaceAnchor = useComboboxAnchor()
+  const outIfaceAnchor = useComboboxAnchor()
 
   // Portal target for Combobox popups: rendering them inside the DrawerContent
   // keeps them within the (Radix) Dialog subtree, so the modal Drawer's pointer
@@ -567,8 +605,8 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
 
   // Form Fields
   const [formName, setFormName] = useState<string>("")
-  const [formInInterface, setFormInInterface] = useState<string>("ALL")
-  const [formOutInterface, setFormOutInterface] = useState<string>("ALL")
+  const [formInInterfaces, setFormInInterfaces] = useState<string[]>(["ALL"])
+  const [formOutInterfaces, setFormOutInterfaces] = useState<string[]>(["ALL"])
   const [formSource, setFormSource] = useState<string[]>([])
   const [formDest, setFormDest] = useState<string[]>([])
   const [formService, setFormService] = useState<string[]>([])
@@ -581,8 +619,8 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
   const openCreateModal = () => {
     setEditingRule(null)
     setFormName("")
-    setFormInInterface("ALL")
-    setFormOutInterface("ALL")
+    setFormInInterfaces(["ALL"])
+    setFormOutInterfaces(["ALL"])
     setFormSource([])
     setFormDest([])
     setFormService([])
@@ -596,8 +634,8 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
   const openEditModal = (rule: PolicyRule) => {
     setEditingRule(rule)
     setFormName(rule.name)
-    setFormInInterface(rule.inInterface || "ALL")
-    setFormOutInterface(rule.outInterface || "ALL")
+    setFormInInterfaces(ruleIfaceList(rule.inInterfaces, rule.inInterface))
+    setFormOutInterfaces(ruleIfaceList(rule.outInterfaces, rule.outInterface))
     setFormSource([...rule.source])
     setFormDest([...rule.destination])
     setFormService([...rule.service])
@@ -617,11 +655,18 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
 
     // In/Out interface only matters in the direction the chain actually
     // matches (backend also enforces this via model.ValidatePolicyRule).
+    // Both the list (source of truth) and the legacy scalar mirror (first
+    // entry) are sent so old and new backends behave the same way
+    // (docs/ref/todo/multi-interface-firewall-rule-plan.md §2.5/§2.6).
+    const inIfaces = showInInterface ? formInInterfaces : ["ALL"]
+    const outIfaces = showOutInterface ? formOutInterfaces : ["ALL"]
     const payload = {
       name: formName,
       chain,
-      inInterface: showInInterface ? formInInterface : "ALL",
-      outInterface: showOutInterface ? formOutInterface : "ALL",
+      inInterface: inIfaces[0] || "ALL",
+      outInterface: outIfaces[0] || "ALL",
+      inInterfaces: inIfaces,
+      outInterfaces: outIfaces,
       source: formSource.length ? formSource : ["ALL"],
       destination: formDest.length ? formDest : ["ALL"],
       service: parsedSvcs,
@@ -717,6 +762,18 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
     }
   }
 
+  // --- D-4: estimated nftables rule expansion for the current form
+  // selections (docs/ref/todo/multi-interface-firewall-rule-plan.md §2.6) —
+  // |in| x |out| x |src| x |dst| x |svc|, counting an empty selection as 1
+  // (mirrors how the backend treats an empty list as "ALL" = 1 match group).
+  // Purely informational: never blocks Save, never calls the API.
+  const ruleExpansionEstimate = useMemo(() => {
+    const factor = (list: string[]) => (list.length === 0 ? 1 : list.length)
+    const inCount = factor(showInInterface ? formInInterfaces : ["ALL"])
+    const outCount = factor(showOutInterface ? formOutInterfaces : ["ALL"])
+    return inCount * outCount * factor(formSource) * factor(formDest) * factor(formService)
+  }, [showInInterface, showOutInterface, formInInterfaces, formOutInterfaces, formSource, formDest, formService])
+
   // --- Filtered Rules ---
   const filteredRules = useMemo(() => {
     return rules.filter((rule) => {
@@ -725,6 +782,8 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
 
       return (
         rule.name.toLowerCase().includes(query) ||
+        ruleIfaceList(rule.inInterfaces, rule.inInterface).some((v) => v.toLowerCase().includes(query)) ||
+        ruleIfaceList(rule.outInterfaces, rule.outInterface).some((v) => v.toLowerCase().includes(query)) ||
         rule.source.some((s) => s.toLowerCase().includes(query)) ||
         rule.destination.some((d) => d.toLowerCase().includes(query)) ||
         rule.service.some((s) => s.toLowerCase().includes(query)) ||
@@ -1077,40 +1136,80 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
               <div className="grid gap-4 sm:grid-cols-2">
                 {showInInterface && (
                   <div className="space-y-1.5">
-                    <Label htmlFor="form-in-interface" className="block text-xs font-medium text-muted-foreground">
+                    <Label className="block text-xs font-medium text-muted-foreground">
                       การ์ดขาเข้า (In Interface) <span className="text-destructive">*</span>
                     </Label>
-                    <select
-                      id="form-in-interface"
-                      value={formInInterface}
-                      onChange={(e) => setFormInInterface(e.target.value)}
-                      className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                    <Combobox
+                      multiple={true}
+                      required
+                      value={formInInterfaces}
+                      onValueChange={(val) => setFormInInterfaces((prev) => resolveIfaceSelection(prev, val as string[]))}
+                      items={interfaceOptions}
                     >
-                      {interfaceOptions.map((opt) => (
-                        <option key={opt} value={opt}>
-                          {opt === "ALL" ? "ALL (ทุกอินเตอร์เฟส)" : ifaceLabel(opt, interfaces)}
-                        </option>
-                      ))}
-                    </select>
+                      <ComboboxChips ref={inIfaceAnchor} className="flex min-h-9 flex-wrap items-center gap-1.5 rounded-md border border-input bg-background px-2 py-1 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary">
+                        <ComboboxValue>
+                          {(values: string[]) => (
+                            <>
+                              {values.map((val) => (
+                                <ComboboxChip key={val} className="text-xs">
+                                  {val === "ALL" ? "ALL" : ifaceLabel(val, interfaces)}
+                                </ComboboxChip>
+                              ))}
+                              <ComboboxChipsInput placeholder={values.length === 0 ? "เลือกการ์ดขาเข้า..." : ""} className="h-7 border-none bg-transparent text-xs outline-none focus:ring-0" />
+                            </>
+                          )}
+                        </ComboboxValue>
+                      </ComboboxChips>
+                      <ComboboxContent anchor={inIfaceAnchor} container={drawerContentRef} data-vaul-no-drag className="w-[var(--anchor-width)] overflow-hidden rounded-lg border border-border bg-popover">
+                        <ComboboxEmpty className="p-2 text-center text-xs text-muted-foreground">ไม่พบข้อมูล</ComboboxEmpty>
+                        <ComboboxList className="max-h-48 overflow-y-auto p-1">
+                          {(opt: string) => (
+                            <ComboboxItem key={opt} value={opt} className="cursor-pointer text-xs hover:bg-muted/80">
+                              {opt === "ALL" ? "ALL (ทุกอินเตอร์เฟส)" : ifaceLabel(opt, interfaces)}
+                            </ComboboxItem>
+                          )}
+                        </ComboboxList>
+                      </ComboboxContent>
+                    </Combobox>
                   </div>
                 )}
                 {showOutInterface && (
                   <div className="space-y-1.5">
-                    <Label htmlFor="form-out-interface" className="block text-xs font-medium text-muted-foreground">
+                    <Label className="block text-xs font-medium text-muted-foreground">
                       การ์ดขาออก (Out Interface) <span className="text-destructive">*</span>
                     </Label>
-                    <select
-                      id="form-out-interface"
-                      value={formOutInterface}
-                      onChange={(e) => setFormOutInterface(e.target.value)}
-                      className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                    <Combobox
+                      multiple={true}
+                      required
+                      value={formOutInterfaces}
+                      onValueChange={(val) => setFormOutInterfaces((prev) => resolveIfaceSelection(prev, val as string[]))}
+                      items={interfaceOptions}
                     >
-                      {interfaceOptions.map((opt) => (
-                        <option key={opt} value={opt}>
-                          {opt === "ALL" ? "ALL (ทุกอินเตอร์เฟส)" : ifaceLabel(opt, interfaces)}
-                        </option>
-                      ))}
-                    </select>
+                      <ComboboxChips ref={outIfaceAnchor} className="flex min-h-9 flex-wrap items-center gap-1.5 rounded-md border border-input bg-background px-2 py-1 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary">
+                        <ComboboxValue>
+                          {(values: string[]) => (
+                            <>
+                              {values.map((val) => (
+                                <ComboboxChip key={val} className="text-xs">
+                                  {val === "ALL" ? "ALL" : ifaceLabel(val, interfaces)}
+                                </ComboboxChip>
+                              ))}
+                              <ComboboxChipsInput placeholder={values.length === 0 ? "เลือกการ์ดขาออก..." : ""} className="h-7 border-none bg-transparent text-xs outline-none focus:ring-0" />
+                            </>
+                          )}
+                        </ComboboxValue>
+                      </ComboboxChips>
+                      <ComboboxContent anchor={outIfaceAnchor} container={drawerContentRef} data-vaul-no-drag className="w-[var(--anchor-width)] overflow-hidden rounded-lg border border-border bg-popover">
+                        <ComboboxEmpty className="p-2 text-center text-xs text-muted-foreground">ไม่พบข้อมูล</ComboboxEmpty>
+                        <ComboboxList className="max-h-48 overflow-y-auto p-1">
+                          {(opt: string) => (
+                            <ComboboxItem key={opt} value={opt} className="cursor-pointer text-xs hover:bg-muted/80">
+                              {opt === "ALL" ? "ALL (ทุกอินเตอร์เฟส)" : ifaceLabel(opt, interfaces)}
+                            </ComboboxItem>
+                          )}
+                        </ComboboxList>
+                      </ComboboxContent>
+                    </Combobox>
                   </div>
                 )}
               </div>
@@ -1249,6 +1348,17 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
                 </div>
               </div>
             </div>
+
+            {/* D-4: estimated nftables rule expansion count */}
+            <p
+              className={cn(
+                "text-xs",
+                ruleExpansionEstimate > 100 ? "text-destructive" : "text-muted-foreground"
+              )}
+            >
+              กฎนี้จะถูกแปลงเป็นกฎย่อยในเคอร์เนลประมาณ {ruleExpansionEstimate.toLocaleString()} ข้อ
+              {ruleExpansionEstimate > 100 && " — อาจชนเพดานการขยายกฎของระบบ (max-expanded-rules-per-policy) ควรลดจำนวนตัวเลือกที่เลือกไว้"}
+            </p>
 
             {/* Action Buttons */}
             <div className="flex items-center justify-end gap-3 border-t border-border/50 pt-4">

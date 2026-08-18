@@ -206,6 +206,14 @@ type Config struct {
 	// of that plan (no other layer may hardcode this number).
 	MonitoredEndpointsEnabled    bool
 	MonitoredEndpointsMaxPerRule int
+
+	// MaxPolicyInterfacesPerDirection is also file-only (no matching CLI
+	// flag) — docs/ref/todo/multi-interface-firewall-rule-plan.md §2.2, D-2.
+	// It is the maximum number of interface names allowed in a single
+	// PolicyRule's InInterfaces or OutInterfaces list, enforced at
+	// validation time in db/repository.go (the only layer that enforces this
+	// cap — see the plan's Caution 7).
+	MaxPolicyInterfacesPerDirection int
 }
 
 // Defaults returns the Config populated with the exact same defaults as the
@@ -276,6 +284,11 @@ func Defaults() Config {
 		// persisted-rule-endpoints-plan.md E-D9/E-D4, issue #141 follow-up).
 		MonitoredEndpointsEnabled:    true,
 		MonitoredEndpointsMaxPerRule: 1000,
+
+		// Owner-confirmed default (D-2, docs/ref/todo/
+		// multi-interface-firewall-rule-plan.md §2.2). Must be kept in sync
+		// with model.DefaultMaxPolicyInterfacesPerDirection.
+		MaxPolicyInterfacesPerDirection: 8,
 	}
 }
 
@@ -346,6 +359,10 @@ const (
 	// E-D9, issue #141 follow-up).
 	keyMonitoredEndpointsEnabled    = "monitored-endpoints-enabled"
 	keyMonitoredEndpointsMaxPerRule = "monitored-endpoints-max-per-rule"
+
+	// keyMaxPolicyInterfacesPerDirection is also file-only (no CLI flag —
+	// docs/ref/todo/multi-interface-firewall-rule-plan.md §2.2, D-2).
+	keyMaxPolicyInterfacesPerDirection = "max-policy-interfaces-per-direction"
 )
 
 // maxDNSStatsPairsCap/maxDNSStatsClientsCap are RAM-guard sanity ceilings for
@@ -449,6 +466,18 @@ const (
 	maxMonitoredEndpointsMaxPerRule = 5000
 )
 
+// minMaxPolicyInterfacesPerDirection/maxMaxPolicyInterfacesPerDirection are
+// the accepted range for max-policy-interfaces-per-direction (docs/ref/todo/
+// multi-interface-firewall-rule-plan.md §2.2, D-2). The floor (1) always
+// allows at least a single interface (parity with the old single-value
+// behavior); the ceiling (64) keeps the in x out combinatorial expansion
+// bounded before it even multiplies against the existing
+// max-expanded-rules-per-policy cap.
+const (
+	minMaxPolicyInterfacesPerDirection = 1
+	maxMaxPolicyInterfacesPerDirection = 64
+)
+
 // orderedKeys is the fixed key order used by Write (and reused by KnownKeys)
 // so the generated file is stable/diffable across runs.
 var orderedKeys = []string{
@@ -514,6 +543,12 @@ var orderedKeys = []string{
 	// pigate.conf files diffing cleanly across upgrades.
 	keyMonitoredEndpointsEnabled,
 	keyMonitoredEndpointsMaxPerRule,
+	// Appended at the very end, after monitored-endpoints-max-per-rule, per
+	// docs/ref/todo/multi-interface-firewall-rule-plan.md §2.2 — keeping new
+	// keys strictly appended (rather than alphabetized among the existing
+	// ones) keeps already-generated pigate.conf files diffing cleanly across
+	// upgrades.
+	keyMaxPolicyInterfacesPerDirection,
 }
 
 // KnownKeys returns the list of recognized config/flag keys, in the fixed
@@ -710,6 +745,12 @@ func Resolve(defaults Config, fileVals, explicit map[string]string) (Config, []s
 			"monitored-endpoints-max-per-rule=%d out of range (%d..%d), using default %d",
 			cfg.MonitoredEndpointsMaxPerRule, minMonitoredEndpointsMaxPerRule, maxMonitoredEndpointsMaxPerRule, defaults.MonitoredEndpointsMaxPerRule))
 		cfg.MonitoredEndpointsMaxPerRule = defaults.MonitoredEndpointsMaxPerRule
+	}
+	if cfg.MaxPolicyInterfacesPerDirection < minMaxPolicyInterfacesPerDirection || cfg.MaxPolicyInterfacesPerDirection > maxMaxPolicyInterfacesPerDirection {
+		warnings = append(warnings, fmt.Sprintf(
+			"max-policy-interfaces-per-direction=%d out of range (%d..%d), using default %d",
+			cfg.MaxPolicyInterfacesPerDirection, minMaxPolicyInterfacesPerDirection, maxMaxPolicyInterfacesPerDirection, defaults.MaxPolicyInterfacesPerDirection))
+		cfg.MaxPolicyInterfacesPerDirection = defaults.MaxPolicyInterfacesPerDirection
 	}
 
 	return cfg, warnings, nil
@@ -913,6 +954,14 @@ func applyKey(cfg *Config, key, value string) error {
 		// Range-checking is deliberately NOT done here — see Resolve's
 		// post-processing pass (clamp + warn, not fail-fast).
 		cfg.MonitoredEndpointsMaxPerRule = n
+	case keyMaxPolicyInterfacesPerDirection:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		// Range-checking is deliberately NOT done here — see Resolve's
+		// post-processing pass (clamp + warn, not fail-fast).
+		cfg.MaxPolicyInterfacesPerDirection = n
 	default:
 		// Unreachable: callers only invoke applyKey for keys that passed
 		// isKnownKey. Kept as a safety net rather than a silent no-op.
@@ -987,6 +1036,8 @@ func keyValue(cfg Config, key string) string {
 		return strconv.FormatBool(cfg.MonitoredEndpointsEnabled)
 	case keyMonitoredEndpointsMaxPerRule:
 		return strconv.Itoa(cfg.MonitoredEndpointsMaxPerRule)
+	case keyMaxPolicyInterfacesPerDirection:
+		return strconv.Itoa(cfg.MaxPolicyInterfacesPerDirection)
 	default:
 		return ""
 	}

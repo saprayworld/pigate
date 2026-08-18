@@ -131,19 +131,56 @@ func (s *FirewallService) GetPolicyByID(id string) (*model.PolicyRule, error) {
 // CreatePolicy inserts a new firewall policy rule into the database.
 func (s *FirewallService) CreatePolicy(rule model.PolicyRule) error {
 	rule.Chain = model.NormalizePolicyChain(rule.Chain)
+	model.NormalizePolicyRuleInterfaces(&rule)
 	if err := model.ValidatePolicyRule(rule); err != nil {
 		return err
 	}
+	s.warnUnknownPolicyInterfaces(rule)
 	return s.repo.CreatePolicy(rule)
 }
 
 // UpdatePolicy updates an existing firewall policy rule in the database.
 func (s *FirewallService) UpdatePolicy(rule model.PolicyRule) error {
 	rule.Chain = model.NormalizePolicyChain(rule.Chain)
+	model.NormalizePolicyRuleInterfaces(&rule)
 	if err := model.ValidatePolicyRule(rule); err != nil {
 		return err
 	}
+	s.warnUnknownPolicyInterfaces(rule)
 	return s.repo.UpdatePolicy(rule)
+}
+
+// warnUnknownPolicyInterfaces implements D-5 (docs/ref/todo/
+// multi-interface-firewall-rule-plan.md §2.2/§2.5): every non-"ALL"
+// interface name in rule's InInterfaces/OutInterfaces is compared against
+// the interfaces currently known to this device. A name that doesn't exist
+// yet (e.g. wlan0/bridge not up at boot, or the operator pre-configuring a
+// rule before creating the interface) only produces a log warning — it must
+// NEVER block saving the rule (Caution 13), and a failure to even query the
+// interface list must be swallowed silently (fail-open on the check itself,
+// fail-closed only stays true for name-syntax validation, which already
+// happened in ValidatePolicyRule above).
+func (s *FirewallService) warnUnknownPolicyInterfaces(rule model.PolicyRule) {
+	if s.ifaceService == nil {
+		return
+	}
+	ifaces, err := s.ifaceService.GetDataLayerInterface()
+	if err != nil {
+		log.Printf("[FirewallService] Could not verify policy %q interfaces exist on this device (skipping check): %v", rule.Name, err)
+		return
+	}
+	known := make(map[string]struct{}, len(ifaces))
+	for _, iface := range ifaces {
+		known[iface.Name] = struct{}{}
+	}
+	for _, name := range append(append([]string{}, rule.InInterfaces...), rule.OutInterfaces...) {
+		if name == "" || name == "ALL" {
+			continue
+		}
+		if _, ok := known[name]; !ok {
+			log.Printf("[FirewallService] Policy %q references interface %q which does not exist on this device yet; the rule was saved and will take effect once the interface is present", rule.Name, name)
+		}
+	}
 }
 
 // DeletePolicy deletes a firewall policy rule by its ID.

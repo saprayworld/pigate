@@ -264,19 +264,39 @@ func NormalizePolicyChain(c string) string {
 
 // PolicyRule represents a single nftables rule definition
 type PolicyRule struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Chain        string   `json:"chain"` // "forward" (default), "input", "output"
-	InInterface  string   `json:"inInterface"`
-	OutInterface string   `json:"outInterface"`
-	Source       []string `json:"source"`
-	Destination  []string `json:"destination"`
-	Service      []string `json:"service"`
-	Action       string   `json:"action"` // "ACCEPT", "DROP"
-	Log          bool     `json:"log"`
-	Nat          bool     `json:"nat"`    // Source NAT (masquerade to outgoing interface address)
-	Status       bool     `json:"status"` // Enabled/Disabled
-	Priority     int      `json:"-"`      // Ordering precedence
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Chain string `json:"chain"` // "forward" (default), "input", "output"
+	// Deprecated: compat mirror of InInterfaces[0] only. Kept temporarily for
+	// old clients and to allow downgrading the binary (SQLite versions in the
+	// field do not support DROP COLUMN easily and the column is NOT NULL) —
+	// it will be removed in the next major version. Must never be used to
+	// generate firewall rules.
+	InInterface string `json:"inInterface"`
+	// Deprecated: compat mirror of OutInterfaces[0] only. Kept temporarily
+	// for old clients and to allow downgrading the binary (SQLite versions
+	// in the field do not support DROP COLUMN easily and the column is NOT
+	// NULL) — it will be removed in the next major version. Must never be
+	// used to generate firewall rules.
+	OutInterface string `json:"outInterface"`
+	// InInterfaces holds the multi-value in-interface list for this rule.
+	// Additive field — see
+	// docs/ref/todo/multi-interface-firewall-rule-plan.md Caution 5: MUST
+	// keep omitempty on every new field here, otherwise old backup files
+	// (encoded before this field existed) will fail checksum verification
+	// and become un-importable.
+	InInterfaces []string `json:"inInterfaces,omitempty"`
+	// OutInterfaces holds the multi-value out-interface list for this rule.
+	// See InInterfaces doc comment above (same omitempty requirement).
+	OutInterfaces []string `json:"outInterfaces,omitempty"`
+	Source        []string `json:"source"`
+	Destination   []string `json:"destination"`
+	Service       []string `json:"service"`
+	Action        string   `json:"action"` // "ACCEPT", "DROP"
+	Log           bool     `json:"log"`
+	Nat           bool     `json:"nat"`    // Source NAT (masquerade to outgoing interface address)
+	Status        bool     `json:"status"` // Enabled/Disabled
+	Priority      int      `json:"-"`      // Ordering precedence
 	// Monitored opts this rule into persisted traffic counters (bytes/packets)
 	// that accumulate in SQLite across ApplyRules/restarts instead of
 	// resetting on every apply, unlike the ephemeral "since last apply"
@@ -296,19 +316,114 @@ type PolicyRule struct {
 
 // PolicyRuleInput represents input parameters to create or edit a rule
 type PolicyRuleInput struct {
-	Name         string   `json:"name"`
-	Chain        string   `json:"chain"` // "forward" (default), "input", "output"
-	InInterface  string   `json:"inInterface"`
-	OutInterface string   `json:"outInterface"`
-	Source       []string `json:"source"`
-	Destination  []string `json:"destination"`
-	Service      []string `json:"service"`
-	Action       string   `json:"action"` // "ACCEPT", "DROP"
-	Log          bool     `json:"log"`
-	Nat          bool     `json:"nat"` // Source NAT (masquerade to outgoing interface address)
-	Status       bool     `json:"status"`
+	Name  string `json:"name"`
+	Chain string `json:"chain"` // "forward" (default), "input", "output"
+	// Deprecated: compat mirror of InInterfaces[0] only. See
+	// PolicyRule.InInterface doc comment. Must never be used to generate
+	// firewall rules.
+	InInterface string `json:"inInterface"`
+	// Deprecated: compat mirror of OutInterfaces[0] only. See
+	// PolicyRule.OutInterface doc comment. Must never be used to generate
+	// firewall rules.
+	OutInterface string `json:"outInterface"`
+	// InInterfaces holds the multi-value in-interface list for this rule.
+	// Additive field — see InInterfaces doc comment on PolicyRule (same
+	// omitempty requirement, same backup-checksum reasoning).
+	InInterfaces []string `json:"inInterfaces,omitempty"`
+	// OutInterfaces holds the multi-value out-interface list for this rule.
+	OutInterfaces []string `json:"outInterfaces,omitempty"`
+	Source        []string `json:"source"`
+	Destination   []string `json:"destination"`
+	Service       []string `json:"service"`
+	Action        string   `json:"action"` // "ACCEPT", "DROP"
+	Log           bool     `json:"log"`
+	Nat           bool     `json:"nat"` // Source NAT (masquerade to outgoing interface address)
+	Status        bool     `json:"status"`
 	// Monitored — see PolicyRule.Monitored doc comment above.
 	Monitored bool `json:"monitored"`
+}
+
+// DefaultMaxPolicyInterfacesPerDirection is the fallback cap used only when
+// the caller does not have a resolved config value on hand (maxPerDirection
+// <= 0 passed to ValidatePolicyInterfaces below). It must be kept in sync
+// with config.Defaults().MaxPolicyInterfacesPerDirection; the value actually
+// enforced in production comes from the file-only
+// "max-policy-interfaces-per-direction" config key (plan
+// docs/ref/todo/multi-interface-firewall-rule-plan.md §2.2, D-2), not from
+// this constant.
+const DefaultMaxPolicyInterfacesPerDirection = 8
+
+// normalizeInterfaceList applies the shared normalize rules to a single
+// direction's interface list, given the legacy scalar fallback:
+//  1. if list is empty, seed it from the scalar (or "ALL" if the scalar is
+//     also empty);
+//  2. trim whitespace on every entry, drop empty entries, drop duplicates
+//     (case-sensitive, matching Linux interface name semantics);
+//  3. if "ALL" is present anywhere in the resulting list, collapse it down
+//     to just ["ALL"] (ALL already matches everything, so keeping other
+//     entries alongside it is redundant and confusing);
+//
+// Returns the normalized list; the caller is responsible for writing the
+// scalar mirror back from list[0].
+func normalizeInterfaceList(list []string, scalar string) []string {
+	if len(list) == 0 {
+		if strings.TrimSpace(scalar) == "" {
+			return []string{"ALL"}
+		}
+		return []string{strings.TrimSpace(scalar)}
+	}
+
+	seen := make(map[string]struct{}, len(list))
+	out := make([]string, 0, len(list))
+	for _, name := range list {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	if len(out) == 0 {
+		return []string{"ALL"}
+	}
+	for _, name := range out {
+		if name == "ALL" {
+			return []string{"ALL"}
+		}
+	}
+	return out
+}
+
+// NormalizePolicyRuleInterfaces keeps InInterface/OutInterface (legacy
+// scalar mirrors) and InInterfaces/OutInterfaces (source of truth) in sync.
+// It is nil-safe and idempotent — see normalizeInterfaceList for the exact
+// rules (seed-from-scalar, trim, dedupe, collapse-to-ALL). The scalar
+// mirrors are always overwritten from list[0] afterwards.
+func NormalizePolicyRuleInterfaces(p *PolicyRule) {
+	if p == nil {
+		return
+	}
+	p.InInterfaces = normalizeInterfaceList(p.InInterfaces, p.InInterface)
+	p.OutInterfaces = normalizeInterfaceList(p.OutInterfaces, p.OutInterface)
+	p.InInterface = p.InInterfaces[0]
+	p.OutInterface = p.OutInterfaces[0]
+}
+
+// NormalizePolicyRuleInputInterfaces is the *PolicyRuleInput counterpart of
+// NormalizePolicyRuleInterfaces, used by handlers before persisting a
+// create/update request. See NormalizePolicyRuleInterfaces for the sync
+// rules.
+func NormalizePolicyRuleInputInterfaces(p *PolicyRuleInput) {
+	if p == nil {
+		return
+	}
+	p.InInterfaces = normalizeInterfaceList(p.InInterfaces, p.InInterface)
+	p.OutInterfaces = normalizeInterfaceList(p.OutInterfaces, p.OutInterface)
+	p.InInterface = p.InInterfaces[0]
+	p.OutInterface = p.OutInterfaces[0]
 }
 
 // PortForward represents a DNAT / port-forward entry (FortiGate VIP style).

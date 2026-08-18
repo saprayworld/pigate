@@ -315,6 +315,25 @@ func migrate(db *sql.DB) error {
 			FOREIGN KEY (service_id) REFERENCES service_objects(id) ON DELETE RESTRICT
 		);`,
 
+		// policy_interfaces (docs/ref/todo/multi-interface-firewall-rule-plan.md
+		// §2.3, D-1/D-3): child table is the source of truth for the (possibly
+		// many) in/out interface names of a PolicyRule. The parent table's
+		// in_interface/out_interface columns above are now a TEMPORARY compat
+		// mirror of the first entry (seq=1) per direction only — kept solely
+		// because they are NOT NULL and let a downgraded binary keep working
+		// during the transition. They are written on every create/update for
+		// backward compatibility but must NEVER be read again to generate
+		// firewall rules; new code must read the interfaces from this child
+		// table instead. Planned removal in the next major version.
+		`CREATE TABLE IF NOT EXISTS policy_interfaces (
+			policy_id TEXT NOT NULL,
+			direction TEXT NOT NULL CHECK(direction IN ('in', 'out')),
+			seq       INTEGER NOT NULL,
+			name      TEXT NOT NULL,
+			PRIMARY KEY (policy_id, direction, seq),
+			FOREIGN KEY (policy_id) REFERENCES firewall_policies(id) ON DELETE CASCADE
+		);`,
+
 		`CREATE TABLE IF NOT EXISTS policy_rule_counters (
 			policy_id TEXT PRIMARY KEY,
 			bytes INTEGER NOT NULL DEFAULT 0,
@@ -1058,6 +1077,34 @@ func seed(db *sql.DB, dsn string, mockMode bool) error {
 		return fmt.Errorf("failed to backfill service_object_ports: %w", err)
 	} else if n, _ := res.RowsAffected(); n > 0 {
 		log.Printf("[Migration] Backfilled %d row(s) into service_object_ports", n)
+	}
+
+	// 3.2 Backfill policy_interfaces (docs/ref/todo/
+	// multi-interface-firewall-rule-plan.md §2.3, T-03). Same idempotent
+	// `WHERE NOT EXISTS` pattern as the address/service backfills above:
+	// safe to run on every InitDB call, and safe across a
+	// downgrade-then-upgrade cycle. Empty/whitespace-only legacy values are
+	// treated as "ALL" (matches model.NormalizePolicyRuleInterfaces).
+	if res, err := db.Exec(`
+		INSERT INTO policy_interfaces (policy_id, direction, seq, name)
+		SELECT p.id, 'in', 1, CASE WHEN TRIM(p.in_interface) = '' THEN 'ALL' ELSE p.in_interface END
+		FROM firewall_policies p
+		WHERE NOT EXISTS (SELECT 1 FROM policy_interfaces i WHERE i.policy_id = p.id AND i.direction = 'in')
+	`); err != nil {
+		return fmt.Errorf("failed to backfill policy_interfaces (in): %w", err)
+	} else if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("[Migration] Backfilled %d row(s) into policy_interfaces (direction=in)", n)
+	}
+
+	if res, err := db.Exec(`
+		INSERT INTO policy_interfaces (policy_id, direction, seq, name)
+		SELECT p.id, 'out', 1, CASE WHEN TRIM(p.out_interface) = '' THEN 'ALL' ELSE p.out_interface END
+		FROM firewall_policies p
+		WHERE NOT EXISTS (SELECT 1 FROM policy_interfaces i WHERE i.policy_id = p.id AND i.direction = 'out')
+	`); err != nil {
+		return fmt.Errorf("failed to backfill policy_interfaces (out): %w", err)
+	} else if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("[Migration] Backfilled %d row(s) into policy_interfaces (direction=out)", n)
 	}
 
 	// 4. Seed Default DHCP Configuration
