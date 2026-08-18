@@ -36,6 +36,12 @@ import { cn } from "@/lib/utils"
 import { formatIfaceLabel } from "@/lib/ifaceLabel"
 import { fmtBytes } from "@/lib/formatBytes"
 import { fmtRelativeTime } from "@/lib/relativeTime"
+import { classifyReferenceTarget } from "@/lib/referenceTarget"
+import { ReferenceHoverProvider } from "@/components/reference/ReferenceHoverProvider"
+import { ReferenceTrigger } from "@/components/reference/ReferenceTrigger"
+import { IpReferenceContent } from "@/components/reference/IpReferenceContent"
+import { DomainReferenceContent } from "@/components/reference/DomainReferenceContent"
+import { AddressObjectReferenceContent } from "@/components/reference/AddressObjectReferenceContent"
 
 // shadcn UI component imports
 import {
@@ -187,6 +193,46 @@ function UsageCell({ rule, stat, statsAvailable }: { rule: PolicyRule; stat?: Po
   )
 }
 
+// AddressReferenceBadge (docs/ref/todo/reference-popover-plan.md Step 12)
+// renders a Source/Destination badge with the reference popover wired in:
+// "ALL" and unresolvable raw values never get a handler bound at all (plan
+// Step 12: "ALL/none → ไม่ผูก handler"); a name found in `addressByName`
+// opens AddressObjectReferenceContent (level 1, its own entries + level-2
+// drill-in); anything else that still classifies as a raw IP/FQDN (a rule
+// authored before Address Objects existed, or entered directly) gets the
+// plain Ip/DomainReferenceContent straight away.
+function AddressReferenceBadge({ value, addressByName }: { value: string; addressByName: Map<string, AddressObject> }) {
+  const badge = (
+    <Badge variant="secondary" className="rounded px-1.5 py-0.5 font-mono text-[11px]">
+      {value}
+    </Badge>
+  )
+  if (value === "ALL") return badge
+
+  const obj = addressByName.get(value)
+  if (obj) {
+    return (
+      <ReferenceTrigger content={() => <AddressObjectReferenceContent object={obj} />}>{badge}</ReferenceTrigger>
+    )
+  }
+
+  const target = classifyReferenceTarget(value)
+  if (target.kind === "none") return badge
+  return (
+    <ReferenceTrigger
+      content={() =>
+        target.kind === "ip" ? (
+          <IpReferenceContent key={target.value} ip={target.value} />
+        ) : (
+          <DomainReferenceContent key={target.value} domain={target.value} />
+        )
+      }
+    >
+      {badge}
+    </ReferenceTrigger>
+  )
+}
+
 // Props for Sortable Row component
 interface SortableRowProps {
   rule: PolicyRule
@@ -194,6 +240,7 @@ interface SortableRowProps {
   interfaces: NetworkInterface[]
   stat?: PolicyRuleStat
   statsAvailable: boolean
+  addressByName: Map<string, AddressObject>
   onEdit: (rule: PolicyRule) => void
   onDelete: (id: string) => void
   onToggleStatus: (id: string) => void
@@ -202,7 +249,7 @@ interface SortableRowProps {
 }
 
 // Drag & Drop Row component
-function SortableRow({ rule, index, interfaces, stat, statsAvailable, onEdit, onDelete, onToggleStatus, onToggleLog, onViewStats }: SortableRowProps) {
+function SortableRow({ rule, index, interfaces, stat, statsAvailable, addressByName, onEdit, onDelete, onToggleStatus, onToggleLog, onViewStats }: SortableRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: rule.id })
 
   const style = {
@@ -262,9 +309,7 @@ function SortableRow({ rule, index, interfaces, stat, statsAvailable, onEdit, on
       <TableCell className="py-3">
         <div className="flex flex-wrap gap-1">
           {rule.source.map((src, i) => (
-            <Badge key={i} variant="secondary" className="rounded px-1.5 py-0.5 font-mono text-[11px]">
-              {src}
-            </Badge>
+            <AddressReferenceBadge key={i} value={src} addressByName={addressByName} />
           ))}
         </div>
       </TableCell>
@@ -273,9 +318,7 @@ function SortableRow({ rule, index, interfaces, stat, statsAvailable, onEdit, on
       <TableCell className="py-3">
         <div className="flex flex-wrap gap-1">
           {rule.destination.map((dst, i) => (
-            <Badge key={i} variant="secondary" className="rounded px-1.5 py-0.5 font-mono text-[11px]">
-              {dst}
-            </Badge>
+            <AddressReferenceBadge key={i} value={dst} addressByName={addressByName} />
           ))}
         </div>
       </TableCell>
@@ -454,6 +497,18 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
       if (showLoading) setIsLoading(false)
     }
   }
+
+  // addressByName (docs/ref/todo/reference-popover-plan.md Step 12) — a
+  // name -> AddressObject lookup for the reference popover on the Source/
+  // Destination badges below, built the SAME useMemo-from-addressObjects
+  // pattern as sourceOptions/destinationOptions immediately below (never a
+  // fresh addressService.getAll() call, never a per-hover .find() scan —
+  // plan §5 Caution 5/Step 12).
+  const addressByName = useMemo(() => {
+    const m = new Map<string, AddressObject>()
+    addressObjects.forEach((a) => m.set(a.name, a))
+    return m
+  }, [addressObjects])
 
   // Generate options dynamically from current address and service objects
   const sourceOptions = useMemo(() => {
@@ -806,6 +861,7 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
   }, [rules, policyStats])
 
   return (
+    <ReferenceHoverProvider closeWhen={isModalOpen || isStatsDrawerOpen}>
     <div className="space-y-4">
       <CapabilityBanner id="firewall" />
 
@@ -969,6 +1025,7 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
                           interfaces={interfaces}
                           stat={statsById.get(rule.id)}
                           statsAvailable={policyStats?.available ?? false}
+                          addressByName={addressByName}
                           onEdit={openEditModal}
                           onDelete={handleDeleteRule}
                           onToggleStatus={handleToggleStatus}
@@ -1392,5 +1449,6 @@ export default function PolicyChainPage({ chain, pageTitle, pageDescription }: P
         onChanged={handleStatsChanged}
       />
     </div>
+    </ReferenceHoverProvider>
   )
 }

@@ -25,6 +25,10 @@ import {
 import { fmtBytes } from "@/lib/formatBytes"
 import { fmtAbsoluteTime, fmtRelativeTime } from "@/lib/relativeTime"
 import { cn } from "@/lib/utils"
+import { ReferenceHoverProvider } from "@/components/reference/ReferenceHoverProvider"
+import { ReferenceTrigger } from "@/components/reference/ReferenceTrigger"
+import { IpReferenceContent } from "@/components/reference/IpReferenceContent"
+import { CombinedReferenceContent } from "@/components/reference/CombinedReferenceContent"
 
 // Endpoints panel refresh cadence while the drawer stays open (T-10).
 const ENDPOINTS_REFRESH_MS = 10_000
@@ -63,6 +67,11 @@ function Field({ label, value }: { label: string; value: ReactNode }) {
 // underneath, count + relative last-seen time on the right. onViewLogs (T-13
 // row-level deep-link), when provided, adds a small "view in Traffic Log"
 // button that navigates filtered to just this IP/port.
+// EndpointRow's primary/secondary text is wrapped in a ReferenceTrigger
+// (docs/ref/todo/reference-popover-plan.md Step 13) whenever `ip` is given —
+// EndpointHit always has an ip, so every row gets one; a row with a known
+// domain gets CombinedReferenceContent, otherwise plain IpReferenceContent.
+// Pure wrapper, no change to the row's own markup/logic.
 function EndpointRow({
   primary,
   secondary,
@@ -70,6 +79,8 @@ function EndpointRow({
   lastSeenAt,
   fromRule,
   onViewLogs,
+  ip,
+  domain,
 }: {
   primary: string
   secondary: string
@@ -77,20 +88,37 @@ function EndpointRow({
   lastSeenAt: string
   fromRule: boolean
   onViewLogs?: () => void
+  ip?: string
+  domain?: string
 }) {
+  const nameBlock = (
+    <div className="min-w-0 space-y-0.5">
+      <div className="flex items-center gap-1.5">
+        <span className="truncate text-sm font-medium text-foreground">{primary}</span>
+        {fromRule ? (
+          <Badge variant="outline" className="shrink-0 rounded px-1.5 py-0 text-[10px] font-semibold text-primary">
+            จากกฎนี้
+          </Badge>
+        ) : null}
+      </div>
+      <div className="truncate text-xs text-muted-foreground">{secondary}</div>
+    </div>
+  )
+
   return (
     <div className="flex items-center justify-between gap-3 rounded-md border border-border/50 px-3 py-2">
-      <div className="min-w-0 space-y-0.5">
-        <div className="flex items-center gap-1.5">
-          <span className="truncate text-sm font-medium text-foreground">{primary}</span>
-          {fromRule ? (
-            <Badge variant="outline" className="shrink-0 rounded px-1.5 py-0 text-[10px] font-semibold text-primary">
-              จากกฎนี้
-            </Badge>
-          ) : null}
-        </div>
-        <div className="truncate text-xs text-muted-foreground">{secondary}</div>
-      </div>
+      {ip ? (
+        <ReferenceTrigger
+          className="min-w-0"
+          content={() =>
+            domain ? <CombinedReferenceContent ip={ip} domain={domain} /> : <IpReferenceContent key={ip} ip={ip} />
+          }
+        >
+          {nameBlock}
+        </ReferenceTrigger>
+      ) : (
+        nameBlock
+      )}
       <div className="flex shrink-0 items-center gap-2">
         <div className="space-y-0.5 text-right">
           <div className="text-sm font-semibold text-foreground">{count.toLocaleString()} ครั้ง</div>
@@ -269,6 +297,14 @@ export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, counte
   return (
     <Drawer direction="right" open={open} onOpenChange={onOpenChange}>
       <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[560px]">
+      {/* Own ReferenceHoverProvider instance (docs/ref/todo/
+          reference-popover-plan.md Step 13) — the Drawer's content is its own
+          Radix portal, mounted (and thus stacked in the DOM) after the host
+          page's own popover portal, so reusing the page-level provider could
+          render this drawer's popover BEHIND the drawer's own overlay. A
+          fresh provider here means its Popover portal mounts fresh too,
+          always on top of this already-open drawer. */}
+      <ReferenceHoverProvider>
         <DrawerHeader className="border-b border-border/50">
           <DrawerTitle className="flex items-center gap-2 text-base font-semibold">
             <Activity className="h-4 w-4 text-muted-foreground" />
@@ -510,6 +546,8 @@ export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, counte
                           lastSeenAt={hit.lastSeenAt}
                           fromRule={hit.fromRule}
                           onViewLogs={() => viewLogsFor(hit.ip)}
+                          ip={hit.ip}
+                          domain={hit.domain}
                         />
                       ))}
                     </div>
@@ -533,6 +571,8 @@ export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, counte
                           lastSeenAt={hit.lastSeenAt}
                           fromRule={hit.fromRule}
                           onViewLogs={() => viewLogsFor(hit.ip)}
+                          ip={hit.ip}
+                          domain={hit.domain}
                         />
                       ))}
                     </div>
@@ -600,6 +640,7 @@ export default function RuleStatsDrawer({ open, onOpenChange, rule, stat, counte
             ปิด
           </Button>
         </DrawerFooter>
+      </ReferenceHoverProvider>
       </DrawerContent>
     </Drawer>
   )

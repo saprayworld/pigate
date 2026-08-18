@@ -26,6 +26,11 @@ import {
 } from "@/services/dnsStatisticsService"
 import { HostNameLines } from "@/components/statistics/HostCells"
 import { STATS_WINDOWS, parseStatsWindow, type StatsWindow } from "@/lib/statsWindow"
+import { ReferenceHoverProvider } from "@/components/reference/ReferenceHoverProvider"
+import { ReferenceTrigger } from "@/components/reference/ReferenceTrigger"
+import { IpReferenceContent } from "@/components/reference/IpReferenceContent"
+import { DomainReferenceContent } from "@/components/reference/DomainReferenceContent"
+import { CombinedReferenceContent } from "@/components/reference/CombinedReferenceContent"
 
 // Shared presentation pieces for the three DNS statistics pages
 // (docs/ref/todo/statistics-nav-restructure-plan.md §2.6 / T-01) — extracted
@@ -184,6 +189,7 @@ export function DomainStatsTable({
   const { rows: sorted, sort, toggle } = useSortableRows(filtered, { key: "count", dir: "desc" })
 
   return (
+    <ReferenceHoverProvider>
     <div className="space-y-3">
       <div className="space-y-1">
         <TrafficFilterInput value={query} onChange={setQuery} placeholder={placeholder} />
@@ -220,7 +226,9 @@ export function DomainStatsTable({
                   title={onRowClick ? "คลิกเพื่อดูว่าเครื่องไหนถามโดเมนนี้บ้าง" : undefined}
                 >
                   <TableCell className="max-w-[220px] truncate py-3 font-mono text-xs font-medium text-foreground" title={d.domain}>
-                    {d.domain}
+                    <ReferenceTrigger content={() => <DomainReferenceContent key={d.domain} domain={d.domain} />}>
+                      {d.domain}
+                    </ReferenceTrigger>
                   </TableCell>
                   <TableCell className="py-3">
                     <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0 text-[10px] font-medium text-primary">
@@ -256,6 +264,7 @@ export function DomainStatsTable({
         </p>
       )}
     </div>
+    </ReferenceHoverProvider>
   )
 }
 
@@ -281,6 +290,7 @@ export function ClientStatsTable({
   const { rows: sorted, sort, toggle } = useSortableRows(filtered, { key: "count", dir: "desc" })
 
   return (
+    <ReferenceHoverProvider>
     <div className="space-y-3">
       <TrafficFilterInput value={query} onChange={setQuery} placeholder="ค้นหา IP, hostname, domain..." />
       <div className="overflow-x-auto">
@@ -317,7 +327,17 @@ export function ClientStatsTable({
                     {c.ip === "unknown" ? (
                       <span className="text-muted-foreground">ไม่ทราบต้นทาง</span>
                     ) : (
-                      <HostNameLines host={c} />
+                      <ReferenceTrigger
+                        content={() =>
+                          c.domain ? (
+                            <CombinedReferenceContent ip={c.ip} domain={c.domain} />
+                          ) : (
+                            <IpReferenceContent key={c.ip} ip={c.ip} />
+                          )
+                        }
+                      >
+                        <HostNameLines host={c} />
+                      </ReferenceTrigger>
                     )}
                   </TableCell>
                   <TableCell className="py-3 text-right font-mono text-xs text-foreground">{c.domains}</TableCell>
@@ -337,6 +357,7 @@ export function ClientStatsTable({
         แสดง {sorted.length} จาก {rows.length} รายการ
       </p>
     </div>
+    </ReferenceHoverProvider>
   )
 }
 
@@ -364,6 +385,7 @@ export function DomainIpTable({
   const { rows: sorted, sort, toggle } = useSortableRows(filtered, { key: "bytes", dir: "desc" })
 
   return (
+    <ReferenceHoverProvider>
     <div className="space-y-3">
       <TrafficFilterInput value={query} onChange={setQuery} placeholder="ค้นหา IP..." />
       <div className="overflow-x-auto">
@@ -392,7 +414,9 @@ export function DomainIpTable({
                   className={onRowClick ? "cursor-pointer hover:bg-muted/50" : "hover:bg-transparent"}
                   title={onRowClick ? "คลิกเพื่อดูว่ามีโดเมนอื่นใช้ IP นี้อีกไหม" : undefined}
                 >
-                  <TableCell className="py-3 font-mono text-xs font-medium text-foreground">{r.ip}</TableCell>
+                  <TableCell className="py-3 font-mono text-xs font-medium text-foreground">
+                    <ReferenceTrigger content={() => <IpReferenceContent key={r.ip} ip={r.ip} />}>{r.ip}</ReferenceTrigger>
+                  </TableCell>
                   <TableCell className="py-3 text-right">
                     <DnsTrafficCell down={r.bytesDown} up={r.bytesUp} />
                   </TableCell>
@@ -417,6 +441,7 @@ export function DomainIpTable({
         แสดง {sorted.length} จาก {rows.length} รายการ
       </p>
     </div>
+    </ReferenceHoverProvider>
   )
 }
 

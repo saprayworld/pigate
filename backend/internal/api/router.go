@@ -65,6 +65,14 @@ func RegisterRoutes(s *Server) http.Handler {
 	// enforced entirely server-side by IPInfoService (ErrIPInfoDisabled ->
 	// 404), not by this route registration.
 	authRoute("GET /api/statistics/ipinfo", s.HandleGetIPInfo)
+	// Reference popover ("hover ที่ IP/Domain แล้วเห็นสรุปข้อมูลอ้างอิงแบบ
+	// FortiGate" — docs/ref/todo/reference-popover-plan.md Step 3): two
+	// lightweight hover-summary endpoints, authRoute same as the DNS/traffic
+	// statistics routes above (same sensitivity level — IP/domain/hostname).
+	// GET only, so DisableEditMiddleware never blocks them; window is fixed
+	// server-side (no query param accepted at all — plan §2.4).
+	authRoute("GET /api/statistics/reference/ip", s.HandleGetIPReference)
+	authRoute("GET /api/statistics/reference/domain", s.HandleGetDomainReference)
 	// Capacity visibility (docs/ref/todo/statistics-capacity-visibility-plan.md
 	// T-07, GitHub issue #123): current usage vs cap for all 9 RAM-only
 	// tracking rings/indices — authRoute (not superAdminRoute), because the

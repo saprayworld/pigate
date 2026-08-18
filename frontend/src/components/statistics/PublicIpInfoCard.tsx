@@ -1,32 +1,20 @@
 import { useEffect, useRef, useState } from "react"
 import { Globe } from "lucide-react"
-import { Skeleton } from "@/components/ui/skeleton"
 import { getErrorMessage } from "@/lib/errors"
-import { ipinfoService, IpInfoDisabledError, type IpInfoLookup } from "@/services/ipinfoService"
+import { ipinfoService, IpInfoDisabledError } from "@/services/ipinfoService"
+import { PublicIpInfoRows, type PublicIpInfoState } from "./PublicIpInfoRows"
 
 // PublicIpInfoCard — Statistics -> Traffic -> Host page's "Public IP Info"
 // card (docs/ref/todo/statistics-host-ipinfo-plan.md T-09), replacing "Top
 // peers" when the drilled-in IP is public (T-10 decides WHEN to render this;
 // this component only renders its own 4 states once mounted). Sized to slot
-// into the same `xl:col-span-1` cell Top peers used to occupy.
+// into the same `xl:col-span-1` cell Top peers used to occupy. The actual row
+// rendering lives in PublicIpInfoRows.tsx (docs/ref/todo/
+// reference-popover-plan.md Step 9), shared with the reference popover's
+// IpReferenceContent — this component only owns the fetch/loading state and
+// the outer card chrome.
 
-type CardState =
-  | { kind: "loading" }
-  | { kind: "disabled" }
-  | { kind: "error"; message: string }
-  | { kind: "success"; data: IpInfoLookup }
-
-// Row is a single label/value line. Fields the backend didn't send are
-// simply never rendered (no row at all) — plan T-09: "ห้ามแสดง —" for a
-// missing field, unlike most other tables in this app.
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-start justify-between gap-3 text-xs">
-      <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate text-right font-mono text-foreground">{value}</span>
-    </div>
-  )
-}
+type CardState = PublicIpInfoState
 
 // NOTE for the caller: this component resets to the "loading" state ONLY on
 // mount, not on every `ip` prop change (avoiding a synchronous setState
@@ -63,39 +51,7 @@ export function PublicIpInfoCard({ ip }: { ip: string }) {
         Public IP Info
       </p>
 
-      {state.kind === "loading" && (
-        <div className="space-y-2 pt-1">
-          <Skeleton className="h-3 w-full" />
-          <Skeleton className="h-3 w-3/4" />
-          <Skeleton className="h-3 w-2/3" />
-          <Skeleton className="h-3 w-1/2" />
-        </div>
-      )}
-
-      {state.kind === "disabled" && (
-        <p className="pt-1 text-xs text-muted-foreground">
-          ฟีเจอร์นี้ปิดอยู่ — เปิดได้ที่ไฟล์คอนฟิก{" "}
-          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">/var/lib/pigate/pigate.conf</code>{" "}
-          ด้วยคีย์ <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">ipinfo-enabled</code>
-        </p>
-      )}
-
-      {state.kind === "error" && <p className="pt-1 text-xs text-muted-foreground">{state.message}</p>}
-
-      {state.kind === "success" && (
-        <div className="space-y-1.5 pt-1">
-          <Row label="IP" value={state.data.ip} />
-          {state.data.hostname && <Row label="Hostname" value={state.data.hostname} />}
-          {(state.data.city || state.data.region) && (
-            <Row label="City" value={[state.data.city, state.data.region].filter(Boolean).join(", ")} />
-          )}
-          {(state.data.country || state.data.countryName) && (
-            <Row label="Country" value={state.data.countryName || state.data.country || ""} />
-          )}
-          {state.data.org && <Row label="Org" value={state.data.org} />}
-          {state.data.asn && <Row label="ASN" value={state.data.asn} />}
-        </div>
-      )}
+      <PublicIpInfoRows state={state} />
     </div>
   )
 }

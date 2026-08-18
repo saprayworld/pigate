@@ -820,6 +820,135 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /statistics/reference/ip:
+    get:
+      tags:
+        - Statistics
+      summary: Lightweight IP hover-popover summary (reference popover)
+      description: >
+        Backs the reference popover (docs/ref/todo/reference-popover-plan.md)
+        that opens when hovering an IP value in the Logs/Policy/Statistics
+        pages — a deliberately lightweight sibling of `/statistics/dns/ip`
+        and `/statistics/traffic/host`, returning only the top few domain
+        references + counts (never a full series/per-client join), since a
+        hover popover can fire dozens of times a minute. Reuses the exact
+        same RAM-only indices those endpoints already read (the domain->IP
+        forward/reverse index, the DNS query-count ring, the conntrack byte
+        breakdown) — no new data source, no new aggregation logic.
+
+        `scope` is decided EXCLUSIVELY by the server (never accepted from the
+        client) via the same `isGloballyRoutable` guard `/statistics/ipinfo`
+        uses (RFC1918/CGNAT/loopback/link-local/multicast/TEST-NET/IPv6
+        ULA/IPv6 documentation range all classify as `lan`, with
+        IPv4-mapped IPv6 addresses unmapped before the check) — it is a
+        security boundary, not a UX hint: the frontend must only call
+        `/statistics/ipinfo` for this IP when `scope == "public"`. `domains`
+        changes meaning with `scope`: for `public` it is every domain known
+        to have resolved to this IP (`lastSeen` populated, `count` omitted);
+        for `lan` it is the top domains THIS IP queried in the window
+        (`count` populated, `lastSeen` omitted).
+
+        The window is always the fixed `1h` — this endpoint does not accept
+        a `window` query parameter at all (any `window`/`scope` the client
+        sends is silently ignored). `enabled=false` (DNS query logging
+        switched off) still returns 200 with `domains` as an empty array —
+        not an error, and the UI should show a muted notice with a link to
+        turn logging on rather than treating it as a failure. Same
+        RAM-only, display-only data source as `/statistics/dns/ip` — MUST
+        NEVER be used for firewall rule generation, policy matching,
+        routing, or QoS decisions.
+      parameters:
+        - name: ip
+          in: query
+          required: true
+          schema:
+            type: string
+            example: 142.250.199.14
+          description: >
+            IP address to look up. Must parse as an IP address (IPv4 or
+            IPv6); anything else returns 400 with a generic message — the
+            submitted value is never echoed back in the error response. A
+            valid IP is re-normalized (e.g. non-canonical IPv6) before
+            lookup.
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10
+            default: 3
+          description: >
+            Max number of `domains[]` rows to return. Out-of-range or
+            unparseable values are silently clamped into [1, 10] — never a
+            400. `domainCount` always reflects the true total before this
+            limit is applied.
+      responses:
+        '200':
+          description: Lightweight reference summary for this IP
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IPReferenceSummary'
+        '400':
+          description: Missing or invalid `ip`
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /statistics/reference/domain:
+    get:
+      tags:
+        - Statistics
+      summary: Lightweight domain hover-popover summary (reference popover)
+      description: >
+        The domain-side sibling of `/statistics/reference/ip` (docs/ref/todo/
+        reference-popover-plan.md) — same lightweight, top-few-entries-only
+        shape, reusing the domain->IP forward index
+        (`dns_domain_ips.go`'s `IPsFor`, the same one
+        `/statistics/dns/domain` reads) and the DNS query-count ring, without
+        any traffic series or per-client join. The window is always the
+        fixed `1h` — no `window` query parameter is accepted.
+        `enabled=false` (DNS query logging switched off) still returns 200
+        with `ips` as an empty array — not an error, same UI treatment as
+        `/statistics/reference/ip`. Same RAM-only, display-only data source
+        as `/statistics/dns/domain` — MUST NEVER be used for firewall rule
+        generation, policy matching, routing, or QoS decisions.
+      parameters:
+        - name: domain
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 253
+          description: >
+            Domain to look up. Lower-cased and a single trailing dot is
+            stripped before matching; only `a-z 0-9 . - _ *` are accepted
+            (max 253 bytes). An invalid value returns 400 with a generic
+            message — the submitted value is never echoed back in the
+            error response.
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10
+            default: 3
+          description: >
+            Max number of `ips[]` rows to return. Out-of-range or
+            unparseable values are silently clamped into [1, 10] — never a
+            400. `ipCount` always reflects the true total before this limit
+            is applied.
+      responses:
+        '200':
+          description: Lightweight reference summary for this domain
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainReferenceSummary'
+        '400':
+          description: Missing or invalid `domain`
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /statistics/capacity:
     get:
       tags:
@@ -5762,6 +5891,254 @@ components:
         accuracy:
           type: string
           enum: [estimated, near-exact]
+        generatedAt:
+          type: string
+          format: date-time
+
+    ReferenceDomainRef:
+      type: object
+      required: [domain]
+      description: >-
+        One row of IPReferenceSummary.domains (docs/ref/todo/
+        reference-popover-plan.md). Its meaning changes with the parent
+        response's scope: when scope=="public", domain resolved to the IP at
+        least once (lastSeen is set, count is 0); when scope=="lan", domain
+        is one this client (the IP) queried in the fixed 1h window (count is
+        its query count, lastSeen is empty).
+      properties:
+        domain:
+          type: string
+          example: example.com
+        lastSeen:
+          type: string
+          format: date-time
+          description: Only populated when the parent scope=="public".
+        count:
+          type: integer
+          format: int64
+          description: Only populated when the parent scope=="lan".
+
+    IPReferenceSummary:
+      type: object
+      required:
+        - ip
+        - hostname
+        - mac
+        - scope
+        - enabled
+        - found
+        - domains
+        - domainCount
+        - bytes
+        - bytesUp
+        - bytesDown
+        - window
+        - generatedAt
+      description: >-
+        The /statistics/reference/ip response — a lightweight hover-popover
+        summary of a single IP (docs/ref/todo/reference-popover-plan.md),
+        reusing the exact same RAM-only indices DNSIPDomains/
+        GetDNSClientDomains already read, without any traffic series or
+        per-client join. Same RAM-only, display-only data source as
+        /statistics/dns/ip: MUST NEVER be used to drive firewall rule
+        generation, policy matching, routing, or QoS decisions.
+      properties:
+        ip:
+          type: string
+          description: >-
+            Canonical (net/netip-normalized) form of the address that was
+            looked up — never the raw client-supplied string.
+          example: 142.250.199.14
+        hostname:
+          type: string
+          description: >-
+            Resolved from a DHCP lease/reservation for ip — display only,
+            empty when unknown (never falls back to echoing ip itself).
+        mac:
+          type: string
+          description: >-
+            DHCP lease's MAC address for ip, when known — empty otherwise.
+            Display only.
+        scope:
+          type: string
+          enum: [public, lan]
+          description: >-
+            Decided EXCLUSIVELY by the server via isGloballyRoutable() — a
+            security boundary, never accepted from or overridable by the
+            client. The frontend must only call /statistics/ipinfo for this
+            ip when scope=="public".
+        enabled:
+          type: boolean
+          description: >-
+            Mirrors DNSServerSettings.queryLogging. false means DNS query
+            logging is off: domains is an empty array and domainCount is 0 —
+            not an error, the UI should show a muted notice rather than
+            treating this as a failure.
+        found:
+          type: boolean
+          description: >-
+            True when this IP has ANY reference data at all (a resolved
+            hostname, at least one related domain, or observed traffic) — a
+            hint for the UI to render a minimal "no data yet" state. Never
+            used to gate a 404; this endpoint always returns 200 for a
+            syntactically valid ip.
+        domains:
+          type: array
+          description: >-
+            Capped at the request's limit (default 3, max 10) — never null.
+            See ReferenceDomainRef's description for how its shape depends
+            on scope.
+          items:
+            $ref: '#/components/schemas/ReferenceDomainRef'
+        domainCount:
+          type: integer
+          description: >-
+            TRUE total count of matching domains BEFORE the limit was
+            applied, so the UI can render "+N more" correctly.
+          example: 5
+        bytes:
+          type: integer
+          format: int64
+          description: >-
+            This IP's observed traffic volume in the fixed 1h window —
+            Dests[ip] when scope=="public", Hosts[ip] when scope=="lan"
+            (same conntrack-derived join every other statistics endpoint
+            uses). Zero when there was no observed traffic — not an error.
+          example: 20500000
+        bytesUp:
+          type: integer
+          format: int64
+          example: 1400000
+        bytesDown:
+          type: integer
+          format: int64
+          example: 19100000
+        window:
+          type: string
+          enum: [1h]
+          description: >-
+            Always "1h" — this endpoint does not accept a window query
+            parameter; echoed back purely so the UI can render a label
+            without hardcoding the string itself.
+        generatedAt:
+          type: string
+          format: date-time
+
+    ReferenceIPRef:
+      type: object
+      required: [ip, lastSeen, shared]
+      description: One row of DomainReferenceSummary.ips.
+      properties:
+        ip:
+          type: string
+          example: 93.184.216.34
+        lastSeen:
+          type: string
+          format: date-time
+          description: >-
+            RFC3339 UTC timestamp of the most recent DNS answer that
+            resolved this domain to this IP.
+        shared:
+          type: boolean
+          description: >-
+            True when this IP is currently also known to resolve for at
+            least one other domain.
+
+    DomainReferenceSummary:
+      type: object
+      required:
+        - domain
+        - enabled
+        - found
+        - ips
+        - ipCount
+        - queryCount
+        - clients
+        - sharedIPs
+        - ipsTruncated
+        - bytes
+        - bytesUp
+        - bytesDown
+        - window
+        - generatedAt
+      description: >-
+        The /statistics/reference/domain response — a lightweight
+        hover-popover summary of a single domain (docs/ref/todo/
+        reference-popover-plan.md), reusing dns_domain_ips.go's IPsFor (the
+        same forward index DNSDomainDrilldown reads) without any traffic
+        series or per-client join. Same RAM-only, display-only data source as
+        /statistics/dns/domain: MUST NEVER be used to drive firewall rule
+        generation, policy matching, routing, or QoS decisions.
+      properties:
+        domain:
+          type: string
+          description: >-
+            Normalized (model.NormalizeQueryDomain) form of the domain that
+            was looked up — never the raw client-supplied string.
+          example: example.com
+        enabled:
+          type: boolean
+          description: >-
+            Mirrors DNSServerSettings.queryLogging. false means ips is an
+            empty array and ipCount/queryCount/clients are 0 — not an error.
+        found:
+          type: boolean
+          description: >-
+            True when this domain has ANY reference data at all (at least
+            one resolved IP, or at least one query) — same non-error
+            "no data yet" hint as IPReferenceSummary.found.
+        ips:
+          type: array
+          description: >-
+            Resolved IPs, newest-lastSeen-first, capped at the request's
+            limit (default 3, max 10) — never null.
+          items:
+            $ref: '#/components/schemas/ReferenceIPRef'
+        ipCount:
+          type: integer
+          description: >-
+            TRUE total count of resolved IPs BEFORE the limit was applied.
+          example: 4
+        queryCount:
+          type: integer
+          format: int64
+          description: This domain's total query count in the fixed 1h window.
+        clients:
+          type: integer
+          description: >-
+            Distinct count of client IPs that queried this domain in the
+            window.
+        sharedIPs:
+          type: boolean
+          description: >-
+            True when at least one of the domain's resolved IPs (across the
+            FULL set, before the limit) is also known to resolve for another
+            domain — same CDN/shared-hosting warning signal as
+            DNSDomainDrilldown.sharedIPs.
+        ipsTruncated:
+          type: boolean
+          description: >-
+            True when this domain's own resolved-IP set is at (or over) the
+            configured dns-stats-max-ips-per-domain cap.
+        bytes:
+          type: integer
+          format: int64
+          description: >-
+            This domain's total observed traffic volume (join of ALL of the
+            domain's known resolved IPs, not just the limited ips above) in
+            the fixed 1h window.
+          example: 20500000
+        bytesUp:
+          type: integer
+          format: int64
+          example: 1400000
+        bytesDown:
+          type: integer
+          format: int64
+          example: 19100000
+        window:
+          type: string
+          enum: [1h]
         generatedAt:
           type: string
           format: date-time

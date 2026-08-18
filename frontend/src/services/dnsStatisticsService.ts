@@ -312,8 +312,11 @@ export interface DNSIPDomains {
 }
 
 // mockHostnames mirrors statisticsService.ts's mockHosts and kernel/mock.go's
-// mockDNSQueryEvents matrix (same 3 LAN client IPs).
-const mockHostnames: Record<string, string> = {
+// mockDNSQueryEvents matrix (same 3 LAN client IPs). Exported so
+// referenceService.ts's mock path (docs/ref/todo/reference-popover-plan.md
+// Step 6) can reuse this fixture rather than duplicating it (plan §3 "ห้าม
+// fixture ซ้ำซ้อน").
+export const mockHostnames: Record<string, string> = {
   "192.168.1.101": "iPhone-13",
   "192.168.1.102": "Android-SmartTV",
   "192.168.1.105": "iPad-Pro",
@@ -333,7 +336,7 @@ const mockClientDomains: Record<string, string> = {
 // weighted matrix exactly, so mock-mode drill-down shows the same shape of
 // data as -mock=true backend responses: www.youtube.com has 3 clients,
 // netflix.com has 2, line-apps.com/cdn.jsdelivr.net have 1 each.
-const mockPairs: { domain: string; queryType: string; client: string; weight: number }[] = [
+export const mockPairs: { domain: string; queryType: string; client: string; weight: number }[] = [
   { domain: "www.youtube.com", queryType: "A", client: "192.168.1.101", weight: 5 },
   { domain: "www.youtube.com", queryType: "A", client: "192.168.1.102", weight: 3 },
   { domain: "www.youtube.com", queryType: "A", client: "192.168.1.105", weight: 1 },
@@ -350,7 +353,7 @@ const mockPairs: { domain: string; queryType: string; client: string; weight: nu
 // entry at all (netflix.com, line-apps.com) so the "no known IP" empty state
 // is exercisable in mock mode too. bytesBase/upRatio are purely synthetic,
 // scaled the same deterministic way as mockPairs' weight -> count.
-const mockDomainIPs: Record<
+export const mockDomainIPs: Record<
   string,
   { ip: string; bytesBase: number; upRatio: number; lastSeenMinAgo: number }[]
 > = {
@@ -378,7 +381,7 @@ for (const ips of Object.values(mockDomainIPs)) {
   }
 }
 
-function mockCount(weight: number, scale: number): number {
+export function mockCount(weight: number, scale: number): number {
   return Math.max(1, Math.round(weight * 10 * scale))
 }
 
@@ -484,7 +487,7 @@ function mockClientTotalBytes(
 // forward index's DomainsForIP (service/dns_domain_ips.go). 64.233.166.127
 // is used by both www.youtube.com and googlevideo.com, giving mock mode a
 // ready-made "shared IP" test case (plan T-06).
-function mockDomainsForIP(ip: string): { domain: string; lastSeenMinAgo: number }[] {
+export function mockDomainsForIP(ip: string): { domain: string; lastSeenMinAgo: number }[] {
   const out: { domain: string; lastSeenMinAgo: number }[] = []
   for (const [domain, entries] of Object.entries(mockDomainIPs)) {
     const match = entries.find((e) => e.ip === ip)

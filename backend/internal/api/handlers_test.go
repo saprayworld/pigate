@@ -2331,6 +2331,229 @@ func TestHandleGetIPInfo_Disabled(t *testing.T) {
 	}
 }
 
+// TestHandleGetIPReference_RequiresAuth mirrors
+// TestHandleGetIPInfo_RequiresAuth for the new reference-popover endpoint
+// (docs/ref/todo/reference-popover-plan.md Step 4).
+func TestHandleGetIPReference_RequiresAuth(t *testing.T) {
+	handler, _ := setupTestServer(t)
+
+	req := httptest.NewRequest("GET", "/api/statistics/reference/ip?ip=8.8.8.8", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("without session: expected 401, got %d", rec.Code)
+	}
+}
+
+// TestHandleGetDomainReference_RequiresAuth mirrors
+// TestHandleGetIPReference_RequiresAuth for the domain sibling route.
+func TestHandleGetDomainReference_RequiresAuth(t *testing.T) {
+	handler, _ := setupTestServer(t)
+
+	req := httptest.NewRequest("GET", "/api/statistics/reference/domain?domain=example.com", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("without session: expected 401, got %d", rec.Code)
+	}
+}
+
+// TestHandleGetIPReference_InputValidation covers plan §4 item 4/Step 4's
+// acceptance checklist: bad ip -> 400 without ever echoing the raw value, a
+// valid IPv4-mapped IPv6 literal ("::ffff:192.168.1.1") must classify as
+// scope="lan" (plan §5 Caution 1's explicit trap case), an explicit
+// window=24h must never change the response's window away from the fixed
+// "1h", and limit=999 must clamp rather than 400.
+func TestHandleGetIPReference_InputValidation(t *testing.T) {
+	server, _ := buildTestServer(t, false)
+	server.statistics.SetDNSLoggingEnabled(true)
+	handler := RegisterRoutes(server)
+	AddSession("mock_session_id_test_token", "pigate")
+	token := "mock_session_id_test_token"
+
+	get := func(rawQuery string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/api/statistics/reference/ip?"+rawQuery, nil)
+		addSessionCookie(req, token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := get(""); rec.Code != http.StatusBadRequest {
+		t.Errorf("missing ip: expected 400, got %d", rec.Code)
+	}
+
+	badIPs := []string{"1.2.3", "abc", "192.168.1.1; ls", "<script>alert(1)</script>", "192.168.1.256"}
+	for _, ip := range badIPs {
+		rec := get("ip=" + url.QueryEscape(ip))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("ip=%q: expected 400, got %d. Body: %s", ip, rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), ip) {
+			t.Errorf("ip=%q: rejected value was echoed back in the response body: %s", ip, rec.Body.String())
+		}
+	}
+
+	// ::ffff:192.168.1.1 must classify as lan, never public — the exact
+	// bypass isPrivateIP alone would miss (plan §5 Caution 1).
+	rec := get("ip=" + url.QueryEscape("::ffff:192.168.1.1"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var got model.IPReferenceSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Scope != model.ReferenceScopeLAN {
+		t.Errorf("expected ::ffff:192.168.1.1 to classify as scope=lan, got %q", got.Scope)
+	}
+
+	// window is never accepted from the client — the response's window field
+	// must always be the fixed "1h" regardless of what's passed.
+	rec = get("ip=8.8.8.8&window=24h")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var got2 model.IPReferenceSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got2); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got2.Window != "1h" {
+		t.Errorf("expected window=24h to be ignored and response window stay 1h, got %q", got2.Window)
+	}
+
+	// limit=999 clamps (never a 400).
+	for _, d := range []string{"a.example.com", "b.example.com", "c.example.com", "d.example.com"} {
+		server.statistics.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogAnswer, Domain: d, AnswerIP: "8.8.8.8"})
+	}
+	rec = get("ip=8.8.8.8&limit=999")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("limit=999: expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var got3 model.IPReferenceSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got3); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got3.Domains) != 4 {
+		t.Errorf("expected 4 domain rows (below the clamp ceiling), got %d", len(got3.Domains))
+	}
+}
+
+// TestHandleGetIPReference_QueryLoggingDisabled covers plan Step 4's
+// "query logging ปิด = 200 + enabled:false" case.
+func TestHandleGetIPReference_QueryLoggingDisabled(t *testing.T) {
+	server, _ := buildTestServer(t, false)
+	server.statistics.SetDNSLoggingEnabled(false)
+	handler := RegisterRoutes(server)
+	AddSession("mock_session_id_test_token", "pigate")
+	token := "mock_session_id_test_token"
+
+	req := httptest.NewRequest("GET", "/api/statistics/reference/ip?ip=8.8.8.8", nil)
+	addSessionCookie(req, token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var got model.IPReferenceSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Enabled {
+		t.Errorf("expected enabled=false")
+	}
+	if len(got.Domains) != 0 {
+		t.Errorf("expected empty domains while disabled, got %+v", got.Domains)
+	}
+}
+
+// TestHandleGetDomainReference_InputValidation mirrors
+// TestHandleGetIPReference_InputValidation for the domain route.
+func TestHandleGetDomainReference_InputValidation(t *testing.T) {
+	server, _ := buildTestServer(t, false)
+	server.statistics.SetDNSLoggingEnabled(true)
+	handler := RegisterRoutes(server)
+	AddSession("mock_session_id_test_token", "pigate")
+	token := "mock_session_id_test_token"
+
+	get := func(rawQuery string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/api/statistics/reference/domain?"+rawQuery, nil)
+		addSessionCookie(req, token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := get(""); rec.Code != http.StatusBadRequest {
+		t.Errorf("missing domain: expected 400, got %d", rec.Code)
+	}
+
+	badDomains := []string{"<script>alert(1)</script>", "evil.com%0Aextra", "evil.com%00", "has space.example.com"}
+	for _, d := range badDomains {
+		rec := get("domain=" + url.QueryEscape(d))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("domain=%q: expected 400, got %d. Body: %s", d, rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), d) {
+			t.Errorf("domain=%q: rejected value was echoed back in the response body: %s", d, rec.Body.String())
+		}
+	}
+
+	// window is never accepted — response window stays the fixed "1h".
+	rec := get("domain=example.com&window=24h")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var got model.DomainReferenceSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Window != "1h" {
+		t.Errorf("expected window=24h to be ignored, got %q", got.Window)
+	}
+
+	// A valid domain never queried -> 200 with an empty ip list, not 404.
+	rec = get("domain=" + url.QueryEscape("never-queried.example.com"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("valid-but-unqueried domain: expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var got2 model.DomainReferenceSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got2); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got2.IPs) != 0 {
+		t.Errorf("expected empty ip list for an unqueried domain, got %+v", got2.IPs)
+	}
+}
+
+// TestHandleGetDomainReference_QueryLoggingDisabled mirrors
+// TestHandleGetIPReference_QueryLoggingDisabled for the domain route.
+func TestHandleGetDomainReference_QueryLoggingDisabled(t *testing.T) {
+	server, _ := buildTestServer(t, false)
+	server.statistics.SetDNSLoggingEnabled(false)
+	handler := RegisterRoutes(server)
+	AddSession("mock_session_id_test_token", "pigate")
+	token := "mock_session_id_test_token"
+
+	req := httptest.NewRequest("GET", "/api/statistics/reference/domain?domain=example.com", nil)
+	addSessionCookie(req, token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var got model.DomainReferenceSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Enabled {
+		t.Errorf("expected enabled=false")
+	}
+	if len(got.IPs) != 0 {
+		t.Errorf("expected empty ips while disabled, got %+v", got.IPs)
+	}
+}
+
 // TestCapacityStatisticsEndpoint is docs/ref/todo/
 // statistics-capacity-visibility-plan.md T-08 (API portion): the new
 // /api/statistics/capacity route must require auth (like every other
