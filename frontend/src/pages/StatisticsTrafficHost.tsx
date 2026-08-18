@@ -285,7 +285,6 @@ function ConversationTable({
                         }
                       }}
                       className="cursor-pointer hover:bg-muted/50"
-                      title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
                     >
                       <TableCell className="py-3 text-xs">
                         <HostReferenceTrigger ip={ip} domain={r.peerDomain}>

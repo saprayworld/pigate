@@ -161,7 +161,6 @@ function TopConversationsCard({
                         <button
                           type="button"
                           onClick={() => goToHost(c.srcIp, "src")}
-                          title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
                           className="block max-w-full cursor-pointer truncate text-left hover:text-primary hover:underline"
                         >
                           {c.srcHostname}
@@ -178,7 +177,6 @@ function TopConversationsCard({
                             <button
                               type="button"
                               onClick={() => goToHost(c.dstIp, "dst")}
-                              title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
                               className="block max-w-full cursor-pointer truncate text-left hover:text-primary hover:underline"
                             >
                               {c.dstDomain}
@@ -190,7 +188,6 @@ function TopConversationsCard({
                             <button
                               type="button"
                               onClick={() => goToHost(c.dstIp, "dst")}
-                              title="คลิกเพื่อดูรายละเอียดการเชื่อมต่อของเครื่องนี้"
                               className="block max-w-full cursor-pointer truncate text-left hover:text-primary hover:underline"
                             >
                               {c.dstHostname}
@@ -267,7 +264,6 @@ function TopDomainsCard({
                         onClick={() =>
                           navigate(`/statistics/dns/domain/${encodeURIComponent(d.domain)}?window=${window_}`)
                         }
-                        title="คลิกเพื่อดูว่าเครื่องไหนถามโดเมนนี้บ้าง"
                         className="min-w-0 cursor-pointer truncate text-left text-foreground/90 hover:text-primary hover:underline"
                       >
                         {d.domain}
