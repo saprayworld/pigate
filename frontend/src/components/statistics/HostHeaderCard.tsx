@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { AccuracyInfoButton } from "@/components/statistics/TrafficStatsShared"
 import { StatsWindowTabs, type StatsWindow } from "@/components/statistics/DnsStatsShared"
+import { HostReferenceTrigger } from "@/components/reference/HostReferenceTrigger"
 import { type TrafficHostDetail } from "@/services/trafficStatisticsService"
 
 // HostHeaderCard — pure presentational header card for the Statistics ->
@@ -47,7 +48,9 @@ export function HostHeaderCard({
           </div>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="truncate font-mono text-xl font-bold tracking-tight">{ip}</span>
+              <HostReferenceTrigger ip={ip} domain={detail?.domain ?? ""} className="min-w-0">
+                <span className="truncate font-mono text-xl font-bold tracking-tight">{ip}</span>
+              </HostReferenceTrigger>
               {showActive && (
                 <Badge variant="outline" className="font-normal border-primary/30 text-primary">
                   Active

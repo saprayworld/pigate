@@ -64,6 +64,7 @@
 * **ข้อมูล domain↔IP ที่แสดงใน popover เป็น display-only และ poisonable** (มาจาก dnsmasq answer log ที่ LAN client ควบคุมได้) — ห้ามใช้ผลจาก popover ไปตัดสิน firewall rule generation, policy matching, routing หรือ QoS ใด ๆ (ดู `docs/tech_stack_design.md` §8 และ doc comment ใน `backend/internal/model/statistics_reference.go`)
 * **content ที่ไม่มีข้อมูล runtime ปลายทางให้ดึงเพิ่ม (เช่น Service Object ที่มีแค่ protocol/port ไม่มี reference data ผูกอยู่) ต้องเป็น presentational ล้วน** — ห้ามยิง API และห้ามมี popover ระดับ 2 (ดู `ServiceObjectReferenceContent.tsx`, docs/ref/todo/service-object-popover-plan.md §2.1)
 * **ปุ่ม "ดู … Objects" ท้าย popover ทุกตัวต้องส่ง `?q=<ชื่อ object>`** (`?q=${encodeURIComponent(object.name)}`) และหน้าปลายทางต้อง seed ตัวกรองจาก `?q=` ตอนโหลดแบบ seed-then-sync (`setSearchParams(..., { replace: true })`, `q` ว่าง = ลบ param ทิ้ง — ห้าม push history ทุกตัวอักษร) เป็นกติกากลาง ไม่ใช่ทางเลือกรายหน้า (ดูแม่แบบ `DnsServer.tsx`'s `?tab=`, ตัวอย่างคู่ `/policy/addresses?q=` และ `/policy/services?q=`)
+* **เซลล์ที่แสดง IP/Domain ในหน้า/ตารางที่เขียนใหม่ ต้อง wire ผ่าน `HostReferenceTrigger`** (`frontend/src/components/reference/HostReferenceTrigger.tsx` — รับ `ip`/`domain` แยกกัน แล้ว classify + เลือก Ip/Domain/Combined content ให้เอง) ห่อด้วย `<ReferenceHoverProvider>` เพียงชั้นเดียวต่อหน้า (ที่ root ของหน้านั้น หรือของ Drawer/Portal ตัวเองตามข้อด้านบน) — ห้าม provider ซ้อนกัน และห้ามสร้าง Popover Root ต่อแถวเด็ดขาด
 
 ---
 

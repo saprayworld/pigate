@@ -190,6 +190,11 @@ subnet/range กว้าง → ข้อความเฉย ๆ ไม่ย
 > ที่แสดง IP/domain เหมือนกัน (`components/statistics/TopHostsShareCard.tsx`, `TrafficTrendCard.tsx`,
 > `pages/StatisticsOverview.tsx`, `pages/StatisticsTraffic.tsx`, `pages/Dashboard.tsx`) **ยังไม่มี popover**
 > เป็น scope gap ที่ตั้งใจ ไม่ใช่บั๊ก ถ้าต้องการให้ครอบคลุมทั้งแอปต้องเปิดแผนรอบถัดไป
+>
+> **หมายเหตุเพิ่มเติม (2026-08-18):** ปิด scope gap ข้างต้นบางส่วนแล้ว — หน้า `pages/StatisticsOverview.tsx`,
+> `pages/StatisticsTraffic.tsx`, `pages/StatisticsTrafficHost.tsx` และ `components/statistics/TopHostsShareCard.tsx`
+> ถูก wire ด้วย `HostReferenceTrigger` (component ใหม่ที่ห่อ `ReferenceTrigger` + classify ip/domain ให้ในที่เดียว
+> reuse pattern จาก `RuleStatsDrawer.tsx`) ในรอบนี้แล้ว — `TrafficTrendCard.tsx`/`pages/Dashboard.tsx` ยังไม่ได้ wire
 
 **Step 14 — เอกสาร** · **แก้:** `docs/rules_of_work.md` (กติกา popover 2 ระดับ + delay มาตรฐาน + ห้าม Root ต่อแถว),
 `README.md` (Feature Status ถ้าจำเป็น), `docs/tech_stack_design.md` หรือ `docs/ref/` (ย้ำ display-only)
@@ -267,7 +272,7 @@ subnet/range กว้าง → ข้อความเฉย ๆ ไม่ย
 - [x] `frontend/src/components/reference/AddressObjectReferenceContent.tsx` — entries + fallback legacy + ไม่ยิง API ระดับ 1
 - [x] `frontend/src/components/logs/TrafficLogPage.tsx` — wiring, ไม่แตะ SSE/pagination
 - [x] `frontend/src/components/policy/PolicyChainPage.tsx` — wiring + Map lookup + ปิด popover เมื่อเปิด Drawer
-- [x] `frontend/src/components/policy/RuleStatsDrawer.tsx`, `frontend/src/components/statistics/{DnsStatsShared,TrafficStatsShared,HostCells}.tsx` — wiring ไม่มี component ใหม่ (scope gap: การ์ด/หน้าอื่นนอก 4 ไฟล์นี้ยังไม่ได้ wire — ดูหมายเหตุ Step 13)
+- [x] `frontend/src/components/policy/RuleStatsDrawer.tsx`, `frontend/src/components/statistics/DnsStatsShared.tsx` — wiring ไม่มี component ใหม่ (`TrafficStatsShared.tsx`/`HostCells.tsx` เองไม่มี `ReferenceTrigger` — เดิมอ้างผิด แก้แล้ว; wiring จริงของหน้า DNS stats อยู่ใน `DnsStatsShared.tsx`; scope gap ที่เหลือ: `TrafficTrendCard.tsx`/`pages/Dashboard.tsx` ยังไม่ได้ wire — ดูหมายเหตุ Step 13)
 - [x] `yarn build` และ `yarn lint` ผ่าน
 
 **ทดสอบ (mock mode: `./pigate-backend -mock=true -allow-dev-cors` + `yarn dev`)**

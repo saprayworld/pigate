@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { fmtBytes } from "@/lib/formatBytes"
 import { CHART_BG_CLASSES } from "@/lib/chartColors"
 import { UpDownLine, HostLabel } from "@/components/statistics/HostCells"
+import { HostReferenceTrigger } from "@/components/reference/HostReferenceTrigger"
 import type { TopHost } from "@/services/statisticsService"
 
 // TopHostsShareCard is the Statistics Overview page's Top 5 Hosts card
@@ -72,7 +73,9 @@ export function TopHostsShareCard({
                         CHART_BG_CLASSES[i % CHART_BG_CLASSES.length]
                       )}
                     />
-                    <HostLabel host={h} />
+                    <HostReferenceTrigger ip={h.ip} domain={h.domain}>
+                      <HostLabel host={h} />
+                    </HostReferenceTrigger>
                   </span>
                   <span className="shrink-0 text-right">
                     <span className="block font-mono text-xs text-muted-foreground">
