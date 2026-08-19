@@ -75,7 +75,7 @@ export function ReferenceTrigger({ level = 1, content, children, className }: Re
 
   return (
     <span
-      className={cn("cursor-default", className)}
+      className={cn("cursor-pointer", className)}
       tabIndex={0}
       onPointerEnter={(e) => {
         if (e.pointerType === "touch") return // plan Step 7: touch must never open on hover
