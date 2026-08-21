@@ -23,10 +23,13 @@ import {
   DnsVolumeInfoButton,
   type StatsWindow,
 } from "@/components/statistics/DnsStatsShared"
+import { BlockedDomainStatsTable, BlockedClientStatsTable } from "@/components/statistics/DnsBlockedStatsShared"
 import { TrafficStatCard } from "@/components/statistics/TrafficStatsShared"
 import { DnsQueryTrendCard } from "@/components/statistics/DnsQueryTrendCard"
+import { DnsBlockedDonutCard } from "@/components/statistics/DnsBlockedDonutCard"
 import { CapacityIndicator } from "@/components/statistics/CapacityIndicator"
 import { capacityService, type RingCapacity } from "@/services/capacityService"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 // DNS Statistics page (docs/ref/todo/statistics-nav-restructure-plan.md T-02)
 // — promoted from the DNS Server page's former "สถิติ" tab
@@ -185,6 +188,44 @@ export default function StatisticsDns() {
 
   const ipMode = classification.kind === "ip"
 
+  // Tabs (docs/ref/todo/dns-blocked-query-statistics-plan.md T-13): "Query
+  // ปกติ" (queries) vs "Blocked Query" (blocked), synced with `?tab=` —
+  // default "queries" when the param is missing/unrecognized, same
+  // whitelist-and-fallback convention as pages/DnsServer.tsx's activeTab.
+  const VALID_TABS = ["queries", "blocked"] as const
+  type DnsStatsTab = (typeof VALID_TABS)[number]
+  const initialTab = searchParams.get("tab")
+  const [activeTab, setActiveTabState] = useState<DnsStatsTab>(
+    VALID_TABS.includes(initialTab as DnsStatsTab) ? (initialTab as DnsStatsTab) : "queries"
+  )
+  const setActiveTab = (tab: string) => {
+    const next = VALID_TABS.includes(tab as DnsStatsTab) ? (tab as DnsStatsTab) : "queries"
+    setActiveTabState(next)
+    setSearchParams(
+      (prev) => {
+        const params = new URLSearchParams(prev)
+        params.set("tab", next)
+        return params
+      },
+      { replace: true }
+    )
+  }
+
+  // IP-filter mode only makes sense on the "queries" tab (it drives the Top
+  // Domains table there) — typing a complete IP while on "blocked" must
+  // bounce back to "queries" automatically (plan T-13 final acceptance).
+  // Adjusted directly during render (React's documented pattern for
+  // "reacting to a prop/derived-value change" — see
+  // https://react.dev/learn/you-might-not-need-an-effect) rather than in a
+  // useEffect, which would otherwise trigger a cascading extra render.
+  const [prevIpMode, setPrevIpMode] = useState(ipMode)
+  if (ipMode !== prevIpMode) {
+    setPrevIpMode(ipMode)
+    if (ipMode && activeTab === "blocked") {
+      setActiveTab("queries")
+    }
+  }
+
   return (
     <div className="space-y-4">
       {/* Page header — same visual style as pages/StatisticsOverview.tsx */}
@@ -220,7 +261,7 @@ export default function StatisticsDns() {
       </div>
 
       {stats && stats.enabled && (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
           <TrafficStatCard label={`Total Queries (${window_})`} value={stats.totalQueries.toLocaleString()} />
           <TrafficStatCard label="Domains found" value={stats.totalDomains.toLocaleString()} />
           <TrafficStatCard label="Clients found" value={stats.totalClients.toLocaleString()} />
@@ -232,13 +273,39 @@ export default function StatisticsDns() {
               up: fmtBytes(stats.topDomains.reduce((sum, d) => sum + d.bytesUp, 0)),
             }}
           />
+          <TrafficStatCard
+            label="Blocked Queries"
+            value={stats.blockedQueries.toLocaleString()}
+            hint={`${stats.blockedPercent.toFixed(1)}% ของ query ทั้งหมด`}
+          />
         </div>
       )}
 
-      {stats && stats.enabled && <DnsQueryTrendCard series={stats.querySeries} window={window_} />}
+      {stats && stats.enabled && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <DnsQueryTrendCard
+            series={stats.querySeries}
+            blockedSeries={stats.blockedSeries}
+            window={window_}
+            className="lg:col-span-2"
+          />
+          <DnsBlockedDonutCard
+            totalQueries={stats.totalQueries}
+            blockedQueries={stats.blockedQueries}
+            blockedPercent={stats.blockedPercent}
+          />
+        </div>
+      )}
 
       {stats?.truncated && <DnsStatsTruncatedWarning />}
       {stats?.domainIndexTruncated && <DnsDomainIndexTruncatedWarning />}
+      {stats?.blockedTruncated && (
+        <div className="flex items-center gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2 text-xs text-warning">
+          <TriangleAlert className="h-4 w-4 shrink-0" />
+          จำนวนโดเมนที่ถูกบล็อกในช่วงเวลานี้เกินขีดจำกัดการติดตาม — ยอดรวม Blocked Queries ยังถูกต้อง
+          แต่ตาราง Top Blocked Domains/Clients ด้านล่างอาจแสดงไม่ครบ
+        </div>
+      )}
 
       {error && !stats && (
         <Card>
@@ -268,6 +335,20 @@ export default function StatisticsDns() {
           </CardContent>
         </Card>
       ) : (
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList>
+            <TabsTrigger value="queries" className="cursor-pointer">Query ปกติ</TabsTrigger>
+            <TabsTrigger value="blocked" className="cursor-pointer gap-1.5">
+              Blocked Query
+              {stats && stats.enabled && stats.totalBlockedDomains > 0 && (
+                <Badge variant="outline" className="rounded border-warning/20 bg-warning/10 px-1.5 py-0 text-[10px] font-medium text-warning">
+                  {stats.totalBlockedDomains}
+                </Badge>
+              )}
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="queries" className="space-y-4">
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <Card>
             <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0">
@@ -382,6 +463,56 @@ export default function StatisticsDns() {
             </CardContent>
           </Card>
         </div>
+          </TabsContent>
+
+          <TabsContent value="blocked" className="space-y-4">
+            {stats && stats.totalBlockedDomains === 0 ? (
+              <Card>
+                <CardContent className="flex flex-col items-center justify-center gap-3 py-10 text-center">
+                  <BarChart3 className="h-8 w-8 text-muted-foreground/50" />
+                  <p className="text-sm font-medium text-foreground">ยังไม่มี DNS query ที่ถูกบล็อกในช่วงเวลานี้</p>
+                  <p className="max-w-md text-xs text-muted-foreground">
+                    ตั้งค่า deny-list (Blocked Domains) ในหน้า DNS Server เพื่อเริ่มบล็อกและเก็บสถิติโดเมนที่ถูกบล็อก
+                  </p>
+                  <Button asChild size="sm" variant="outline" className="cursor-pointer gap-1.5">
+                    <NavLink to="/network/dns-server?tab=blocked">
+                      <Settings2 className="h-4 w-4" />
+                      ไปที่หน้า DNS Server &gt; Blocked Domains
+                    </NavLink>
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                <Card>
+                  <CardHeader className="space-y-0">
+                    <CardTitle className="text-base font-semibold">Top Blocked Domains</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <BlockedDomainStatsTable
+                      rows={stats?.topBlockedDomains ?? []}
+                      emptyLabel="ยังไม่มีข้อมูลโดเมนที่ถูกบล็อกในช่วงเวลานี้"
+                      onRowClick={(domain) => navigate(`/statistics/dns/domain/${encodeURIComponent(domain)}?window=${window_}`)}
+                    />
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="space-y-0">
+                    <CardTitle className="text-base font-semibold">Top Blocked Clients</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <BlockedClientStatsTable
+                      rows={stats?.topBlockedClients ?? []}
+                      emptyLabel="ยังไม่มีข้อมูลเครื่องที่ถูกบล็อกในช่วงเวลานี้"
+                      onRowClick={(ip) => navigate(`/statistics/dns/client/${encodeURIComponent(ip)}?window=${window_}`)}
+                    />
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+          </TabsContent>
+        </Tabs>
       )}
 
       <DnsStatsPrivacyNote />

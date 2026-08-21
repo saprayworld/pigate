@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useMemo, useState, type ReactNode } from "react"
 import { ArrowDown, ArrowUp, ChevronsUpDown, Info, Search, TriangleAlert, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -237,10 +237,17 @@ export function TrafficStatCard({
   label,
   value,
   breakdown,
+  hint,
 }: {
   label: string
   value: string
   breakdown?: { down: string; up: string }
+  // hint (docs/ref/todo/dns-blocked-query-statistics-plan.md T-13) renders
+  // as an extra muted line under value/breakdown — additive, optional, and
+  // omitted entirely (no layout change) for every existing caller that
+  // doesn't pass it (e.g. "4.2% ของ query ทั้งหมด" on the Blocked Queries
+  // card).
+  hint?: ReactNode
 }) {
   return (
     <Card size="sm">
@@ -259,6 +266,7 @@ export function TrafficStatCard({
             </span>
           </div>
         )}
+        {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
       </CardContent>
     </Card>
   )

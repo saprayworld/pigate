@@ -240,6 +240,21 @@ type DNSDomainStat struct {
 	// DNSQueryStatistics.DomainBytes). Always label this "% Vol" separately
 	// from Percent's "% Query" in the UI (plan §1.3).
 	BytesPercent float64 `json:"bytesPercent"`
+	// Blocked/BlockedRule/BlockedMode are the "Blocked Domain Query"
+	// classification (docs/ref/todo/dns-blocked-query-statistics-plan.md
+	// T-04) — RECORD-TIME only: they reflect whether THIS domain matched an
+	// active deny-list rule at the moment it was queried (dns_block_index.go
+	// via recordDomainQuery), never a re-classification against the CURRENT
+	// deny-list. BlockedRule may be a PARENT of Domain (e.g. Domain =
+	// "ads.example.com", BlockedRule = "example.com") when the match came
+	// from a subdomain rule, mirroring dnsmasq's own address=/domain/
+	// semantics. BlockedMode is one of model.DNSBlockModeNXDomain /
+	// model.DNSBlockModeSinkhole. All three are zero-valued (false/"") for a
+	// normal, never-blocked domain — and for every row when DNS query
+	// logging itself is disabled (Enabled == false on the parent DTO).
+	Blocked     bool   `json:"blocked"`
+	BlockedRule string `json:"blockedRule"`
+	BlockedMode string `json:"blockedMode"`
 }
 
 // DNSDomainIP is one row of the "Resolved IPs" table on a domain's
@@ -442,6 +457,57 @@ type DNSClientStat struct {
 	BytesPercent float64 `json:"bytesPercent"`
 }
 
+// DNSBlockedDomainStat is one row of the "Top Blocked Domains" table on the
+// DNS Query Statistics tab's "Blocked Query" sub-tab (docs/ref/todo/
+// dns-blocked-query-statistics-plan.md T-04) — ranked by blocked query
+// count. Unlike DNSDomainStat, deliberately has NO Bytes/BytesUp/BytesDown/
+// BytesPercent column: a blocked domain is answered NXDOMAIN or a sinkhole
+// address by dnsmasq, so it carries essentially no real traffic volume worth
+// joining against conntrack.
+type DNSBlockedDomainStat struct {
+	Domain string `json:"domain"`
+	// Rule is the deny-list entry that matched this domain at record time —
+	// may be a PARENT of Domain (e.g. Domain "ads.example.com" matched via
+	// the "example.com" rule), same meaning as DNSDomainStat.BlockedRule.
+	Rule string `json:"rule"`
+	// Mode is model.DNSBlockModeNXDomain / model.DNSBlockModeSinkhole, as
+	// recorded at the time this domain was queried — NOT necessarily the
+	// rule's CURRENT mode if it was edited afterwards (record-time
+	// classification, plan §0).
+	Mode string `json:"mode"`
+	// Count is the number of blocked queries for this domain within the
+	// window, derived from the same (domain, client) pair ring as
+	// DNSDomainStat.Count, but only for pairs whose domain was classified as
+	// blocked at record time.
+	Count uint64 `json:"count"`
+	// Percent is Count as a percent of DNSQueryStatistics.BlockedQueries —
+	// a DIFFERENT (smaller) denominator than DNSDomainStat.Percent, which
+	// divides by TotalQueries.
+	Percent float64 `json:"percent"`
+	// Clients is the number of distinct client IPs that issued this blocked
+	// query in the window (same derivation as DNSDomainStat.Clients, scoped
+	// to the blocked pairs only).
+	Clients int `json:"clients"`
+}
+
+// DNSBlockedClientStat is one row of the "Top Blocked Clients" table on the
+// DNS Query Statistics tab's "Blocked Query" sub-tab (docs/ref/todo/
+// dns-blocked-query-statistics-plan.md T-04) — ranked by blocked query
+// count, one row per client IP that issued at least one blocked query.
+type DNSBlockedClientStat struct {
+	IP string `json:"ip"`
+	// Hostname is resolved from a DHCP lease/reservation, same pattern as
+	// DNSClientStat.Hostname — display only, falls back to IP itself.
+	Hostname string `json:"hostname"`
+	Count    uint64 `json:"count"`
+	// Percent is Count as a percent of DNSQueryStatistics.BlockedQueries.
+	Percent float64 `json:"percent"`
+	// Domains is the number of distinct BLOCKED domains this client queried
+	// in the window — deliberately DIFFERENT from DNSClientStat.Domains
+	// (which counts ALL domains, system-wide, not just blocked ones).
+	Domains int `json:"domains"`
+}
+
 // DNSQueryStatistics is the /api/statistics/dns response backing the DNS
 // Query Statistics tab's two top-level tables (Top Domains / Top Clients).
 // RAM-only, opt-in (query logging must be enabled from the DNS Server page)
@@ -525,6 +591,56 @@ type DNSQueryStatistics struct {
 	// derived from the same traffic breakdown.
 	Accuracy    string `json:"accuracy"`
 	GeneratedAt string `json:"generatedAt"`
+
+	// BlockedQueries/BlockedPercent/BlockedSeries/BlockedTruncated/
+	// TotalBlockedDomains/TotalBlockedClients/TopBlockedDomains/
+	// TopBlockedClients back the "Blocked Domain Query" statistics feature
+	// (docs/ref/todo/dns-blocked-query-statistics-plan.md) — a RECORD-TIME
+	// classification (dns_block_index.go via recordDomainQuery) of queries
+	// that matched an ENABLED deny-list entry actually applied to dnsmasq at
+	// the moment the query happened. A later deny-list change never
+	// re-classifies historical data (plan §0).
+	//
+	// BlockedQueries counts EVERY blocked query event, uncapped by any ring
+	// limit (mirrors TotalQueries itself) — it is also already INCLUDED in
+	// TotalQueries above, never subtracted from it (a blocked query is still
+	// a query). This means BlockedQueries can legitimately be LARGER than
+	// the sum of TopBlockedDomains[].Count: BlockedQueries is exact, while
+	// TopBlockedDomains/TopBlockedClients are derived from the same
+	// dns-stats-max-pairs/dns-stats-max-blocked-domains-capped ring data
+	// every other Top* table here uses — once that ring is full,
+	// TopBlockedDomains' row sum can fall behind BlockedQueries. This is
+	// intentional and signaled by BlockedTruncated below, rather than
+	// silently forcing the two numbers to agree.
+	BlockedQueries uint64 `json:"blockedQueries"`
+	// BlockedPercent is BlockedQueries as a percent of TotalQueries.
+	BlockedPercent float64 `json:"blockedPercent"`
+	// BlockedSeries is the same shape/axis as QuerySeries above, but only
+	// counting blocked queries — invariant: sum(BlockedSeries[].Count) ==
+	// BlockedQueries always holds (same axis-before-lock construction as
+	// QuerySeries). Empty (non-nil) when Enabled is false.
+	BlockedSeries []DNSQueryPoint `json:"blockedSeries"`
+	// BlockedTruncated is true when the (domain, client) pair ring hit
+	// dns-stats-max-pairs, OR the per-bucket blocked-domain tracking hit
+	// dns-stats-max-blocked-domains, during this window — meaning
+	// TopBlockedDomains/TopBlockedClients below may under-report relative to
+	// the always-accurate BlockedQueries total. A SEPARATE signal from
+	// Truncated above (which does not require any query to have been
+	// blocked at all).
+	BlockedTruncated bool `json:"blockedTruncated"`
+	// TotalBlockedDomains/TotalBlockedClients are the number of distinct
+	// blocked domains/clients observed in the window (before the dnsStatsTopN
+	// row cap on TopBlockedDomains/TopBlockedClients is applied) — same
+	// "showing N of M" convention as TotalDomains/TotalClients above.
+	TotalBlockedDomains int `json:"totalBlockedDomains"`
+	TotalBlockedClients int `json:"totalBlockedClients"`
+	// TopBlockedDomains/TopBlockedClients are the "Blocked Query" sub-tab's
+	// two tables (plan T-05), ranked by blocked query count, capped at
+	// dnsStatsTopN rows like TopDomains/TopClients above. Never nil — an
+	// empty (non-nil) slice when Enabled is false or no query has ever been
+	// classified as blocked in the window.
+	TopBlockedDomains []DNSBlockedDomainStat `json:"topBlockedDomains"`
+	TopBlockedClients []DNSBlockedClientStat `json:"topBlockedClients"`
 }
 
 // DNSDomainDrilldown is the /api/statistics/dns/domain response — for a
@@ -578,6 +694,15 @@ type DNSDomainDrilldown struct {
 	// show TotalBytes as "% of all traffic" alongside the per-IP percentages.
 	ObservedBytes uint64 `json:"observedBytes"`
 	GeneratedAt   string `json:"generatedAt"`
+	// Blocked/BlockedRule/BlockedMode are this domain's own "Blocked Domain
+	// Query" classification (docs/ref/todo/
+	// dns-blocked-query-statistics-plan.md T-04/T-05) — same record-time
+	// meaning as DNSDomainStat.Blocked/BlockedRule/BlockedMode, i.e. whether
+	// THIS domain (the one being drilled into) matched an active deny-list
+	// rule at the moment any of its queries in this window were recorded.
+	Blocked     bool   `json:"blocked"`
+	BlockedRule string `json:"blockedRule"`
+	BlockedMode string `json:"blockedMode"`
 }
 
 // DNSClientDrilldown is the /api/statistics/dns/client response — for a

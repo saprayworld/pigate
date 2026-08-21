@@ -49,8 +49,11 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 	// way that's invisible until two requests interleave.
 	axisStart, seriesN := statsSeriesAxis(window)
 	querySeries := make([]model.DNSQueryPoint, seriesN)
+	blockedSeries := make([]model.DNSQueryPoint, seriesN)
 	for i := range querySeries {
-		querySeries[i].Ts = axisStart.Add(time.Duration(i) * trafficDetailBucketSpan).Format(time.RFC3339)
+		ts := axisStart.Add(time.Duration(i) * trafficDetailBucketSpan).Format(time.RFC3339)
+		querySeries[i].Ts = ts
+		blockedSeries[i].Ts = ts
 	}
 
 	s.dns.mu.RLock()
@@ -63,12 +66,15 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 		// slice here (not the zero-filled one built above), so no timing/count
 		// data ever leaks while DNS query logging is switched off.
 		return model.DNSQueryStatistics{
-			Window:      window,
-			Enabled:     false,
-			TopDomains:  []model.DNSDomainStat{},
-			TopClients:  []model.DNSClientStat{},
-			QuerySeries: []model.DNSQueryPoint{},
-			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+			Window:            window,
+			Enabled:           false,
+			TopDomains:        []model.DNSDomainStat{},
+			TopClients:        []model.DNSClientStat{},
+			QuerySeries:       []model.DNSQueryPoint{},
+			BlockedSeries:     []model.DNSQueryPoint{},
+			TopBlockedDomains: []model.DNSBlockedDomainStat{},
+			TopBlockedClients: []model.DNSBlockedClientStat{},
+			GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
 		}
 	}
 
@@ -83,6 +89,26 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 	clientDomains := make(map[string]map[string]struct{})
 	var totalQueries uint64
 	var truncated bool
+
+	// windowBlockedInfo unions every bucket's blockedInfo (domain -> the
+	// rule/mode that classified it as blocked at record time) across the
+	// window — the source for TopDomains[].Blocked/BlockedRule/BlockedMode
+	// below (docs/ref/todo/dns-blocked-query-statistics-plan.md T-04/T-05).
+	// Iterated oldest -> newest (dnsWindowBuckets' own order), so a later
+	// bucket's entry for the same domain wins, i.e. this always reflects the
+	// MOST RECENT classification within the window.
+	windowBlockedInfo := make(map[string]blockedMeta)
+	// blockedDomainTotals/blockedClientTotals/blockedDomainClients/
+	// blockedClientDomains are the "Blocked Query" sub-tab's own aggregation
+	// (plan T-05) — derived from the SAME b.pairs data the loop below
+	// already walks, restricted to the domains each bucket's blockedInfo
+	// says were blocked (no second ring, no second source of truth).
+	blockedDomainTotals := make(map[string]uint64)
+	blockedClientTotals := make(map[string]uint64)
+	blockedDomainClients := make(map[string]map[string]struct{})
+	blockedClientDomains := make(map[string]map[string]struct{})
+	var blockedQueries uint64
+	var blockedTruncated bool
 
 	for _, b := range s.dnsWindowBuckets(window) {
 		for domain, clients := range b.pairs {
@@ -107,9 +133,33 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 		// ts would land at in getTrafficBreakdown's series (same axis, same
 		// carry rule) — this is what keeps
 		// sum(QuerySeries[].Count) == TotalQueries true (plan §2/T-03 step 3).
-		querySeries[statsSeriesIndex(b.ts, axisStart, seriesN)].Count += b.queries
+		idx := statsSeriesIndex(b.ts, axisStart, seriesN)
+		querySeries[idx].Count += b.queries
 		if b.pairCount >= s.dns.maxPairs || len(b.clientCount) >= s.dns.maxClients {
 			truncated = true
+		}
+
+		if b.blockedInfo != nil {
+			blockedQueries += b.blockedQueries
+			blockedSeries[idx].Count += b.blockedQueries
+			if len(b.blockedInfo) >= s.dns.maxBlockedDomains {
+				blockedTruncated = true
+			}
+			for domain, meta := range b.blockedInfo {
+				windowBlockedInfo[domain] = meta
+				for client, count := range b.pairs[domain] {
+					blockedDomainTotals[domain] += count
+					blockedClientTotals[client] += count
+					if blockedDomainClients[domain] == nil {
+						blockedDomainClients[domain] = make(map[string]struct{})
+					}
+					blockedDomainClients[domain][client] = struct{}{}
+					if blockedClientDomains[client] == nil {
+						blockedClientDomains[client] = make(map[string]struct{})
+					}
+					blockedClientDomains[client][domain] = struct{}{}
+				}
+			}
 		}
 	}
 	s.dns.mu.RUnlock() // ring lock released before touching domainIPs/traffic below (plan Caution 3)
@@ -165,6 +215,7 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 			}
 		}
 		bytes := domainBytes[td.Domain]
+		blockedMetaRow, isBlocked := windowBlockedInfo[td.Domain]
 		topDomains[i] = model.DNSDomainStat{
 			TopDomain: td,
 			Clients:   len(domainClients[td.Domain]),
@@ -177,6 +228,9 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 			// sum of every domain's join-derived bytes) — NOT ObservedBytes
 			// (plan §2.2/T-04: "ของโดเมนใช้ denominator = DomainBytes").
 			BytesPercent: percentOf(bytes.Total(), domainBytesDenominator),
+			Blocked:      isBlocked,
+			BlockedRule:  blockedMetaRow.Rule,
+			BlockedMode:  blockedMetaRow.Mode,
 		}
 	}
 	// NOTE: deliberately NOT setting truncated when len(domainTotals) >
@@ -213,6 +267,13 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 	// dnsStatsTopN is not truncation, it's TotalClients being larger than the
 	// top-50 table.
 
+	// "Blocked Query" sub-tab tables (plan T-05) — ranked from the same
+	// blockedDomainTotals/blockedClientTotals this method already derived
+	// from the ring loop above, reusing the SAME leaseByIP/resByIP maps
+	// (no second hostLookup call).
+	topBlockedDomains := rankBlockedDomains(blockedDomainTotals, windowBlockedInfo, blockedDomainClients, blockedQueries, dnsStatsTopN)
+	topBlockedClients := rankBlockedClients(blockedClientTotals, blockedClientDomains, blockedQueries, leaseByIP, resByIP, dnsStatsTopN)
+
 	return model.DNSQueryStatistics{
 		Window:               window,
 		Enabled:              true,
@@ -228,6 +289,14 @@ func (s *StatisticsService) GetDNSQueryStatistics(window string) model.DNSQueryS
 		TotalClients:         len(clientTotals),
 		Accuracy:             breakdown.Accuracy,
 		GeneratedAt:          time.Now().UTC().Format(time.RFC3339),
+		BlockedQueries:       blockedQueries,
+		BlockedPercent:       percentOf(blockedQueries, totalQueries),
+		BlockedSeries:        blockedSeries,
+		BlockedTruncated:     blockedTruncated,
+		TotalBlockedDomains:  len(blockedDomainTotals),
+		TotalBlockedClients:  len(blockedClientTotals),
+		TopBlockedDomains:    topBlockedDomains,
+		TopBlockedClients:    topBlockedClients,
 	}
 }
 
@@ -266,6 +335,11 @@ func (s *StatisticsService) GetDNSDomainClients(window, domain string) model.DNS
 	clientDomainsAll := make(map[string]map[string]struct{})
 	var totalQueries uint64
 	var truncated bool
+	// windowBlockedInfo unions every bucket's blockedInfo across the window
+	// (docs/ref/todo/dns-blocked-query-statistics-plan.md T-05) — here only
+	// `domain`'s own entry (if any) is used, to set the top-level
+	// Blocked/BlockedRule/BlockedMode fields below.
+	windowBlockedInfo := make(map[string]blockedMeta)
 
 	for _, b := range s.dnsWindowBuckets(window) {
 		for d, clients := range b.pairs {
@@ -284,6 +358,9 @@ func (s *StatisticsService) GetDNSDomainClients(window, domain string) model.DNS
 		}
 		if b.pairCount >= s.dns.maxPairs {
 			truncated = true
+		}
+		for d, meta := range b.blockedInfo {
+			windowBlockedInfo[d] = meta
 		}
 	}
 	// Keep only the clients that actually queried `domain` (clientTotals) to
@@ -420,6 +497,7 @@ func (s *StatisticsService) GetDNSDomainClients(window, domain string) model.DNS
 		}
 	}
 
+	blockedMetaRow, isBlocked := windowBlockedInfo[domain]
 	return model.DNSDomainDrilldown{
 		Domain:         domain,
 		Window:         window,
@@ -437,6 +515,9 @@ func (s *StatisticsService) GetDNSDomainClients(window, domain string) model.DNS
 		Accuracy:       breakdown.Accuracy,
 		ObservedBytes:  breakdown.Observed,
 		GeneratedAt:    time.Now().UTC().Format(time.RFC3339),
+		Blocked:        isBlocked,
+		BlockedRule:    blockedMetaRow.Rule,
+		BlockedMode:    blockedMetaRow.Mode,
 	}
 }
 
@@ -472,6 +553,10 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 	domainClientsAll := make(map[string]map[string]struct{})
 	var totalQueries uint64
 	var truncated bool
+	// windowBlockedInfo unions every bucket's blockedInfo across the window
+	// (docs/ref/todo/dns-blocked-query-statistics-plan.md T-05) — feeds the
+	// per-row Blocked/BlockedRule/BlockedMode fields on Domains below.
+	windowBlockedInfo := make(map[string]blockedMeta)
 
 	for _, b := range s.dnsWindowBuckets(window) {
 		for domain, clients := range b.pairs {
@@ -491,6 +576,9 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 		}
 		if b.pairCount >= s.dns.maxPairs {
 			truncated = true
+		}
+		for d, meta := range b.blockedInfo {
+			windowBlockedInfo[d] = meta
 		}
 	}
 	// Keep only the domains `client` actually queried (domainTotals) to bound
@@ -528,11 +616,15 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 		domains := make([]model.DNSDomainStat, len(baseDomains))
 		for i, td := range baseDomains {
 			stat := domainIPStats[td.Domain]
+			blockedMetaRow, isBlocked := windowBlockedInfo[td.Domain]
 			domains[i] = model.DNSDomainStat{
-				TopDomain: td,
-				Clients:   len(domainClients[td.Domain]),
-				IPCount:   stat.Count,
-				SharedIPs: stat.Shared,
+				TopDomain:   td,
+				Clients:     len(domainClients[td.Domain]),
+				IPCount:     stat.Count,
+				SharedIPs:   stat.Shared,
+				Blocked:     isBlocked,
+				BlockedRule: blockedMetaRow.Rule,
+				BlockedMode: blockedMetaRow.Mode,
 			}
 		}
 		return model.DNSClientDrilldown{
@@ -586,6 +678,7 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 	for i, td := range baseDomains {
 		bytes := domainBytes[td.Domain]
 		stat := domainIPStats[td.Domain]
+		blockedMetaRow, isBlocked := windowBlockedInfo[td.Domain]
 		domains[i] = model.DNSDomainStat{
 			TopDomain: td,
 			Bytes:     bytes.Total(),
@@ -603,9 +696,12 @@ func (s *StatisticsService) GetDNSClientDomains(window, client string) model.DNS
 			// overview/domain drill-down rows show for this domain, not
 			// scoped to the single client being drilled into (docs/ref/todo/
 			// statistics-dns-review-fixes-plan.md §2/T-04 — R-3 fix).
-			Clients:   len(domainClients[td.Domain]),
-			IPCount:   stat.Count,
-			SharedIPs: stat.Shared,
+			Clients:     len(domainClients[td.Domain]),
+			IPCount:     stat.Count,
+			SharedIPs:   stat.Shared,
+			Blocked:     isBlocked,
+			BlockedRule: blockedMetaRow.Rule,
+			BlockedMode: blockedMetaRow.Mode,
 		}
 	}
 
@@ -663,6 +759,10 @@ func (s *StatisticsService) GetDNSIPDomains(window, ip string) model.DNSIPDomain
 	domainClients := make(map[string]map[string]struct{})
 	var totalQueries uint64
 	var truncated bool
+	// windowBlockedInfo unions every bucket's blockedInfo across the window
+	// (docs/ref/todo/dns-blocked-query-statistics-plan.md T-05) — feeds the
+	// per-row Blocked/BlockedRule/BlockedMode fields on Domains below.
+	windowBlockedInfo := make(map[string]blockedMeta)
 
 	for _, b := range s.dnsWindowBuckets(window) {
 		for domain, clients := range b.pairs {
@@ -680,6 +780,9 @@ func (s *StatisticsService) GetDNSIPDomains(window, ip string) model.DNSIPDomain
 		totalQueries += b.queries
 		if b.pairCount >= s.dns.maxPairs || len(b.clientCount) >= s.dns.maxClients {
 			truncated = true
+		}
+		for d, meta := range b.blockedInfo {
+			windowBlockedInfo[d] = meta
 		}
 	}
 	s.dns.mu.RUnlock() // ring lock released before touching domainIPs/traffic below (plan Caution 3)
@@ -733,6 +836,7 @@ func (s *StatisticsService) GetDNSIPDomains(window, ip string) model.DNSIPDomain
 			}
 		}
 		count := domainTotals[m.Domain]
+		blockedMetaRow, isBlocked := windowBlockedInfo[m.Domain]
 		rows = append(rows, model.DNSIPDomain{
 			DNSDomainStat: model.DNSDomainStat{
 				TopDomain: model.TopDomain{
@@ -751,6 +855,9 @@ func (s *StatisticsService) GetDNSIPDomains(window, ip string) model.DNSIPDomain
 				// matchedBytes (the sum across every row) is known — see
 				// model.DNSIPDomain's doc comment for why this differs from
 				// the window-wide DomainBytes used elsewhere.
+				Blocked:     isBlocked,
+				BlockedRule: blockedMetaRow.Rule,
+				BlockedMode: blockedMetaRow.Mode,
 			},
 			LastSeen: m.LastSeen.UTC().Format(time.RFC3339),
 		})

@@ -492,6 +492,29 @@ func (s *Server) HandleGetStatistics(w http.ResponseWriter, r *http.Request) {
 // DNS query counts per 5-minute bucket for the Statistics -> DNS overview
 // page's bar chart — sourced from the same RAM-only ring the tables above
 // already read, with no additional input from the client.
+//
+// Since docs/ref/todo/dns-blocked-query-statistics-plan.md T-10, the
+// response also carries the "Blocked Domain Query" statistics fields:
+// BlockedQueries/BlockedPercent/BlockedSeries/BlockedTruncated/
+// TotalBlockedDomains/TotalBlockedClients/TopBlockedDomains/
+// TopBlockedClients, plus a per-row Blocked/BlockedRule/BlockedMode badge on
+// every DNSDomainStat in TopDomains. Still NO new query parameter — this
+// endpoint's request shape is unchanged; only the response grew additively.
+// Important caveats surfaced on the frontend (see model.DNSQueryStatistics'
+// own doc comments for the full list):
+//   - Display-only / RAM-only, never persisted to SQLite, and opt-in (same
+//     DNS Query Logging switch as everything else on this endpoint) — a
+//     blocked query is never dropped from TotalQueries, it is simply ALSO
+//     counted in BlockedQueries.
+//   - Classification is RECORD-TIME: it reflects the deny-list that was
+//     actually applied to dnsmasq at the moment each query happened, not
+//     the CURRENT deny-list — editing/removing a deny-list rule never
+//     re-classifies historical data already in the ring.
+//   - NOT proof a query was actually blocked end-to-end: it only reflects
+//     whether the queried domain matched an ENABLED deny-list entry that
+//     had been successfully applied to dnsmasq; it says nothing about
+//     upstream DNS-over-HTTPS, a client's own DNS cache, or a client using
+//     a different resolver entirely.
 func (s *Server) HandleGetDNSQueryStatistics(w http.ResponseWriter, r *http.Request) {
 	window := statsWindowParam(r)
 	s.writeJSON(w, http.StatusOK, s.statistics.GetDNSQueryStatistics(window))

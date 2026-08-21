@@ -223,12 +223,22 @@ export function DomainStatsTable({
                   key={d.domain}
                   onClick={onRowClick ? () => onRowClick(d.domain) : undefined}
                   className={onRowClick ? "cursor-pointer hover:bg-muted/50" : "hover:bg-transparent"}
-                  title={onRowClick ? "คลิกเพื่อดูว่าเครื่องไหนถามโดเมนนี้บ้าง" : undefined}
                 >
-                  <TableCell className="max-w-[220px] truncate py-3 font-mono text-xs font-medium text-foreground" title={d.domain}>
-                    <ReferenceTrigger content={() => <DomainReferenceContent key={d.domain} domain={d.domain} />}>
-                      {d.domain}
-                    </ReferenceTrigger>
+                  <TableCell className="max-w-[220px] truncate py-3 font-mono text-xs font-medium text-foreground">
+                    <span className="inline-flex items-center gap-1.5">
+                      <ReferenceTrigger content={() => <DomainReferenceContent key={d.domain} domain={d.domain} />}>
+                        {d.domain}
+                      </ReferenceTrigger>
+                      {d.blocked && (
+                        <Badge
+                          variant="outline"
+                          className="shrink-0 rounded border-warning/20 bg-warning/10 px-1.5 py-0 text-[10px] font-medium text-warning"
+                          title={`ถูกบล็อกโดย deny-list: ${d.blockedRule} (${d.blockedMode})`}
+                        >
+                          Blocked
+                        </Badge>
+                      )}
+                    </span>
                   </TableCell>
                   <TableCell className="py-3">
                     <Badge variant="outline" className="rounded border-primary/20 bg-primary/10 px-1.5 py-0 text-[10px] font-medium text-primary">
@@ -318,12 +328,8 @@ export function ClientStatsTable({
                   key={c.ip}
                   onClick={onRowClick ? () => onRowClick(c.ip, c.hostname) : undefined}
                   className={onRowClick ? "cursor-pointer hover:bg-muted/50" : "hover:bg-transparent"}
-                  title={onRowClick ? "คลิกเพื่อดูว่าเครื่องนี้ค้นหาโดเมนอะไรบ้าง" : undefined}
                 >
-                  <TableCell
-                    className="max-w-[220px] truncate py-3 text-xs text-foreground"
-                    title={c.domain ? `${c.domain} (${c.ip})` : `${c.hostname || c.ip}${c.hostname ? ` (${c.ip})` : ""}`}
-                  >
+                  <TableCell className="max-w-[220px] truncate py-3 text-xs text-foreground">
                     {c.ip === "unknown" ? (
                       <span className="text-muted-foreground">ไม่ทราบต้นทาง</span>
                     ) : (
@@ -412,7 +418,6 @@ export function DomainIpTable({
                   key={r.ip}
                   onClick={onRowClick ? () => onRowClick(r.ip) : undefined}
                   className={onRowClick ? "cursor-pointer hover:bg-muted/50" : "hover:bg-transparent"}
-                  title={onRowClick ? "คลิกเพื่อดูว่ามีโดเมนอื่นใช้ IP นี้อีกไหม" : undefined}
                 >
                   <TableCell className="py-3 font-mono text-xs font-medium text-foreground">
                     <ReferenceTrigger content={() => <IpReferenceContent key={r.ip} ip={r.ip} />}>{r.ip}</ReferenceTrigger>

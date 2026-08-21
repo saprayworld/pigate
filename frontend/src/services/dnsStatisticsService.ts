@@ -72,6 +72,53 @@ export interface DNSDomainStat extends TopDomain {
   // the parent DTO that embeds this row (e.g. DNSQueryStatistics.domainBytes).
   // Always labelled "% Vol" separately from percent's "% Query" in the UI.
   bytesPercent: number
+  // Blocked/blockedRule/blockedMode are the "Blocked Domain Query"
+  // classification (docs/ref/todo/dns-blocked-query-statistics-plan.md) —
+  // RECORD-TIME only: whether this domain matched an active deny-list rule
+  // at the moment it was queried, never re-evaluated against the CURRENT
+  // deny-list. blockedRule may be a PARENT of domain (e.g. domain
+  // "ads.example.com" matched via the "example.com" rule, mirroring
+  // dnsmasq's own address=/domain/ subdomain semantics). A blocked domain is
+  // still counted in count/percent above (never subtracted).
+  blocked: boolean
+  blockedRule: string
+  blockedMode: "nxdomain" | "sinkhole" | ""
+}
+
+// DNSBlockedDomainStat is one row of the "Top Blocked Domains" table on the
+// DNS Query Statistics tab's "Blocked Query" sub-tab (docs/ref/todo/
+// dns-blocked-query-statistics-plan.md) — ranked by blocked query count.
+// Deliberately has NO bytes/bytesUp/bytesDown/bytesPercent column: a blocked
+// domain is answered NXDOMAIN/sinkhole by dnsmasq, so it carries essentially
+// no real traffic volume worth showing.
+export interface DNSBlockedDomainStat {
+  domain: string
+  // The deny-list entry that matched at record time — may be a PARENT of
+  // domain (same meaning as DNSDomainStat.blockedRule above).
+  rule: string
+  mode: "nxdomain" | "sinkhole"
+  count: number
+  // Percent of DNSQueryStatistics.blockedQueries — a DIFFERENT (smaller)
+  // denominator than DNSDomainStat.percent, which divides by totalQueries.
+  percent: number
+  // Number of distinct client IPs that issued this blocked query in the
+  // window.
+  clients: number
+}
+
+// DNSBlockedClientStat is one row of the "Top Blocked Clients" table —
+// ranked by blocked query count, one row per client IP that issued at least
+// one blocked query.
+export interface DNSBlockedClientStat {
+  ip: string
+  hostname: string
+  count: number
+  // Percent of DNSQueryStatistics.blockedQueries.
+  percent: number
+  // Number of distinct BLOCKED domains this client queried in the window —
+  // DIFFERENT from DNSClientStat.domains (which counts ALL domains,
+  // system-wide, not just blocked ones).
+  domains: number
 }
 
 // DNSQueryPoint is one point of DNSQueryStatistics.querySeries (docs/ref/todo/
@@ -169,6 +216,41 @@ export interface DNSQueryStatistics {
   // same conntrack-poll-vs-DESTROY-event signal.
   accuracy: "estimated" | "near-exact"
   generatedAt: string
+  // blockedQueries/blockedPercent/blockedSeries/blockedTruncated/
+  // totalBlockedDomains/totalBlockedClients/topBlockedDomains/
+  // topBlockedClients back the "Blocked Domain Query" statistics feature
+  // (docs/ref/todo/dns-blocked-query-statistics-plan.md) — RAM-only,
+  // display-only, opt-in (same dns/settings.queryLogging switch), RECORD-TIME
+  // classification (a later deny-list change never re-classifies historical
+  // data already in the ring).
+  //
+  // blockedQueries counts EVERY blocked query event, uncapped, and is
+  // already INCLUDED in totalQueries above (never subtracted). It can
+  // legitimately be LARGER than the sum of topBlockedDomains[].count once
+  // the underlying ring is full — signaled by blockedTruncated, not by
+  // forcing the two numbers to silently agree.
+  blockedQueries: number
+  // blockedQueries as a percent of totalQueries.
+  blockedPercent: number
+  // Same shape/axis as querySeries above, but counting only blocked
+  // queries. Invariant: sum(blockedSeries[].count) === blockedQueries always
+  // holds. Empty array (not undefined) when enabled=false.
+  blockedSeries: DNSQueryPoint[]
+  // True when the (domain,client) pair ring hit dns-stats-max-pairs, OR the
+  // per-bucket blocked-domain tracking hit dns-stats-max-blocked-domains,
+  // during this window — meaning topBlockedDomains/topBlockedClients below
+  // may under-report relative to the always-accurate blockedQueries total.
+  // A SEPARATE signal from truncated above.
+  blockedTruncated: boolean
+  // Number of distinct blocked domains/clients observed in the window
+  // (before the row cap on topBlockedDomains/topBlockedClients is applied).
+  totalBlockedDomains: number
+  totalBlockedClients: number
+  // The "Blocked Query" sub-tab's two tables, ranked by blocked query count.
+  // Never undefined — empty array when enabled=false or no query was ever
+  // classified as blocked in the window.
+  topBlockedDomains: DNSBlockedDomainStat[]
+  topBlockedClients: DNSBlockedClientStat[]
 }
 
 export interface DNSDomainDrilldown {
@@ -205,6 +287,14 @@ export interface DNSDomainDrilldown {
   // window, so the UI can show totalBytes as "% of all traffic".
   observedBytes: number
   generatedAt: string
+  // This domain's own "Blocked Domain Query" classification (docs/ref/todo/
+  // dns-blocked-query-statistics-plan.md) — same record-time meaning as
+  // DNSDomainStat.blocked/blockedRule/blockedMode above, i.e. whether THIS
+  // domain (the one being drilled into) matched an active deny-list rule at
+  // the moment any of its queries in this window were recorded.
+  blocked: boolean
+  blockedRule: string
+  blockedMode: "nxdomain" | "sinkhole" | ""
 }
 
 export interface DNSClientDrilldown {
@@ -345,7 +435,37 @@ export const mockPairs: { domain: string; queryType: string; client: string; wei
   { domain: "netflix.com", queryType: "A", client: "192.168.1.101", weight: 2 },
   { domain: "line-apps.com", queryType: "A", client: "192.168.1.105", weight: 2 },
   { domain: "cdn.jsdelivr.net", queryType: "A", client: "192.168.1.105", weight: 1 },
+  // ads.doubleclick.net/ads.googlesyndication.com mirror kernel/mock.go's
+  // mockDNSQueryEvents (docs/ref/todo/dns-blocked-query-statistics-plan.md
+  // T-14) — matched by mockBlockedDomains below (a subdomain rule for
+  // "doubleclick.net"/"googlesyndication.com"), so mock mode exercises the
+  // "Blocked Query" sub-tab end to end without any deny-list configuration.
+  { domain: "ads.doubleclick.net", queryType: "A", client: "192.168.1.101", weight: 2 },
+  { domain: "ads.googlesyndication.com", queryType: "A", client: "192.168.1.102", weight: 1 },
 ]
+
+// mockBlockedDomains is the mock deny-list — a subdomain-covering rule set
+// (mirrors dnsmasq's address=/domain/ semantics, same as dnsBlockIndex.Match
+// on the backend), always-on in mock mode so the "Blocked Query" sub-tab has
+// real data without requiring the user to configure a deny-list first.
+const mockBlockedDomains: { rule: string; mode: "nxdomain" | "sinkhole" }[] = [
+  { rule: "doubleclick.net", mode: "nxdomain" },
+  { rule: "googlesyndication.com", mode: "sinkhole" },
+]
+
+// mockBlockRuleFor mirrors dnsBlockIndex.Match (backend/internal/service/
+// dns_block_index.go): exact match first, then each parent label in turn —
+// "ads.doubleclick.net" matches the "doubleclick.net" rule, but
+// "notdoubleclick.net" does not (label-boundary only).
+function mockBlockRuleFor(domain: string): { rule: string; mode: "nxdomain" | "sinkhole" } | undefined {
+  const labels = domain.split(".")
+  for (let i = 0; i < labels.length; i++) {
+    const candidate = labels.slice(i).join(".")
+    const hit = mockBlockedDomains.find((r) => r.rule === candidate)
+    if (hit) return hit
+  }
+  return undefined
+}
 
 // mockDomainIPs mirrors kernel/mock.go's mockDNSAnswerEvents (plan T-06) —
 // same domains/IPs, including the shared IP (64.233.166.127) between
@@ -482,6 +602,40 @@ function mockClientTotalBytes(
   return { bytes, bytesUp, bytesDown: bytes - bytesUp }
 }
 
+// mockBlockedAggregates derives the "Blocked Query" sub-tab's totals from
+// mockPairs + mockBlockRuleFor — the SAME source data getDNSStatistics
+// already builds domainTotals/clientTotals from (docs/ref/todo/
+// dns-blocked-query-statistics-plan.md), never a second/separate mock
+// fixture, mirroring the backend's "label layered on the existing pairs
+// matrix, not a second counting structure" design.
+function mockBlockedAggregates(scale: number): {
+  blockedQueries: number
+  domainTotals: Map<string, { count: number; rule: string; mode: "nxdomain" | "sinkhole"; clients: Set<string> }>
+  clientTotals: Map<string, { count: number; domains: Set<string> }>
+} {
+  const domainTotals = new Map<
+    string,
+    { count: number; rule: string; mode: "nxdomain" | "sinkhole"; clients: Set<string> }
+  >()
+  const clientTotals = new Map<string, { count: number; domains: Set<string> }>()
+  let blockedQueries = 0
+  for (const p of mockPairs) {
+    const hit = mockBlockRuleFor(p.domain)
+    if (!hit) continue
+    const count = mockCount(p.weight, scale)
+    blockedQueries += count
+    const d = domainTotals.get(p.domain) ?? { count: 0, rule: hit.rule, mode: hit.mode, clients: new Set<string>() }
+    d.count += count
+    d.clients.add(p.client)
+    domainTotals.set(p.domain, d)
+    const c = clientTotals.get(p.client) ?? { count: 0, domains: new Set<string>() }
+    c.count += count
+    c.domains.add(p.domain)
+    clientTotals.set(p.client, c)
+  }
+  return { blockedQueries, domainTotals, clientTotals }
+}
+
 // mockDomainsForIP is the reverse of mockDomainIps — every (domain,
 // lastSeenMinAgo) pair whose known IPs include `ip`, mirroring the real
 // forward index's DomainsForIP (service/dns_domain_ips.go). 64.233.166.127
@@ -523,6 +677,7 @@ export const dnsStatisticsService = {
       }
 
       const domainByClient = mockClientDomainByteMap(scale)
+      const blocked = mockBlockedAggregates(scale)
 
       let domainBytes = 0
       const topDomains: DNSDomainStat[] = Array.from(domainTotals.entries())
@@ -530,6 +685,7 @@ export const dnsStatisticsService = {
           const totals = mockDomainTotals(domain, scale)
           domainBytes += totals.bytes
           const ips = mockDomainIpRows(domain, scale)
+          const blockedRow = blocked.domainTotals.get(domain)
           return {
             domain,
             queryType: v.queryType,
@@ -542,10 +698,42 @@ export const dnsStatisticsService = {
             bytesUp: totals.bytesUp,
             bytesDown: totals.bytesDown,
             bytesPercent: 0, // filled below once domainBytes is final
+            blocked: !!blockedRow,
+            blockedRule: blockedRow?.rule ?? "",
+            blockedMode: (blockedRow?.mode ?? "") as "nxdomain" | "sinkhole" | "",
           }
         })
         .sort((a, b) => b.count - a.count || a.domain.localeCompare(b.domain))
       for (const d of topDomains) d.bytesPercent = percentOf(d.bytes, domainBytes)
+
+      const topBlockedDomains: DNSBlockedDomainStat[] = Array.from(blocked.domainTotals.entries())
+        .map(([domain, v]) => ({
+          domain,
+          rule: v.rule,
+          mode: v.mode,
+          count: v.count,
+          percent: percentOf(v.count, blocked.blockedQueries),
+          clients: v.clients.size,
+        }))
+        .sort((a, b) => b.count - a.count || a.domain.localeCompare(b.domain))
+
+      const topBlockedClients: DNSBlockedClientStat[] = Array.from(blocked.clientTotals.entries())
+        .map(([ip, v]) => ({
+          ip,
+          hostname: mockHostnames[ip] ?? "",
+          count: v.count,
+          percent: percentOf(v.count, blocked.blockedQueries),
+          domains: v.domains.size,
+        }))
+        .sort((a, b) => b.count - a.count || a.ip.localeCompare(b.ip))
+
+      // blockedSeries reuses the same mockBandwidthSeries trick as
+      // querySeries below (bytes field reused as "count") — this keeps
+      // sum(blockedSeries[].count) === blockedQueries true for free.
+      const blockedSeries: DNSQueryPoint[] = mockBandwidthSeries(window, blocked.blockedQueries).series.map((p) => ({
+        ts: p.ts,
+        count: p.bytes,
+      }))
 
       const observedBytes = Math.max(domainBytes, Math.round(domainBytes / 0.6))
 
@@ -598,6 +786,14 @@ export const dnsStatisticsService = {
         totalClients: clientTotals.size,
         accuracy: "near-exact",
         generatedAt: new Date().toISOString(),
+        blockedQueries: blocked.blockedQueries,
+        blockedPercent: percentOf(blocked.blockedQueries, totalQueries),
+        blockedSeries,
+        blockedTruncated: false,
+        totalBlockedDomains: blocked.domainTotals.size,
+        totalBlockedClients: blocked.clientTotals.size,
+        topBlockedDomains,
+        topBlockedClients,
       }
     }
 
@@ -658,6 +854,7 @@ export const dnsStatisticsService = {
         .sort((a, b) => b.count - a.count || a.ip.localeCompare(b.ip))
 
       const series = mockBandwidthSeries(window, totals.bytes, totals.bytes > 0 ? totals.bytesUp / totals.bytes : 0.15).series
+      const blockedRule = mockBlockRuleFor(target)
 
       return {
         domain: target,
@@ -676,6 +873,9 @@ export const dnsStatisticsService = {
         accuracy: "near-exact",
         observedBytes: totals.bytes,
         generatedAt: new Date().toISOString(),
+        blocked: !!blockedRule,
+        blockedRule: blockedRule?.rule ?? "",
+        blockedMode: blockedRule?.mode ?? "",
       }
     }
 
@@ -722,6 +922,7 @@ export const dnsStatisticsService = {
           // docs/ref/todo/statistics-dns-review-fixes-plan.md).
           const domainIps = mockDomainIpRows(d, scale)
           const clientsForDomain = new Set(mockPairs.filter((p) => p.domain === d).map((p) => p.client)).size
+          const blockedRule = mockBlockRuleFor(d)
           return {
             domain: d,
             queryType: v.queryType,
@@ -734,6 +935,9 @@ export const dnsStatisticsService = {
             bytesUp: b.bytesUp,
             bytesDown: b.bytesDown,
             bytesPercent: percentOf(b.bytes, clientTotals.bytes),
+            blocked: !!blockedRule,
+            blockedRule: blockedRule?.rule ?? "",
+            blockedMode: (blockedRule?.mode ?? "") as "nxdomain" | "sinkhole" | "",
           }
         })
         .sort((a, b) => b.count - a.count || a.domain.localeCompare(b.domain))
@@ -799,6 +1003,7 @@ export const dnsStatisticsService = {
           const totals = mockDomainTotals(domain, scale)
           const domainIps = mockDomainIpRows(domain, scale)
           const d = domainTotals.get(domain)
+          const blockedRule = mockBlockRuleFor(domain)
           return {
             domain,
             queryType: d?.queryType ?? "",
@@ -812,6 +1017,9 @@ export const dnsStatisticsService = {
             bytesDown: totals.bytesDown,
             bytesPercent: 0, // filled below once matchedBytes is final
             lastSeen: new Date(Date.now() - lastSeenMinAgo * 60_000).toISOString(),
+            blocked: !!blockedRule,
+            blockedRule: blockedRule?.rule ?? "",
+            blockedMode: (blockedRule?.mode ?? "") as "nxdomain" | "sinkhole" | "",
           }
         })
         .sort((a, b) => b.bytes - a.bytes || b.count - a.count || a.domain.localeCompare(b.domain))

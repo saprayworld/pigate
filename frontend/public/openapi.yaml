@@ -5568,7 +5568,7 @@ components:
 
     DNSDomainStat:
       type: object
-      required: [domain, queryType, count, percent, clients, ipCount, sharedIps, bytes, bytesUp, bytesDown, bytesPercent]
+      required: [domain, queryType, count, percent, clients, ipCount, sharedIps, bytes, bytesUp, bytesDown, bytesPercent, blocked, blockedRule, blockedMode]
       description: >-
         One row of the domain-centric tables on the Statistics -> DNS page
         (docs/ref/todo/statistics-dns-page-revamp-plan.md T-01) — the same
@@ -5648,6 +5648,34 @@ components:
             DNSQueryStatistics.domainBytes). Always labelled "% Vol"
             separately from percent's "% Query" in the UI.
           example: 61.7
+        blocked:
+          type: boolean
+          description: >-
+            docs/ref/todo/dns-blocked-query-statistics-plan.md T-04/T-11:
+            true when this domain matched an ENABLED deny-list entry that had
+            actually been applied to dnsmasq at the moment it was queried
+            (RECORD-TIME classification — never re-evaluated against the
+            CURRENT deny-list). A blocked domain is still counted in count/
+            percent above (never subtracted). Always false when DNS query
+            logging is disabled or no deny-list entry ever matched.
+          example: false
+        blockedRule:
+          type: string
+          description: >-
+            The deny-list entry that matched at record time — may be a
+            PARENT of domain above (e.g. domain "ads.example.com" matched
+            via the "example.com" rule, mirroring dnsmasq's own
+            address=/domain/ subdomain semantics). Empty when blocked is
+            false.
+          example: ""
+        blockedMode:
+          type: string
+          enum: [nxdomain, sinkhole, ""]
+          description: >-
+            The deny-list rule's mode as recorded at query time (NOT
+            necessarily its CURRENT mode if it was edited afterwards). Empty
+            when blocked is false.
+          example: ""
 
     DNSDomainIP:
       type: object
@@ -6160,6 +6188,14 @@ components:
         - totalClients
         - accuracy
         - generatedAt
+        - blockedQueries
+        - blockedPercent
+        - blockedSeries
+        - blockedTruncated
+        - totalBlockedDomains
+        - totalBlockedClients
+        - topBlockedDomains
+        - topBlockedClients
       description: >-
         The /statistics/dns response backing the Statistics -> DNS page's two
         top-level tables (Top Domains / Top Clients). **RAM-only,
@@ -6281,6 +6317,155 @@ components:
         generatedAt:
           type: string
           format: date-time
+        blockedQueries:
+          type: integer
+          format: int64
+          description: >-
+            docs/ref/todo/dns-blocked-query-statistics-plan.md: total number
+            of queries classified as "blocked" (RECORD-TIME match against the
+            deny-list actually applied to dnsmasq — see
+            DNSDomainStat.blocked). Uncapped by any ring limit (same
+            unconditional-increment contract as totalQueries) and already
+            INCLUDED in totalQueries above, never subtracted from it. Can be
+            LARGER than the sum of topBlockedDomains[].count once the
+            underlying ring is full — see blockedTruncated below, which
+            signals exactly that case rather than the two numbers silently
+            disagreeing.
+          example: 342
+        blockedPercent:
+          type: number
+          format: float
+          description: blockedQueries as a percent of totalQueries.
+          example: 4.2
+        blockedSeries:
+          type: array
+          description: >-
+            Same shape/axis as querySeries above, but counting only blocked
+            queries. Invariant: sum(blockedSeries[].count) == blockedQueries
+            always holds. Empty array (not omitted) when enabled=false.
+          items:
+            $ref: '#/components/schemas/DNSQueryPoint'
+        blockedTruncated:
+          type: boolean
+          description: >-
+            True when the (domain,client) pair ring hit dns-stats-max-pairs,
+            OR the per-bucket blocked-domain tracking hit
+            dns-stats-max-blocked-domains, during this window — meaning
+            topBlockedDomains/topBlockedClients below may under-report
+            relative to the always-accurate blockedQueries total. A SEPARATE
+            signal from truncated above (which does not require any query to
+            have been blocked at all).
+        totalBlockedDomains:
+          type: integer
+          description: >-
+            Number of distinct blocked domains observed in the window (before
+            the row cap on topBlockedDomains is applied) — same "showing N of
+            M" convention as totalDomains above.
+          example: 12
+        totalBlockedClients:
+          type: integer
+          description: Same as totalBlockedDomains but for distinct client IPs.
+          example: 5
+        topBlockedDomains:
+          type: array
+          description: >-
+            The "Blocked Query" sub-tab's per-domain table, ranked by blocked
+            query count, capped at the same row limit as topDomains. Never
+            null — empty array when enabled=false or no query was ever
+            classified as blocked in the window.
+          items:
+            $ref: '#/components/schemas/DNSBlockedDomainStat'
+        topBlockedClients:
+          type: array
+          description: >-
+            The "Blocked Query" sub-tab's per-client table, ranked by blocked
+            query count.
+          items:
+            $ref: '#/components/schemas/DNSBlockedClientStat'
+
+    DNSBlockedDomainStat:
+      type: object
+      required: [domain, rule, mode, count, percent, clients]
+      description: >-
+        docs/ref/todo/dns-blocked-query-statistics-plan.md T-04: one row of
+        the "Top Blocked Domains" table on the DNS Query Statistics tab's
+        "Blocked Query" sub-tab — ranked by blocked query count. Unlike
+        DNSDomainStat, deliberately has NO bytes/bytesUp/bytesDown/
+        bytesPercent column: a blocked domain is answered NXDOMAIN or a
+        sinkhole address by dnsmasq, so it carries essentially no real
+        traffic volume worth joining against conntrack.
+      properties:
+        domain:
+          type: string
+          example: ads.example.com
+        rule:
+          type: string
+          description: >-
+            The deny-list entry that matched this domain at record time — may
+            be a PARENT of domain (e.g. domain "ads.example.com" matched via
+            the "example.com" rule).
+          example: example.com
+        mode:
+          type: string
+          enum: [nxdomain, sinkhole]
+          description: >-
+            The rule's mode as recorded at the time this domain was queried —
+            NOT necessarily the rule's CURRENT mode if it was edited
+            afterwards (record-time classification).
+          example: nxdomain
+        count:
+          type: integer
+          format: int64
+          example: 87
+        percent:
+          type: number
+          format: float
+          description: >-
+            count as a percent of DNSQueryStatistics.blockedQueries — a
+            DIFFERENT (smaller) denominator than DNSDomainStat.percent, which
+            divides by totalQueries.
+          example: 25.4
+        clients:
+          type: integer
+          description: >-
+            Number of distinct client IPs that issued this blocked query in
+            the window.
+          example: 3
+
+    DNSBlockedClientStat:
+      type: object
+      required: [ip, hostname, count, percent, domains]
+      description: >-
+        docs/ref/todo/dns-blocked-query-statistics-plan.md T-04: one row of
+        the "Top Blocked Clients" table on the DNS Query Statistics tab's
+        "Blocked Query" sub-tab — ranked by blocked query count, one row per
+        client IP that issued at least one blocked query.
+      properties:
+        ip:
+          type: string
+          example: 192.168.1.101
+        hostname:
+          type: string
+          description: >-
+            Resolved from a DHCP lease/reservation — display only, falls back
+            to ip itself when unknown.
+          example: laptop-alice
+        count:
+          type: integer
+          format: int64
+          example: 61
+        percent:
+          type: number
+          format: float
+          description: count as a percent of DNSQueryStatistics.blockedQueries.
+          example: 17.8
+        domains:
+          type: integer
+          description: >-
+            Number of distinct BLOCKED domains this client queried in the
+            window — DIFFERENT from DNSClientStat.domains (which counts ALL
+            domains, system-wide, not just blocked ones).
+          example: 4
 
     DNSDomainDrilldown:
       type: object
@@ -6301,6 +6486,9 @@ components:
         - accuracy
         - observedBytes
         - generatedAt
+        - blocked
+        - blockedRule
+        - blockedMode
       description: >-
         The /statistics/dns/domain response — for a single domain, the
         clients that queried it within the window, the IPs it was resolved
@@ -6421,6 +6609,25 @@ components:
         generatedAt:
           type: string
           format: date-time
+        blocked:
+          type: boolean
+          description: >-
+            docs/ref/todo/dns-blocked-query-statistics-plan.md T-04/T-11:
+            this domain's own "Blocked Domain Query" classification — same
+            record-time meaning as DNSDomainStat.blocked, i.e. whether THIS
+            domain (the one being drilled into) matched an active deny-list
+            rule at the moment any of its queries in this window were
+            recorded.
+          example: false
+        blockedRule:
+          type: string
+          description: Same meaning as DNSDomainStat.blockedRule. Empty when blocked is false.
+          example: ""
+        blockedMode:
+          type: string
+          enum: [nxdomain, sinkhole, ""]
+          description: Same meaning as DNSDomainStat.blockedMode. Empty when blocked is false.
+          example: ""
 
     DNSClientDrilldown:
       type: object

@@ -6,6 +6,7 @@ import {
   XAxis,
   YAxis,
   Tooltip,
+  Legend,
   CartesianGrid,
 } from "recharts"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -26,10 +27,19 @@ import { statsWindowLongLabel, type StatsWindow } from "@/lib/statsWindow"
 // TrafficTrendCard's pattern so the two charts read consistently.
 export function DnsQueryTrendCard({
   series,
+  blockedSeries,
   window: statsWindow,
   className,
 }: {
   series: DNSQueryPoint[] | undefined
+  // blockedSeries (docs/ref/todo/dns-blocked-query-statistics-plan.md T-13)
+  // is OPTIONAL — when omitted, this chart's behavior is byte-for-byte
+  // unchanged (a single "Queries" bar per bucket). When given, it must be
+  // the SAME axis/length as series (both come from DNSQueryStatistics'
+  // querySeries/blockedSeries, sharing one axis) — each bucket is then
+  // rendered as a stacked bar: allowed (primary) below, blocked (warning) on
+  // top, with a separate legend/tooltip entry for each.
+  blockedSeries?: DNSQueryPoint[]
   window: StatsWindow
   className?: string
 }) {
@@ -38,19 +48,27 @@ export function DnsQueryTrendCard({
   const grid = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"
   const axis = isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.45)"
   const barColor = "var(--primary)"
+  const blockedColor = "var(--warning)"
 
   const points = useMemo(() => series ?? [], [series])
+  const blockedPoints = useMemo(() => blockedSeries ?? [], [blockedSeries])
+  const hasBlocked = blockedSeries !== undefined
 
   const data = useMemo(
     () =>
-      points.map((p) => {
+      points.map((p, i) => {
         const d = new Date(p.ts)
         const label = Number.isNaN(d.getTime())
           ? p.ts
           : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })
-        return { time: label, count: p.count }
+        const blockedCount = hasBlocked ? (blockedPoints[i]?.count ?? 0) : 0
+        // series' own count already INCLUDES blocked queries (they are
+        // never subtracted out of totalQueries) — allowed is what's left
+        // once blocked is split back out, clamped at 0 defensively.
+        const allowedCount = hasBlocked ? Math.max(0, p.count - blockedCount) : p.count
+        return { time: label, count: p.count, allowed: allowedCount, blocked: blockedCount }
       }),
-    [points]
+    [points, blockedPoints, hasBlocked]
   )
 
   const hasSignal = points.some((p) => p.count > 0)
@@ -108,9 +126,31 @@ export function DnsQueryTrendCard({
                     fontSize: "12px",
                     color: isDark ? "#fff" : "#111",
                   }}
-                  formatter={(value) => [`${Number(value).toLocaleString()} ครั้ง / 5 นาที`, "Queries"]}
+                  formatter={(value, name) => [`${Number(value).toLocaleString()} ครั้ง / 5 นาที`, name]}
                 />
-                <Bar dataKey="count" name="Queries" fill={barColor} radius={[2, 2, 0, 0]} isAnimationActive={false} />
+                {hasBlocked && <Legend wrapperStyle={{ fontSize: 11 }} />}
+                {hasBlocked ? (
+                  <>
+                    <Bar
+                      dataKey="allowed"
+                      name="Allowed"
+                      stackId="dns"
+                      fill={barColor}
+                      radius={[0, 0, 0, 0]}
+                      isAnimationActive={false}
+                    />
+                    <Bar
+                      dataKey="blocked"
+                      name="Blocked"
+                      stackId="dns"
+                      fill={blockedColor}
+                      radius={[2, 2, 0, 0]}
+                      isAnimationActive={false}
+                    />
+                  </>
+                ) : (
+                  <Bar dataKey="count" name="Queries" fill={barColor} radius={[2, 2, 0, 0]} isAnimationActive={false} />
+                )}
               </BarChart>
             </ResponsiveContainer>
           )}

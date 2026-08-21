@@ -321,6 +321,18 @@ func main() {
 	// todo/firewall-log-buffer-capacity-plan.md T-03/T-05, issue #134) —
 	// mirrors SetPolicyStatsService below rather than a constructor parameter.
 	statisticsService.SetLogBuffer(ringBuffer)
+	// SetBlockedStatsLimit sets the per-bucket cap on distinct blocked
+	// domains tracked (docs/ref/todo/dns-blocked-query-statistics-plan.md
+	// T-07/T-08) — file-only bootstrap key dns-stats-max-blocked-domains, no
+	// CLI flag, same pattern as DNSStatsMaxPairs/DNSStatsMaxClients above.
+	statisticsService.SetBlockedStatsLimit(cfg.DNSStatsMaxBlockedDomains)
+	// SetBlockedDomainsSink wires DNSServerService.ApplyAll to prime the
+	// RAM-only deny-list matcher behind the "Blocked Domain Query"
+	// statistics feature every time the deny-list is (re)applied (plan
+	// T-08). MUST run before dnsServerService.InitApplyConfig() further down
+	// so the index is primed from this boot's very first Apply DNS Zones,
+	// not left Empty() until the next config change.
+	dnsServerService.SetBlockedDomainsSink(statisticsService.SetBlockedDomains)
 
 	// Public IP Info card backend proxy (docs/ref/todo/
 	// statistics-host-ipinfo-plan.md T-06) — opt-in, default OFF via the
