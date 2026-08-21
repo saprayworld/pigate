@@ -78,9 +78,8 @@ export function BlockedDomainStatsTable({
                     key={d.domain}
                     onClick={onRowClick ? () => onRowClick(d.domain) : undefined}
                     className={onRowClick ? "cursor-pointer hover:bg-muted/50" : "hover:bg-transparent"}
-                    title={onRowClick ? "คลิกเพื่อดูว่าเครื่องไหนถามโดเมนนี้บ้าง" : undefined}
                   >
-                    <TableCell className="max-w-[220px] truncate py-3 font-mono text-xs font-medium text-foreground" title={d.domain}>
+                    <TableCell className="max-w-[220px] truncate py-3 font-mono text-xs font-medium text-foreground">
                       <ReferenceTrigger content={() => <DomainReferenceContent key={d.domain} domain={d.domain} />}>
                         {d.domain}
                       </ReferenceTrigger>
@@ -156,12 +155,8 @@ export function BlockedClientStatsTable({
                     key={c.ip}
                     onClick={onRowClick ? () => onRowClick(c.ip, c.hostname) : undefined}
                     className={onRowClick ? "cursor-pointer hover:bg-muted/50" : "hover:bg-transparent"}
-                    title={onRowClick ? "คลิกเพื่อดูว่าเครื่องนี้ถูกบล็อกโดเมนอะไรบ้าง" : undefined}
                   >
-                    <TableCell
-                      className="max-w-[220px] truncate py-3 text-xs text-foreground"
-                      title={`${c.hostname || c.ip}${c.hostname ? ` (${c.ip})` : ""}`}
-                    >
+                    <TableCell className="max-w-[220px] truncate py-3 text-xs text-foreground">
                       {c.ip === "unknown" ? (
                         <span className="text-muted-foreground">ไม่ทราบต้นทาง</span>
                       ) : (
