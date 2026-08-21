@@ -139,6 +139,16 @@ type Config struct {
 	DNSStatsMaxDomains      int
 	DNSStatsMaxIPsPerDomain int
 
+	// DNSStatsMaxBlockedDomains is also file-only (no matching CLI flag) —
+	// the per-bucket cap on how many distinct BLOCKED domains
+	// dns_query_stats.go's ring tracks (docs/ref/todo/
+	// dns-blocked-query-statistics-plan.md T-07), independent from
+	// DNSStatsMaxPairs above (which bounds ALL (domain, client) pairs, not
+	// just blocked ones). BlockedQueries itself (the raw count) is never
+	// bounded by this cap — only the per-domain breakdown feeding
+	// TopBlockedDomains/TopBlockedClients is.
+	DNSStatsMaxBlockedDomains int
+
 	// IPInfoEnabled is also file-only (no matching CLI flag) — gates the
 	// Public IP Info card's backend proxy to ipinfo.io (docs/ref/todo/
 	// statistics-host-ipinfo-plan.md T-06). Default false; no token support
@@ -253,6 +263,13 @@ func Defaults() Config {
 		DNSStatsMaxDomains:      1000,
 		DNSStatsMaxIPsPerDomain: 32,
 
+		// Keep in sync with defaultMaxTrackedBlockedDomains in
+		// internal/service/dns_query_stats.go. Owner-confirmed default
+		// (docs/ref/todo/dns-blocked-query-statistics-plan.md) — 1000 rather
+		// than the initially-proposed 300, to comfortably cover a large
+		// public blocklist import in the future.
+		DNSStatsMaxBlockedDomains: 1000,
+
 		// Default OFF (docs/ref/todo/statistics-host-ipinfo-plan.md T-06).
 		IPInfoEnabled: false,
 
@@ -325,6 +342,10 @@ const (
 	keyDNSStatsMaxDomains      = "dns-stats-max-domains"
 	keyDNSStatsMaxIPsPerDomain = "dns-stats-max-ips-per-domain"
 
+	// keyDNSStatsMaxBlockedDomains is also file-only (no CLI flag —
+	// docs/ref/todo/dns-blocked-query-statistics-plan.md T-07).
+	keyDNSStatsMaxBlockedDomains = "dns-stats-max-blocked-domains"
+
 	// keyIPInfoEnabled is also file-only (no CLI flag — docs/ref/todo/
 	// statistics-host-ipinfo-plan.md T-06).
 	keyIPInfoEnabled = "ipinfo-enabled"
@@ -375,6 +396,13 @@ const (
 	maxDNSStatsPairsCap   = 50000
 	maxDNSStatsClientsCap = 10000
 )
+
+// maxDNSStatsBlockedDomainsCap is the RAM-guard sanity ceiling for
+// dns-stats-max-blocked-domains (docs/ref/todo/
+// dns-blocked-query-statistics-plan.md T-07) — same clamp-not-fail rationale
+// as maxDNSStatsPairsCap/maxDNSStatsClientsCap above, applied per 5-minute
+// bucket across the same 288-bucket ring.
+const maxDNSStatsBlockedDomainsCap = 50000
 
 // maxTrafficStatsCap is the shared RAM-guard sanity ceiling for all three
 // traffic-stats-max-* keys (docs/ref/todo/statistics-traffic-page-plan.md
@@ -549,6 +577,12 @@ var orderedKeys = []string{
 	// ones) keeps already-generated pigate.conf files diffing cleanly across
 	// upgrades.
 	keyMaxPolicyInterfacesPerDirection,
+	// Appended at the very end, after max-policy-interfaces-per-direction, per
+	// docs/ref/todo/dns-blocked-query-statistics-plan.md T-07 — keeping new
+	// keys strictly appended (rather than alphabetized among the existing
+	// ones) keeps already-generated pigate.conf files diffing cleanly across
+	// upgrades.
+	keyDNSStatsMaxBlockedDomains,
 }
 
 // KnownKeys returns the list of recognized config/flag keys, in the fixed
@@ -660,6 +694,12 @@ func Resolve(defaults Config, fileVals, explicit map[string]string) (Config, []s
 			"dns-stats-max-clients=%d out of range (1..%d), using default %d",
 			cfg.DNSStatsMaxClients, maxDNSStatsClientsCap, defaults.DNSStatsMaxClients))
 		cfg.DNSStatsMaxClients = defaults.DNSStatsMaxClients
+	}
+	if cfg.DNSStatsMaxBlockedDomains <= 0 || cfg.DNSStatsMaxBlockedDomains > maxDNSStatsBlockedDomainsCap {
+		warnings = append(warnings, fmt.Sprintf(
+			"dns-stats-max-blocked-domains=%d out of range (1..%d), using default %d",
+			cfg.DNSStatsMaxBlockedDomains, maxDNSStatsBlockedDomainsCap, defaults.DNSStatsMaxBlockedDomains))
+		cfg.DNSStatsMaxBlockedDomains = defaults.DNSStatsMaxBlockedDomains
 	}
 	if cfg.TrafficStatsMaxHosts <= 0 || cfg.TrafficStatsMaxHosts > maxTrafficStatsCap {
 		warnings = append(warnings, fmt.Sprintf(
@@ -838,6 +878,14 @@ func applyKey(cfg *Config, key, value string) error {
 			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
 		}
 		cfg.DNSStatsMaxClients = n
+	case keyDNSStatsMaxBlockedDomains:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		// Range-checking is deliberately NOT done here — see Resolve's
+		// post-processing pass, same as dns-stats-max-pairs above.
+		cfg.DNSStatsMaxBlockedDomains = n
 	case keyTrafficStatsMaxHosts:
 		n, err := strconv.Atoi(value)
 		if err != nil {
@@ -1002,6 +1050,8 @@ func keyValue(cfg Config, key string) string {
 		return strconv.Itoa(cfg.DNSStatsMaxPairs)
 	case keyDNSStatsMaxClients:
 		return strconv.Itoa(cfg.DNSStatsMaxClients)
+	case keyDNSStatsMaxBlockedDomains:
+		return strconv.Itoa(cfg.DNSStatsMaxBlockedDomains)
 	case keyTrafficStatsMaxHosts:
 		return strconv.Itoa(cfg.TrafficStatsMaxHosts)
 	case keyTrafficStatsMaxDests:

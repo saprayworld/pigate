@@ -15,6 +15,15 @@ type DNSServerService struct {
 	repo       *db.Repository
 	manager    kernel.DNSServerManager
 	dnsService *DNSService
+
+	// blockedDomainsSink is optional (nil until SetBlockedDomainsSink is
+	// called by main.go, mirroring PolicyStatsService.SetDomainLookup's
+	// pattern) — wired to StatisticsService.SetBlockedDomains so ApplyAll
+	// can prime the RAM-only deny-list matcher behind the "Blocked Domain
+	// Query" statistics feature (docs/ref/todo/
+	// dns-blocked-query-statistics-plan.md T-08). NOT a NewDNSServerService
+	// parameter, to avoid changing that constructor's existing signature.
+	blockedDomainsSink func([]model.BlockedDomain)
 }
 
 func NewDNSServerService(repo *db.Repository, manager kernel.DNSServerManager, dnsService *DNSService) *DNSServerService {
@@ -23,6 +32,18 @@ func NewDNSServerService(repo *db.Repository, manager kernel.DNSServerManager, d
 		manager:    manager,
 		dnsService: dnsService,
 	}
+}
+
+// SetBlockedDomainsSink wires the callback ApplyAll invokes, right after a
+// successful ApplyZones, with the exact same deny-list it just applied
+// (docs/ref/todo/dns-blocked-query-statistics-plan.md T-08). In production
+// this is statisticsService.SetBlockedDomains — main.go must call this
+// BEFORE InitApplyConfig() so the index is primed at boot, not just from the
+// first later Apply DNS Zones. Safe to call with nil (the zero value —
+// ApplyAll simply skips the callback then, e.g. in tests that never wire a
+// StatisticsService).
+func (s *DNSServerService) SetBlockedDomainsSink(fn func([]model.BlockedDomain)) {
+	s.blockedDomainsSink = fn
 }
 
 // ApplyAll applies all enabled DNS Zones and their records to dnsmasq
@@ -58,6 +79,25 @@ func (s *DNSServerService) ApplyAll() error {
 	// ส่ง TTL/cap ไม่เกี่ยวกับ dnsmasq").
 	if err := s.manager.ApplyZones(enabledZones, settings.Interfaces, upstreams, settings.QueryLogging, blocked); err != nil {
 		return fmt.Errorf("failed to apply DNS zone configurations: %w", err)
+	}
+
+	// Prime/refresh the RAM-only deny-list matcher behind the "Blocked
+	// Domain Query" statistics feature with the SAME list that was just
+	// successfully applied (docs/ref/todo/dns-blocked-query-statistics-plan.md
+	// T-08) — deliberately AFTER the ApplyZones success check above, never
+	// before: a DB row that failed to apply must not be reflected as
+	// "currently enforced" by the statistics classifier. A panic/error from
+	// the sink itself must never fail ApplyAll (this is display-only
+	// statistics wiring, not a boot/apply dependency).
+	if s.blockedDomainsSink != nil {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[DNSServerService] Warning: blocked-domains sink panicked: %v", r)
+				}
+			}()
+			s.blockedDomainsSink(blocked)
+		}()
 	}
 
 	return nil

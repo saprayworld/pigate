@@ -154,6 +154,14 @@ func NewStatisticsService(traffic *TrafficStatsService, repo *db.Repository, dhc
 			domainIPs:    newDNSDomainIPs(),
 			maxPairs:     maxDNSPairs,
 			maxClients:   maxDNSClients,
+			blockIndex:   &dnsBlockIndex{},
+			// Set to the package default here; main.go raises it to the
+			// file-only dns-stats-max-blocked-domains config value via
+			// SetBlockedStatsLimit right after construction (mirrors
+			// SetLogBuffer's post-construction wiring pattern) — a direct
+			// caller (tests) that never calls SetBlockedStatsLimit still
+			// gets a sane, non-zero cap.
+			maxBlockedDomains: defaultMaxTrackedBlockedDomains,
 		},
 	}
 }

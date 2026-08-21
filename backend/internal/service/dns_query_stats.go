@@ -1,6 +1,7 @@
 package service
 
 import (
+	"net/netip"
 	"sort"
 	"sync"
 	"time"
@@ -50,6 +51,15 @@ const (
 	// (drilldown plan T-02) — a dedicated full-page tab, so intentionally
 	// larger than statsTopN (the 10-row card cap used elsewhere).
 	dnsStatsTopN = 50
+
+	// defaultMaxTrackedBlockedDomains is the fallback default used when
+	// NewStatisticsService is passed a <=0 value for the blocked-domains
+	// cap (defense-in-depth for direct callers, same convention as
+	// defaultMaxTrackedDNSPairs above). The authoritative production value
+	// comes from the file-only config key dns-stats-max-blocked-domains
+	// (docs/ref/todo/dns-blocked-query-statistics-plan.md T-07) —
+	// config.Defaults() must stay in sync with this literal.
+	defaultMaxTrackedBlockedDomains = 1000
 )
 
 // domainBucket is one 5-minute bucket of query counts, keyed by
@@ -84,6 +94,31 @@ type domainBucket struct {
 	// window total must stay accurate even once a bucket is truncated
 	// (drilldown plan §2.1/T-02 item 4).
 	queries uint64
+
+	// blockedQueries/blockedInfo back the "Blocked Domain Query" statistics
+	// feature (docs/ref/todo/dns-blocked-query-statistics-plan.md T-03) — a
+	// LABEL layered on top of the existing pairs matrix above, not a second
+	// counting structure: the per-(domain,client) counts for a blocked
+	// domain are still read straight out of pairs, exactly like every other
+	// domain. blockedQueries is the bucket's total blocked-query count,
+	// incremented unconditionally like queries above (never gated by
+	// maxBlockedDomains). blockedInfo maps a queried domain that was
+	// classified as blocked (at RECORD TIME, via dnsQueryStats.blockIndex)
+	// to the rule/mode that matched it; lazy-allocated (nil until the first
+	// blocked query lands in this bucket) and capped independently at
+	// maxBlockedDomains distinct domains — an existing key can always keep
+	// being looked up/reused, only a brand-new key is gated by the cap
+	// (same admission pattern as pairCount/clientCount above).
+	blockedQueries uint64
+	blockedInfo    map[string]blockedMeta
+}
+
+// blockedMeta is the rule/mode recorded for one blocked domain at the
+// moment it was queried (docs/ref/todo/dns-blocked-query-statistics-plan.md
+// T-03) — see domainBucket.blockedInfo.
+type blockedMeta struct {
+	Rule string
+	Mode string
 }
 
 // dnsQueryStats holds the domain ring + the opt-in switch state. Kept as its
@@ -105,6 +140,18 @@ type dnsQueryStats struct {
 	// buckets that were filled under the old cap.
 	maxPairs   int
 	maxClients int
+
+	// blockIndex is the RAM-only deny-list matcher (dns_block_index.go) fed
+	// by DNSServerService.SetBlockedDomainsSink -> SetBlockedDomains,
+	// primed at boot and refreshed every time Apply DNS Zones runs
+	// successfully (docs/ref/todo/dns-blocked-query-statistics-plan.md T-03/
+	// T-08). Never nil (constructed in NewStatisticsService); starts Empty()
+	// until the first successful ApplyAll.
+	blockIndex *dnsBlockIndex
+	// maxBlockedDomains is the effective per-bucket cap on distinct blocked
+	// domains tracked (dns-stats-max-blocked-domains), same "set once at
+	// construction, never mutated" convention as maxPairs/maxClients above.
+	maxBlockedDomains int
 }
 
 // RecordDNSEvent is the single entry point from the DNS query-log watcher
@@ -118,6 +165,18 @@ func (s *StatisticsService) RecordDNSEvent(ev model.DNSLogEvent) {
 		s.recordDomainQuery(ev.Domain, ev.QueryType, ev.ClientIP)
 	case model.DNSLogAnswer:
 		if ev.Domain != "" && ev.AnswerIP != "" {
+			// Skip unspecified addresses (0.0.0.0 / ::) — sinkhole-mode
+			// blocked domains (docs/ref/todo/
+			// dns-blocked-query-statistics-plan.md T-09) make dnsmasq answer
+			// EVERY blocked domain with 0.0.0.0, which would otherwise
+			// pollute the reverse cache / domain->IP forward index and make
+			// the Statistics -> DNS page's IP-filter mode claim that every
+			// blocked domain "resolves to 0.0.0.0". A malformed/unparseable
+			// AnswerIP is let through unchanged (defense-in-depth only, not
+			// this fix's concern).
+			if addr, err := netip.ParseAddr(ev.AnswerIP); err == nil && addr.IsUnspecified() {
+				return
+			}
 			s.dns.reverseCache.Put(ev.AnswerIP, ev.Domain)
 			s.dns.domainIPs.Put(ev.Domain, ev.AnswerIP)
 		}
@@ -138,6 +197,19 @@ func (s *StatisticsService) recordDomainQuery(domain, qtype, client string) {
 		client = dnsUnknownClient
 	}
 	ts := time.Now().Truncate(domainBucketSpan).Format(time.RFC3339)
+
+	// LOCK ORDERING (docs/ref/todo/dns-blocked-query-statistics-plan.md
+	// T-03): dnsBlockIndex.Match takes its own mutex (idx.mu) — it must be
+	// called BEFORE s.dns.mu.Lock() below, never while s.dns.mu is held, to
+	// avoid a lock-ordering inversion against dnsBlockIndex.Set (called from
+	// DNSServerService.ApplyAll, which never holds s.dns.mu). Empty() is
+	// checked first as a fast, allocation-free path for the overwhelmingly
+	// common case (no deny-list configured at all).
+	var blocked bool
+	var blockedRule, blockedMode string
+	if !s.dns.blockIndex.Empty() {
+		blockedRule, blockedMode, blocked = s.dns.blockIndex.Match(domain)
+	}
 
 	s.dns.mu.Lock()
 	defer s.dns.mu.Unlock()
@@ -167,6 +239,20 @@ func (s *StatisticsService) recordDomainQuery(domain, qtype, client string) {
 	// queries is never gated by the caps below — the window total must
 	// remain accurate even once a bucket has hit its tracked-pair/client cap.
 	b.queries++
+
+	if blocked {
+		// blockedQueries is uncapped, mirroring b.queries above — the
+		// window-wide BlockedQueries total must stay exact even once
+		// maxBlockedDomains is hit (plan §0/T-03).
+		b.blockedQueries++
+		_, alreadyTracked := b.blockedInfo[domain]
+		if alreadyTracked || len(b.blockedInfo) < s.dns.maxBlockedDomains {
+			if b.blockedInfo == nil {
+				b.blockedInfo = make(map[string]blockedMeta)
+			}
+			b.blockedInfo[domain] = blockedMeta{Rule: blockedRule, Mode: blockedMode}
+		}
+	}
 
 	clients := b.pairs[domain]
 	_, pairExists := clients[client]
@@ -215,6 +301,34 @@ func (s *StatisticsService) ClearDNSStats() {
 	s.dns.mu.Unlock()
 	s.dns.reverseCache.Clear()
 	s.dns.domainIPs.Clear()
+}
+
+// SetBlockedDomains forwards rules to the RAM-only deny-list matcher
+// (dns_block_index.go) that classifies queries as "blocked" at record time
+// (docs/ref/todo/dns-blocked-query-statistics-plan.md T-03/T-08). Called by
+// DNSServerService via SetBlockedDomainsSink, ONLY after ApplyZones has
+// actually succeeded with this exact list — see that method's doc comment
+// for why. Deliberately does NOT touch s.dns.buckets/ClearDNSStats: a
+// deny-list change must never re-classify or wipe already-recorded history
+// (plan §0 — record-time classification is permanent).
+func (s *StatisticsService) SetBlockedDomains(rules []model.BlockedDomain) {
+	s.dns.blockIndex.Set(rules)
+}
+
+// SetBlockedStatsLimit sets the per-bucket cap on distinct blocked domains
+// tracked (dns-stats-max-blocked-domains, plan T-07/T-08) — called once by
+// main.go right after NewStatisticsService, mirroring SetLogBuffer's
+// post-construction wiring. A <=0 value is ignored (keeps the
+// defaultMaxTrackedBlockedDomains value NewStatisticsService already set),
+// same defense-in-depth convention as the maxPairs/maxClients constructor
+// arguments.
+func (s *StatisticsService) SetBlockedStatsLimit(n int) {
+	if n <= 0 {
+		return
+	}
+	s.dns.mu.Lock()
+	s.dns.maxBlockedDomains = n
+	s.dns.mu.Unlock()
 }
 
 // SetReverseCacheLimits forwards to the reverse cache's SetLimits — see
@@ -456,6 +570,71 @@ func rankDNSClients(totals map[string]uint64, totalQueries uint64, leaseByIP map
 			Hostname: hostname,
 			Count:    count,
 			Percent:  percentOf(count, totalQueries),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].IP < out[j].IP
+	})
+	if len(out) > topN {
+		out = out[:topN]
+	}
+	return out
+}
+
+// rankBlockedDomains ranks the "Blocked Domain Query" per-domain totals into
+// DNSBlockedDomainStat rows (docs/ref/todo/dns-blocked-query-statistics-plan.md
+// T-05) — same deterministic sort (count desc, then domain asc) and topN cap
+// convention as rankTopDomains above. totalBlocked is the Percent
+// denominator (DNSQueryStatistics.BlockedQueries), NOT totalQueries.
+func rankBlockedDomains(totals map[string]uint64, meta map[string]blockedMeta, clientsByDomain map[string]map[string]struct{}, totalBlocked uint64, topN int) []model.DNSBlockedDomainStat {
+	out := make([]model.DNSBlockedDomainStat, 0, len(totals))
+	for domain, count := range totals {
+		if count == 0 {
+			continue
+		}
+		m := meta[domain]
+		out = append(out, model.DNSBlockedDomainStat{
+			Domain:  domain,
+			Rule:    m.Rule,
+			Mode:    m.Mode,
+			Count:   count,
+			Percent: percentOf(count, totalBlocked),
+			Clients: len(clientsByDomain[domain]),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Domain < out[j].Domain
+	})
+	if len(out) > topN {
+		out = out[:topN]
+	}
+	return out
+}
+
+// rankBlockedClients ranks the "Blocked Domain Query" per-client totals into
+// DNSBlockedClientStat rows (plan T-05), enriched with a hostname the same
+// way rankDNSClients does — reusing the SAME leaseByIP/resByIP maps the
+// caller already fetched via hostLookup() (never a second hostLookup call).
+// totalBlocked is the Percent denominator (BlockedQueries), NOT totalQueries.
+func rankBlockedClients(totals map[string]uint64, domainsByClient map[string]map[string]struct{}, totalBlocked uint64, leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation, topN int) []model.DNSBlockedClientStat {
+	out := make([]model.DNSBlockedClientStat, 0, len(totals))
+	for client, count := range totals {
+		if count == 0 {
+			continue
+		}
+		hostname, _ := hostnameFor(client, leaseByIP, resByIP)
+		out = append(out, model.DNSBlockedClientStat{
+			IP:       client,
+			Hostname: hostname,
+			Count:    count,
+			Percent:  percentOf(count, totalBlocked),
+			Domains:  len(domainsByClient[client]),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

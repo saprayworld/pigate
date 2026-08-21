@@ -222,6 +222,69 @@ func TestResolve(t *testing.T) {
 		}
 	})
 
+	t.Run("dns stats max blocked domains defaults when absent", func(t *testing.T) {
+		cfg, warns, err := Resolve(Defaults(), nil, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.DNSStatsMaxBlockedDomains != 1000 {
+			t.Fatalf("got blocked domains=%d, want 1000", cfg.DNSStatsMaxBlockedDomains)
+		}
+	})
+
+	t.Run("file overrides dns stats max blocked domains", func(t *testing.T) {
+		fileVals := map[string]string{"dns-stats-max-blocked-domains": "5000"}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if cfg.DNSStatsMaxBlockedDomains != 5000 {
+			t.Fatalf("got blocked domains=%d, want 5000", cfg.DNSStatsMaxBlockedDomains)
+		}
+	})
+
+	t.Run("non-integer dns stats max blocked domains fails fast", func(t *testing.T) {
+		fileVals := map[string]string{"dns-stats-max-blocked-domains": "abc"}
+		_, _, err := Resolve(Defaults(), fileVals, nil)
+		if err == nil {
+			t.Fatalf("expected error for dns-stats-max-blocked-domains=abc, got nil")
+		}
+	})
+
+	t.Run("dns stats max blocked domains zero/negative clamps to default with a warning", func(t *testing.T) {
+		fileVals := map[string]string{"dns-stats-max-blocked-domains": "0"}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(warns) != 1 {
+			t.Fatalf("expected 1 warning, got %v", warns)
+		}
+		if cfg.DNSStatsMaxBlockedDomains != 1000 {
+			t.Fatalf("got blocked domains=%d, want default 1000", cfg.DNSStatsMaxBlockedDomains)
+		}
+	})
+
+	t.Run("dns stats max blocked domains absurdly large clamps to default with a warning", func(t *testing.T) {
+		fileVals := map[string]string{"dns-stats-max-blocked-domains": "999999"}
+		cfg, warns, err := Resolve(Defaults(), fileVals, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(warns) != 1 {
+			t.Fatalf("expected 1 warning, got %v", warns)
+		}
+		if cfg.DNSStatsMaxBlockedDomains != 1000 {
+			t.Fatalf("got blocked domains=%d, want default 1000", cfg.DNSStatsMaxBlockedDomains)
+		}
+	})
+
 	t.Run("dns stats domain-ip keys default when absent", func(t *testing.T) {
 		cfg, warns, err := Resolve(Defaults(), nil, nil)
 		if err != nil {
@@ -369,8 +432,8 @@ func TestWriteParseRoundTripDefaults(t *testing.T) {
 
 func TestKnownKeys(t *testing.T) {
 	keys := KnownKeys()
-	if len(keys) != 32 {
-		t.Fatalf("expected 32 known keys, got %d: %v", len(keys), keys)
+	if len(keys) != 33 {
+		t.Fatalf("expected 33 known keys, got %d: %v", len(keys), keys)
 	}
 	// "config" and "v" must never be treated as config-file keys.
 	for _, k := range keys {
@@ -486,8 +549,8 @@ func TestKnownKeys(t *testing.T) {
 	if !hasEndpointsEnabled || !hasEndpointsMaxPerRule {
 		t.Fatalf("expected monitored-endpoints-enabled/monitored-endpoints-max-per-rule in KnownKeys, got %v", keys)
 	}
-	if keys[len(keys)-3] != "monitored-endpoints-enabled" || keys[len(keys)-2] != "monitored-endpoints-max-per-rule" {
-		t.Fatalf("expected monitored-endpoints-enabled/monitored-endpoints-max-per-rule to be the third/second-to-last keys, got %v", keys)
+	if keys[len(keys)-4] != "monitored-endpoints-enabled" || keys[len(keys)-3] != "monitored-endpoints-max-per-rule" {
+		t.Fatalf("expected monitored-endpoints-enabled/monitored-endpoints-max-per-rule to be the fourth/third-to-last keys, got %v", keys)
 	}
 	var hasMaxPolicyInterfacesPerDirection bool
 	for _, k := range keys {
@@ -498,8 +561,20 @@ func TestKnownKeys(t *testing.T) {
 	if !hasMaxPolicyInterfacesPerDirection {
 		t.Fatalf("expected max-policy-interfaces-per-direction in KnownKeys, got %v", keys)
 	}
-	if keys[len(keys)-1] != "max-policy-interfaces-per-direction" {
-		t.Fatalf("expected max-policy-interfaces-per-direction to be the last key, got %v", keys)
+	if keys[len(keys)-2] != "max-policy-interfaces-per-direction" {
+		t.Fatalf("expected max-policy-interfaces-per-direction to be the second-to-last key, got %v", keys)
+	}
+	var hasDNSStatsMaxBlockedDomains bool
+	for _, k := range keys {
+		if k == "dns-stats-max-blocked-domains" {
+			hasDNSStatsMaxBlockedDomains = true
+		}
+	}
+	if !hasDNSStatsMaxBlockedDomains {
+		t.Fatalf("expected dns-stats-max-blocked-domains in KnownKeys, got %v", keys)
+	}
+	if keys[len(keys)-1] != "dns-stats-max-blocked-domains" {
+		t.Fatalf("expected dns-stats-max-blocked-domains to be the last key, got %v", keys)
 	}
 }
 
@@ -605,22 +680,41 @@ func TestWriteParseRoundTrip_MonitoredEndpointsWrittenLast(t *testing.T) {
 		t.Fatalf("Write failed: %v", err)
 	}
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	if len(lines) < 3 {
-		t.Fatalf("expected at least 3 lines, got %d", len(lines))
+	if len(lines) < 4 {
+		t.Fatalf("expected at least 4 lines, got %d", len(lines))
 	}
-	if lines[len(lines)-3] != "monitored-endpoints-enabled=true" {
-		t.Fatalf("expected monitored-endpoints-enabled=true as third-to-last line, got %q", lines[len(lines)-3])
+	if lines[len(lines)-4] != "monitored-endpoints-enabled=true" {
+		t.Fatalf("expected monitored-endpoints-enabled=true as fourth-to-last line, got %q", lines[len(lines)-4])
 	}
-	if lines[len(lines)-2] != "monitored-endpoints-max-per-rule=1000" {
-		t.Fatalf("expected monitored-endpoints-max-per-rule=1000 as second-to-last line, got %q", lines[len(lines)-2])
+	if lines[len(lines)-3] != "monitored-endpoints-max-per-rule=1000" {
+		t.Fatalf("expected monitored-endpoints-max-per-rule=1000 as third-to-last line, got %q", lines[len(lines)-3])
 	}
 }
 
 // TestWriteParseRoundTrip_MaxPolicyInterfacesPerDirectionWrittenLast locks in
-// that the newest file-only key (docs/ref/todo/
-// multi-interface-firewall-rule-plan.md §2.2, D-2) is appended at the very
-// end of the generated file.
+// that max-policy-interfaces-per-direction (docs/ref/todo/
+// multi-interface-firewall-rule-plan.md §2.2, D-2) is appended right before
+// the newer dns-stats-max-blocked-domains key at the very end of the
+// generated file.
 func TestWriteParseRoundTrip_MaxPolicyInterfacesPerDirectionWrittenLast(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, Defaults()); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 lines, got %d", len(lines))
+	}
+	if lines[len(lines)-2] != "max-policy-interfaces-per-direction=8" {
+		t.Fatalf("expected max-policy-interfaces-per-direction=8 as second-to-last line, got %q", lines[len(lines)-2])
+	}
+}
+
+// TestWriteParseRoundTrip_DNSStatsMaxBlockedDomainsWrittenLast locks in that
+// the newest file-only key (docs/ref/todo/
+// dns-blocked-query-statistics-plan.md T-07) is appended at the very end of
+// the generated file.
+func TestWriteParseRoundTrip_DNSStatsMaxBlockedDomainsWrittenLast(t *testing.T) {
 	var buf bytes.Buffer
 	if err := Write(&buf, Defaults()); err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -629,8 +723,8 @@ func TestWriteParseRoundTrip_MaxPolicyInterfacesPerDirectionWrittenLast(t *testi
 	if len(lines) < 1 {
 		t.Fatalf("expected at least 1 line, got %d", len(lines))
 	}
-	if lines[len(lines)-1] != "max-policy-interfaces-per-direction=8" {
-		t.Fatalf("expected max-policy-interfaces-per-direction=8 as last line, got %q", lines[len(lines)-1])
+	if lines[len(lines)-1] != "dns-stats-max-blocked-domains=1000" {
+		t.Fatalf("expected dns-stats-max-blocked-domains=1000 as last line, got %q", lines[len(lines)-1])
 	}
 }
 

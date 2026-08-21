@@ -437,6 +437,14 @@ func (m *MockDNSServerManager) ClearCache() error {
 //   - netflix.com is queried from 2 distinct clients (.101/.102).
 //   - line-apps.com and cdn.jsdelivr.net are each queried from a single
 //     client, to exercise the single-row drill-down edge case.
+//   - ads.doubleclick.net and ads.googlesyndication.com are two obviously
+//     ad-network domains (docs/ref/todo/dns-blocked-query-statistics-plan.md
+//     T-14), so `-mock=true` dev mode has real query traffic to classify as
+//     "blocked" once a matching deny-list entry is configured — this file
+//     never touches the deny-list itself (that's real DB data, unaffected by
+//     mock mode); it only ensures the query-log side of the pipeline has
+//     something a deny-list rule for "doubleclick.net"/"googlesyndication.com"
+//     would actually match.
 //
 // Weights keep the same few LAN clients MockDhcp/mockFlowTemplates already
 // use, at different relative frequencies so the "Top Queried Domains" card
@@ -455,6 +463,8 @@ var mockDNSQueryEvents = []struct {
 	{"netflix.com", "A", "192.168.1.101", 2},
 	{"line-apps.com", "A", "192.168.1.105", 2},
 	{"cdn.jsdelivr.net", "A", "192.168.1.105", 1},
+	{"ads.doubleclick.net", "A", "192.168.1.101", 2},
+	{"ads.googlesyndication.com", "A", "192.168.1.102", 1},
 }
 
 // mockDNSAnswerEvents map IPs to domains that intentionally mirror

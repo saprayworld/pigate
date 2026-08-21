@@ -2141,6 +2141,43 @@ func TestHandleGetDNSQueryStatistics_WindowWhitelistAndDisabledState(t *testing.
 		if stats.TopDomains == nil || stats.TopClients == nil {
 			t.Errorf("query=%q: expected non-nil (possibly empty) slices, got topDomains=%v topClients=%v", c.query, stats.TopDomains, stats.TopClients)
 		}
+		// docs/ref/todo/dns-blocked-query-statistics-plan.md T-10: the
+		// blocked-side fields must also be non-nil empty slices in the
+		// disabled state, same contract as TopDomains/TopClients above.
+		if stats.TopBlockedDomains == nil || stats.TopBlockedClients == nil || stats.BlockedSeries == nil {
+			t.Errorf("query=%q: expected non-nil (possibly empty) blocked slices, got topBlockedDomains=%v topBlockedClients=%v blockedSeries=%v",
+				c.query, stats.TopBlockedDomains, stats.TopBlockedClients, stats.BlockedSeries)
+		}
+		if stats.BlockedQueries != 0 || stats.TotalBlockedDomains != 0 || stats.TotalBlockedClients != 0 {
+			t.Errorf("query=%q: expected blocked counters to be 0 while disabled, got %+v", c.query, stats)
+		}
+	}
+}
+
+// TestHandleGetDNSQueryStatistics_NoNewQueryParamAccepted covers
+// docs/ref/todo/dns-blocked-query-statistics-plan.md T-10's explicit
+// constraint: GET /api/statistics/dns must NOT accept any new query
+// parameter for the blocked-query feature — an unrecognized param is simply
+// ignored, exactly like any other unknown query string key, and the
+// response shape/behavior is unaffected.
+func TestHandleGetDNSQueryStatistics_NoNewQueryParamAccepted(t *testing.T) {
+	handler, _ := setupTestServer(t)
+	token := "mock_session_id_test_token"
+
+	req := httptest.NewRequest("GET", "/api/statistics/dns?window=1h&blockedOnly=true&tab=blocked", nil)
+	addSessionCookie(req, token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var stats model.DNSQueryStatistics
+	if err := json.Unmarshal(rec.Body.Bytes(), &stats); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if stats.Window != "1h" {
+		t.Errorf("expected window=1h (unaffected by the unknown params), got %q", stats.Window)
 	}
 }
 

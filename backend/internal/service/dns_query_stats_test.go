@@ -8,6 +8,40 @@ import (
 	"pigate/internal/model"
 )
 
+// TestStatisticsService_RecordDNSEvent_SkipsUnspecifiedAnswerIP is
+// docs/ref/todo/dns-blocked-query-statistics-plan.md T-09: a DNSLogAnswer
+// event whose AnswerIP is 0.0.0.0 or :: (dnsmasq's sinkhole-mode answer for
+// a blocked domain) must never be admitted into the reverse cache or the
+// domain->IP forward index — otherwise every sinkholed domain would appear
+// to "resolve to 0.0.0.0" on the Statistics -> DNS page's IP-filter mode. A
+// normal IP answer must still be recorded exactly as before.
+func TestStatisticsService_RecordDNSEvent_SkipsUnspecifiedAnswerIP(t *testing.T) {
+	s := newTestStatisticsService(t, &fakeTrafficAccounting{})
+
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogAnswer, Domain: "ads.example.com", AnswerIP: "0.0.0.0"})
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogAnswer, Domain: "ads6.example.com", AnswerIP: "::"})
+
+	if got := s.LookupDomain("0.0.0.0"); got != "" {
+		t.Fatalf("expected 0.0.0.0 to never be recorded in the reverse cache, got domain %q", got)
+	}
+	if ips := s.dns.domainIPs.IPsFor("ads.example.com"); len(ips) != 0 {
+		t.Fatalf("expected ads.example.com to have no known IPs, got %v", ips)
+	}
+	if ips := s.dns.domainIPs.IPsFor("ads6.example.com"); len(ips) != 0 {
+		t.Fatalf("expected ads6.example.com to have no known IPs, got %v", ips)
+	}
+
+	// A normal (non-unspecified) IP answer must still work exactly as
+	// before this fix.
+	s.RecordDNSEvent(model.DNSLogEvent{Kind: model.DNSLogAnswer, Domain: "example.com", AnswerIP: "93.184.216.34"})
+	if got := s.LookupDomain("93.184.216.34"); got != "example.com" {
+		t.Fatalf("expected 93.184.216.34 -> example.com in the reverse cache, got %q", got)
+	}
+	if ips := s.dns.domainIPs.IPsFor("example.com"); len(ips) != 1 || ips[0].IP != "93.184.216.34" {
+		t.Fatalf("expected example.com -> [93.184.216.34], got %v", ips)
+	}
+}
+
 // TestStatisticsService_DNSDrilldown_PairCounting is drilldown plan T-05
 // item 1: 3 clients x 2 domains must rank Top Domains/Top Clients correctly
 // and the sum of each domain's/client's drill-down must equal the top-level
