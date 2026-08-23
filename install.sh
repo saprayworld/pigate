@@ -311,6 +311,18 @@ chown -R pigate:pigate /run/pigate
 chmod 775 /var/lib/pigate
 log_ok "สร้าง /var/lib/pigate และ /run/pigate สำเร็จ"
 
+# สร้าง /var/lib/pigate/blocklists สำหรับฟีเจอร์ DNS blocklist import
+# (docs/ref/todo/dns-blocklist-import-plan.md §2.3) — ไดเรกทอรีนี้เก็บ
+# manifest.json (metadata) และไฟล์ที่ generate แล้ว (<id>.hosts / <id>.conf)
+# ที่ dnsmasq โหลดผ่าน addn-hosts/conf-file โค้ด Go (kernel layer) ก็
+# MkdirAll ไดเรกทอรีนี้เองได้เมื่อ apply ครั้งแรก แต่ตั้งไว้ที่นี่ด้วยเพื่อให้
+# ownership ถูกต้องตั้งแต่แรก และเพื่อให้เครื่องที่ติดตั้งไปแล้วก่อนฟีเจอร์นี้มี
+# ไดเรกทอรีนี้ทันทีเมื่อรัน install.sh ซ้ำ (idempotent เหมือนบรรทัดข้างบน)
+mkdir -p /var/lib/pigate/blocklists
+chown pigate:netdev /var/lib/pigate/blocklists
+chmod 755 /var/lib/pigate/blocklists
+log_ok "สร้าง /var/lib/pigate/blocklists สำเร็จ"
+
 # สร้างไฟล์ baseline dhcpcd.conf ที่ pigate เป็นเจ้าของ (อ่านโดย dhcpcd@.service
 # ผ่าน -f ดู STEP 2.2) หากยังไม่มี — ค่าเริ่มต้นคือไม่ share hostname (ว่าง/มีแต่
 # comment) ตรงกับค่า default ของ system_hostname_settings.share_with_dhcp = 0

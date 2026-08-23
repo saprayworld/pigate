@@ -334,6 +334,56 @@ func main() {
 	// not left Empty() until the next config change.
 	dnsServerService.SetBlockedDomainsSink(statisticsService.SetBlockedDomains)
 
+	// DNS blocklist import (docs/ref/todo/dns-blocklist-import-plan.md T-07)
+	// — bulk hosts-file blocklists (subscribe URL / upload), metadata kept in
+	// a JSON manifest under /var/lib/pigate/blocklists rather than SQLite
+	// (plan §2.3/R1). Load() reads that manifest into RAM; a failure here
+	// only warns (same "must not brick the boot" rule as policyCounterStore.
+	// Load() above) — an empty in-memory list just means blocklists behave
+	// as if none were configured until the next successful write.
+	//
+	// Note: dnsBlocklistService's HTTP fetcher (T-04) still makes real
+	// outbound HTTPS requests even when -mock=true (it is a plain outbound
+	// client, not OS/kernel access), but every file it writes (.hosts/.conf/
+	// manifest.json) goes through kernel.DNSServerManager, so under -mock=true
+	// they all land in MockDNSServerManager's in-memory maps, never on disk.
+	// MockDNSServerManager.SupportsBulkNXDomain() always returns true, so the
+	// nxdomain blockMode can be exercised on a dev workstation too.
+	dnsBlocklistService := service.NewDNSBlocklistService(repo, dnsServer)
+	if err := dnsBlocklistService.Load(); err != nil {
+		log.Printf("[Main] Warning: failed to load DNS blocklist manifest: %v", err)
+	}
+	// SetBlocklistProvider/SetBlocklistSink mirror SetBlockedDomainsSink just
+	// above: they MUST run before dnsServerService.InitApplyConfig() further
+	// down so both dnsServerService.ApplyAll (which pulls the list of
+	// enabled blocklists to render into pigate-dns.conf) and the Statistics
+	// blocklist-hit index are primed from this boot's very first Apply DNS
+	// Zones, not left empty until the next config change.
+	dnsServerService.SetBlocklistProvider(dnsBlocklistService)
+	dnsServerService.SetBlocklistSink(statisticsService.SetBlocklists)
+	// SetApplyDNSCallback is the reverse-direction wiring: it lets
+	// dnsBlocklistService.Delete/UpdateInfo regenerate pigate-dns.conf (via
+	// dnsServerService.ApplyAll) BEFORE removing a <id>.hosts/<id>.conf file
+	// that config might still reference — closes the stale-directive window
+	// found at final tech-lead sign-off (same class of problem as Caution
+	// 16/issue #50: dnsmasq refuses to start if any conf-file=/addn-hosts=
+	// target is missing). Order relative to SetBlocklistProvider above does
+	// not matter (different callback directions on different objects), only
+	// that it happens before any HTTP request could call Delete/UpdateInfo.
+	dnsBlocklistService.SetApplyDNSCallback(dnsServerService.ApplyAll)
+	// statisticsService needs a kernel.DNSServerManager handle of its own
+	// (SetDNSServerManager, T-06) to stream domains back out of the .hosts
+	// files named in SetBlocklists' []model.DNSBlocklist when building the
+	// blocklist hit index.
+	statisticsService.SetDNSServerManager(dnsServer)
+	// No separate InitApplyConfig() call for blocklists: they are applied to
+	// dnsmasq as part of dnsServerService.InitApplyConfig() below, exactly
+	// like the existing deny-list (dns_blocked_domains) is — blocklists are
+	// just another input ApplyAll gathers via the provider wired above.
+	//
+	// dnsBlocklistService itself is passed into api.NewServer below (T-08) —
+	// it backs the /api/dns/blocklists* HTTP handlers/routes.
+
 	// Public IP Info card backend proxy (docs/ref/todo/
 	// statistics-host-ipinfo-plan.md T-06) — opt-in, default OFF via the
 	// file-only ipinfo-enabled config key (no CLI flag, no UI toggle). The
@@ -480,8 +530,13 @@ func main() {
 	// todo/fqdn-retry-and-monitored-counters-plan.md T-12) — additive, same
 	// pattern as the other Set* calls below.
 	backupService.SetCounterStore(policyCounterStore)
+	// SetBlocklistService wires the DNS blocklist import feature (docs/ref/
+	// todo/dns-blocklist-import-plan.md §2.4/T-09) so a config export/import
+	// carries the blocklist manifest + selected .hosts payloads too —
+	// additive, same pattern as SetCounterStore above.
+	backupService.SetBlocklistService(dnsBlocklistService)
 
-	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker, wifiPresetService, systemServiceService, capabilityService, trafficStatsService, statisticsService, ipInfoService)
+	server := api.NewServer(repo, fw, net, rt, dhcp, ringBuffer, cfg.DisableEdit, cfg.AllowDevCORS, ifaceService, dhcpcdService, routingService, firewallService, dnsService, qosService, dhcpServerService, dnsServerService, hostnameService, timeService, userService, backupService, systemStatusService, powerService, eventLogService, dhcpHealthChecker, wifiPresetService, systemServiceService, capabilityService, trafficStatsService, statisticsService, ipInfoService, dnsBlocklistService)
 
 	// SetPolicyStatsService wires the optional per-rule usage stats service
 	// (docs/ref/todo/firewall-policy-rule-usage-stats-plan.md T-07) — additive,

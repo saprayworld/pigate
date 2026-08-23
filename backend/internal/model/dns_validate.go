@@ -358,27 +358,12 @@ const (
 // REJECTS rather than trims/strips: Domain is not trimmed here, so a value
 // with edge whitespace is rejected outright, not silently accepted.
 func ValidateBlockedDomain(b BlockedDomain) error {
-	domain := b.Domain
-	if domain == "" {
-		return fmt.Errorf("domain must not be empty")
-	}
-	if strings.TrimSpace(domain) != domain {
-		return fmt.Errorf("domain %q must not have leading or trailing whitespace", b.Domain)
-	}
-	if len(domain) > 253 {
-		return fmt.Errorf("domain %q exceeds 253 characters", b.Domain)
-	}
-	if !reZoneName.MatchString(domain) {
-		return fmt.Errorf("domain %q contains invalid characters (allowed: letters, digits, '.', '-')", b.Domain)
-	}
-	if !strings.Contains(domain, ".") {
-		return fmt.Errorf("domain %q must contain at least one '.'", b.Domain)
-	}
-	if strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
-		return fmt.Errorf("domain %q must not start or end with '.'", b.Domain)
-	}
-	if strings.HasPrefix(domain, "-") || strings.HasSuffix(domain, "-") {
-		return fmt.Errorf("domain %q must not start or end with '-'", b.Domain)
+	// Domain shape/charset checks are shared with the blocklist-import
+	// feature's per-domain validator (docs/ref/todo/
+	// dns-blocklist-import-plan.md §3 T-01 item 5) so the two never drift
+	// into two slightly different rule sets.
+	if err := ValidateBlocklistDomain(b.Domain); err != nil {
+		return err
 	}
 
 	mode := b.Mode

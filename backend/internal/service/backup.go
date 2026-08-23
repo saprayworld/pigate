@@ -1,10 +1,14 @@
 package service
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 	"time"
@@ -12,6 +16,17 @@ import (
 	"pigate/internal/db"
 	"pigate/internal/model"
 )
+
+// dnsBlocklistBackupCapBytes bounds the total size (post-gzip, post-base64)
+// of every DNSBlocklistFilePayload carried in one export (docs/ref/todo/
+// dns-blocklist-import-plan.md §2.4) — a 93k-domain list gzips down to
+// roughly ~500 KB (~700 KB base64), so 8 MiB comfortably covers several large
+// lists while still keeping a backup file well under the 10 MB body cap
+// HandleImportConfig enforces on the way back in (handlers.go). Lists beyond
+// the cap are simply omitted from the export (a warning is logged, not
+// returned — BackupFile carries no warnings field) rather than growing the
+// backup unboundedly.
+const dnsBlocklistBackupCapBytes = 8 << 20
 
 // BackupService owns configuration export/import. Export only needs the
 // repository; import additionally drives every subsystem service so restored DB
@@ -42,12 +57,29 @@ type BackupService struct {
 	// cache reflects the DB's post-import policy_rule_counters state
 	// instead of stale pre-import values.
 	counterStore *PolicyCounterStore
+
+	// blocklistService is the optional DNSBlocklistService (docs/ref/todo/
+	// dns-blocklist-import-plan.md §2.4/T-09), wired post-construction via
+	// SetBlocklistService for the same reason as counterStore above —
+	// NewBackupService's parameter list stays unchanged. When set, Export
+	// includes the manifest's lists (+ selected .hosts file payloads) and
+	// Import restores them. The DNS blocklist feature intentionally never
+	// uses SQLite (plan §2.3/R1), so it cannot be folded into
+	// repo.RestoreConfig's transaction the way every other table is — it is
+	// handled as its own step, both here in Export/Import.
+	blocklistService *DNSBlocklistService
 }
 
 // SetCounterStore wires the optional PolicyCounterStore — see the
 // counterStore field doc comment above.
 func (s *BackupService) SetCounterStore(store *PolicyCounterStore) {
 	s.counterStore = store
+}
+
+// SetBlocklistService wires the optional DNSBlocklistService — see the
+// blocklistService field doc comment above.
+func (s *BackupService) SetBlocklistService(svc *DNSBlocklistService) {
+	s.blocklistService = svc
 }
 
 func NewBackupService(
@@ -92,8 +124,10 @@ func NewBackupService(
 // includeUsers is true the users table — including bcrypt hashes — is included.
 // When passphrase is non-empty the config section is AES-256-GCM encrypted with
 // an Argon2id-derived key; the returned file then carries EncryptedConfig
-// instead of Config.
-func (s *BackupService) Export(includeUsers bool, passphrase string) (*model.BackupFile, error) {
+// instead of Config. includeBlocklistFiles additionally carries subscribe-URL
+// blocklists' .hosts file content (upload-sourced lists are always carried
+// regardless of this flag — plan §2.4).
+func (s *BackupService) Export(includeUsers bool, passphrase string, includeBlocklistFiles bool) (*model.BackupFile, error) {
 	cfg := model.BackupConfig{}
 	var err error
 
@@ -128,6 +162,19 @@ func (s *BackupService) Export(includeUsers bool, passphrase string) (*model.Bac
 	if cfg.BlockedDomains, err = s.repo.GetBlockedDomains(); err != nil {
 		return nil, fmt.Errorf("read dns blocked domains: %w", err)
 	}
+
+	// DNS blocklist import feature (plan §2.4/T-09) — never touches SQLite,
+	// so it is not part of any repo.Get* call above; blocklistService is
+	// nil-safe (optional dependency, unset in some tests).
+	if s.blocklistService != nil {
+		cfg.Blocklists = s.blocklistService.List()
+		payloads, perr := s.buildBlocklistFilePayloads(cfg.Blocklists, includeBlocklistFiles)
+		if perr != nil {
+			return nil, fmt.Errorf("build blocklist file payloads: %w", perr)
+		}
+		cfg.BlocklistFiles = payloads
+	}
+
 	dnsServerSettings, err := s.repo.GetDNSServerSettings()
 	if err != nil {
 		return nil, fmt.Errorf("read dns server settings: %w", err)
@@ -210,6 +257,106 @@ func (s *BackupService) Export(includeUsers bool, passphrase string) (*model.Bac
 	file.Meta.Encryption = encParams
 	file.EncryptedConfig = enc
 	return file, nil
+}
+
+// buildBlocklistFilePayloads selects which of lists' <id>.hosts files to
+// carry into the backup and gzip+base64-encodes their content (plan §2.4):
+// sourceType==upload is always included (an upload can never be re-fetched);
+// sourceType==url is included only when includeBlocklistFiles was requested.
+// The running total is capped at dnsBlocklistBackupCapBytes — once reached,
+// remaining eligible lists are omitted (logged, not returned as an error: an
+// export must still succeed, just smaller than it could have been).
+func (s *BackupService) buildBlocklistFilePayloads(lists []model.DNSBlocklist, includeBlocklistFiles bool) ([]model.DNSBlocklistFilePayload, error) {
+	if s.blocklistService == nil {
+		return nil, nil
+	}
+
+	var payloads []model.DNSBlocklistFilePayload
+	total := 0
+	for _, l := range lists {
+		eligible := l.SourceType == model.DNSBlocklistSourceUpload ||
+			(l.SourceType == model.DNSBlocklistSourceURL && includeBlocklistFiles)
+		if !eligible {
+			continue
+		}
+
+		raw, err := s.readBlocklistHostsFile(l.ID)
+		if err != nil {
+			log.Printf("[Export] blocklist %q: failed to read .hosts file, omitting from backup: %v", l.ID, err)
+			continue
+		}
+		if raw == nil {
+			// Never written yet (e.g. a list that failed its very first
+			// ingest) — nothing to carry.
+			continue
+		}
+
+		gz, err := gzipBytes(raw)
+		if err != nil {
+			return nil, fmt.Errorf("compress blocklist %q: %w", l.ID, err)
+		}
+		b64 := base64.StdEncoding.EncodeToString(gz)
+		if total+len(b64) > dnsBlocklistBackupCapBytes {
+			log.Printf("[Export] blocklist backup payload cap (%d bytes) reached; omitting %q and any remaining blocklist files", dnsBlocklistBackupCapBytes, l.ID)
+			break
+		}
+		total += len(b64)
+
+		sum := sha256.Sum256(raw)
+		payloads = append(payloads, model.DNSBlocklistFilePayload{
+			ID:         l.ID,
+			Sha256:     hex.EncodeToString(sum[:]),
+			GzipBase64: b64,
+		})
+	}
+	return payloads, nil
+}
+
+// readBlocklistHostsFile reconstructs the exact bytes of <id>.hosts by
+// streaming it back line-by-line via the kernel layer (there is no raw-bytes
+// read method on kernel.DNSServerManager by design — StreamBlocklistFile is
+// the only read path, plan §2.1.1/T-02) and rejoining with "\n". This is
+// lossless because every line RenderHostsFile writes ends in "\n" and the
+// file has no trailing partial line, so bufio.Scanner's line-split-then-
+// rejoin round-trips byte-for-byte — which is what lets the payload's sha256
+// end up equal to the sha256 the manifest already recorded for this content.
+// Returns (nil, nil) if the file has never been written (empty/missing).
+func (s *BackupService) readBlocklistHostsFile(id string) ([]byte, error) {
+	var lines []string
+	err := s.blocklistService.manager.StreamBlocklistFile(id, func(line string) error {
+		lines = append(lines, line)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(lines) == 0 {
+		return nil, nil
+	}
+	return []byte(strings.Join(lines, "\n") + "\n"), nil
+}
+
+// gzipBytes compresses raw with the standard gzip writer.
+func gzipBytes(raw []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	if _, err := gw.Write(raw); err != nil {
+		return nil, err
+	}
+	if err := gw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// gunzipBytes decompresses gz produced by gzipBytes.
+func gunzipBytes(gz []byte) ([]byte, error) {
+	r, err := gzip.NewReader(bytes.NewReader(gz))
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	return io.ReadAll(r)
 }
 
 // =============================================================================
@@ -314,6 +461,13 @@ func (s *BackupService) Import(raw []byte, opts model.ImportOptions) (*model.Imp
 	}
 
 	result.Counts = configCounts(cfg)
+
+	// DNS blocklist import feature (plan §2.4/T-09) — never in SQLite, so it
+	// is restored as its own step rather than through repo.RestoreConfig
+	// above. Failures are warnings, same policy as reapply() below: the
+	// manifest/files this writes are this feature's only state, so a partial
+	// failure here does not roll back anything else already restored.
+	result.Warnings = append(result.Warnings, s.importBlocklists(cfg.Blocklists, cfg.BlocklistFiles)...)
 
 	// Re-apply DB config to the kernel in startup order. Failures are warnings.
 	result.Warnings = append(result.Warnings, s.reapply()...)
@@ -515,6 +669,120 @@ func (s *BackupService) removedUsernames(preUsers []model.User, actor string) []
 		}
 	}
 	return removed
+}
+
+// importBlocklists restores the DNS blocklist import feature's manifest
+// entries and file payloads (plan §2.4/T-09). It is a no-op if
+// blocklistService was never wired (SetBlocklistService) or the backup
+// carries no blocklists at all — e.g. every backup taken before this feature
+// existed. Never fatal: any per-list problem downgrades that single list
+// (domainCount=0, lastError set) rather than aborting the whole import, since
+// by the time this runs the DB restore has already committed.
+//
+// For each list:
+//  1. blockMode is normalized (garbage/legacy "" -> the blocklist default).
+//  2. If no matching DNSBlocklistFilePayload was carried (a url-sourced list
+//     exported without ?includeBlocklistFiles=1), the list is kept in the
+//     manifest but with domainCount=0 and lastError="needs refresh after
+//     import" — ApplyZones skips a list whose <id>.hosts file does not exist
+//     (kernel os.Stat check), so this never renders a stale/empty directive.
+//  3. Otherwise the payload is base64-decoded, gunzipped, and its sha256
+//     verified against DNSBlocklistFilePayload.Sha256 BEFORE anything is
+//     written to disk (this content is later loaded straight into dnsmasq).
+//     A verified file is written via kernel.WriteBlocklistFile.
+//  4. blockMode's derived artifact (<id>.conf, only for
+//     DNSBlockModeNXDomain) is (re)rendered from the just-written .hosts
+//     content via the SAME renderArtifacts path CreateFromURL/UpdateInfo use
+//     (T-05) — never a second writer. If this system's dnsmasq does not
+//     support nxdomain mode (SupportsBulkNXDomain()==false), the list is
+//     silently downgraded to sinkhole (not an error — plan §3 T-09 item 3)
+//     with lastError explaining why.
+//
+// The whole restored set replaces the manifest wholesale via
+// blocklistStore.ReplaceAll — a backup import is a full restore, not a merge.
+func (s *BackupService) importBlocklists(lists []model.DNSBlocklist, files []model.DNSBlocklistFilePayload) []string {
+	if s.blocklistService == nil || len(lists) == 0 {
+		return nil
+	}
+
+	payloadByID := make(map[string]model.DNSBlocklistFilePayload, len(files))
+	for _, f := range files {
+		payloadByID[f.ID] = f
+	}
+
+	var warnings []string
+	restored := make([]model.DNSBlocklist, 0, len(lists))
+	for _, l := range lists {
+		mode, err := model.NormalizeBlocklistBlockMode(l.BlockMode)
+		if err != nil {
+			mode = model.DNSBlocklistDefaultBlockMode
+		}
+		l.BlockMode = mode
+
+		payload, ok := payloadByID[l.ID]
+		if !ok {
+			l.DomainCount = 0
+			l.LastError = "needs refresh after import"
+			restored = append(restored, l)
+			continue
+		}
+
+		gz, err := base64.StdEncoding.DecodeString(payload.GzipBase64)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("blocklist %q: invalid backup file payload, skipping file restore: %v", l.ID, err))
+			l.DomainCount = 0
+			l.LastError = "needs refresh after import"
+			restored = append(restored, l)
+			continue
+		}
+		content, err := gunzipBytes(gz)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("blocklist %q: failed to decompress backup file payload, skipping file restore: %v", l.ID, err))
+			l.DomainCount = 0
+			l.LastError = "needs refresh after import"
+			restored = append(restored, l)
+			continue
+		}
+		if len(content) > model.DNSBlocklistMaxFileBytes {
+			warnings = append(warnings, fmt.Sprintf("blocklist %q: backup file payload exceeds maximum size, skipping file restore", l.ID))
+			l.DomainCount = 0
+			l.LastError = "needs refresh after import"
+			restored = append(restored, l)
+			continue
+		}
+		sum := sha256.Sum256(content)
+		if hex.EncodeToString(sum[:]) != payload.Sha256 {
+			warnings = append(warnings, fmt.Sprintf("blocklist %q: backup file payload checksum mismatch, skipping file restore", l.ID))
+			l.DomainCount = 0
+			l.LastError = "needs refresh after import"
+			restored = append(restored, l)
+			continue
+		}
+
+		if err := s.blocklistService.manager.WriteBlocklistFile(l.ID, content); err != nil {
+			warnings = append(warnings, fmt.Sprintf("blocklist %q: failed to write hosts file: %v", l.ID, err))
+			l.DomainCount = 0
+			l.LastError = "needs refresh after import"
+			restored = append(restored, l)
+			continue
+		}
+
+		if mode == model.DNSBlockModeNXDomain && !s.blocklistService.manager.SupportsBulkNXDomain() {
+			mode = model.DNSBlockModeSinkhole
+			l.BlockMode = mode
+			l.LastError = "blockMode downgraded to sinkhole on import: this system's dnsmasq does not support nxdomain mode (requires dnsmasq >= 2.86)"
+		}
+		if err := s.blocklistService.renderArtifacts(l.ID, mode); err != nil {
+			warnings = append(warnings, fmt.Sprintf("blocklist %q: failed to render blockMode %q artifacts: %v", l.ID, mode, err))
+		}
+
+		restored = append(restored, l)
+	}
+
+	if err := s.blocklistService.store.ReplaceAll(restored); err != nil {
+		warnings = append(warnings, fmt.Sprintf("failed to persist restored blocklist manifest: %v", err))
+	}
+	return warnings
 }
 
 // reapply pushes the freshly restored DB state to the kernel, in the same order
@@ -797,6 +1065,30 @@ func validateConfig(cfg model.BackupConfig) error {
 			return fmt.Errorf("blocked domain %q: %w", b.Domain, err)
 		}
 	}
+	// Same fail-closed treatment for the DNS blocklist import feature (plan
+	// §2.4/T-09): its manifest entries bypass HandleCreateDNSBlocklist/
+	// HandleUpdateDNSBlocklist on import, so a crafted backup must not be able
+	// to smuggle an invalid id (used directly to build a filesystem path,
+	// plan §2.1) or blockMode.
+	for _, bl := range cfg.Blocklists {
+		if err := model.ValidateDNSBlocklistID(bl.ID); err != nil {
+			return fmt.Errorf("blocklist %q: %w", bl.Name, err)
+		}
+		if err := model.ValidateDNSBlocklistName(bl.Name); err != nil {
+			return fmt.Errorf("blocklist %q: %w", bl.ID, err)
+		}
+		if bl.SourceType != model.DNSBlocklistSourceURL && bl.SourceType != model.DNSBlocklistSourceUpload {
+			return fmt.Errorf("blocklist %q: invalid sourceType %q", bl.ID, bl.SourceType)
+		}
+		if bl.SourceType == model.DNSBlocklistSourceURL {
+			if err := model.ValidateDNSBlocklistURL(bl.URL); err != nil {
+				return fmt.Errorf("blocklist %q: %w", bl.ID, err)
+			}
+		}
+		if _, err := model.NormalizeBlocklistBlockMode(bl.BlockMode); err != nil {
+			return fmt.Errorf("blocklist %q: %w", bl.ID, err)
+		}
+	}
 	for _, res := range cfg.DhcpReservations {
 		if err := model.ValidateReservation(res); err != nil {
 			return fmt.Errorf("dhcp reservation %q: %w", res.DeviceName, err)
@@ -839,6 +1131,7 @@ func configCounts(cfg model.BackupConfig) map[string]int {
 		"qosRules":         len(cfg.QosRules),
 		"users":            len(cfg.Users),
 		"wifiPresets":      len(cfg.Presets),
+		"blocklists":       len(cfg.Blocklists),
 	}
 }
 

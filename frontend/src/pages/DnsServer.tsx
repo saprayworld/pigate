@@ -17,7 +17,9 @@ import {
   Loader2,
   Network,
   Ban,
-  ShieldAlert
+  ShieldAlert,
+  Download,
+  Upload
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -37,6 +39,12 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@/components/ui/drawer"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -54,6 +62,7 @@ import {
   type DNSRecord,
   type NetworkInterface,
   type BlockedDomain,
+  type DNSBlocklist,
   DNS_CACHE_TTL_MIN,
   DNS_CACHE_TTL_MAX,
   DNS_CACHE_TTL_DEFAULT,
@@ -62,6 +71,9 @@ import {
   DNS_CACHE_ENTRIES_DEFAULT,
   DNS_UPSTREAM_MAX_SERVERS,
   DNS_BLOCKED_DOMAINS_MAX,
+  DNS_BLOCKLISTS_MAX,
+  DNS_BLOCKLIST_MAX_FILE_MB,
+  DNS_BLOCKLIST_NXDOMAIN_MAX_DOMAINS,
 } from "@/data-mockup/mockData"
 import { dnsServerService } from "@/services/dnsServerService"
 import { interfaceService } from "@/services/interfaceService"
@@ -69,6 +81,12 @@ import { systemService, type DNSConfig } from "@/services/systemService"
 import { useAlert } from "@/hooks/useAlert"
 import { isValidIp } from "@/lib/utils"
 import { ifaceLabel } from "@/lib/ifaceLabel"
+
+// Must match backend model.DNSBlocklistMaxTotalDomains (docs/ref/todo/
+// dns-blocklist-import-plan.md §2.1.4). Not re-exported from mockData.ts by
+// T-11 (only the per-list/upload/nxdomain caps are), so it is mirrored here
+// for the Blocklists tab's summary bar only.
+const DNS_BLOCKLIST_TOTAL_DOMAINS_MAX = 500000
 
 export default function DnsServer() {
   const { alert, confirm } = useAlert()
@@ -80,7 +98,7 @@ export default function DnsServer() {
   // now-dead "stats") falls back to "zones". activeTab stays the single
   // source of truth for <Tabs value=...>; the param only seeds its initial
   // value and is kept in sync on every tab switch below.
-  const VALID_TABS = ["zones", "blocked", "settings"] as const
+  const VALID_TABS = ["zones", "blocked", "blocklists", "settings"] as const
   type DnsServerTab = (typeof VALID_TABS)[number]
   const [searchParams, setSearchParams] = useSearchParams()
   const initialTab = searchParams.get("tab")
@@ -142,6 +160,27 @@ export default function DnsServer() {
   const [blkError, setBlkError] = useState("")
   const [isSavingBlocked, setIsSavingBlocked] = useState(false)
 
+  // DNS Blocklists (bulk subscribe-URL/upload hosts import,
+  // docs/ref/todo/dns-blocklist-import-plan.md) — distinct feature from the
+  // deny-list above. blstXxx fields belong to the Add/Edit dialog form.
+  const [blocklists, setBlocklists] = useState<DNSBlocklist[]>([])
+  const [isBlocklistModalOpen, setIsBlocklistModalOpen] = useState(false)
+  const [editingBlocklist, setEditingBlocklist] = useState<DNSBlocklist | null>(null)
+  const [blstSourceType, setBlstSourceType] = useState<"url" | "upload">("url")
+  const [blstName, setBlstName] = useState("")
+  const [blstUrl, setBlstUrl] = useState("")
+  // Default "sinkhole" — opposite of the deny-list's blkMode default above
+  // (see mockData.ts DNSBlocklist.blockMode doc comment for why).
+  const [blstMode, setBlstMode] = useState<"sinkhole" | "nxdomain">("sinkhole")
+  const [blstEnabled, setBlstEnabled] = useState(true)
+  const [blstFile, setBlstFile] = useState<File | null>(null)
+  const [blstError, setBlstError] = useState("")
+  const [isSavingBlocklist, setIsSavingBlocklist] = useState(false)
+  // Ids currently mid-flight for a row action (refresh/toggle/delete) — a
+  // refresh of a large hosts file can take several seconds, so this both
+  // shows a spinner and blocks double-clicks on that row.
+  const [blocklistBusyIds, setBlocklistBusyIds] = useState<Set<string>>(new Set())
+
   // Apply & Save states
   const [isApplying, setIsApplying] = useState(false)
   const [isApplied, setIsApplied] = useState(true)
@@ -179,15 +218,17 @@ export default function DnsServer() {
     // selectedZoneId is still its initial null value on this first-mount load.
     const initialLoad = async () => {
       try {
-        const [data, ifaces, settings, sysDns, blocked] = await Promise.all([
+        const [data, ifaces, settings, sysDns, blocked, blocklistsData] = await Promise.all([
           dnsServerService.getZones(),
           interfaceService.getAll(),
           dnsServerService.getSettings(),
           systemService.getDNSConfig(),
           dnsServerService.getBlockedDomains(),
+          dnsServerService.getBlocklists(),
         ])
         setZones(data || [])
         setBlockedDomains(blocked || [])
+        setBlocklists(blocklistsData || [])
         if ((data || []).length > 0) {
           setSelectedZoneId(data[0].id)
         }
@@ -408,6 +449,35 @@ export default function DnsServer() {
       b.domain.toLowerCase().includes(q) || (b.comment || "").toLowerCase().includes(q)
     )
   }, [blockedDomains, blockedSearchQuery])
+
+  // Blocklists summary bar totals (docs/ref/todo/dns-blocklist-import-plan.md
+  // T-12 item 2): overall domain count across every list/mode, plus the
+  // narrower nxdomain-only total (which has a separate, lower cap since it
+  // costs a re-parse of its conf-file on every Apply — plan §2.1.4).
+  const blocklistTotalDomains = useMemo(
+    () => blocklists.reduce((sum, b) => sum + b.domainCount, 0),
+    [blocklists]
+  )
+  const blocklistNXDomainDomains = useMemo(
+    () => blocklists.filter(b => b.blockMode === "nxdomain").reduce((sum, b) => sum + b.domainCount, 0),
+    [blocklists]
+  )
+
+  const formatBlocklistTime = (iso?: string): string => {
+    if (!iso) return "—"
+    const d = new Date(iso)
+    if (isNaN(d.getTime())) return "—"
+    return d.toLocaleString()
+  }
+
+  const blocklistUrlHost = (url?: string): string => {
+    if (!url) return ""
+    try {
+      return new URL(url).hostname
+    } catch {
+      return url
+    }
+  }
 
   // Read-only suggestion (T-12, plan §5 item 3/§2 "Migration path ของ
   // empty-zone workaround"): zones that look like they were created purely
@@ -706,6 +776,173 @@ export default function DnsServer() {
     }
   }
 
+  // --- Handlers: DNS Blocklists (bulk import, docs/ref/todo/
+  // dns-blocklist-import-plan.md) ---
+  const closeBlocklistModal = () => {
+    setIsBlocklistModalOpen(false)
+    // Reset back to the defaults every time the form closes (create, edit,
+    // Cancel, or Escape/overlay dismiss) — instruction T-12 item 3b.
+    setBlstSourceType("url")
+    setBlstMode("sinkhole")
+  }
+
+  const openCreateBlocklistModal = () => {
+    setEditingBlocklist(null)
+    setBlstSourceType("url")
+    setBlstName("")
+    setBlstUrl("")
+    setBlstMode("sinkhole")
+    setBlstEnabled(true)
+    setBlstFile(null)
+    setBlstError("")
+    setIsBlocklistModalOpen(true)
+  }
+
+  const openEditBlocklistModal = (b: DNSBlocklist) => {
+    setEditingBlocklist(b)
+    setBlstSourceType(b.sourceType)
+    setBlstName(b.name)
+    setBlstUrl(b.url || "")
+    setBlstMode(b.blockMode)
+    setBlstEnabled(b.enabled)
+    setBlstFile(null)
+    setBlstError("")
+    setIsBlocklistModalOpen(true)
+  }
+
+  const handleDeleteBlocklist = async (id: string, name: string) => {
+    if (await confirm("ยืนยันการลบ", `คุณต้องการลบ Blocklist "${name}" ใช่หรือไม่? (ไฟล์โดเมนที่ import ไว้จะถูกลบไปด้วย)`)) {
+      setBlocklistBusyIds(prev => new Set(prev).add(id))
+      try {
+        await dnsServerService.deleteBlocklist(id)
+        setBlocklists(prev => prev.filter(b => b.id !== id))
+        setIsApplied(false)
+      } catch (err) {
+        await alert("ข้อผิดพลาด", "ไม่สามารถลบ Blocklist ได้: " + getErrorMessage(err))
+      } finally {
+        setBlocklistBusyIds(prev => {
+          const next = new Set(prev)
+          next.delete(id)
+          return next
+        })
+      }
+    }
+  }
+
+  const handleToggleBlocklist = async (id: string) => {
+    setBlocklistBusyIds(prev => new Set(prev).add(id))
+    try {
+      const updated = await dnsServerService.toggleBlocklist(id)
+      setBlocklists(prev => prev.map(b => b.id === id ? updated : b))
+      setIsApplied(false)
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถเปิด/ปิด Blocklist ได้: " + getErrorMessage(err))
+    } finally {
+      setBlocklistBusyIds(prev => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }
+  }
+
+  const handleRefreshBlocklist = async (id: string) => {
+    setBlocklistBusyIds(prev => new Set(prev).add(id))
+    try {
+      const updated = await dnsServerService.refreshBlocklist(id)
+      setBlocklists(prev => prev.map(b => b.id === id ? updated : b))
+      setIsApplied(false)
+    } catch (err) {
+      await alert("ข้อผิดพลาด", "ไม่สามารถรีเฟรช Blocklist ได้: " + getErrorMessage(err))
+    } finally {
+      setBlocklistBusyIds(prev => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }
+  }
+
+  const handleSaveBlocklist = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setBlstError("")
+
+    const name = blstName.trim()
+    if (!name) {
+      setBlstError("กรุณากรอกชื่อ Blocklist")
+      return
+    }
+    if (!editingBlocklist && blocklists.length >= DNS_BLOCKLISTS_MAX) {
+      setBlstError(`รายการ Blocklist ครบจำนวนสูงสุด ${DNS_BLOCKLISTS_MAX} รายการแล้ว`)
+      return
+    }
+
+    if (editingBlocklist) {
+      // Edit only touches name/url/blockMode/enabled — the source (url vs
+      // upload) and its data can't be changed here; delete + re-add instead.
+      setIsSavingBlocklist(true)
+      try {
+        const updated = await dnsServerService.updateBlocklist(editingBlocklist.id, {
+          name,
+          url: editingBlocklist.sourceType === "url" ? blstUrl.trim() : undefined,
+          blockMode: blstMode,
+          enabled: blstEnabled,
+        })
+        setBlocklists(prev => prev.map(b => b.id === editingBlocklist.id ? updated : b))
+        closeBlocklistModal()
+        setIsApplied(false)
+      } catch (err) {
+        setBlstError(getErrorMessage(err) || "เกิดข้อผิดพลาดในการบันทึกข้อมูล")
+      } finally {
+        setIsSavingBlocklist(false)
+      }
+      return
+    }
+
+    if (blstSourceType === "url") {
+      const url = blstUrl.trim()
+      if (!url) {
+        setBlstError("กรุณากรอก URL ของ Blocklist")
+        return
+      }
+      if (!/^https:\/\//i.test(url)) {
+        setBlstError("URL ต้องขึ้นต้นด้วย https:// เท่านั้น (มาตรการความปลอดภัย — ไม่รองรับ http://)")
+        return
+      }
+      setIsSavingBlocklist(true)
+      try {
+        const created = await dnsServerService.createBlocklistFromUrl(name, url, blstMode, blstEnabled)
+        setBlocklists(prev => [...prev, created])
+        closeBlocklistModal()
+        setIsApplied(false)
+      } catch (err) {
+        setBlstError(getErrorMessage(err) || "เกิดข้อผิดพลาดในการดึงข้อมูล Blocklist จาก URL")
+      } finally {
+        setIsSavingBlocklist(false)
+      }
+    } else {
+      if (!blstFile) {
+        setBlstError("กรุณาเลือกไฟล์ hosts ที่ต้องการอัปโหลด")
+        return
+      }
+      if (blstFile.size > DNS_BLOCKLIST_MAX_FILE_MB * 1024 * 1024) {
+        setBlstError(`ไฟล์ใหญ่เกิน ${DNS_BLOCKLIST_MAX_FILE_MB} MB (ไฟล์ที่เลือกมีขนาด ${(blstFile.size / (1024 * 1024)).toFixed(1)} MB)`)
+        return
+      }
+      setIsSavingBlocklist(true)
+      try {
+        const created = await dnsServerService.uploadBlocklist(name, blstFile, blstMode, blstEnabled)
+        setBlocklists(prev => [...prev, created])
+        closeBlocklistModal()
+        setIsApplied(false)
+      } catch (err) {
+        setBlstError(getErrorMessage(err) || "เกิดข้อผิดพลาดในการอัปโหลดไฟล์ Blocklist")
+      } finally {
+        setIsSavingBlocklist(false)
+      }
+    }
+  }
+
   // --- Handlers: Apply & Cache ---
   const handleApplySettings = async () => {
     setIsApplying(true)
@@ -792,6 +1029,7 @@ export default function DnsServer() {
         <TabsList>
           <TabsTrigger value="zones" className="cursor-pointer">Zones &amp; Records</TabsTrigger>
           <TabsTrigger value="blocked" className="cursor-pointer">Blocked Domains</TabsTrigger>
+          <TabsTrigger value="blocklists" className="cursor-pointer">Blocklists</TabsTrigger>
           <TabsTrigger value="settings" className="cursor-pointer">Settings</TabsTrigger>
         </TabsList>
 
@@ -1182,6 +1420,202 @@ export default function DnsServer() {
               </div>
             </div>
           )}
+        </TabsContent>
+
+        <TabsContent value="blocklists" className="space-y-4">
+          {/* Permanent explainer — sinkhole vs nxdomain, and why the mode is
+              chosen per-list, not per-domain (plan §2.1.2/§2.1.4). */}
+          <div className="flex gap-2 rounded-lg border border-border bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
+            <Info className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="space-y-1">
+              <p>
+                <strong className="text-foreground">Sinkhole</strong> ตอบที่อยู่ 0.0.0.0 / :: และ{" "}
+                <strong className="text-foreground">บล็อกเฉพาะชื่อที่อยู่ในไฟล์เท่านั้น ไม่ครอบ subdomain</strong> — เร็วและเบาที่สุด เหมาะกับ list ขนาดใหญ่ (ค่าเริ่มต้น)
+              </p>
+              <p>
+                <strong className="text-foreground">NXDOMAIN</strong> ตอบว่าไม่พบโดเมนและ{" "}
+                <strong className="text-foreground">ครอบ subdomain ทั้งหมด</strong> แต่ dnsmasq ต้อง parse ไฟล์ทุกครั้งที่กด Apply DNS จึงมีเพดานโดเมนต่ำกว่า
+                (สูงสุด {DNS_BLOCKLIST_NXDOMAIN_MAX_DOMAINS.toLocaleString()} โดเมนรวมทุก list ที่ใช้โหมดนี้) ทำให้ Apply ช้าลง และต้องใช้ dnsmasq เวอร์ชัน 2.86 ขึ้นไป
+              </p>
+              <p>
+                เลือกโหมดได้เฉพาะ<strong className="text-foreground">ระดับ list</strong> ไม่ใช่รายโดเมน — ถ้าต้องการกำหนดโหมดเป็นรายโดเมน ให้ใช้แท็บ{" "}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("blocked")}
+                  className="cursor-pointer text-primary underline underline-offset-2"
+                >
+                  Blocked Domains
+                </button>{" "}
+                แทน (จำกัด {DNS_BLOCKED_DOMAINS_MAX.toLocaleString()} รายการ แต่เลือกโหมดต่อโดเมนได้)
+              </p>
+            </div>
+          </div>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
+              <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                <Download className="h-4 w-4 text-muted-foreground" />
+                Blocklists
+                <Badge variant="secondary" className="rounded-full px-2 py-0 text-xs font-semibold">
+                  {blocklists.length}/{DNS_BLOCKLISTS_MAX}
+                </Badge>
+              </CardTitle>
+              <Button
+                onClick={openCreateBlocklistModal}
+                size="sm"
+                disabled={blocklists.length >= DNS_BLOCKLISTS_MAX}
+                className="cursor-pointer gap-1.5 font-semibold"
+              >
+                <Plus className="h-4 w-4" />
+                Add Blocklist
+              </Button>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Summary bar — total domains across every list/mode vs. the
+                  overall cap, plus the narrower nxdomain-only total vs. its
+                  own (lower) cap. */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-border bg-muted/50 p-3">
+                  <p className="text-[10px] font-medium text-muted-foreground">รวมทุก List / ทุกโหมด</p>
+                  <p className="font-mono text-sm font-semibold text-foreground">
+                    {blocklistTotalDomains.toLocaleString()} <span className="text-muted-foreground">/ {DNS_BLOCKLIST_TOTAL_DOMAINS_MAX.toLocaleString()} โดเมน</span>
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/50 p-3">
+                  <p className="text-[10px] font-medium text-muted-foreground">เฉพาะโหมด NXDOMAIN</p>
+                  <p className="font-mono text-sm font-semibold text-foreground">
+                    {blocklistNXDomainDomains.toLocaleString()} <span className="text-muted-foreground">/ {DNS_BLOCKLIST_NXDOMAIN_MAX_DOMAINS.toLocaleString()} โดเมน</span>
+                  </p>
+                </div>
+              </div>
+
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="w-[18%] text-xs font-medium text-muted-foreground">Name</TableHead>
+                    <TableHead className="w-[18%] text-xs font-medium text-muted-foreground">Source</TableHead>
+                    <TableHead className="w-[10%] text-xs font-medium text-muted-foreground">Mode</TableHead>
+                    <TableHead className="w-[10%] text-xs font-medium text-muted-foreground">Domains</TableHead>
+                    <TableHead className="w-[16%] text-xs font-medium text-muted-foreground">Last fetched</TableHead>
+                    <TableHead className="w-[10%] text-xs font-medium text-muted-foreground">Status</TableHead>
+                    <TableHead className="w-[8%] text-xs font-medium text-muted-foreground">Enabled</TableHead>
+                    <TableHead className="w-[10%] text-right text-xs font-medium text-muted-foreground"></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {blocklists.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={8} className="py-8 text-center text-xs text-muted-foreground">
+                        ยังไม่มี Blocklist — กด "Add Blocklist" เพื่อ subscribe URL หรืออัปโหลดไฟล์ hosts
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    blocklists.map((b) => {
+                      const busy = blocklistBusyIds.has(b.id)
+                      return (
+                        <TableRow key={b.id}>
+                          <TableCell className="py-3">
+                            <span className="text-xs font-medium text-foreground">{b.name}</span>
+                          </TableCell>
+                          <TableCell className="py-3">
+                            <div className="flex items-center gap-1.5">
+                              <Badge
+                                variant="outline"
+                                className="rounded border-border bg-muted px-1.5 py-0 text-[10px] font-medium text-muted-foreground"
+                              >
+                                {b.sourceType === "url" ? "URL" : "Upload"}
+                              </Badge>
+                              {b.sourceType === "url" && b.url && (
+                                <span className="max-w-[140px] truncate font-mono text-[10px] text-muted-foreground" title={b.url}>
+                                  {blocklistUrlHost(b.url)}
+                                </span>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell className="py-3">
+                            <Badge
+                              variant="outline"
+                              className={`rounded px-1.5 py-0 text-[10px] font-medium ${b.blockMode === "sinkhole"
+                                ? "border-warning/30 bg-warning/10 text-warning"
+                                : "border-primary/20 bg-primary/10 text-primary"
+                                }`}
+                            >
+                              {b.blockMode === "sinkhole" ? "Sinkhole" : "NXDOMAIN"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="py-3 font-mono text-xs text-foreground">
+                            {b.domainCount.toLocaleString()}
+                          </TableCell>
+                          <TableCell className="py-3 text-xs text-muted-foreground">
+                            {formatBlocklistTime(b.lastFetchedAt)}
+                          </TableCell>
+                          <TableCell className="py-3">
+                            {b.lastError ? (
+                              <Badge variant="destructive" className="rounded px-1.5 py-0 text-[10px] font-medium" title={b.lastError}>
+                                Error
+                              </Badge>
+                            ) : (
+                              <Badge
+                                variant="outline"
+                                className="rounded border-primary/20 bg-primary/10 px-1.5 py-0 text-[10px] font-medium text-primary"
+                              >
+                                OK
+                              </Badge>
+                            )}
+                          </TableCell>
+                          <TableCell className="py-3">
+                            <Switch
+                              size="sm"
+                              checked={b.enabled}
+                              disabled={busy}
+                              onCheckedChange={() => handleToggleBlocklist(b.id)}
+                              className="cursor-pointer"
+                            />
+                          </TableCell>
+                          <TableCell className="py-3 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              {b.sourceType === "url" && (
+                                <Button
+                                  variant="outline"
+                                  size="icon-sm"
+                                  disabled={busy}
+                                  onClick={() => handleRefreshBlocklist(b.id)}
+                                  className="cursor-pointer text-muted-foreground hover:text-foreground"
+                                  title="Refresh (re-fetch จาก URL)"
+                                >
+                                  <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
+                                </Button>
+                              )}
+                              <Button
+                                variant="outline"
+                                size="icon-sm"
+                                disabled={busy}
+                                onClick={() => openEditBlocklistModal(b)}
+                                className="cursor-pointer text-muted-foreground hover:text-foreground"
+                                title="แก้ไข"
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                disabled={busy}
+                                onClick={() => handleDeleteBlocklist(b.id, b.name)}
+                                className="cursor-pointer text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                title="ลบ"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="settings" className="space-y-4">
@@ -1801,6 +2235,191 @@ export default function DnsServer() {
           </div>
         </DrawerContent>
       </Drawer>
+
+      {/* Blocklist Add/Edit Dialog — a Dialog (not Drawer) since this form has
+          no Combobox field (T-12 item 7); default modal behavior is fine. */}
+      <Dialog open={isBlocklistModalOpen} onOpenChange={(open) => !open && closeBlocklistModal()}>
+        <DialogContent className="max-h-[85vh] w-full max-w-[480px] gap-4 overflow-y-auto rounded-xl p-6">
+          <DialogHeader className="border-b border-border/50 pb-3">
+            <DialogTitle className="flex items-center gap-2 text-base font-semibold">
+              <Download className="h-4 w-4 text-muted-foreground" />
+              {editingBlocklist ? "แก้ไข Blocklist" : "เพิ่ม Blocklist ใหม่"}
+            </DialogTitle>
+          </DialogHeader>
+
+          <form onSubmit={handleSaveBlocklist} className="space-y-4 text-sm">
+            {blstError && (
+              <Alert variant="destructive" className="px-3 py-2.5">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-xs">{blstError}</AlertDescription>
+              </Alert>
+            )}
+
+            {/* Source type toggle — create only; fixed once created */}
+            {!editingBlocklist ? (
+              <div className="space-y-1.5">
+                <Label className="block text-xs font-medium text-muted-foreground">แหล่งที่มา</Label>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant={blstSourceType === "url" ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setBlstSourceType("url")}
+                    className="flex-1 cursor-pointer gap-1.5 font-semibold"
+                  >
+                    <Globe className="h-4 w-4" />
+                    Subscribe URL
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={blstSourceType === "upload" ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setBlstSourceType("upload")}
+                    className="flex-1 cursor-pointer gap-1.5 font-semibold"
+                  >
+                    <Upload className="h-4 w-4" />
+                    Upload file
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <Label className="block text-xs font-medium text-muted-foreground">แหล่งที่มา</Label>
+                <Badge variant="outline" className="rounded border-border bg-muted px-1.5 py-0 text-[10px] font-medium text-muted-foreground">
+                  {editingBlocklist.sourceType === "url" ? "Subscribe URL" : "Upload file"} (แก้ไขไม่ได้)
+                </Badge>
+              </div>
+            )}
+
+            {/* Field: Name */}
+            <div className="space-y-1.5">
+              <Label htmlFor="blst-name" className="block text-xs font-medium text-muted-foreground">
+                Name (ชื่อ Blocklist) <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="blst-name"
+                type="text"
+                required
+                value={blstName}
+                onChange={(e) => setBlstName(e.target.value)}
+                placeholder="เช่น StevenBlack unified"
+                className="h-9 text-sm"
+              />
+            </div>
+
+            {/* Field: URL (subscribe URL mode only) */}
+            {blstSourceType === "url" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="blst-url" className="block text-xs font-medium text-muted-foreground">
+                  Subscribe URL <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="blst-url"
+                  type="text"
+                  required
+                  value={blstUrl}
+                  onChange={(e) => setBlstUrl(e.target.value)}
+                  placeholder="https://raw.githubusercontent.com/..."
+                  className="h-9 font-mono text-xs"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  ต้องขึ้นต้นด้วย <span className="font-mono">https://</span> เท่านั้น — <strong className="text-foreground">URL ภายใน LAN ใช้ไม่ได้</strong> (มาตรการความปลอดภัยป้องกัน SSRF)
+                  {!editingBlocklist && " ระบบจะดึงและตรวจสอบไฟล์ทันทีหลังกด Create"}
+                </p>
+              </div>
+            )}
+
+            {/* Field: File upload (upload mode, create only) */}
+            {!editingBlocklist && blstSourceType === "upload" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="blst-file" className="block text-xs font-medium text-muted-foreground">
+                  Hosts File <span className="text-destructive">*</span>
+                </Label>
+                <input
+                  id="blst-file"
+                  type="file"
+                  accept=".txt,.hosts,text/plain"
+                  onChange={(e) => {
+                    const f = e.target.files && e.target.files.length > 0 ? e.target.files[0] : null
+                    setBlstFile(f)
+                  }}
+                  className="w-full cursor-pointer rounded-lg border border-border text-xs text-muted-foreground file:mr-3 file:cursor-pointer file:rounded-l-lg file:border-0 file:border-r file:border-border file:bg-primary file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-primary-foreground"
+                />
+                {blstFile && (
+                  <p className="text-[10px] text-muted-foreground">
+                    ไฟล์ที่เลือก: {blstFile.name} ({(blstFile.size / (1024 * 1024)).toFixed(2)} MB)
+                    {blstFile.size > DNS_BLOCKLIST_MAX_FILE_MB * 1024 * 1024 && (
+                      <span className="font-semibold text-destructive"> — เกินขนาดสูงสุด {DNS_BLOCKLIST_MAX_FILE_MB} MB</span>
+                    )}
+                  </p>
+                )}
+                <p className="text-[10px] text-muted-foreground">
+                  รองรับไฟล์รูปแบบ hosts (.txt / .hosts) ขนาดไม่เกิน {DNS_BLOCKLIST_MAX_FILE_MB} MB — ระบบจะทิ้งคอลัมน์ IP ต้นฉบับและ render ใหม่เองทั้งหมด (ป้องกัน DNS spoofing)
+                </p>
+              </div>
+            )}
+
+            {/* Field: Block mode — same pattern as the deny-list's blk-mode
+                Select above, but default/order swapped (T-12 item 3b). */}
+            <div className="space-y-1.5">
+              <Label htmlFor="blst-mode" className="block text-xs font-medium text-muted-foreground">
+                Block mode (วิธีตอบกลับ)
+              </Label>
+              <Select value={blstMode} onValueChange={(v) => setBlstMode(v as "sinkhole" | "nxdomain")}>
+                <SelectTrigger id="blst-mode" className="h-9 w-full text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="sinkhole" className="text-xs">Sinkhole (ค่าเริ่มต้น — ตอบ 0.0.0.0 / ::)</SelectItem>
+                  <SelectItem value="nxdomain" className="text-xs">NXDOMAIN (ตอบว่าไม่พบโดเมน — ครอบ subdomain ด้วย)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[10px] text-muted-foreground">
+                เปลี่ยนโหมดไม่ต้องดึงข้อมูลใหม่ แต่ต้องกด "Apply DNS Zones" เพื่อให้มีผลจริง
+              </p>
+            </div>
+
+            {/* Field: Enabled */}
+            <div className="flex items-center justify-between rounded-lg border border-border bg-muted/50 p-3">
+              <div className="space-y-0.5">
+                <Label className="text-xs font-semibold text-foreground">Enabled</Label>
+                <p className="text-[10px] text-muted-foreground">ปิดเพื่อพักการบล็อกของ list นี้ชั่วคราวโดยไม่ต้องลบ</p>
+              </div>
+              <Switch
+                checked={blstEnabled}
+                onCheckedChange={setBlstEnabled}
+                className="cursor-pointer"
+              />
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center justify-end gap-3 border-t border-border/50 pt-4">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={closeBlocklistModal}
+                className="cursor-pointer text-muted-foreground"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={isSavingBlocklist}
+                className="cursor-pointer gap-1.5 px-6 font-semibold"
+              >
+                {isSavingBlocklist ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    {editingBlocklist ? "Saving..." : blstSourceType === "url" ? "Fetching..." : "Uploading..."}
+                  </>
+                ) : (
+                  editingBlocklist ? "Save Changes" : "Create"
+                )}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

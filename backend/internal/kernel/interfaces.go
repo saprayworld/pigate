@@ -176,7 +176,17 @@ type DNSServerManager interface {
 	// `address=/<domain>/<ip>` (sinkhole) directive appended after all zones;
 	// an empty/all-skipped list produces byte-for-byte the same output as
 	// before this parameter existed.
-	ApplyZones(zones []model.DNSZone, interfaces []string, upstreamServers []string, queryLog bool, blocked []model.BlockedDomain) error
+	//
+	// blocklists is the bulk-import blocklist feature (docs/ref/todo/
+	// dns-blocklist-import-plan.md §2.1/§2.7, T-02): one BlocklistRef per
+	// enabled list with DomainCount>0 that the service layer wants enforced.
+	// The implementation MUST os.Stat the file each ref resolves to (per its
+	// BlockMode) and only emit a directive for a file that actually exists
+	// and is non-empty — never emit `addn-hosts=`/`conf-file=` pointing at a
+	// missing file (a missing conf-file= target makes dnsmasq refuse to
+	// start entirely). An empty/all-skipped blocklists slice produces
+	// byte-for-byte the same output as before this parameter existed.
+	ApplyZones(zones []model.DNSZone, interfaces []string, upstreamServers []string, queryLog bool, blocked []model.BlockedDomain, blocklists []model.BlocklistRef) error
 	ClearCache() error
 	// WatchDNSLog streams both query and answer (reply/cached ... is <IP>)
 	// events parsed from dnsmasq's query log. Blocking until ctx is done; cb
@@ -185,6 +195,70 @@ type DNSServerManager interface {
 	// for the log file to not exist or for query logging to be disabled — the
 	// implementation simply waits quietly rather than erroring.
 	WatchDNSLog(ctx context.Context, cb func(model.DNSLogEvent)) error
+
+	// --- Blocklist import (docs/ref/todo/dns-blocklist-import-plan.md T-02) ---
+	// All of the following operate on files under /var/lib/pigate/blocklists
+	// (kept OUTSIDE /etc/dnsmasq.d on purpose — dnsmasq only auto-scans
+	// /etc/dnsmasq.d, so a disabled list's file sitting in this directory is
+	// never loaded implicitly; ApplyZones above is the only thing that
+	// references it, via an explicit addn-hosts=/conf-file= directive it
+	// builds itself). id is always validated against
+	// model.ValidateDNSBlocklistID (^bl-[a-z0-9]{1,32}$) before being used to
+	// build any path — id comes from the manifest / API layer, i.e. is
+	// external input, and is concatenated directly into a filesystem path.
+
+	// WriteBlocklistFile atomically (over)writes <id>.hosts — the canonical,
+	// always-present artifact for a list regardless of BlockMode (plan
+	// §2.1.1).
+	WriteBlocklistFile(id string, content []byte) error
+	// WriteBlocklistConfFile atomically (over)writes <id>.conf — the
+	// dnsmasq conf-file used only for BlockMode == DNSBlockModeNXDomain,
+	// always derived from (never the source of) <id>.hosts.
+	WriteBlocklistConfFile(id string, content []byte) error
+	// RemoveBlocklistFile deletes both <id>.hosts and <id>.conf for id (used
+	// when a list is deleted). Missing files are not an error.
+	RemoveBlocklistFile(id string) error
+	// RemoveBlocklistConfFile deletes only <id>.conf (used when a list
+	// switches from nxdomain back to sinkhole mode, so no derived file is
+	// left orphaned on disk). Missing file is not an error.
+	RemoveBlocklistConfFile(id string) error
+	// BlocklistFileInfo reports the size/existence of <id>.hosts without
+	// reading its contents. exists=false (size=0) covers both "never
+	// written" and "id fails validation" — callers that need to distinguish
+	// those cases should validate id themselves first.
+	BlocklistFileInfo(id string) (size int64, exists bool)
+	// BlocklistConfFileInfo is BlocklistFileInfo for <id>.conf.
+	BlocklistConfFileInfo(id string) (size int64, exists bool)
+	// StreamBlocklistFile reads <id>.hosts back line-by-line, invoking fn
+	// once per line (used to rebuild the statistics index and to re-render
+	// <id>.conf when a list's BlockMode is switched without re-fetching —
+	// both cases where holding the whole file in memory would be wasteful).
+	// A missing file is not an error (fn is simply never called). fn
+	// returning a non-nil error stops the scan and that error is returned.
+	StreamBlocklistFile(id string, fn func(line string) error) error
+	// ReadBlocklistManifest reads manifest.json's raw bytes. A missing file
+	// returns (nil, nil) — NOT an error — so the service layer's Load()
+	// treats "never written yet" the same as "empty manifest" (plan §2.3
+	// item 3).
+	ReadBlocklistManifest() ([]byte, error)
+	// WriteBlocklistManifest atomically (over)writes manifest.json.
+	WriteBlocklistManifest(content []byte) error
+	// QuarantineBlocklistManifest renames a corrupt/unparsable manifest.json
+	// to manifest.json.corrupt-<unix-timestamp> so the feature can start
+	// fresh with a new empty manifest instead of being permanently stuck
+	// (plan §2.3 item 3). Not finding a manifest to quarantine is not an
+	// error.
+	QuarantineBlocklistManifest() error
+	// SupportsBulkNXDomain reports whether the local dnsmasq binary is new
+	// enough (>= 2.86, plan §2.1.5) to serve BlockMode == DNSBlockModeNXDomain
+	// blocklists efficiently at scale. The real implementation runs
+	// `dnsmasq --version` once (cached via sync.Once) and fails OPEN (returns
+	// true) when the version can't be determined — an unnecessarily-enabled
+	// nxdomain mode on an old dnsmasq is merely slow, whereas fail-closed
+	// would break the feature on boards that are actually fine. The mock
+	// implementation always returns true (dev workstations aren't running
+	// the board's dnsmasq at all).
+	SupportsBulkNXDomain() bool
 }
 
 // DhcpcdManager abstracts starting/stopping the per-interface dhcpcd@ systemd

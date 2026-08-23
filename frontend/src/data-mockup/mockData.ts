@@ -847,6 +847,75 @@ export const DNS_BLOCKED_DOMAINS_MAX = 1000
 
 export const initialBlockedDomains: BlockedDomain[] = []
 
+// DNS blocklist import — bulk subscribe-URL/upload hosts-format blocklists
+// (docs/ref/todo/dns-blocklist-import-plan.md). Deliberately mirrors backend
+// model.DNSBlocklist 1:1 (its metadata lives in a JSON manifest on the
+// backend, NOT SQLite/the DB used by the rest of this file — see the plan's
+// §2.3 for why). Distinct from BlockedDomain above (the small, ≤1000-entry
+// deny-list): this is for large public/personal hosts files (tens of
+// thousands of domains) rendered into their own dnsmasq files.
+export interface DNSBlocklist {
+  id: string
+  name: string
+  sourceType: "url" | "upload"
+  url?: string
+  // blockMode selects which dnsmasq mechanism this list is rendered with —
+  // "sinkhole" (addn-hosts, exact-match, DEFAULT for blocklists) or
+  // "nxdomain" (conf-file with address=/d/, suffix-match — covers
+  // subdomains too). Same union shape as BlockedDomain.mode above, but note
+  // the *default* is the opposite of the deny-list's ("sinkhole" here vs.
+  // "nxdomain" there) — see backend model.NormalizeBlocklistBlockMode's doc
+  // comment for why.
+  blockMode: "nxdomain" | "sinkhole"
+  enabled: boolean
+  domainCount: number
+  fileBytes: number
+  sha256: string
+  lastFetchedAt?: string
+  lastError?: string
+  createdAt: string
+}
+
+// Must match backend model.DNSBlocklistsMax / DNSBlocklistMaxFileBytes (in
+// MiB) / DNSBlocklistMaxNXDomainDomains.
+export const DNS_BLOCKLISTS_MAX = 8
+export const DNS_BLOCKLIST_MAX_FILE_MB = 16
+export const DNS_BLOCKLIST_NXDOMAIN_MAX_DOMAINS = 150000
+
+// Two entries on purpose — one of each sourceType AND one of each blockMode
+// — so the Blocklists tab has a non-empty example of both mechanisms
+// (addn-hosts sinkhole / conf-file nxdomain) visible in mock mode without
+// the user having to add anything first.
+export const initialDNSBlocklists: DNSBlocklist[] = [
+  {
+    id: "bl-stevenblack",
+    name: "StevenBlack unified",
+    sourceType: "url",
+    url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
+    blockMode: "sinkhole",
+    enabled: true,
+    domainCount: 93412,
+    fileBytes: 1902344,
+    sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a0",
+    lastFetchedAt: "2026-08-20T08:11:00Z",
+    lastError: "",
+    createdAt: "2026-08-20T08:10:00Z",
+  },
+  {
+    id: "bl-manualupload",
+    name: "Personal upload",
+    sourceType: "upload",
+    blockMode: "nxdomain",
+    enabled: true,
+    domainCount: 1240,
+    fileBytes: 40920,
+    sha256: "1b4f0e9851971998e732078544c96b36c3d01cedf7caa332359d6f1d835670",
+    lastFetchedAt: "2026-08-21T09:00:00Z",
+    lastError: "",
+    createdAt: "2026-08-21T08:55:00Z",
+  },
+]
+
 
 
 
