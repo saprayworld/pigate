@@ -92,6 +92,18 @@ type StatisticsService struct {
 	// nil-check.
 	dns *dnsQueryStats
 
+	// dnsServerManager is optional (nil until SetDNSServerManager is called
+	// by main.go, mirroring SetLogBuffer's post-construction wiring pattern
+	// below) — used only by SetBlocklists (dns_query_stats.go, docs/ref/todo/
+	// dns-blocklist-import-plan.md T-06) to STREAM each enabled blocklist's
+	// <id>.hosts file back off disk (via kernel.StreamBlocklistFile +
+	// model.ParseHostsFileDomains) when rebuilding the RAM-only
+	// dnsBlocklistIndex, instead of holding up to 500,000 domains as a
+	// []string. Not a NewStatisticsService parameter, to avoid growing that
+	// constructor's already-7-parameter signature further (same reasoning as
+	// logBuffer).
+	dnsServerManager kernel.DNSServerManager
+
 	// logBuffer is optional (nil until SetLogBuffer is called by main.go,
 	// mirroring api.Server.SetPolicyStatsService's pattern) — it feeds the
 	// firewall.logBuffer ring in GetCapacityStatistics (docs/ref/todo/
@@ -110,6 +122,17 @@ type StatisticsService struct {
 // row when logBuffer is nil (e.g. a unit test that never calls this).
 func (s *StatisticsService) SetLogBuffer(rb *logs.RingBuffer) {
 	s.logBuffer = rb
+}
+
+// SetDNSServerManager wires the kernel.DNSServerManager handle used by
+// SetBlocklists to stream <id>.hosts files back off disk (docs/ref/todo/
+// dns-blocklist-import-plan.md T-06). Called once by main.go, mirroring
+// SetLogBuffer's post-construction pattern. Safe to leave unset (nil) —
+// SetBlocklists then simply skips every list it's handed (a direct caller,
+// e.g. a unit test, that never calls this still gets a working, empty
+// dnsBlocklistIndex).
+func (s *StatisticsService) SetDNSServerManager(m kernel.DNSServerManager) {
+	s.dnsServerManager = m
 }
 
 // NewStatisticsService constructs the service. traffic must be the same
@@ -155,6 +178,12 @@ func NewStatisticsService(traffic *TrafficStatsService, repo *db.Repository, dhc
 			maxPairs:     maxDNSPairs,
 			maxClients:   maxDNSClients,
 			blockIndex:   &dnsBlockIndex{},
+			// blocklistIndex backs the bulk-import blocklist statistics
+			// feature (dns_blocklist_index.go, T-06) — a zero-value
+			// dnsBlocklistIndex (atomic.Pointer defaults to nil) starts
+			// Empty() until the first successful SetBlocklists call, exactly
+			// like blockIndex above.
+			blocklistIndex: &dnsBlocklistIndex{},
 			// Set to the package default here; main.go raises it to the
 			// file-only dns-stats-max-blocked-domains config value via
 			// SetBlockedStatsLimit right after construction (mirrors

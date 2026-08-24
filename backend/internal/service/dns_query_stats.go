@@ -148,6 +148,17 @@ type dnsQueryStats struct {
 	// T-08). Never nil (constructed in NewStatisticsService); starts Empty()
 	// until the first successful ApplyAll.
 	blockIndex *dnsBlockIndex
+
+	// blocklistIndex is the RAM-only bulk-import blocklist matcher
+	// (dns_blocklist_index.go) fed by DNSServerService.SetBlocklistSink ->
+	// StatisticsService.SetBlocklists, primed at boot and refreshed every
+	// time Apply DNS Zones runs successfully (docs/ref/todo/
+	// dns-blocklist-import-plan.md §2.6/T-06) — the sibling of blockIndex
+	// above for the separate, much-larger bulk-import blocklist feature.
+	// Never nil (constructed in NewStatisticsService); starts Empty() until
+	// the first successful ApplyAll.
+	blocklistIndex *dnsBlocklistIndex
+
 	// maxBlockedDomains is the effective per-bucket cap on distinct blocked
 	// domains tracked (dns-stats-max-blocked-domains), same "set once at
 	// construction, never mutated" convention as maxPairs/maxClients above.
@@ -199,16 +210,28 @@ func (s *StatisticsService) recordDomainQuery(domain, qtype, client string) {
 	ts := time.Now().Truncate(domainBucketSpan).Format(time.RFC3339)
 
 	// LOCK ORDERING (docs/ref/todo/dns-blocked-query-statistics-plan.md
-	// T-03): dnsBlockIndex.Match takes its own mutex (idx.mu) — it must be
-	// called BEFORE s.dns.mu.Lock() below, never while s.dns.mu is held, to
-	// avoid a lock-ordering inversion against dnsBlockIndex.Set (called from
+	// T-03, extended by dns-blocklist-import-plan.md T-06 for
+	// blocklistIndex): both dnsBlockIndex.Match and dnsBlocklistIndex.Match
+	// take their own internal synchronization (a mutex / an atomic.Pointer
+	// load respectively) — they must be called BEFORE s.dns.mu.Lock() below,
+	// never while s.dns.mu is held, to avoid a lock-ordering inversion
+	// against dnsBlockIndex.Set / dnsBlocklistIndex.Set (both called from
 	// DNSServerService.ApplyAll, which never holds s.dns.mu). Empty() is
 	// checked first as a fast, allocation-free path for the overwhelmingly
-	// common case (no deny-list configured at all).
+	// common case (no deny-list/blocklist configured at all).
+	//
+	// The deny-list (blockIndex) is checked FIRST and wins on a match in
+	// both — it is the smaller, explicitly user-curated list and has always
+	// taken precedence; a domain that happens to appear in both a deny-list
+	// rule and a bulk-imported blocklist is reported under the deny-list's
+	// rule/mode (docs/ref/todo/dns-blocklist-import-plan.md Caution 19).
 	var blocked bool
 	var blockedRule, blockedMode string
 	if !s.dns.blockIndex.Empty() {
 		blockedRule, blockedMode, blocked = s.dns.blockIndex.Match(domain)
+	}
+	if !blocked && !s.dns.blocklistIndex.Empty() {
+		blockedRule, blockedMode, blocked = s.dns.blocklistIndex.Match(domain)
 	}
 
 	s.dns.mu.Lock()
@@ -313,6 +336,60 @@ func (s *StatisticsService) ClearDNSStats() {
 // (plan §0 — record-time classification is permanent).
 func (s *StatisticsService) SetBlockedDomains(rules []model.BlockedDomain) {
 	s.dns.blockIndex.Set(rules)
+}
+
+// SetBlocklists rebuilds the RAM-only bulk-import blocklist matcher
+// (dns_blocklist_index.go) that classifies queries as "blocked" at record
+// time (docs/ref/todo/dns-blocklist-import-plan.md §2.6/T-06). Called by
+// DNSServerService via SetBlocklistSink, ONLY after ApplyZones has actually
+// succeeded with this exact manifest — see that method's doc comment for
+// why (a list that was never successfully applied to dnsmasq must never be
+// reflected here). Like SetBlockedDomains, deliberately does NOT touch
+// s.dns.buckets/ClearDNSStats: a blocklist change must never re-classify or
+// wipe already-recorded history (plan §0 — record-time classification is
+// permanent).
+//
+// Every enabled, non-empty list's domains are read back by STREAMING its
+// <id>.hosts file through s.dnsServerManager.StreamBlocklistFile +
+// model.ParseHostsFileDomains, one line at a time — <id>.hosts is the
+// canonical artifact for EVERY list regardless of BlockMode (plan §2.1.1),
+// so this is the only parser needed; <id>.conf (the nxdomain-mode derived
+// file) is never read here. Peak RAM during a rebuild is therefore the
+// hash slice being built, never a []string holding every domain at once.
+//
+// A nil s.dnsServerManager (SetDNSServerManager never called — e.g. a
+// direct unit-test construction of StatisticsService) or a list whose file
+// fails to stream degrades that single list to zero domains rather than
+// aborting the whole rebuild; the resulting index simply won't classify
+// queries against that one list.
+func (s *StatisticsService) SetBlocklists(lists []model.DNSBlocklist) {
+	entries := make([]blocklistEntry, 0, len(lists))
+	for _, l := range lists {
+		if !l.Enabled || l.DomainCount <= 0 {
+			continue
+		}
+		mode, err := model.NormalizeBlocklistBlockMode(l.BlockMode)
+		if err != nil {
+			// A manifest entry with an invalid/corrupt blockMode is skipped
+			// rather than aborting the whole rebuild — the same
+			// fail-degraded-not-fail-closed posture as a streaming error
+			// below.
+			continue
+		}
+
+		var hashes []uint64
+		if s.dnsServerManager != nil {
+			hashes = streamBlocklistHashes(s.dnsServerManager, l.ID)
+		}
+
+		entries = append(entries, blocklistEntry{
+			id:     l.ID,
+			name:   l.Name,
+			mode:   mode,
+			hashes: hashes,
+		})
+	}
+	s.dns.blocklistIndex.Set(entries)
 }
 
 // SetBlockedStatsLimit sets the per-bucket cap on distinct blocked domains

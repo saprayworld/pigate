@@ -1,6 +1,8 @@
 package kernel
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -407,23 +409,173 @@ func (m *MockQos) GetIfaceQosStatus(ifaceName string) (*model.QosIfaceStatus, er
 // dnsmasq config write + restart) fired — e.g. a TTL/cap-only settings
 // change must NOT increment it (docs/ref/todo/
 // statistics-dns-top-domain-plan.md §5 item 18 / T-11 item 7).
+//
+// blocklists/blocklistConfs/manifest (docs/ref/todo/
+// dns-blocklist-import-plan.md T-02) are held ENTIRELY in RAM — this mock
+// must never touch the real filesystem, so `-mock=true` dev/CI runs stay
+// 100% safe regardless of what the blocklist feature does.
 type MockDNSServerManager struct {
 	ApplyCount int
+
+	mu             sync.Mutex
+	blocklists     map[string][]byte // id -> <id>.hosts content
+	blocklistConfs map[string][]byte // id -> <id>.conf content
+	manifest       []byte
 }
 
 func NewMockDNSServerManager() *MockDNSServerManager {
-	return &MockDNSServerManager{}
+	return &MockDNSServerManager{
+		blocklists:     make(map[string][]byte),
+		blocklistConfs: make(map[string][]byte),
+	}
 }
 
-func (m *MockDNSServerManager) ApplyZones(zones []model.DNSZone, interfaces []string, upstreamServers []string, queryLog bool, blocked []model.BlockedDomain) error {
+func (m *MockDNSServerManager) ApplyZones(zones []model.DNSZone, interfaces []string, upstreamServers []string, queryLog bool, blocked []model.BlockedDomain, blocklists []model.BlocklistRef) error {
 	m.ApplyCount++
-	log.Printf("[MockDNSServer] ApplyZones called with %d zones, interfaces: %v, upstream servers: %v, queryLog: %t, %d blocked domains", len(zones), interfaces, upstreamServers, queryLog, len(blocked))
+	log.Printf("[MockDNSServer] ApplyZones called with %d zones, interfaces: %v, upstream servers: %v, queryLog: %t, %d blocked domains, %d blocklists", len(zones), interfaces, upstreamServers, queryLog, len(blocked), len(blocklists))
 	return nil
 }
 
 func (m *MockDNSServerManager) ClearCache() error {
 	log.Printf("[MockDNSServer] ClearCache called")
 	return nil
+}
+
+// --- Blocklist import (T-02) — in-memory equivalents of dns_blocklist.go ---
+
+func (m *MockDNSServerManager) WriteBlocklistFile(id string, content []byte) error {
+	if err := model.ValidateDNSBlocklistID(id); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.blocklists[id] = append([]byte(nil), content...)
+	return nil
+}
+
+func (m *MockDNSServerManager) WriteBlocklistConfFile(id string, content []byte) error {
+	if err := model.ValidateDNSBlocklistID(id); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.blocklistConfs[id] = append([]byte(nil), content...)
+	return nil
+}
+
+func (m *MockDNSServerManager) RemoveBlocklistFile(id string) error {
+	if err := model.ValidateDNSBlocklistID(id); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.blocklists, id)
+	delete(m.blocklistConfs, id)
+	return nil
+}
+
+func (m *MockDNSServerManager) RemoveBlocklistConfFile(id string) error {
+	if err := model.ValidateDNSBlocklistID(id); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.blocklistConfs, id)
+	return nil
+}
+
+func (m *MockDNSServerManager) BlocklistFileInfo(id string) (int64, bool) {
+	if err := model.ValidateDNSBlocklistID(id); err != nil {
+		return 0, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	content, ok := m.blocklists[id]
+	if !ok {
+		return 0, false
+	}
+	return int64(len(content)), true
+}
+
+func (m *MockDNSServerManager) BlocklistConfFileInfo(id string) (int64, bool) {
+	if err := model.ValidateDNSBlocklistID(id); err != nil {
+		return 0, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	content, ok := m.blocklistConfs[id]
+	if !ok {
+		return 0, false
+	}
+	return int64(len(content)), true
+}
+
+// BlocklistConfContent is a MOCK-ONLY test helper (NOT part of the
+// DNSServerManager interface, so it requires no change to the real
+// implementation) that returns the raw bytes last written via
+// WriteBlocklistConfFile for id — used by service-layer tests (docs/ref/todo/
+// dns-blocklist-import-plan.md T-05) to assert the actual rendered content of
+// <id>.conf (e.g. that it contains "address=/<domain>/" for every domain),
+// which BlocklistConfFileInfo's size-only return cannot verify.
+func (m *MockDNSServerManager) BlocklistConfContent(id string) ([]byte, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	content, ok := m.blocklistConfs[id]
+	if !ok {
+		return nil, false
+	}
+	return append([]byte(nil), content...), true
+}
+
+func (m *MockDNSServerManager) StreamBlocklistFile(id string, fn func(line string) error) error {
+	if err := model.ValidateDNSBlocklistID(id); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	content, ok := m.blocklists[id]
+	m.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	for scanner.Scan() {
+		if err := fn(scanner.Text()); err != nil {
+			return err
+		}
+	}
+	return scanner.Err()
+}
+
+func (m *MockDNSServerManager) ReadBlocklistManifest() ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.manifest) == 0 {
+		return nil, nil
+	}
+	return append([]byte(nil), m.manifest...), nil
+}
+
+func (m *MockDNSServerManager) WriteBlocklistManifest(content []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.manifest = append([]byte(nil), content...)
+	return nil
+}
+
+func (m *MockDNSServerManager) QuarantineBlocklistManifest() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	log.Printf("[MockDNSServer] Quarantining corrupt manifest (in-memory, discarded — nothing written to disk)")
+	m.manifest = nil
+	return nil
+}
+
+// SupportsBulkNXDomain always returns true in mock mode: dev workstations
+// don't run the board's dnsmasq at all, so there is no real version to
+// probe, and the whole point of mock mode is to let nxdomain-mode
+// blocklists be exercised without a Pi (plan §3 T-07 item 6).
+func (m *MockDNSServerManager) SupportsBulkNXDomain() bool {
+	return true
 }
 
 // mockDNSQueryEvents are the synthetic query events WatchDNSLog cycles

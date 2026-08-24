@@ -24,6 +24,21 @@ type DNSServerService struct {
 	// dns-blocked-query-statistics-plan.md T-08). NOT a NewDNSServerService
 	// parameter, to avoid changing that constructor's existing signature.
 	blockedDomainsSink func([]model.BlockedDomain)
+
+	// blocklistProvider (docs/ref/todo/dns-blocklist-import-plan.md T-05) is
+	// optional (nil until SetBlocklistProvider is called by main.go) — wired
+	// to *DNSBlocklistService so ApplyAll can pull the current blocklist
+	// manifest and forward every enabled, non-empty list to
+	// kernel.ApplyZones. NOT a NewDNSServerService parameter, for the same
+	// reason as blockedDomainsSink above (avoid changing that constructor's
+	// existing signature).
+	blocklistProvider *DNSBlocklistService
+
+	// blocklistSink mirrors blockedDomainsSink but for the bulk-import
+	// blocklist feature's own statistics index
+	// (StatisticsService.SetBlocklists, T-06) — invoked with the SAME
+	// blocklists that were just applied, only AFTER ApplyZones succeeds.
+	blocklistSink func([]model.DNSBlocklist)
 }
 
 func NewDNSServerService(repo *db.Repository, manager kernel.DNSServerManager, dnsService *DNSService) *DNSServerService {
@@ -44,6 +59,25 @@ func NewDNSServerService(repo *db.Repository, manager kernel.DNSServerManager, d
 // StatisticsService).
 func (s *DNSServerService) SetBlockedDomainsSink(fn func([]model.BlockedDomain)) {
 	s.blockedDomainsSink = fn
+}
+
+// SetBlocklistProvider wires the *DNSBlocklistService ApplyAll pulls the
+// current blocklist manifest from (docs/ref/todo/
+// dns-blocklist-import-plan.md T-05). In production this is main.go's
+// DNSBlocklistService instance. Not a constructor parameter, mirroring
+// SetBlockedDomainsSink above. Safe to leave unset (nil) — ApplyAll then
+// simply passes no blocklists to kernel.ApplyZones, e.g. in tests.
+func (s *DNSServerService) SetBlocklistProvider(p *DNSBlocklistService) {
+	s.blocklistProvider = p
+}
+
+// SetBlocklistSink wires the callback ApplyAll invokes, right after a
+// successful ApplyZones, with the same blocklist manifest it just used to
+// build the applied refs (docs/ref/todo/dns-blocklist-import-plan.md T-06).
+// In production this is statisticsService.SetBlocklists. Safe to call with
+// nil (ApplyAll simply skips the callback).
+func (s *DNSServerService) SetBlocklistSink(fn func([]model.DNSBlocklist)) {
+	s.blocklistSink = fn
 }
 
 // ApplyAll applies all enabled DNS Zones and their records to dnsmasq
@@ -77,7 +111,23 @@ func (s *DNSServerService) ApplyAll() error {
 	// QueryLogging is the only DNS Statistics field that affects the dnsmasq
 	// config (TTL/cap are pure service-layer parameters — plan T-07: "ไม่ต้อง
 	// ส่ง TTL/cap ไม่เกี่ยวกับ dnsmasq").
-	if err := s.manager.ApplyZones(enabledZones, settings.Interfaces, upstreams, settings.QueryLogging, blocked); err != nil {
+	// blocklists (docs/ref/todo/dns-blocklist-import-plan.md T-05): pulled
+	// from blocklistProvider (if wired) and filtered down to exactly the
+	// lists ApplyZones' kernel implementation is allowed to reference — only
+	// Enabled lists with DomainCount>0 (a list with 0 domains has nothing
+	// useful to render, and a disabled list must not be enforced).
+	var manifestBlocklists []model.DNSBlocklist
+	var blocklistRefs []model.BlocklistRef
+	if s.blocklistProvider != nil {
+		manifestBlocklists = s.blocklistProvider.List()
+		for _, l := range manifestBlocklists {
+			if l.Enabled && l.DomainCount > 0 {
+				blocklistRefs = append(blocklistRefs, model.BlocklistRef{ID: l.ID, BlockMode: l.BlockMode})
+			}
+		}
+	}
+
+	if err := s.manager.ApplyZones(enabledZones, settings.Interfaces, upstreams, settings.QueryLogging, blocked, blocklistRefs); err != nil {
 		return fmt.Errorf("failed to apply DNS zone configurations: %w", err)
 	}
 
@@ -97,6 +147,20 @@ func (s *DNSServerService) ApplyAll() error {
 				}
 			}()
 			s.blockedDomainsSink(blocked)
+		}()
+	}
+
+	// Same pattern as blockedDomainsSink above, for the blocklist import
+	// feature's statistics index (T-06) — invoked with the manifest snapshot
+	// that produced blocklistRefs above, only after ApplyZones succeeded.
+	if s.blocklistSink != nil {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[DNSServerService] Warning: blocklist sink panicked: %v", r)
+				}
+			}()
+			s.blocklistSink(manifestBlocklists)
 		}()
 	}
 

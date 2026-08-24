@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -35,6 +36,22 @@ func newBackupTestEnv(t *testing.T) (*BackupService, *db.Repository) {
 	bs := NewBackupService(repo, dbPath, "test",
 		interfaceService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	return bs, repo
+}
+
+// newBackupTestEnvWithBlocklists is newBackupTestEnv plus a DNSBlocklistService
+// wired via SetBlocklistService (docs/ref/todo/dns-blocklist-import-plan.md
+// §2.4/T-09), backed by a MockDNSServerManager so nothing touches the real
+// filesystem.
+func newBackupTestEnvWithBlocklists(t *testing.T) (*BackupService, *db.Repository, *DNSBlocklistService, *kernel.MockDNSServerManager) {
+	t.Helper()
+	bs, repo := newBackupTestEnv(t)
+	mgr := kernel.NewMockDNSServerManager()
+	blSvc := NewDNSBlocklistService(repo, mgr)
+	if err := blSvc.Load(); err != nil {
+		t.Fatalf("blocklist service Load(): %v", err)
+	}
+	bs.SetBlocklistService(blSvc)
+	return bs, repo, blSvc, mgr
 }
 
 // seedCustomConfig adds one custom object of each restorable kind on top of the
@@ -86,7 +103,7 @@ func TestExportIncludesAllSections(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -132,7 +149,7 @@ func TestExportIncludesAllSections(t *testing.T) {
 		t.Errorf("wifi presets not exported with plaintext password: %+v", c.Presets)
 	}
 
-	withUsers, err := bs.Export(true, "")
+	withUsers, err := bs.Export(true, "", false)
 	if err != nil {
 		t.Fatalf("export with users: %v", err)
 	}
@@ -148,7 +165,7 @@ func TestImportRoundTrip(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -168,7 +185,7 @@ func TestImportRoundTrip(t *testing.T) {
 	}
 
 	// Round-trip fidelity: re-export and compare canonical checksums.
-	file2, err := bs.Export(false, "")
+	file2, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("re-export: %v", err)
 	}
@@ -216,7 +233,7 @@ func TestImportRejectsInvalidWifiPreset(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -251,7 +268,7 @@ func TestImportLegacyBackupWithoutPresets(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -305,7 +322,7 @@ func TestImportRoundTripPreservesChain(t *testing.T) {
 		t.Fatalf("create output policy: %v", err)
 	}
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -344,7 +361,7 @@ func TestImportLegacyBackupWithoutChainNormalizesToForward(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo) // seeds policy "pol-1"
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -385,7 +402,7 @@ func TestImportLegacyBackupWithoutEntriesKeyChecksumRegression(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -471,7 +488,7 @@ func TestImportRoundTripMultiEntryObjects(t *testing.T) {
 		t.Fatalf("create multi-entry service: %v", err)
 	}
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -516,7 +533,7 @@ func TestImportChecksumMismatchRejected(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -539,7 +556,7 @@ func TestImportConstraintViolationRollsBack(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -580,7 +597,7 @@ func TestImportRejectsDnsmasqInjection(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -620,7 +637,7 @@ func TestImportRejectsDhcpConfigInjection(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -664,7 +681,7 @@ func TestImportRejectsPolicyInterfacesOverCap(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -766,7 +783,7 @@ func TestExportImportEncryptedRoundTrip(t *testing.T) {
 	seedCustomConfig(t, repo)
 
 	const pass = "correct horse battery staple"
-	file, err := bs.Export(false, pass)
+	file, err := bs.Export(false, pass, false)
 	if err != nil {
 		t.Fatalf("encrypted export: %v", err)
 	}
@@ -817,7 +834,7 @@ func TestImportUsersActorGuardAndSessionPurge(t *testing.T) {
 		t.Fatalf("create ghost: %v", err)
 	}
 
-	file, err := bs.Export(true, "")
+	file, err := bs.Export(true, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -868,7 +885,7 @@ func TestImportSkipsUnknownInterface(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -911,7 +928,7 @@ func TestImportKeepsVlanRow(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -992,7 +1009,7 @@ func TestRestoreConfigRecreatesDeletedInterfaceRow(t *testing.T) {
 		t.Fatalf("seed eth1: %v", err)
 	}
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -1034,7 +1051,7 @@ func TestImportDedupsConflictingAliases(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -1088,7 +1105,7 @@ func TestImportDedupsConflictingAliases(t *testing.T) {
 func TestImportLegacyDNSServerSettingsBackupUsesDefaultCacheLimits(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -1136,7 +1153,7 @@ func TestImportPreservesCustomDNSCacheLimits(t *testing.T) {
 		t.Fatalf("seed custom dns server settings: %v", err)
 	}
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -1184,7 +1201,7 @@ func TestImportPreservesCustomUpstreamSettings(t *testing.T) {
 		t.Fatalf("seed custom upstream settings: %v", err)
 	}
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -1235,7 +1252,7 @@ func TestImportLegacyDNSServerSettingsBackupDefaultsUpstreamToSystem(t *testing.
 		t.Fatalf("seed pre-import upstream settings: %v", err)
 	}
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -1281,7 +1298,7 @@ func TestExportImportRoundTripsMonitoredField(t *testing.T) {
 		t.Fatalf("SetPolicyMonitored: %v", err)
 	}
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -1346,7 +1363,7 @@ func TestImportLegacyBackupWithoutMonitoredKeyChecksumRegression(t *testing.T) {
 	bs, repo := newBackupTestEnv(t)
 	seedCustomConfig(t, repo)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -1406,7 +1423,7 @@ func TestImportDoesNotExportCounterTable(t *testing.T) {
 		t.Fatalf("AddPolicyRuleCounterDeltas: %v", err)
 	}
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -1443,7 +1460,7 @@ func TestBackupService_SetCounterStoreReloadsAfterImport(t *testing.T) {
 	}
 	bs.SetCounterStore(store)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -1496,7 +1513,7 @@ func TestImportDoesNotExportEndpointsTable(t *testing.T) {
 		t.Fatalf("AddPolicyEndpointDeltas: %v", err)
 	}
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -1533,7 +1550,7 @@ func TestBackupService_SetCounterStoreReloadsRecorderAfterImport(t *testing.T) {
 	recorder.SetMonitoredRules(map[string]bool{"pol-1": true})
 	bs.SetCounterStore(store)
 
-	file, err := bs.Export(false, "")
+	file, err := bs.Export(false, "", false)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
@@ -1570,5 +1587,277 @@ func TestBackupService_SetCounterStoreReloadsRecorderAfterImport(t *testing.T) {
 	recorder.Record(model.FirewallLog{RuleID: "pol-1", Src: "198.51.100.6", Time: "2026-01-01T00:01:00Z"})
 	if got := recorder.Drain(); len(got) != 1 {
 		t.Fatalf("expected recorder's monitored set to be resynced after import, got %+v", got)
+	}
+}
+
+// =============================================================================
+// DNS blocklist import feature (docs/ref/todo/dns-blocklist-import-plan.md
+// §2.4/T-09) — backup export/import
+// =============================================================================
+
+const backupTestHostsBody = "" +
+	"# sample blocklist\n" +
+	"0.0.0.0 ads.example.com\n" +
+	"0.0.0.0 tracker.example.net\n"
+
+// TestBackupBlocklistRoundTrip_Upload covers plan §3 T-09 item 5: an
+// upload-sourced list's .hosts file must round-trip through export/import
+// (byte-identical content, matching sha256) even though ?includeBlocklistFiles
+// was never passed — upload-sourced lists are always carried.
+func TestBackupBlocklistRoundTrip_Upload(t *testing.T) {
+	bs, _, blSvc, mgr := newBackupTestEnvWithBlocklists(t)
+
+	entry, err := blSvc.CreateFromUpload("Uploaded List", []byte(backupTestHostsBody), model.DNSBlockModeSinkhole, true)
+	if err != nil {
+		t.Fatalf("CreateFromUpload: %v", err)
+	}
+	origContent, ok := mgr.BlocklistFileInfo(entry.ID)
+	if !ok || origContent == 0 {
+		t.Fatalf("expected .hosts to exist before export")
+	}
+
+	// includeBlocklistFiles=false: an upload-sourced list must still be
+	// carried regardless.
+	file, err := bs.Export(false, "", false)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if len(file.Config.Blocklists) != 1 {
+		t.Fatalf("expected 1 blocklist in export, got %d", len(file.Config.Blocklists))
+	}
+	if len(file.Config.BlocklistFiles) != 1 {
+		t.Fatalf("expected 1 blocklist file payload in export (upload-sourced must always be carried), got %d", len(file.Config.BlocklistFiles))
+	}
+	payload := file.Config.BlocklistFiles[0]
+	if payload.ID != entry.ID {
+		t.Fatalf("payload ID = %q, want %q", payload.ID, entry.ID)
+	}
+	if payload.Sha256 != entry.Sha256 {
+		t.Errorf("payload.Sha256 = %q, want %q (must match the manifest's own sha256 of the same .hosts content)", payload.Sha256, entry.Sha256)
+	}
+
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Simulate a fresh device: wipe the blocklist store/files before import.
+	bs2, _, blSvc2, mgr2 := newBackupTestEnvWithBlocklists(t)
+	if _, err := bs2.Import(raw, model.ImportOptions{}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	restored := blSvc2.List()
+	if len(restored) != 1 {
+		t.Fatalf("expected 1 restored blocklist, got %d", len(restored))
+	}
+	if restored[0].ID != entry.ID {
+		t.Fatalf("restored blocklist ID = %q, want %q", restored[0].ID, entry.ID)
+	}
+	if restored[0].DomainCount != entry.DomainCount {
+		t.Errorf("restored DomainCount = %d, want %d (not needing a refresh)", restored[0].DomainCount, entry.DomainCount)
+	}
+	if restored[0].LastError != "" {
+		t.Errorf("restored LastError = %q, want empty (file payload was present and verified)", restored[0].LastError)
+	}
+	content2, exists2 := mgr2.BlocklistFileInfo(entry.ID)
+	if !exists2 || content2 == 0 {
+		t.Fatalf("expected imported .hosts file to exist on the destination device")
+	}
+	if content2 != origContent {
+		t.Errorf("imported .hosts size = %d, want %d (byte-identical round trip)", content2, origContent)
+	}
+	if _, existsConf := mgr2.BlocklistConfFileInfo(entry.ID); existsConf {
+		t.Errorf("sinkhole-mode list must not gain a .conf file on import")
+	}
+}
+
+// TestBackupBlocklistRoundTrip_NXDomain covers plan §3 T-09 item 5: a
+// nxdomain-mode list's <id>.conf must be regenerated on import purely from
+// the imported .hosts content, even though the backup itself never carried
+// any .conf payload (only DNSBlocklistFilePayload for .hosts exists).
+func TestBackupBlocklistRoundTrip_NXDomain(t *testing.T) {
+	bs, _, blSvc, _ := newBackupTestEnvWithBlocklists(t)
+
+	entry, err := blSvc.CreateFromUpload("NX Uploaded List", []byte(backupTestHostsBody), model.DNSBlockModeNXDomain, true)
+	if err != nil {
+		t.Fatalf("CreateFromUpload: %v", err)
+	}
+
+	file, err := bs.Export(false, "", false)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// Load-bearing: the backup must never carry the derived .conf artifact —
+	// only the canonical .hosts payload (plan §2.1.1/§2.4).
+	if strings.Contains(string(raw), "address=/ads.example.com/") {
+		t.Fatalf("backup must not embed rendered .conf content, but raw payload contains it: %s", raw)
+	}
+
+	bs2, _, blSvc2, mgr2 := newBackupTestEnvWithBlocklists(t)
+	if _, err := bs2.Import(raw, model.ImportOptions{}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	restored := blSvc2.List()
+	if len(restored) != 1 || restored[0].BlockMode != model.DNSBlockModeNXDomain {
+		t.Fatalf("expected 1 restored nxdomain-mode blocklist, got %+v", restored)
+	}
+	confBytes, exists := mgr2.BlocklistConfContent(entry.ID)
+	if !exists {
+		t.Fatalf("expected .conf to be regenerated on import for a nxdomain-mode list")
+	}
+	for _, domain := range []string{"ads.example.com", "tracker.example.net"} {
+		want := "address=/" + domain + "/"
+		if !strings.Contains(string(confBytes), want) {
+			t.Errorf(".conf missing %q, got:\n%s", want, confBytes)
+		}
+	}
+}
+
+// unsupportedNXDomainBackupManager makes SupportsBulkNXDomain() report false,
+// used to test the automatic sinkhole downgrade on import (plan §3 T-09 item
+// 3).
+type unsupportedNXDomainBackupManager struct {
+	*kernel.MockDNSServerManager
+}
+
+func (m *unsupportedNXDomainBackupManager) SupportsBulkNXDomain() bool { return false }
+
+// TestBackupBlocklistImportDowngradesNXDomainWhenUnsupported covers plan §3
+// T-09 item 3: importing a nxdomain-mode list onto a system whose dnsmasq
+// doesn't support it must downgrade to sinkhole (not fail the whole import),
+// and record why in LastError.
+func TestBackupBlocklistImportDowngradesNXDomainWhenUnsupported(t *testing.T) {
+	bs, _, blSvc, _ := newBackupTestEnvWithBlocklists(t)
+	entry, err := blSvc.CreateFromUpload("NX List", []byte(backupTestHostsBody), model.DNSBlockModeNXDomain, true)
+	if err != nil {
+		t.Fatalf("CreateFromUpload: %v", err)
+	}
+	file, err := bs.Export(false, "", false)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	bs2, repo2 := newBackupTestEnv(t)
+	mgr2 := &unsupportedNXDomainBackupManager{kernel.NewMockDNSServerManager()}
+	blSvc2 := NewDNSBlocklistService(repo2, mgr2)
+	if err := blSvc2.Load(); err != nil {
+		t.Fatalf("blocklist service Load(): %v", err)
+	}
+	bs2.SetBlocklistService(blSvc2)
+
+	res, err := bs2.Import(raw, model.ImportOptions{})
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	restored := blSvc2.List()
+	if len(restored) != 1 {
+		t.Fatalf("expected 1 restored blocklist, got %d", len(restored))
+	}
+	if restored[0].BlockMode != model.DNSBlockModeSinkhole {
+		t.Errorf("BlockMode = %q, want %q (downgraded)", restored[0].BlockMode, model.DNSBlockModeSinkhole)
+	}
+	if restored[0].LastError == "" {
+		t.Errorf("expected LastError to explain the downgrade, got empty")
+	}
+	if _, exists := mgr2.BlocklistConfFileInfo(entry.ID); exists {
+		t.Errorf("a downgraded-to-sinkhole list must not have a .conf file")
+	}
+	if len(res.Warnings) == 0 {
+		t.Logf("no warnings recorded for the downgrade (acceptable: downgrade is recorded per-list via LastError, not necessarily a top-level warning)")
+	}
+}
+
+// TestBackupBlocklistExportOmitsUrlSourcedFilesByDefault covers plan §2.4:
+// url-sourced lists are only carried when includeBlocklistFiles is requested;
+// by default only the metadata (manifest entry) travels, and the list needs
+// a Refresh after import.
+func TestBackupBlocklistExportOmitsUrlSourcedFilesByDefault(t *testing.T) {
+	bs, _, blSvc, _ := newBackupTestEnvWithBlocklists(t)
+	srv := blocklistTestServer(t, backupTestHostsBody)
+	blSvc.fetcher = newLoopbackFetcher(srv)
+
+	entry, err := blSvc.CreateFromURL(context.Background(), "URL List", testBlocklistBaseURL+"/hosts", model.DNSBlockModeSinkhole, true)
+	if err != nil {
+		t.Fatalf("CreateFromURL: %v", err)
+	}
+
+	fileDefault, err := bs.Export(false, "", false)
+	if err != nil {
+		t.Fatalf("export (default): %v", err)
+	}
+	if len(fileDefault.Config.Blocklists) != 1 {
+		t.Fatalf("expected the url-sourced list's metadata to still be exported")
+	}
+	if len(fileDefault.Config.BlocklistFiles) != 0 {
+		t.Fatalf("expected NO file payload by default for a url-sourced list, got %d", len(fileDefault.Config.BlocklistFiles))
+	}
+
+	fileIncluded, err := bs.Export(false, "", true)
+	if err != nil {
+		t.Fatalf("export (includeBlocklistFiles=true): %v", err)
+	}
+	if len(fileIncluded.Config.BlocklistFiles) != 1 || fileIncluded.Config.BlocklistFiles[0].ID != entry.ID {
+		t.Fatalf("expected the url-sourced list's file payload to be included with includeBlocklistFiles=true, got %+v", fileIncluded.Config.BlocklistFiles)
+	}
+
+	// Importing the default (no-file-payload) export must not fail — the
+	// list is kept but flagged as needing a refresh.
+	raw, err := json.Marshal(fileDefault)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	bs2, _, blSvc2, _ := newBackupTestEnvWithBlocklists(t)
+	if _, err := bs2.Import(raw, model.ImportOptions{}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	restored := blSvc2.List()
+	if len(restored) != 1 {
+		t.Fatalf("expected 1 restored blocklist, got %d", len(restored))
+	}
+	if restored[0].DomainCount != 0 {
+		t.Errorf("DomainCount = %d, want 0 (no file payload was carried)", restored[0].DomainCount)
+	}
+	if restored[0].LastError != "needs refresh after import" {
+		t.Errorf("LastError = %q, want %q", restored[0].LastError, "needs refresh after import")
+	}
+}
+
+// TestImportOldBackupWithoutBlocklistsKeyChecksumRegression is the most
+// important regression test in this file (plan §3 T-09 acceptance): a
+// backup exported by a build that predates the DNS blocklist import feature
+// entirely lacks the "blocklists"/"blocklistFiles" keys, and MUST still
+// import successfully — the checksum, computed by re-marshalling the decoded
+// BackupConfig, must be unaffected by the two new omitempty fields added to
+// BackupConfig in this change.
+func TestImportOldBackupWithoutBlocklistsKeyChecksumRegression(t *testing.T) {
+	bs, repo := newBackupTestEnv(t) // no SetBlocklistService — mirrors a pre-feature binary
+	seedCustomConfig(t, repo)
+
+	file, err := bs.Export(false, "", false)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// Load-bearing: this exporter (blocklistService unset) must never emit
+	// these keys — omitempty must actually be doing its job.
+	if strings.Contains(string(raw), `"blocklists"`) || strings.Contains(string(raw), `"blocklistFiles"`) {
+		t.Fatalf("expected no blocklists/blocklistFiles keys when blocklistService is unset, got: %s", raw)
+	}
+
+	if _, err := bs.Import(raw, model.ImportOptions{}); err != nil {
+		t.Fatalf("import of a backup without blocklists/blocklistFiles keys must succeed (checksum must still verify), got: %v", err)
 	}
 }

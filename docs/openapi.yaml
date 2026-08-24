@@ -3282,6 +3282,270 @@ paths:
                 type: boolean
                 example: true
 
+  # =========================================================================
+  # DNS BLOCKLISTS (bulk hosts-file import — docs/ref/todo/
+  # dns-blocklist-import-plan.md). A separate feature from the deny-list
+  # above: metadata lives in a JSON manifest on disk
+  # (/var/lib/pigate/blocklists/manifest.json), NOT the database. GET is
+  # available to any authenticated role; every mutation below (create,
+  # upload, update, delete, toggle, refresh) requires super_admin because it
+  # makes the device fetch an HTTP URL the caller supplies and/or writes
+  # multi-MB files to disk. Block mode (sinkhole/nxdomain) is selected per
+  # list, never per domain within a list.
+  # =========================================================================
+  /dns/blocklists:
+    get:
+      tags:
+        - DNS Server
+      summary: List all DNS blocklists (bulk hosts-file import)
+      description: >-
+        Returns manifest metadata for every subscribed/uploaded blocklist
+        (id, name, sourceType, url, blockMode, enabled, domainCount,
+        fileBytes, sha256, lastFetchedAt, lastError, createdAt) — never the
+        domain list itself (a list can hold up to hundreds of thousands of
+        entries). Metadata is stored in a single JSON manifest file
+        (`/var/lib/pigate/blocklists/manifest.json`), not SQLite. Any
+        authenticated role may call this endpoint.
+      responses:
+        '200':
+          description: List of DNS blocklists
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DNSBlocklist'
+    post:
+      tags:
+        - DNS Server
+      summary: Subscribe to a new URL-sourced DNS blocklist (super_admin only)
+      description: >-
+        Fetches the URL synchronously (HTTPS-only; SSRF-guarded — private,
+        loopback, link-local and CGNAT addresses are refused at dial time,
+        re-checked on every redirect) and parses it as a hosts-format file
+        BEFORE writing anything to the manifest, so an unreachable/invalid
+        URL never leaves a stale entry behind. The block mode is chosen per
+        list via `blockMode` (see `DNSBlocklistInput`): `sinkhole` (default)
+        answers `0.0.0.0` for an exact domain match only and does **not**
+        cover subdomains; `nxdomain` answers NXDOMAIN and **covers every
+        subdomain**, but requires dnsmasq >= 2.86 and counts against a
+        separate, lower domain quota (`DNSBlocklistMaxNXDomainDomains`)
+        because dnsmasq must parse its `conf-file` twice per Apply. Writes
+        to `/var/lib/pigate/blocklists/` and the manifest only — does NOT
+        restart dnsmasq; call `POST /dns/apply` afterwards to take effect.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSBlocklistInput'
+      responses:
+        '200':
+          description: Blocklist created and fetched
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSBlocklist'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Caller is not a super_admin
+        '503':
+          description: DNS blocklist feature is not available on this server instance
+
+  /dns/blocklists/upload:
+    post:
+      tags:
+        - DNS Server
+      summary: Upload a hosts-format file as a new DNS blocklist (super_admin only)
+      description: >-
+        Body is the raw hosts-format file content (`Content-Type:
+        text/plain`), not JSON — the list name and block mode are passed as
+        query parameters instead. Exempt from the global 1 MB request-body
+        cap; capped instead at `DNSBlocklistMaxFileBytes` (16 MiB) via
+        `http.MaxBytesReader`. Writes to `/var/lib/pigate/blocklists/` and
+        the manifest only — does NOT restart dnsmasq; call `POST
+        /dns/apply` afterwards to take effect.
+      parameters:
+        - name: name
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 64
+        - name: blockMode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [sinkhole, nxdomain]
+            default: sinkhole
+          description: >-
+            `sinkhole` (default) answers `0.0.0.0`, exact-match only (no
+            subdomain coverage). `nxdomain` answers NXDOMAIN and covers
+            subdomains, but requires dnsmasq >= 2.86 and a separate, lower
+            domain quota. Chosen per list, not per domain.
+        - name: enabled
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["1", "true", "0", "false"]
+            default: "true"
+      requestBody:
+        required: true
+        content:
+          text/plain:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Blocklist created from upload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSBlocklist'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Caller is not a super_admin
+        '503':
+          description: DNS blocklist feature is not available on this server instance
+
+  /dns/blocklists/{id}:
+    put:
+      tags:
+        - DNS Server
+      summary: Update a DNS blocklist's name/url/blockMode/enabled (super_admin only)
+      description: >-
+        Never re-fetches or re-parses the source. Changing only `blockMode`
+        re-derives the `<id>.conf` file purely from the already-written
+        `<id>.hosts` file (no network access) — switching modes therefore
+        works offline and for upload-sourced lists too. Writes to
+        `/var/lib/pigate/blocklists/` and the manifest only — does NOT
+        restart dnsmasq; call `POST /dns/apply` afterwards to take effect.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSBlocklistInput'
+      responses:
+        '200':
+          description: Blocklist updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSBlocklist'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Caller is not a super_admin
+        '404':
+          description: Blocklist not found
+        '503':
+          description: DNS blocklist feature is not available on this server instance
+    delete:
+      tags:
+        - DNS Server
+      summary: Delete a DNS blocklist (super_admin only)
+      description: >-
+        Removes both the `<id>.hosts` and (if present) `<id>.conf` file plus
+        the manifest entry. Writes to `/var/lib/pigate/blocklists/` and the
+        manifest only — does NOT restart dnsmasq; call `POST /dns/apply`
+        afterwards to take effect.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Blocklist deleted
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Caller is not a super_admin
+        '503':
+          description: DNS blocklist feature is not available on this server instance
+
+  /dns/blocklists/{id}/toggle:
+    post:
+      tags:
+        - DNS Server
+      summary: Toggle a DNS blocklist's enabled flag (super_admin only)
+      description: >-
+        Re-checked against the cross-list domain-count quotas when
+        re-enabling a currently disabled list (`DNSBlocklistMaxTotalDomains`
+        always, plus `DNSBlocklistMaxNXDomainDomains` if its `blockMode` is
+        `nxdomain`). Writes to the manifest only — does NOT restart
+        dnsmasq; call `POST /dns/apply` afterwards to take effect.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Blocklist toggled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSBlocklist'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Caller is not a super_admin
+        '503':
+          description: DNS blocklist feature is not available on this server instance
+
+  /dns/blocklists/{id}/refresh:
+    post:
+      tags:
+        - DNS Server
+      summary: Re-fetch a subscribe-URL DNS blocklist (super_admin only)
+      description: >-
+        Only meaningful for `sourceType: url` lists. A fetch/parse failure
+        leaves the existing `<id>.hosts`/`<id>.conf` files and
+        `domainCount` completely untouched — only `lastError` is recorded —
+        so a transient network problem never takes down a list that is
+        currently working. Writes to `/var/lib/pigate/blocklists/` and the
+        manifest only — does NOT restart dnsmasq; call `POST /dns/apply`
+        afterwards to take effect.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Blocklist refreshed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSBlocklist'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Caller is not a super_admin
+        '503':
+          description: DNS blocklist feature is not available on this server instance
+
   /dns/apply:
     post:
       tags:
@@ -3699,6 +3963,18 @@ paths:
         `403`. `meta.checksum` is a SHA-256 over the canonical config, so a
         reformatted file still verifies on import. Also available in
         `-disable-edit` (read-only) mode.
+
+        DNS blocklist metadata (`config.blocklists`, including each list's
+        `blockMode`) is always included — it lives in a JSON manifest, not
+        the database, but is still part of the exported config. The
+        underlying `<id>.hosts` file content is NOT included by default
+        (`config.blocklistFiles`); pass `includeBlocklistFiles=1` to embed it
+        (gzip+base64), for `sourceType: upload` lists always, and for
+        `sourceType: url` lists only when explicitly requested — a
+        URL-sourced list can otherwise be recovered with Refresh, so leaving
+        this off keeps most exports small. `<id>.conf` (the nxdomain-mode
+        derived artifact) is never included; it is always regenerated from
+        `<id>.hosts` on import.
       parameters:
         - name: includeUsers
           in: query
@@ -3707,6 +3983,16 @@ paths:
             type: string
             enum: ["1", "true"]
           description: When set, embeds the users table (including bcrypt hashes).
+        - name: includeBlocklistFiles
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["1", "true"]
+          description: >-
+            When set, embeds each DNS blocklist's `<id>.hosts` file content
+            (gzip+base64) in `config.blocklistFiles`, capped at a combined 8
+            MB (any remainder is dropped with a warning). Off by default.
         - name: X-Backup-Passphrase
           in: header
           required: false
@@ -8598,6 +8884,146 @@ components:
           type: string
           description: Max 128 characters, no newlines.
           example: ad network
+
+    DNSBlocklist:
+      type: object
+      description: >-
+        One DNS blocklist import entry (docs/ref/todo/
+        dns-blocklist-import-plan.md) — a bulk-imported hosts-format list,
+        either subscribed from a URL or uploaded as a file. Metadata for
+        every list lives in a single JSON manifest file on disk
+        (`/var/lib/pigate/blocklists/manifest.json`), never in the
+        database. This is a separate feature from the deny-list
+        (`BlockedDomain`, capped at 1000 hand-curated entries) and shares no
+        storage with it. The block mode is chosen per list, never per
+        domain within a list.
+      required:
+        - id
+        - name
+        - sourceType
+        - enabled
+        - domainCount
+        - fileBytes
+        - sha256
+        - createdAt
+      properties:
+        id:
+          type: string
+          description: >-
+            Also the filename stem of the generated `<id>.hosts`/`<id>.conf`
+            files under `/var/lib/pigate/blocklists/`.
+          example: bl-3f9a2c
+        name:
+          type: string
+          example: StevenBlack unified
+        sourceType:
+          type: string
+          enum: [url, upload]
+          example: url
+        url:
+          type: string
+          description: "Present only for `sourceType: url` lists. HTTPS-only."
+          example: https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+        blockMode:
+          type: string
+          enum: [sinkhole, nxdomain]
+          default: sinkhole
+          description: >-
+            Chosen per list, NOT per domain — there is no per-domain
+            override within a blocklist. `sinkhole` (default) renders
+            `addn-hosts=/var/lib/pigate/blocklists/<id>.hosts`: dnsmasq
+            answers `0.0.0.0` for an exact domain match only and does
+            **not** cover subdomains — the cheapest option at
+            tens-of-thousands-of-domains scale, and adequate because public
+            blocklists already enumerate every subdomain they mean to
+            block. `nxdomain` renders
+            `conf-file=/var/lib/pigate/blocklists/<id>.conf` (one
+            `address=/<domain>/` line per domain): dnsmasq answers
+            NXDOMAIN for the domain **and every subdomain**, but requires
+            dnsmasq >= 2.86 and this list's domains count against the
+            separate, lower `DNSBlocklistMaxNXDomainDomains` quota, because
+            the conf-file is parsed twice per Apply (`dnsmasq --test` plus
+            actual daemon start) versus `addn-hosts`, which is never parsed
+            during `--test`. This default (sinkhole) is the OPPOSITE of the
+            deny-list's default (`BlockedDomain.mode` defaults to
+            `nxdomain`) — the deny-list is small and hand-curated and
+            benefits from automatic subdomain coverage; a public blocklist
+            is large and already exhaustive. Metadata (including this
+            field) lives only in the JSON manifest, never the database.
+          example: sinkhole
+        enabled:
+          type: boolean
+          example: true
+        domainCount:
+          type: integer
+          description: >-
+            Number of distinct domains after parsing/dedupe (0 if the list
+            has never been successfully fetched/uploaded).
+          example: 93412
+        fileBytes:
+          type: integer
+          format: int64
+          description: Size in bytes of the generated `<id>.hosts` file.
+          example: 1902344
+        sha256:
+          type: string
+          description: >-
+            SHA-256 of the generated `<id>.hosts` content — not the
+            original source file, and not `<id>.conf` (which is always a
+            derived artifact re-rendered from `<id>.hosts` when needed,
+            never hashed itself).
+          example: "9f86d081..."
+        lastFetchedAt:
+          type: string
+          format: date-time
+          description: "Present only for `sourceType: url` lists that have been fetched at least once."
+        lastError:
+          type: string
+          description: >-
+            Message from the most recent failed fetch/parse, if any. A
+            failed refresh never discards the previously working
+            `<id>.hosts`/`<id>.conf` files or `domainCount` — only this
+            field is updated.
+        createdAt:
+          type: string
+          format: date-time
+
+    DNSBlocklistInput:
+      type: object
+      description: Create/update request body for a DNS blocklist (POST/PUT /dns/blocklists).
+      required:
+        - name
+        - enabled
+      properties:
+        name:
+          type: string
+          description: Max 64 characters, no newlines, no leading/trailing whitespace.
+          example: StevenBlack unified
+        url:
+          type: string
+          description: >-
+            Required when creating a `sourceType: url` list via `POST
+            /dns/blocklists` (name/blockMode/enabled only apply to
+            upload-sourced lists created via `POST
+            /dns/blocklists/upload`, which takes no JSON body). Must be
+            `https://`, no userinfo, port empty or `443`, max 2048
+            characters.
+          example: https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+        blockMode:
+          type: string
+          enum: [sinkhole, nxdomain]
+          default: sinkhole
+          description: >-
+            Omit (or send an empty string) to keep the default `sinkhole`.
+            An unrecognized value is rejected with `400` at the handler
+            layer, before any network fetch happens. See
+            `DNSBlocklist.blockMode` for the behavioral difference between
+            the two modes and why the default here is the opposite of the
+            deny-list's.
+          example: sinkhole
+        enabled:
+          type: boolean
+          example: true
 
     # --- Static Route Schemas ---
     RoutesConfig:

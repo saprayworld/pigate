@@ -66,6 +66,16 @@ type Server struct {
 	// (docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md T-11, issue
 	// #141). Used by HandleTogglePolicyMonitor/HandleResetPolicyMonitorCounter.
 	policyCounterStore *service.PolicyCounterStore
+
+	// dnsBlocklistService backs the /api/dns/blocklists* handlers (docs/ref/
+	// todo/dns-blocklist-import-plan.md T-08) — bulk hosts-file blocklist
+	// import (subscribe URL / upload), metadata kept in a JSON manifest
+	// rather than SQLite (plan §2.3/R1). Unlike policyStats/policyCounterStore
+	// above this is a required NewServer parameter, not an optional setter,
+	// since every deployment wires it (main.go constructs it unconditionally);
+	// it may still be nil in tests that don't need it, so every handler below
+	// checks for that explicitly rather than assuming it is always set.
+	dnsBlocklistService *service.DNSBlocklistService
 }
 
 // SetPolicyStatsService wires the optional per-rule usage stats service into
@@ -112,6 +122,7 @@ func NewServer(
 	trafficStats *service.TrafficStatsService,
 	statistics *service.StatisticsService,
 	ipInfo *service.IPInfoService,
+	dnsBlocklistService *service.DNSBlocklistService,
 ) *Server {
 	return &Server{
 		repo:              repo,
@@ -141,9 +152,10 @@ func NewServer(
 		wifiPresetService: wifiPresetService,
 		systemServiceSvc:  systemServiceSvc,
 		capabilityService: capabilityService,
-		trafficStats:      trafficStats,
-		statistics:        statistics,
-		ipInfo:            ipInfo,
+		trafficStats:        trafficStats,
+		statistics:          statistics,
+		ipInfo:              ipInfo,
+		dnsBlocklistService: dnsBlocklistService,
 	}
 }
 
@@ -3351,8 +3363,14 @@ func (s *Server) HandleExportConfig(w http.ResponseWriter, r *http.Request) {
 	// Optional passphrase encrypts the config; sent via header (not query) to
 	// keep it out of access logs.
 	passphrase := r.Header.Get("X-Backup-Passphrase")
+	// includeBlocklistFiles opts into carrying subscribe-URL blocklists' .hosts
+	// content too (upload-sourced lists are always carried — they cannot be
+	// re-fetched). Default off: plan §2.4 (docs/ref/todo/
+	// dns-blocklist-import-plan.md) — a URL-sourced list can be recovered with
+	// Refresh, so most exports should stay small.
+	includeBlocklistFiles := r.URL.Query().Get("includeBlocklistFiles") == "1" || r.URL.Query().Get("includeBlocklistFiles") == "true"
 
-	backup, err := s.backupService.Export(includeUsers, passphrase)
+	backup, err := s.backupService.Export(includeUsers, passphrase, includeBlocklistFiles)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to export configuration: "+err.Error())
 		return
@@ -4274,6 +4292,280 @@ func (s *Server) HandleToggleBlockedDomain(w http.ResponseWriter, r *http.Reques
 	s.logEvent(r, model.EventCategoryDns, "dns.blocked_domain_toggled", model.EventSeverityInfo,
 		id, "Blocked domain "+id+" toggled")
 	s.writeJSON(w, http.StatusOK, true)
+}
+
+// =========================================================================
+// DNS BLOCKLISTS (bulk hosts-file import — subscribe URL / upload,
+// docs/ref/todo/dns-blocklist-import-plan.md T-08)
+// =========================================================================
+// SENSITIVE: unlike the deny-list above, these routes make the board fetch a
+// user-supplied HTTPS URL (CreateFromURL/Refresh) and write multi-MB files
+// to disk (any of create/upload/refresh) — router.go therefore puts every
+// mutation on superAdminRoute explicitly, not just RoleReadOnlyMiddleware.
+// Every handler re-validates name/url/blockMode itself (model.ValidateDNSBlocklist*
+// / model.NormalizeBlocklistBlockMode) before calling the service, even
+// though the service validates again internally — same "validate at both
+// layers" pattern the deny-list handlers use just above. Service errors are
+// never forwarded to the client verbatim: writeBlocklistServiceError below
+// decides what is safe to show (validation/quota/version messages) versus
+// what must be summarized (anything that could carry a fetcher error with a
+// URL/host, or an internal filesystem path).
+
+// writeBlocklistServiceError classifies an error returned by
+// DNSBlocklistService and writes the appropriate HTTP response. Known,
+// user-actionable messages (quota exceeded, dnsmasq version too old, not
+// found, wrong sourceType) are passed through as-is — they never contain
+// anything sensitive. Everything else is assumed to potentially carry
+// fetcher/filesystem internals (e.g. "fetch blocklist: ...", which wraps the
+// raw net/http error including the target host) and is replaced with a
+// generic message; the real error is still logged server-side for
+// diagnosis.
+func (s *Server) writeBlocklistServiceError(w http.ResponseWriter, err error) {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "requires dnsmasq >= 2.86"),
+		strings.Contains(msg, "exceeding the maximum"),
+		strings.Contains(msg, "exceeds maximum"),
+		strings.Contains(msg, "already reached"),
+		strings.Contains(msg, "cannot refresh"),
+		strings.Contains(msg, "is not a subscribe-URL list"):
+		s.writeError(w, http.StatusBadRequest, msg)
+	case strings.Contains(strings.ToLower(msg), "not found"):
+		s.writeError(w, http.StatusNotFound, msg)
+	case strings.HasPrefix(msg, "fetch blocklist:"):
+		log.Printf("[DNSBlocklist] fetch failed: %v", err)
+		s.writeError(w, http.StatusBadGateway, "Failed to fetch the blocklist from the configured URL. Check that the URL is reachable and returns a plain hosts file.")
+	default:
+		log.Printf("[DNSBlocklist] internal error: %v", err)
+		s.writeError(w, http.StatusInternalServerError, "Failed to process the blocklist request. See server logs for details.")
+	}
+}
+
+// HandleGetDNSBlocklists returns every blocklist's metadata from the
+// manifest (never the domain list itself — that only ever lives in the
+// generated <id>.hosts/<id>.conf files, plan §0/§2.3).
+func (s *Server) HandleGetDNSBlocklists(w http.ResponseWriter, r *http.Request) {
+	if s.dnsBlocklistService == nil {
+		s.writeJSON(w, http.StatusOK, []model.DNSBlocklist{})
+		return
+	}
+	list := s.dnsBlocklistService.List()
+	if list == nil {
+		list = []model.DNSBlocklist{}
+	}
+	s.writeJSON(w, http.StatusOK, list)
+}
+
+// HandleCreateDNSBlocklist subscribes to a new URL-sourced blocklist: fetches
+// it synchronously (SSRF-guarded fetcher, T-04) before ever writing to the
+// manifest, so a bad URL never leaves a stale entry behind.
+func (s *Server) HandleCreateDNSBlocklist(w http.ResponseWriter, r *http.Request) {
+	if s.dnsBlocklistService == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "DNS blocklist feature is not available")
+		return
+	}
+	var input model.DNSBlocklistInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	if err := model.ValidateDNSBlocklistName(input.Name); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := model.ValidateDNSBlocklistURL(input.URL); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// blockMode: validated here at the handler layer too (not just inside the
+	// service) so an unknown value is rejected with 400 before any network
+	// fetch happens — plan §3 T-08 item 2b. An empty value is left alone;
+	// the service applies model.DNSBlocklistDefaultBlockMode (sinkhole).
+	mode, err := model.NormalizeBlocklistBlockMode(input.BlockMode)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	entry, err := s.dnsBlocklistService.CreateFromURL(r.Context(), input.Name, input.URL, mode, input.Enabled)
+	if err != nil {
+		s.writeBlocklistServiceError(w, err)
+		return
+	}
+	s.logEvent(r, model.EventCategoryDns, "dns.blocklist_created", model.EventSeverityInfo,
+		entry.ID, "DNS blocklist \""+entry.Name+"\" created from URL")
+	s.writeJSON(w, http.StatusOK, entry)
+}
+
+// HandleUploadDNSBlocklist adds a new upload-sourced blocklist from a raw
+// hosts-format file in the request body (Content-Type: text/plain), with the
+// list name and (optional) blockMode passed as query parameters — there is
+// no JSON body here, only the file bytes. The body is explicitly capped with
+// http.MaxBytesReader at model.DNSBlocklistMaxFileBytes (same pattern as
+// HandleImportConfig) BEFORE reading it, and this path is registered in
+// bodyLimitExemptPaths (middleware.go) so BodyLimitMiddleware's global 1 MB
+// cap does not truncate it first.
+func (s *Server) HandleUploadDNSBlocklist(w http.ResponseWriter, r *http.Request) {
+	if s.dnsBlocklistService == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "DNS blocklist feature is not available")
+		return
+	}
+
+	name := r.URL.Query().Get("name")
+	if err := model.ValidateDNSBlocklistName(name); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	mode, err := model.NormalizeBlocklistBlockMode(r.URL.Query().Get("blockMode"))
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// enabled defaults to true for an upload (the whole point of uploading a
+	// file is to use it immediately) but can be overridden with ?enabled=false.
+	enabled := true
+	if v := r.URL.Query().Get("enabled"); v != "" {
+		enabled = v == "1" || v == "true"
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, model.DNSBlocklistMaxFileBytes)
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to read upload (max %d bytes): %s", model.DNSBlocklistMaxFileBytes, err.Error()))
+		return
+	}
+
+	entry, err := s.dnsBlocklistService.CreateFromUpload(name, raw, mode, enabled)
+	if err != nil {
+		s.writeBlocklistServiceError(w, err)
+		return
+	}
+	s.logEvent(r, model.EventCategoryDns, "dns.blocklist_created", model.EventSeverityInfo,
+		entry.ID, "DNS blocklist \""+entry.Name+"\" created from upload")
+	s.writeJSON(w, http.StatusOK, entry)
+}
+
+// HandleUpdateDNSBlocklist updates a list's name/url/blockMode/enabled. It
+// never re-fetches or re-parses content — a blockMode change re-derives
+// <id>.conf purely from the already-written <id>.hosts (service.UpdateInfo /
+// renderArtifacts, plan §2.1.1), which is why this works offline and for
+// upload-sourced lists.
+func (s *Server) HandleUpdateDNSBlocklist(w http.ResponseWriter, r *http.Request) {
+	if s.dnsBlocklistService == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "DNS blocklist feature is not available")
+		return
+	}
+	id := r.PathValue("id")
+	if err := model.ValidateDNSBlocklistID(id); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var input model.DNSBlocklistInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	if err := model.ValidateDNSBlocklistName(input.Name); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// URL is only meaningful for subscribe-URL lists (UpdateInfo ignores it
+	// for upload-sourced ones) but is still validated here whenever non-empty
+	// so an obviously malformed/injected value is rejected up front.
+	if input.URL != "" {
+		if err := model.ValidateDNSBlocklistURL(input.URL); err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	mode, err := model.NormalizeBlocklistBlockMode(input.BlockMode)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	entry, err := s.dnsBlocklistService.UpdateInfo(id, input.Name, input.URL, mode, input.Enabled)
+	if err != nil {
+		s.writeBlocklistServiceError(w, err)
+		return
+	}
+	s.logEvent(r, model.EventCategoryDns, "dns.blocklist_updated", model.EventSeverityInfo,
+		entry.ID, "DNS blocklist \""+entry.Name+"\" updated")
+	s.writeJSON(w, http.StatusOK, entry)
+}
+
+// HandleDeleteDNSBlocklist removes a blocklist's files (both .hosts and
+// .conf) and its manifest entry.
+func (s *Server) HandleDeleteDNSBlocklist(w http.ResponseWriter, r *http.Request) {
+	if s.dnsBlocklistService == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "DNS blocklist feature is not available")
+		return
+	}
+	id := r.PathValue("id")
+	if err := model.ValidateDNSBlocklistID(id); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := s.dnsBlocklistService.Delete(id); err != nil {
+		s.writeBlocklistServiceError(w, err)
+		return
+	}
+	s.logEvent(r, model.EventCategoryDns, "dns.blocklist_deleted", model.EventSeverityWarning,
+		id, "DNS blocklist "+id+" deleted")
+	s.writeJSON(w, http.StatusOK, true)
+}
+
+// HandleToggleDNSBlocklist flips a list's enabled flag. Enabling a currently
+// disabled list is re-checked against the cross-list domain-count quotas
+// (service.Toggle).
+func (s *Server) HandleToggleDNSBlocklist(w http.ResponseWriter, r *http.Request) {
+	if s.dnsBlocklistService == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "DNS blocklist feature is not available")
+		return
+	}
+	id := r.PathValue("id")
+	if err := model.ValidateDNSBlocklistID(id); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	entry, err := s.dnsBlocklistService.Toggle(id)
+	if err != nil {
+		s.writeBlocklistServiceError(w, err)
+		return
+	}
+	s.logEvent(r, model.EventCategoryDns, "dns.blocklist_toggled", model.EventSeverityInfo,
+		id, "DNS blocklist "+id+" toggled")
+	s.writeJSON(w, http.StatusOK, entry)
+}
+
+// HandleRefreshDNSBlocklist re-fetches a subscribe-URL list's content. A
+// fetch/parse failure leaves the existing files and DomainCount completely
+// untouched (service.Refresh records only LastError), so a transient network
+// problem never takes down a list that is currently working.
+func (s *Server) HandleRefreshDNSBlocklist(w http.ResponseWriter, r *http.Request) {
+	if s.dnsBlocklistService == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "DNS blocklist feature is not available")
+		return
+	}
+	id := r.PathValue("id")
+	if err := model.ValidateDNSBlocklistID(id); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	entry, err := s.dnsBlocklistService.Refresh(r.Context(), id)
+	if err != nil {
+		s.writeBlocklistServiceError(w, err)
+		return
+	}
+	s.logEvent(r, model.EventCategoryDns, "dns.blocklist_refreshed", model.EventSeverityInfo,
+		id, "DNS blocklist "+id+" refreshed")
+	s.writeJSON(w, http.StatusOK, entry)
 }
 
 // =========================================================================

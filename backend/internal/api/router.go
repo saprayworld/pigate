@@ -217,6 +217,20 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("DELETE /api/dns/blocked-domains/{id}", s.HandleDeleteBlockedDomain)
 	authRoute("POST /api/dns/blocked-domains/{id}/toggle", s.HandleToggleBlockedDomain)
 
+	// 8.3 DNS Server — Blocklists (bulk hosts-file import, docs/ref/todo/
+	// dns-blocklist-import-plan.md T-08). GET is authRoute like the deny-list
+	// above, but every mutation is explicit superAdminRoute (not just
+	// RoleReadOnlyMiddleware) because these endpoints make the board fetch a
+	// user-supplied URL and write multi-MB files to disk — same reasoning as
+	// reboot/config-export below.
+	authRoute("GET /api/dns/blocklists", s.HandleGetDNSBlocklists)
+	superAdminRoute("POST /api/dns/blocklists", s.HandleCreateDNSBlocklist)
+	superAdminRoute("POST /api/dns/blocklists/upload", s.HandleUploadDNSBlocklist)
+	superAdminRoute("PUT /api/dns/blocklists/{id}", s.HandleUpdateDNSBlocklist)
+	superAdminRoute("DELETE /api/dns/blocklists/{id}", s.HandleDeleteDNSBlocklist)
+	superAdminRoute("POST /api/dns/blocklists/{id}/toggle", s.HandleToggleDNSBlocklist)
+	superAdminRoute("POST /api/dns/blocklists/{id}/refresh", s.HandleRefreshDNSBlocklist)
+
 	// 9. System Management & Backup
 	authRoute("GET /api/system/info", s.HandleGetSystemInfo)
 	authRoute("GET /api/system/capabilities", s.HandleGetSystemCapabilities)

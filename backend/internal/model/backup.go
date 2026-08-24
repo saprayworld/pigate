@@ -90,6 +90,30 @@ type BackupConfig struct {
 	// the same bytes, or their checksum breaks and the whole file fails to
 	// import.
 	BlockedDomains []BlockedDomain `json:"blockedDomains,omitempty"`
+	// Blocklists and BlocklistFiles (docs/ref/todo/dns-blocklist-import-plan.md
+	// §2.4/T-09) carry the DNS blocklist import feature's manifest entries
+	// (Blocklists — including each list's blockMode, plan §2.3) and, for a
+	// subset of them, the underlying <id>.hosts file content (BlocklistFiles).
+	// Both MUST stay omitempty for the same checksum-compatibility reason as
+	// PortForwards above: older backups (which lack these keys) must keep
+	// re-marshalling to the same bytes, or their checksum breaks and the whole
+	// file fails to import. Only <id>.hosts is ever carried — <id>.conf (the
+	// nxdomain-mode derived artifact) is never included, since it can always
+	// be regenerated from the .hosts content on import (plan §2.1.1/§2.4).
+	Blocklists     []DNSBlocklist            `json:"blocklists,omitempty"`
+	BlocklistFiles []DNSBlocklistFilePayload `json:"blocklistFiles,omitempty"`
+}
+
+// DNSBlocklistFilePayload carries one blocklist's canonical <id>.hosts file
+// content inside a backup (plan §2.4) — gzip-compressed then base64-encoded
+// to keep the JSON backup file a reasonable size for a 90k+ domain list.
+// Sha256 is verified against the decoded/decompressed content on import
+// BEFORE it is ever written to disk (plan §3 T-09 item 3), since that content
+// is later loaded straight into dnsmasq.
+type DNSBlocklistFilePayload struct {
+	ID         string `json:"id"`
+	Sha256     string `json:"sha256"`
+	GzipBase64 string `json:"gzipBase64"`
 }
 
 // BackupUser mirrors a users row for backup purposes. Unlike model.User it

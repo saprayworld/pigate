@@ -357,6 +357,11 @@ const maxRequestBody = 1 << 20 // 1 MB
 // must be added here too.
 var bodyLimitExemptPaths = map[string]bool{
 	"/api/system/config/import": true,
+	// DNS blocklist upload (docs/ref/todo/dns-blocklist-import-plan.md T-08)
+	// handles its own cap via http.MaxBytesReader at model.DNSBlocklistMaxFileBytes
+	// (16 MiB) in HandleUploadDNSBlocklist — without this entry the global 1 MB
+	// BodyLimitMiddleware cap would win and silently truncate any real upload.
+	"/api/dns/blocklists/upload": true,
 }
 
 // BodyLimitMiddleware wraps r.Body in a MaxBytesReader so oversized payloads

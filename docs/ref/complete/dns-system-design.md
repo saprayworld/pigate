@@ -387,3 +387,230 @@ query-log path built on `DNSServerManager.WatchDNSLog`. Summary (see
 - **UI**: new "สถิติ" tab on the DNS Server page (two ranked tables — Domain Query Stats,
   Source Hosts — plus a Dialog for drill-down in either direction), alongside the existing
   Zones/Blocked Domains/Settings tabs.
+
+---
+
+## Cross-reference: DNS Server "Blocklists" (bulk import) (2026-08-23)
+
+Also lives entirely in the DNS **Server** (dnsmasq) path, alongside the deny-list above —
+this is a *separate* feature, not a replacement for it. Full design/rationale:
+`docs/ref/todo/dns-blocklist-import-plan.md`. Summary:
+
+### Two render mechanisms, selected per list by `blockMode`
+
+Every list a user adds — subscribed URL or uploaded file — is assigned a `blockMode`
+(`sinkhole` or `nxdomain`, reusing the exact same `model.DNSBlockModeSinkhole` /
+`model.DNSBlockModeNXDomain` constants as the deny-list, not a new set) that decides which
+dnsmasq mechanism renders it:
+
+| `blockMode` | directive emitted in `pigate-dns.conf` | generated file | subdomains covered? | relative cost |
+|---|---|---|---|---|
+| `sinkhole` (**default for a new blocklist**) | `addn-hosts=/var/lib/pigate/blocklists/<id>.hosts` | `<id>.hosts` — plain hosts records, `0.0.0.0 <domain>` per line | **No** — hosts-file matching is exact-name only | cheapest: dnsmasq never parses `addn-hosts` during `--test`, only at process start, and looks entries up in a hash table at query time |
+| `nxdomain` | `conf-file=/var/lib/pigate/blocklists/<id>.conf` | `<id>.conf` — `address=/<domain>/` (no IP) per line | **Yes** — dnsmasq's man page: `address=/<domain>/` with no address "returns a no-such-domain answer… for `<domain>` and all its subdomains", matched on complete labels | more expensive: `conf-file` is parsed **twice per Apply** (once during `dnsmasq --test`, once again at process start), see cost table below |
+
+Why `nxdomain` uses `address=/<domain>/` and not `server=/<domain>/` (which the deny-list
+uses and gives an equivalent per-domain result): dnsmasq's CHANGELOG shows the two code
+paths scale differently at bulk sizes — 2.86 made domain lookup for `address=`-style
+matching grow as O(log₂ n) instead of worse-than-linear, while a later release notes
+`--server` option parsing itself can be O(n²) at "thousands of options". At 90k+ domains
+that gap matters; at the deny-list's ≤1000-row scale it doesn't, so the deny-list is
+deliberately left on `server=` unchanged.
+
+Estimated cost of the two modes at 93,515 domains (StevenBlack unified list; see
+plan §2.1.3 for the full derivation — **these are estimates from documentation, not yet
+measured on real hardware**, see "Numbers still to be measured" below):
+
+| | `sinkhole` (`addn-hosts`) | `nxdomain` (`conf-file` + `address=/d/`) |
+|---|---|---|
+| bytes/domain | ≈31 B (`0.0.0.0 <name>\n`) | ≈33 B (`address=/<name>/\n`) |
+| generated file size | ≈2.9 MB | ≈3.1 MB (within 10% of sinkhole — *not* the "tens of MB" an earlier plan draft assumed for a 2-line-per-domain sinkhole render) |
+| parsed by `dnsmasq --test`? | No (hosts files are read only at process start) | Yes — parsed once by `--test`, once again at start (2 parses per Apply) |
+| lookup cost per query | hash table | O(log₂ n) since dnsmasq 2.86 (~17 steps at 93k) |
+| safety net if the file goes missing | `--test` does **not** catch it (Caution 1) | `--test` **does** catch it, because `conf-file` is read while parsing options (Caution 16) |
+
+One domain per line always — `address=/a.com/b.com/c.com/` batching is valid dnsmasq
+syntax but the per-line read buffer size for config lines is undocumented, so batching is
+deliberately not used until a real board confirms it's safe.
+
+### Why the mode is a property of the *list*, not of a domain inside it
+
+1. The source format (`<ip> <hostname>` hosts lines) carries no per-domain mode column, and
+   the IP column is discarded entirely (see next section) — there's nothing to infer a
+   per-domain mode from even if we wanted to.
+2. The UI intentionally never renders a 93k-row domain table (a browser-hang risk), so
+   there is no place for a user to toggle an individual domain's mode.
+3. `addn-hosts` and `conf-file` are different file formats; making mode per-domain would
+   force every list to always be split across both files, and the per-domain state would
+   have to live somewhere — i.e. back in SQLite, which was explicitly rejected for this
+   feature (see manifest section below).
+4. Users who need per-domain mode control already have it via the pre-existing
+   "Blocked Domains" deny-list tab (cap 1000), which also takes precedence over blocklists
+   in the statistics classifier.
+
+The accepted asymmetry (`sinkhole` never covers subdomains, `nxdomain` always does) is
+intentional dnsmasq behavior, not a bug, and is called out directly in the Blocklists tab's
+UI copy.
+
+### Why files are re-rendered from scratch instead of forwarded as-is (anti-spoofing)
+
+A public hosts file maps `<hostname> → <ip>` with an arbitrary IP column. If that column
+were passed straight to `addn-hosts`, whoever controls the source (or a MITM, or whoever
+uploaded the file) could point any domain at any IP — full DNS spoofing. The parser
+therefore **always discards the original IP column** and re-renders every accepted domain
+as `0.0.0.0 <domain>` in `<id>.hosts`, regardless of the list's `blockMode` — the same
+parser feeds both render paths, so there's exactly one place enforcing this. `nxdomain`
+mode is inherently even safer here since `address=/<domain>/` has no IP field to spoof at
+all, but that's a side effect, not a substitute for the parser doing the stripping.
+
+Both generated files (`<id>.hosts`, `<id>.conf`) are written atomically: `os.CreateTemp` in
+the same directory → write → `Sync` → `Chmod(0644)` → `os.Rename`.
+
+### `<id>.hosts` is canonical, `<id>.conf` is a derived file
+
+Every list writes `<id>.hosts` regardless of its `blockMode` — it is the single canonical
+store of the list's domain names. `<id>.conf` is written **only** for lists whose
+`blockMode == nxdomain`, and is always regenerated from `<id>.hosts` (no re-fetch/re-upload
+needed) whenever a list's mode is switched to `nxdomain`. Switching a list back to
+`sinkhole` deletes its `<id>.conf`, so an orphaned derived file is never left on disk to be
+loaded silently if the directory layout ever changes.
+
+Consequences of this split (chosen so no other part of the feature needs a second domain
+parser):
+- The statistics index (below) always streams from `<id>.hosts`, for every list, no matter
+  its current mode.
+- Backup/restore only ships `<id>.hosts` in the backup payload — `<id>.conf` is
+  regenerated on import, not carried.
+- Mode switches work fully offline, which matters for `upload`-sourced lists that cannot be
+  re-fetched.
+- Cost: an `nxdomain` list uses roughly double the disk space of an equivalent `sinkhole`
+  list (both files present, ≈3 MB + ≈3 MB at 93k domains) — accepted, and it's a one-time
+  write per ingest/mode-switch, not per query, so it has no meaningful SD-card wear impact.
+
+### dnsmasq version requirement for `nxdomain`
+
+`nxdomain` mode at blocklist scale depends on dnsmasq ≥ 2.86 ("domain search rewrite" —
+sub-linear lookup growth for `address=`-style domain matching; before 2.86, lookup time grew
+faster than linear, which would visibly slow down DNS resolution for every client on the
+LAN). The kernel layer runs `dnsmasq --version` once (fixed argument, no user input — same
+pattern as the existing `--test` call, not a violation of the no-shell-exec-for-user-input
+rule) and caches the result; the service layer refuses to **set** a list's mode to
+`nxdomain` if the detected version is below 2.86, with a readable error surfaced in the UI.
+If the version can't be parsed or detected at all, the check **fails open** (treats it as
+supported) — the worst case of guessing wrong here is "slower", not "insecure", so failing
+closed and locking working boards out of the feature was judged worse.
+
+### Metadata: single JSON manifest, deliberately not SQLite
+
+`/var/lib/pigate/blocklists/manifest.json` holds every list's metadata (`id`, `name`,
+`sourceType`, `url`, `blockMode`, `enabled`, `domainCount`, `fileBytes`, `sha256` of the
+rendered `.hosts` file, `lastFetchedAt`, `lastError`, `createdAt`) — `schemaVersion: 1`.
+The domain names themselves are **never** held in the manifest, in SQLite, or as an
+in-memory `[]string` beyond what it takes to stream-render `<id>.hosts`/`<id>.conf` — the
+generated files on disk are the only place they live.
+
+Why JSON instead of adding blocklist tables to the existing SQLite schema (project's usual
+source of truth for config): the actual imported *content* (the domain list) already has to
+live outside the DB as plain files dnsmasq loads directly, so the DB would only ever hold
+small metadata rows pointing at those files — not enough benefit to justify a schema
+migration, and it keeps blocklist import fully separable/deletable as one directory. Rules
+that make this safe without a database:
+- A single `sync.RWMutex` in the kernel-layer store covers the entire read‑modify‑write
+  cycle (load → mutate → write), not just the write, so two concurrent refreshes can't
+  clobber each other. No `flock` — there is exactly one pigate process writing this
+  directory, the same single-writer assumption the SQLite layer already makes.
+- Atomic write: marshal (indent 2, deterministic) → temp file in the same directory →
+  `Sync` → `Rename`, same pattern as the `.hosts`/`.conf` files above.
+- A missing manifest is treated as an empty `schemaVersion: 1` manifest, not an error; a
+  `schemaVersion` newer than the binary understands is a hard **fail closed** (refuse to
+  write, surface an error, never overwrite a newer file); a manifest that fails to parse is
+  quarantined to `manifest.json.corrupt-<timestamp>` and a fresh empty manifest is started,
+  so a single corrupt file can't kill the feature permanently.
+- The manifest is loaded into RAM once at service construction and every read (e.g. `GET`
+  the list) is served from that in-memory cache, never re-reading the file — consistent
+  with the project's general SD-wear-avoidance stance for anything that doesn't have to hit
+  disk on every read.
+- All actual byte-level I/O (manifest bytes, `.hosts`/`.conf` bytes) lives in the kernel
+  layer, both `real_*` and `mock` implementations — the service layer only does
+  marshal/unmarshal, locking, and business rules, so `-mock=true` never touches the
+  filesystem for this feature, matching every other kernel capability in the project.
+
+### Statistics: mode-aware hash index, separate from the deny-list's index
+
+The existing deny-list statistics matcher (`dnsBlockIndex`, `map[string]string`) is left
+untouched and keeps serving only the ≤1000-row deny-list. A **separate** index
+(`dnsBlocklistIndex`) backs blocklist statistics because the two features have different
+match semantics and different scale:
+- **Match rule depends on the matching list's `blockMode`**, not a single global rule:
+  `sinkhole` lists are matched **exact-name only** (a hosts-file entry for
+  `ads.example.com` does not make `sub.ads.example.com` match), `nxdomain` lists are matched
+  **by suffix/label-boundary** (mirrors dnsmasq's own `address=/<domain>/` subdomain-covering
+  behavior). Applying the wrong rule to either mode would make the Statistics page report
+  blocks dnsmasq never performed, or miss ones it did.
+- **RAM layout**: each domain contributes one 8-byte FNV-1a 64-bit hash to its list's
+  sorted `[]uint64` — never the domain string itself. At the 500,000-domain ceiling
+  (`DNSBlocklistMaxTotalDomains`) that's ≈4 MB, versus an estimated ≈30 MB for a
+  `map[string]string` keyed by the domain text, which is the structure the deny-list uses
+  at its much smaller (≤1000-row) scale. `blockMode` is stored once **per list** (at most
+  `DNSBlocklistsMax` = 8 lists), not once per domain, so mode-awareness costs nothing extra
+  at the per-domain level. At 500,000 entries the chance of any FNV-1a 64-bit hash
+  collision is on the order of `500000² / 2⁶⁵ ≈ 7×10⁻⁹` (birthday bound) — accepted as
+  negligible for a statistics feature (a false-positive "blocked" classification here has
+  no security consequence, only a cosmetic one).
+- **Feed path**: the deny-list index is fed straight from the DB
+  (`DNSServerService.SetBlockedDomainsSink`). The blocklist index is instead fed by
+  **streaming `<id>.hosts` files back off disk** through the kernel layer
+  (`StatisticsService.SetBlocklists`) after a successful `ApplyZones`, never by holding one
+  big in-memory `[]string` of the combined domain set.
+- If the same domain appears in two lists using different modes, dnsmasq's own internal
+  precedence between a hosts record and an `address=/d/` rule decides what it actually
+  answers; the statistics classifier may then report a list/mode that doesn't exactly match
+  what dnsmasq used. This does not affect security (either path is "blocked"), and is
+  accepted as an edge case (the user created it deliberately by importing overlapping
+  lists).
+
+### Relationship to the pre-existing deny-list ("Blocked Domains" tab)
+
+Blocklists (this section) and the deny-list (see the "Blocked Domains" cross-reference
+above) are two independent features that coexist and both render into the same
+`pigate-dns.conf`:
+
+| | Deny-list ("Blocked Domains") | Blocklists (bulk import) |
+|---|---|---|
+| Storage | SQLite (`dns_blocked_domains`) | JSON manifest + generated files, no SQLite |
+| Cap | 1000 domains | 500,000 domains total (8 lists max), 150,000 of which may be `nxdomain` |
+| Entry method | Typed in one at a time via the UI | Subscribed URL (backend-fetched) or uploaded hosts file |
+| Default `blockMode` | `nxdomain` | `sinkhole` (deliberately the opposite default — see cost table above; a doc comment on both the model and the UI calls this out so the two features aren't assumed to share a default) |
+| Mode granularity | Per domain | Per list |
+| Directive(s) emitted | `server=/<domain>/` (`nxdomain`) or `address=/<domain>/0.0.0.0` + `address=/<domain>/::` (`sinkhole`) | `conf-file=<id>.conf` with `address=/<domain>/` lines (`nxdomain`) or `addn-hosts=<id>.hosts` (`sinkhole`) |
+| Statistics index | `dnsBlockIndex` (`map[string]string`) | `dnsBlocklistIndex` (sorted `[]uint64` per list) |
+| Precedence in statistics classification | Takes priority over blocklists | Checked after the deny-list |
+
+Neither feature was modified to accommodate the other — the deny-list's generator, cap, and
+byte-for-byte config output when empty are all unchanged; blocklist rendering is strictly
+additive at the end of `pigate-dns.conf`.
+
+### Numbers still to be measured on real hardware
+
+The cost table above (file sizes, RSS, Apply timing) is derived from documentation and
+napkin math, not measured. Per Caution 1 and Caution 15 of the implementation plan
+(`docs/ref/todo/dns-blocklist-import-plan.md` §5), the following still need to be measured
+on an actual Raspberry Pi 5 board before being treated as fact (none of this environment's
+containers/dev machines are a substitute):
+
+- Wall-clock time of a full Apply (`dnsmasq --test` + restart) for a 93k-domain list in
+  `sinkhole` mode vs. `nxdomain` mode.
+- `dnsmasq` RSS after start with a 93k-domain list loaded, both modes.
+- Whether `dnsmasq --test` genuinely misses a missing/unreadable `addn-hosts` target (as
+  assumed in Caution 1) — if it doesn't, that safety-net gap needs to be treated as fixed,
+  not just documented.
+- Whether `DNSBlocklistMaxNXDomainDomains = 150000` needs to be lowered — the plan's own
+  guidance is: if a full Apply of an `nxdomain` list at the cap takes longer than roughly
+  5 seconds, the cap is too high and should be reduced, with the reasoning for the new
+  number recorded here and in the constant's doc comment
+  (`backend/internal/model/dns_blocklist.go`).
+- Whether accessing PiGate's own web UI through a domain present in an active `nxdomain`
+  blocklist can lock an admin out of the box (Caution 15) — plan for this before testing
+  on a board that's the only way to reach the device.
+
+Until these are measured, `DNSBlocklistMaxNXDomainDomains` stays at its current
+plan-derived value of 150,000 and should not be assumed final.
