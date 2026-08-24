@@ -39,12 +39,6 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@/components/ui/drawer"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -2236,17 +2230,17 @@ export default function DnsServer() {
         </DrawerContent>
       </Drawer>
 
-      {/* Blocklist Add/Edit Dialog — a Dialog (not Drawer) since this form has
-          no Combobox field (T-12 item 7); default modal behavior is fine. */}
-      <Dialog open={isBlocklistModalOpen} onOpenChange={(open) => !open && closeBlocklistModal()}>
-        <DialogContent className="max-h-[85vh] w-full max-w-[480px] gap-4 overflow-y-auto rounded-xl p-6">
-          <DialogHeader className="border-b border-border/50 pb-3">
-            <DialogTitle className="flex items-center gap-2 text-base font-semibold">
+      {/* Blocklist Add/Edit Drawer */}
+      <Drawer direction="right" open={isBlocklistModalOpen} onOpenChange={(open) => !open && closeBlocklistModal()}>
+        <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[450px]">
+          <DrawerHeader className="border-b border-border/50">
+            <DrawerTitle className="flex items-center gap-2 text-base font-semibold">
               <Download className="h-4 w-4 text-muted-foreground" />
               {editingBlocklist ? "แก้ไข Blocklist" : "เพิ่ม Blocklist ใหม่"}
-            </DialogTitle>
-          </DialogHeader>
+            </DrawerTitle>
+          </DrawerHeader>
 
+          <div className="flex-1 overflow-y-auto p-4">
           <form onSubmit={handleSaveBlocklist} className="space-y-4 text-sm">
             {blstError && (
               <Alert variant="destructive" className="px-3 py-2.5">
@@ -2418,8 +2412,9 @@ export default function DnsServer() {
               </Button>
             </div>
           </form>
-        </DialogContent>
-      </Dialog>
+          </div>
+        </DrawerContent>
+      </Drawer>
     </div>
   )
 }
