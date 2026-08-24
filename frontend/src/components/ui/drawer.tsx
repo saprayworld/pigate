@@ -4,9 +4,16 @@ import { Drawer as DrawerPrimitive } from "vaul"
 import { cn } from "@/lib/utils"
 
 function Drawer({
+  handleOnly = true,
   ...props
 }: React.ComponentProps<typeof DrawerPrimitive.Root>) {
-  return <DrawerPrimitive.Root data-slot="drawer" {...props} />
+  // handleOnly restricts drag-to-close to the grabber handle in DrawerContent
+  // so mouse-drag text selection inside the content isn't hijacked as a
+  // drawer-move gesture (vaul only checks for an active text selection on
+  // "bottom"/"top" drawers, never on "left"/"right" ones).
+  return (
+    <DrawerPrimitive.Root data-slot="drawer" handleOnly={handleOnly} {...props} />
+  )
 }
 
 // A Drawer opened from *inside* another Drawer's content (e.g. "save as
@@ -69,7 +76,10 @@ function DrawerContent({
         )}
         {...props}
       >
-        <div className="mx-auto mt-4 hidden h-1.5 w-[100px] shrink-0 rounded-full bg-muted group-data-[vaul-drawer-direction=bottom]/drawer-content:block" />
+        <DrawerPrimitive.Handle
+          data-slot="drawer-handle"
+          className="mx-auto mt-4 hidden h-1.5 w-[100px] shrink-0 rounded-full bg-muted group-data-[vaul-drawer-direction=bottom]/drawer-content:block"
+        />
         {children}
       </DrawerPrimitive.Content>
     </DrawerPortal>
