@@ -119,6 +119,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       items: [
         { path: "/statistics/overview", label: "Overview", icon: BarChart3 },
         { path: "/statistics/traffic", label: "Traffic", icon: ArrowLeftRight, matchPrefix: true },
+        { path: "/statistics/firewall", label: "Firewall", icon: ShieldAlert, matchPrefix: true },
         { path: "/statistics/dns", label: "DNS", icon: ChartColumnBig, matchPrefix: true },
         { path: "/statistics/capacity", label: "Capacity", icon: Gauge, matchPrefix: true },
       ],

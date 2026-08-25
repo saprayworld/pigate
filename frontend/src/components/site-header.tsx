@@ -12,6 +12,7 @@ const TITLES: Record<string, string> = {
   "/dashboard": "Dashboard",
   "/statistics/overview": "Statistics Overview",
   "/statistics/traffic": "Traffic Statistics",
+  "/statistics/firewall": "Firewall Statistics",
   "/statistics/dns": "DNS Statistics",
   "/network/interfaces": "Network Interfaces",
   "/network/dns": "DNS Settings",

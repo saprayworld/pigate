@@ -2097,3 +2097,73 @@ func (s *TrafficStatsService) policyLookup() map[string]model.PolicyRule {
 	}
 	return out
 }
+
+// FirewallRuleBreakdown is GetFirewallRuleBreakdown's return value — the
+// per-rule totals and accept/drop trend backing the Statistics -> Firewall
+// page (docs/ref/todo/statistics-firewall-page-plan.md T-03), built from the
+// SAME bucket ring (b.ruleBytes) GetTrafficDetail's TopRules already reads.
+type FirewallRuleBreakdown struct {
+	// RuleTotals is the per-DB-rule-id cumulative bytes/packets over the
+	// window (same shape/semantics as GetTrafficDetail's ruleTotals local).
+	RuleTotals map[string]model.RuleCounter
+	// Stale holds every rule id present in RuleTotals whose id is NOT a key
+	// of the actionByRule map the caller passed in (deleted/renamed rule) —
+	// callers must not look these ids up in a live rule map and must not
+	// panic; render as "(deleted rule)" instead (plan Risk 5). A stale id's
+	// bytes/packets still count in RuleTotals but are excluded from Trend
+	// below (no action to classify accept-vs-drop with).
+	Stale map[string]bool
+	// Trend is the accept/drop series for the Firewall Traffic Trend chart,
+	// axis-aligned via statsSeriesAxis(window) — one point per bucket,
+	// oldest -> newest, length == statsWindowBucketCount(window).
+	Trend []model.FirewallTrendPoint
+}
+
+// GetFirewallRuleBreakdown backs the Statistics -> Firewall page (plan T-03).
+// actionByRule maps DB rule id -> "ACCEPT"/"DROP" (built by the caller from
+// repo.GetPolicies(), enabled rules only — see StatisticsService.
+// GetFirewallStatistics) and is used ONLY to classify each bucket's
+// ruleBytes delta into accepted/blocked for Trend; it is never mutated here.
+// Reads s.buckets under a single s.mu.RLock() for the whole aggregation,
+// exactly like GetTrafficDetail (see its long comment above for why a
+// two-step copy-then-read would race with poll()'s background goroutine).
+// Never calls the kernel and never starts a goroutine (plan Caution 4).
+func (s *TrafficStatsService) GetFirewallRuleBreakdown(window string, actionByRule map[string]string) FirewallRuleBreakdown {
+	axisStart, n := statsSeriesAxis(window)
+	trend := make([]model.FirewallTrendPoint, n)
+	for i := 0; i < n; i++ {
+		trend[i].Ts = axisStart.Add(time.Duration(i) * trafficDetailBucketSpan).Format(time.RFC3339)
+	}
+
+	ruleTotals := make(map[string]model.RuleCounter)
+	stale := make(map[string]bool)
+
+	s.mu.RLock()
+	windowBuckets := lastNBuckets(s.buckets, statsWindowBucketCount(window))
+	for _, b := range windowBuckets {
+		idx := statsSeriesIndex(b.ts, axisStart, n)
+		for id, v := range b.ruleBytes {
+			cur := ruleTotals[id]
+			cur.Bytes += v.Bytes
+			cur.Packets += v.Packets
+			ruleTotals[id] = cur
+
+			action, ok := actionByRule[id]
+			if !ok {
+				stale[id] = true
+				continue
+			}
+			switch action {
+			case "ACCEPT":
+				trend[idx].AcceptedBytes += v.Bytes
+				trend[idx].AcceptedPackets += v.Packets
+			case "DROP":
+				trend[idx].BlockedBytes += v.Bytes
+				trend[idx].BlockedPackets += v.Packets
+			}
+		}
+	}
+	s.mu.RUnlock()
+
+	return FirewallRuleBreakdown{RuleTotals: ruleTotals, Stale: stale, Trend: trend}
+}

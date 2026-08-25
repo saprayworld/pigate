@@ -321,6 +321,11 @@ func main() {
 	// todo/firewall-log-buffer-capacity-plan.md T-03/T-05, issue #134) —
 	// mirrors SetPolicyStatsService below rather than a constructor parameter.
 	statisticsService.SetLogBuffer(ringBuffer)
+	// SetFirewallService wires FirewallService.LastAppliedAt() into
+	// GetFirewallStatistics' CountersSince field (docs/ref/todo/
+	// statistics-firewall-page-plan.md T-05/T-06) — same post-construction
+	// setter pattern as SetLogBuffer above.
+	statisticsService.SetFirewallService(firewallService)
 	// SetBlockedStatsLimit sets the per-bucket cap on distinct blocked
 	// domains tracked (docs/ref/todo/dns-blocked-query-statistics-plan.md
 	// T-07/T-08) — file-only bootstrap key dns-stats-max-blocked-domains, no

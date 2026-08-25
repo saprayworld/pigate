@@ -112,6 +112,24 @@ type StatisticsService struct {
 	// already-7-parameter signature further; wired via setter instead, same
 	// as SetPolicyStatsService.
 	logBuffer *logs.RingBuffer
+
+	// firewall is optional (nil until SetFirewallService is called by
+	// main.go, mirroring SetLogBuffer's post-construction wiring pattern
+	// above) — used only by GetFirewallStatistics (statistics_firewall.go,
+	// docs/ref/todo/statistics-firewall-page-plan.md T-05) to read
+	// FirewallService.LastAppliedAt() for the response's CountersSince
+	// field. NOT added as a NewStatisticsService parameter, to avoid growing
+	// that constructor's already-7-parameter signature further; a nil
+	// firewall simply leaves CountersSince empty (e.g. a unit test that
+	// never calls this).
+	firewall *FirewallService
+}
+
+// SetFirewallService wires the FirewallService handle used by
+// GetFirewallStatistics to read LastAppliedAt() — see the firewall field's
+// doc comment above. Safe to call with nil.
+func (s *StatisticsService) SetFirewallService(fw *FirewallService) {
+	s.firewall = fw
 }
 
 // SetLogBuffer wires the traffic log ring buffer into the service after
@@ -357,8 +375,8 @@ func (s *StatisticsService) GetStatistics(window string) model.TrafficStatistics
 		TopSources:        buildTopHosts(breakdown.Hosts, breakdown.Observed, leaseByIP, resByIP, ipDomain, statsTopN),
 		TopDestinations:   buildTopHosts(breakdown.Dests, breakdown.Observed, leaseByIP, resByIP, ipDomain, statsTopN),
 		TopConversations:  buildTopConversations(breakdown.Convs, breakdown.Observed, leaseByIP, resByIP, ipDomain),
-		DeniedSources:     buildTopDeniedSources(srcTotals, deniedEvents, leaseByIP, resByIP),
-		DeniedPorts:       buildTopDeniedPorts(portTotals, deniedEvents),
+		DeniedSources:     buildTopDeniedSources(srcTotals, deniedEvents, leaseByIP, resByIP, statsTopN),
+		DeniedPorts:       buildTopDeniedPorts(portTotals, deniedEvents, statsTopN),
 		DeniedSampled:     true,
 		DeniedEvents:      deniedEvents,
 		Truncated:         breakdown.Truncated || denyTruncated,
@@ -475,7 +493,11 @@ func buildTopConversations(totals map[string]dirBytes, observed uint64, leaseByI
 // buildTopDeniedSources ranks the deny ring's per-source event counts.
 // Percent is against totalEvents (this window's actual DROP-event count),
 // never against ObservedBytes — the two are different units (plan Caution 3).
-func buildTopDeniedSources(totals map[string]uint64, totalEvents uint64, leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation) []model.TopDeniedSource {
+// limit caps the returned row count (GetStatistics always passes statsTopN,
+// keeping /api/statistics/traffic byte-for-byte unchanged — docs/ref/todo/
+// statistics-firewall-page-plan.md T-05 item 4 — GetFirewallStatistics is the
+// only other caller, passing its own clamped limit).
+func buildTopDeniedSources(totals map[string]uint64, totalEvents uint64, leaseByIP map[string]model.ActiveDhcpLease, resByIP map[string]model.DhcpReservation, limit int) []model.TopDeniedSource {
 	out := make([]model.TopDeniedSource, 0, len(totals))
 	for ip, count := range totals {
 		if count == 0 {
@@ -495,14 +517,15 @@ func buildTopDeniedSources(totals map[string]uint64, totalEvents uint64, leaseBy
 		}
 		return out[i].IP < out[j].IP
 	})
-	if len(out) > statsTopN {
-		out = out[:statsTopN]
+	if len(out) > limit {
+		out = out[:limit]
 	}
 	return out
 }
 
 // buildTopDeniedPorts ranks the deny ring's per-"proto/port" event counts.
-func buildTopDeniedPorts(totals map[string]uint64, totalEvents uint64) []model.TopDeniedPort {
+// limit caps the returned row count — see buildTopDeniedSources' doc comment.
+func buildTopDeniedPorts(totals map[string]uint64, totalEvents uint64, limit int) []model.TopDeniedPort {
 	out := make([]model.TopDeniedPort, 0, len(totals))
 	for key, count := range totals {
 		if count == 0 {
@@ -528,8 +551,8 @@ func buildTopDeniedPorts(totals map[string]uint64, totalEvents uint64) []model.T
 		}
 		return out[i].Port < out[j].Port
 	})
-	if len(out) > statsTopN {
-		out = out[:statsTopN]
+	if len(out) > limit {
+		out = out[:limit]
 	}
 	return out
 }
