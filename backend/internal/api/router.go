@@ -80,6 +80,12 @@ func RegisterRoutes(s *Server) http.Handler {
 	// a strictly LOWER sensitivity than every other /api/statistics/* route
 	// above.
 	authRoute("GET /api/statistics/capacity", s.HandleGetCapacityStatistics)
+	// Statistics -> Firewall page (docs/ref/todo/statistics-firewall-page-plan.md
+	// T-06): rule-counter + NFLOG-sourced firewall traffic/blocked-event
+	// summary — authRoute (not superAdminRoute), same sensitivity level as
+	// /api/statistics/traffic (source IPs, rule names) which is also
+	// authRoute only.
+	authRoute("GET /api/statistics/firewall", s.HandleGetFirewallStatistics)
 	authRoute("GET /api/dashboard/logs", s.HandleGetRecentLogs)
 	authRoute("POST /api/dashboard/logs/clear", s.HandleClearLogs)
 	authRoute("GET /api/dashboard/logs/stream", s.HandleLogStream)

@@ -2232,6 +2232,7 @@ func TestStatsWindowParam_AllEndpoints_SevenValuesAndFallback(t *testing.T) {
 			return "/api/statistics/dns/client?client=unknown&window=" + url.QueryEscape(w)
 		}},
 		{"statistics/capacity", func(w string) string { return "/api/statistics/capacity?window=" + url.QueryEscape(w) }},
+		{"statistics/firewall", func(w string) string { return "/api/statistics/firewall?window=" + url.QueryEscape(w) }},
 	}
 
 	for _, ep := range endpoints {
@@ -2692,5 +2693,86 @@ func TestCapacityStatisticsEndpoint(t *testing.T) {
 	rec = get("/api/statistics/capacity?series=garbage")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("series=garbage: expected 200 (graceful fallback), got %d", rec.Code)
+	}
+}
+
+// TestHandleGetFirewallStatistics covers the Statistics -> Firewall page
+// endpoint (docs/ref/todo/statistics-firewall-page-plan.md T-07/T-06): no
+// session -> 401, an unrecognized/out-of-range window/limit is normalized
+// server-side rather than rejected, and the happy-path response has the
+// expected top-level shape.
+func TestHandleGetFirewallStatistics(t *testing.T) {
+	handler, _ := setupTestServer(t)
+	token := "mock_session_id_test_token"
+
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		addSessionCookie(req, token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Requires auth.
+	req := httptest.NewRequest("GET", "/api/statistics/firewall", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("without session: expected 401, got %d", rec.Code)
+	}
+
+	// Happy path: 200, expected top-level shape, limit echoed back clamped to
+	// the default when omitted.
+	rec = get("/api/statistics/firewall")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d. Body: %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	for _, field := range []string{
+		"window", "generatedAt", "available", "truncated", "acceptedBytes", "acceptedPackets",
+		"blockedBytes", "blockedPackets", "blockedEvents", "rulesEnabled", "rulesUnused",
+		"trend", "denyTrend", "chains", "rules", "blockedSources", "blockedPorts",
+		"recentBlockedEvents", "limit",
+	} {
+		if _, ok := body[field]; !ok {
+			t.Errorf("expected field %q in response, got %s", field, rec.Body.String())
+		}
+	}
+	if got, _ := body["window"].(string); got != "1h" {
+		t.Errorf("expected default window=1h, got %q", got)
+	}
+	if got, _ := body["limit"].(float64); got != 100 {
+		t.Errorf("expected default limit=100, got %v", got)
+	}
+
+	// window/limit are normalized/clamped, never rejected with a 400.
+	rec = get("/api/statistics/firewall?window=garbage&limit=99999")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("window=garbage&limit=99999: expected 200 (graceful fallback), got %d", rec.Code)
+	}
+	body = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if got, _ := body["window"].(string); got != "1h" {
+		t.Errorf("window=garbage: expected fallback window=1h, got %q", got)
+	}
+	if got, _ := body["limit"].(float64); got != 500 {
+		t.Errorf("limit=99999: expected clamp to max 500, got %v", got)
+	}
+
+	rec = get("/api/statistics/firewall?window=24h&limit=0")
+	body = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if got, _ := body["window"].(string); got != "24h" {
+		t.Errorf("expected window=24h, got %q", got)
+	}
+	if got, _ := body["limit"].(float64); got != 100 {
+		t.Errorf("limit=0: expected fallback to default 100, got %v", got)
 	}
 }

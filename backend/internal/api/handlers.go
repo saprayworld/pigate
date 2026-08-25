@@ -671,6 +671,34 @@ func (s *Server) HandleGetCapacityStatistics(w http.ResponseWriter, r *http.Requ
 	s.writeJSON(w, http.StatusOK, s.statistics.GetCapacityStatistics(window, withSeries))
 }
 
+// firewallStatsDefaultLimit/firewallStatsMaxLimit mirror the same constants
+// in service/statistics_firewall.go — duplicated here for the same reason as
+// trafficTopHostsDefaultLimit/-MaxLimit above (plan §1.2/Caution 5: the HTTP
+// layer decides what an invalid/out-of-range `limit` means before it ever
+// reaches the service).
+const (
+	firewallStatsDefaultLimit = 100
+	firewallStatsMaxLimit     = 500
+)
+
+// HandleGetFirewallStatistics backs the Statistics -> Firewall page
+// (docs/ref/todo/statistics-firewall-page-plan.md T-06): rule-counter +
+// NFLOG-sourced firewall traffic/blocked-event summary. window is
+// whitelisted via statsWindowParam exactly like every other statistics
+// endpoint; limit is clamped via clampQueryLimit, never rejected — no other
+// query parameter is accepted or read.
+func (s *Server) HandleGetFirewallStatistics(w http.ResponseWriter, r *http.Request) {
+	window := statsWindowParam(r)
+	limit := clampQueryLimit(r, firewallStatsDefaultLimit, firewallStatsMaxLimit)
+
+	stats, err := s.statistics.GetFirewallStatistics(window, limit)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "failed to load firewall statistics")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, stats)
+}
+
 // trafficTopHostsDefaultLimit/trafficTopHostsMaxLimit and
 // trafficHostDetailDefaultLimit/trafficHostDetailMaxLimit mirror the same
 // constants in service/statistics_traffic.go — duplicated here (rather than

@@ -1017,6 +1017,77 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /statistics/firewall:
+    get:
+      tags:
+        - Statistics
+      summary: Firewall traffic/blocked-event summary for the Statistics -> Firewall page
+      description: >
+        Backs the Statistics -> Firewall page (docs/ref/todo/
+        statistics-firewall-page-plan.md). Composes data from two
+        independently-sourced, differently-scoped accountings that already
+        exist elsewhere in the API — never mixed into one percentage or one
+        denominator:
+
+
+        - `acceptedBytes`/`acceptedPackets`/`blockedBytes`/`blockedPackets`
+        and every byte/packet figure in `trend`/`chains`/`rules` come from
+        the nftables PER-RULE COUNTER (the same exact, kernel-counted source
+        `/policies/stats` and the Dashboard "Top Rules by Traffic" card use).
+        This is EXACT, but it ONLY EVER reflects traffic that matched a
+        USER-DEFINED policy rule — traffic dropped by the board's built-in
+        default-drop rule (the final catch-all of the input/forward chain,
+        see docs/tech_stack_design.md §4.3) is NOT counted in these fields
+        at all, because that drop has no associated DB rule/counter.
+
+        - `blockedEvents` and every value in `denyTrend`/`blockedSources`/
+        `blockedPorts`/`recentBlockedEvents` come from NFLOG (the same "Top
+        Denied Sources/Ports" deny-ring source `/statistics/traffic`
+        already exposes) — an EVENT COUNT, not bytes, and it DOES include
+        packets dropped by the default-drop, a strictly larger and
+        differently-shaped population than `blockedBytes`/`blockedPackets`.
+
+
+        Every field is RAM-only (never persisted to SQLite): the per-rule
+        counters additionally reset to 0 on every successful Apply Settings
+        (see `countersSince`), and the whole response resets on a pigate
+        restart. `percent` on `chains`/`rules` rows is always relative to the
+        sum of accepted+blocked bytes across every chain/rule in this
+        response, never against `blockedEvents`.
+      parameters:
+        - name: window
+          in: query
+          schema:
+            type: string
+            enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
+            default: 1h
+          description: >
+            Aggregation window. Any value outside {15m, 30m, 1h, 3h, 6h, 12h,
+            24h} — including omitted, wrong case (e.g. "1H"), or garbage —
+            silently falls back to 1h rather than erroring.
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 500
+          description: >
+            Maximum rows returned for `rules`/`blockedSources`/`blockedPorts`/
+            `recentBlockedEvents` (each independently capped at this same
+            value). A missing/unparseable value falls back to the default
+            (100); a value outside [1, 500] is CLAMPED into range, never
+            rejected.
+      responses:
+        '200':
+          description: Firewall traffic/blocked-event summary retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FirewallStatistics'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /dashboard/logs:
     get:
       tags:
@@ -7210,6 +7281,255 @@ components:
         generatedAt:
           type: string
           format: date-time
+
+    FirewallTrendPoint:
+      type: object
+      description: >-
+        One 5-minute bucket of the Firewall Traffic Trend chart (bytes) —
+        accept vs drop, sourced from the nft per-rule counter (exact,
+        user-rule-only — see FirewallStatistics description).
+      required: [ts, acceptedBytes, blockedBytes, acceptedPackets, blockedPackets]
+      properties:
+        ts:
+          type: string
+          format: date-time
+        acceptedBytes:
+          type: integer
+          format: uint64
+        blockedBytes:
+          type: integer
+          format: uint64
+        acceptedPackets:
+          type: integer
+          format: uint64
+        blockedPackets:
+          type: integer
+          format: uint64
+
+    FirewallDenyPoint:
+      type: object
+      description: >-
+        One 5-minute bucket of the Blocked Events Trend chart — an NFLOG
+        EVENT count (not bytes), a completely different unit/source than
+        FirewallTrendPoint.
+      required: [ts, events]
+      properties:
+        ts:
+          type: string
+          format: date-time
+        events:
+          type: integer
+          format: uint64
+
+    FirewallChainStat:
+      type: object
+      description: >-
+        One row of the Chain Breakdown table — accept vs drop bytes/packets
+        for one nftables chain, from the same nft-rule-counter source as
+        FirewallTrendPoint. percent is against the sum of
+        acceptedBytes+blockedBytes across ALL chains in the response.
+      required: [chain, acceptedBytes, blockedBytes, acceptedPackets, blockedPackets, percent]
+      properties:
+        chain:
+          type: string
+          enum: [forward, input, output]
+        acceptedBytes:
+          type: integer
+          format: uint64
+        blockedBytes:
+          type: integer
+          format: uint64
+        acceptedPackets:
+          type: integer
+          format: uint64
+        blockedPackets:
+          type: integer
+          format: uint64
+        percent:
+          type: number
+          format: double
+
+    FirewallRuleStatRow:
+      type: object
+      description: >-
+        One row of the Top Rules by Traffic table. Mirrors PolicyRuleStat
+        field-for-field for the fields they share, plus it can represent a
+        rule id that no longer exists (deleted/renamed mid-window) as a
+        "(deleted rule)" row instead of omitting it or erroring.
+      required: [ruleId, name, bytes, packets, percent, unused]
+      properties:
+        ruleId:
+          type: string
+          example: rule-a1b2
+        name:
+          type: string
+          description: '"(deleted rule)" when ruleId no longer maps to a live policy rule.'
+          example: Block_Malicious
+        chain:
+          type: string
+          enum: [forward, input, output]
+        action:
+          type: string
+          enum: [ACCEPT, DROP]
+        log:
+          type: boolean
+        monitored:
+          type: boolean
+        bytes:
+          type: integer
+          format: uint64
+        packets:
+          type: integer
+          format: uint64
+        percent:
+          type: number
+          format: double
+        unused:
+          type: boolean
+        lastMatchedAt:
+          type: string
+          format: date-time
+        lastMatchedSource:
+          type: string
+          enum: [log, counter]
+
+    FirewallBlockedEvent:
+      type: object
+      description: >-
+        One row of the Recent Blocked Events table — a single NFLOG DROP
+        entry, read directly off the existing traffic-log ring buffer,
+        newest first.
+      required: [ts, sourceIp, proto, port, chain]
+      properties:
+        ts:
+          type: string
+          format: date-time
+        sourceIp:
+          type: string
+          example: 203.0.113.9
+        proto:
+          type: string
+          example: TCP
+        port:
+          type: string
+          example: '23'
+        chain:
+          type: string
+          enum: [forward, input, output]
+        ruleName:
+          type: string
+          description: >-
+            Best-effort/omitted when the entry predates rule-name capture or
+            the drop came from the built-in default-drop rather than a user
+            rule.
+
+    FirewallStatistics:
+      type: object
+      required:
+        - window
+        - generatedAt
+        - available
+        - truncated
+        - acceptedBytes
+        - acceptedPackets
+        - blockedBytes
+        - blockedPackets
+        - blockedEvents
+        - rulesEnabled
+        - rulesUnused
+        - trend
+        - denyTrend
+        - chains
+        - rules
+        - blockedSources
+        - blockedPorts
+        - recentBlockedEvents
+        - limit
+      description: >-
+        The GET /statistics/firewall response — see that path's description
+        for the full explanation of the two independent data sources
+        (nft-rule-counter vs NFLOG) this DTO combines.
+      properties:
+        window:
+          type: string
+          enum: [15m, 30m, 1h, 3h, 6h, 12h, 24h]
+        generatedAt:
+          type: string
+          format: date-time
+        available:
+          type: boolean
+          description: >-
+            False until the nft rule-counter poller has completed at least
+            one tick (mirrors PolicyRuleStats.available).
+        truncated:
+          type: boolean
+          description: >-
+            True when the NFLOG deny ring (blockedSources/blockedPorts/
+            recentBlockedEvents) hit one of its per-bucket tracking caps in
+            this window. The rule-counter side of this response has no such
+            cap and never sets this.
+        countersSince:
+          type: string
+          format: date-time
+          description: >-
+            Last successful Apply Settings — every nft-rule-counter-sourced
+            figure is "since" this timestamp, not lifetime. Omitted if no
+            successful apply has happened yet this run.
+        acceptedBytes:
+          type: integer
+          format: uint64
+        acceptedPackets:
+          type: integer
+          format: uint64
+        blockedBytes:
+          type: integer
+          format: uint64
+          description: >-
+            nft-rule-counter-sourced — NOT the same population as
+            blockedEvents (does not include default-drop traffic). Never
+            combine into a percentage with blockedEvents.
+        blockedPackets:
+          type: integer
+          format: uint64
+        blockedEvents:
+          type: integer
+          format: uint64
+          description: NFLOG DROP event count for this window (includes default-drop traffic).
+        rulesEnabled:
+          type: integer
+        rulesUnused:
+          type: integer
+        trend:
+          type: array
+          items:
+            $ref: '#/components/schemas/FirewallTrendPoint'
+        denyTrend:
+          type: array
+          items:
+            $ref: '#/components/schemas/FirewallDenyPoint'
+        chains:
+          type: array
+          items:
+            $ref: '#/components/schemas/FirewallChainStat'
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/FirewallRuleStatRow'
+        blockedSources:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopDeniedSource'
+        blockedPorts:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopDeniedPort'
+        recentBlockedEvents:
+          type: array
+          items:
+            $ref: '#/components/schemas/FirewallBlockedEvent'
+        limit:
+          type: integer
+          description: The effective (server-clamped) row cap applied to the 4 list fields above.
 
     TrafficLogBufferUsage:
       type: object
