@@ -454,10 +454,16 @@ function RecentBlockedEventsCard({ data }: { data: FirewallStatistics }) {
           <CardTitle className="text-base font-semibold">Recent Blocked Events</CardTitle>
           <p className="text-[11px] text-muted-foreground">เหตุการณ์บล็อกล่าสุดจาก NFLOG (ring buffer เดียวกับหน้า Log)</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => navigate("/logs/traffic?action=DROP")} className="cursor-pointer">
-          ดู log แบบเต็ม
-          <ArrowRight className="size-3.5" />
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => navigate("/logs/traffic?action=DROP")} className="cursor-pointer">
+            Forward log
+            <ArrowRight className="size-3.5" />
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => navigate("/logs/local?action=DROP")} className="cursor-pointer">
+            Local log
+            <ArrowRight className="size-3.5" />
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         {data.recentBlockedEvents.length === 0 ? (
@@ -508,7 +514,7 @@ export default function StatisticsFirewall() {
   const load = useCallback(async (win: typeof window_, showLoading: boolean) => {
     if (showLoading) setIsLoading(true)
     try {
-      const result = await firewallStatisticsService.getFirewallStatistics(win, 100)
+      const result = await firewallStatisticsService.getFirewallStatistics(win, 25)
       setData(result)
       setError(null)
     } catch (err) {
