@@ -98,14 +98,11 @@ func (s *StatisticsService) GetFirewallStatistics(window string, limit int) (mod
 		ruleByID[r.ID] = r
 	}
 
+	// s.traffic is required (see NewStatisticsService) and already
+	// dereferenced unconditionally above, so no nil-check here either.
 	breakdown := s.traffic.GetFirewallRuleBreakdown(window, actionByRule)
-
-	var lastHitsByPoll map[string]time.Time
-	available := false
-	if s.traffic != nil {
-		lastHitsByPoll = s.traffic.RuleLastHits()
-		available = s.traffic.RuleCountersReady()
-	}
+	lastHitsByPoll := s.traffic.RuleLastHits()
+	available := s.traffic.RuleCountersReady()
 	var lastMatchedByLog map[string]string
 	if s.logBuffer != nil {
 		lastMatchedByLog = s.logBuffer.LastMatchedByRule()
