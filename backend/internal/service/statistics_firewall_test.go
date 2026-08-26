@@ -207,6 +207,47 @@ func TestGetFirewallStatistics_ComposesResponse(t *testing.T) {
 	}
 }
 
+// TestGetFirewallStatistics_StaleRulePercentWithinTotal covers issue #156: a
+// stale ("(deleted rule)") row's Percent must never exceed 100%, and must be
+// computed against the same total-bytes divisor as the live rule rows so all
+// Rules[].Percent values sum to <=100%.
+func TestGetFirewallStatistics_StaleRulePercentWithinTotal(t *testing.T) {
+	acct := &fakeTrafficAccounting{
+		ruleResponses: []map[string]model.RuleCounter{
+			{"accept-1": {Bytes: 0, Packets: 0}, "ghost-rule": {Bytes: 0, Packets: 0}},
+			{"accept-1": {Bytes: 100, Packets: 1}, "ghost-rule": {Bytes: 1000, Packets: 10}},
+		},
+	}
+	repo, _, trafficSvc, _, s := newFirewallStatsTestServices(t, acct)
+	mustCreatePolicy(t, repo, model.PolicyRule{ID: "accept-1", Name: "Allow Web", Chain: model.PolicyChainForward, Action: "ACCEPT", Status: true})
+
+	trafficSvc.poll()
+	trafficSvc.poll()
+
+	stats, err := s.GetFirewallStatistics("1h", 100)
+	if err != nil {
+		t.Fatalf("GetFirewallStatistics: %v", err)
+	}
+
+	var staleRow *model.FirewallRuleStatRow
+	var sumPercent float64
+	for i := range stats.Rules {
+		sumPercent += stats.Rules[i].Percent
+		if stats.Rules[i].Name == "(deleted rule)" {
+			staleRow = &stats.Rules[i]
+		}
+	}
+	if staleRow == nil {
+		t.Fatalf("expected a stale '(deleted rule)' row, got %+v", stats.Rules)
+	}
+	if staleRow.Percent > 100 {
+		t.Fatalf("expected stale row Percent <= 100, got %v", staleRow.Percent)
+	}
+	if sumPercent > 100.1 { // rounding slack, percentOf rounds to 1 decimal
+		t.Fatalf("expected sum(Rules[].Percent) <= 100, got %v (%+v)", sumPercent, stats.Rules)
+	}
+}
+
 // TestGetFirewallStatistics_NoRaceWithPoll drives poll() concurrently with
 // GetFirewallStatistics() across every supported window (mirrors
 // TestTrafficStats_GetTrafficDetailNoRaceWithPoll) — run with `go test
