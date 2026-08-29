@@ -149,7 +149,16 @@ func (s *StatisticsService) GetFirewallStatistics(window string, limit int) (mod
 	// by bytes desc, cut to limit. A stale id (deleted/renamed rule) is
 	// rendered with a placeholder name/chain/action rather than skipped or
 	// panicking (plan Risk 5).
-	totalRuleBytes := acceptedBytes + blockedBytes
+	//
+	// totalRuleBytes is the Percent divisor for every row, stale included, so
+	// row percentages always sum to <=100% (issue #156: using
+	// acceptedBytes+blockedBytes alone excludes stale bytes from the
+	// divisor, letting a stale row's own percentage read over 100%).
+	var staleBytes uint64
+	for id := range breakdown.Stale {
+		staleBytes += breakdown.RuleTotals[id].Bytes
+	}
+	totalRuleBytes := acceptedBytes + blockedBytes + staleBytes
 	rows := make([]model.FirewallRuleStatRow, 0, len(breakdown.RuleTotals))
 	rulesUnused := 0
 	for _, r := range rules {
