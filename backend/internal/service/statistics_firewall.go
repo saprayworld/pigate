@@ -86,7 +86,6 @@ func (s *StatisticsService) GetFirewallStatistics(window string, limit int) (mod
 
 	actionByRule := make(map[string]string, len(rules))
 	chainByRule := make(map[string]string, len(rules))
-	ruleByID := make(map[string]model.PolicyRule, len(rules))
 	rulesEnabled := 0
 	for _, r := range rules {
 		if !r.Status {
@@ -95,7 +94,6 @@ func (s *StatisticsService) GetFirewallStatistics(window string, limit int) (mod
 		rulesEnabled++
 		actionByRule[r.ID] = r.Action
 		chainByRule[r.ID] = r.Chain
-		ruleByID[r.ID] = r
 	}
 
 	// s.traffic is required (see NewStatisticsService) and already
