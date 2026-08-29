@@ -39,7 +39,7 @@ const defaultConfigPath = "/var/lib/pigate/pigate.conf"
 // version is the PiGate build version. It is overridable at build time via
 // -ldflags "-X main.version=<tag>" (see build.sh); the default applies to plain
 // `go build` / `go run` during development.
-var version = "v0.1.0"
+var version = "v0.2.0"
 
 func main() {
 	// 1. Register CLI flags. Their default values here must stay 1:1 with
