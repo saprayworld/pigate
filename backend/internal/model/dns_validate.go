@@ -81,11 +81,19 @@ func ValidateDNSZone(z DNSZone) error {
 // ValidateDNSRecord validates a record's name and its value according to the
 // record type (A, AAAA, CNAME, MX, TXT, PTR, NS), matching exactly what the
 // generator (kernel/dns_server.go) will accept — no stricter, so it never
-// rejects a value the writer handles fine.
+// rejects a value the writer handles fine. GlueIPs is only allowed on NS
+// records (each entry becomes a `server=/<fqdn>/<ip>` forwarding-delegation
+// line in the generator — see docs/ref/todo/dns-ns-delegation-plan.md); this
+// function does not know the zone name, so the apex guard (NS record name ==
+// the zone's own apex) is enforced one layer up, at the API handler.
 func ValidateDNSRecord(r DNSRecord) error {
 	name := strings.TrimSpace(r.Name)
 	if name != "" && name != "@" && !reZoneName.MatchString(name) {
 		return fmt.Errorf("record name %q contains invalid characters", r.Name)
+	}
+
+	if len(r.GlueIPs) > 0 && strings.ToUpper(r.Type) != "NS" {
+		return fmt.Errorf("glueIps is only allowed on NS records, not %q", r.Type)
 	}
 
 	value := strings.TrimSpace(r.Value)
@@ -158,6 +166,42 @@ func ValidateDNSRecord(r DNSRecord) error {
 		}
 		if _, err := EncodeDNSNameHex(target); err != nil {
 			return fmt.Errorf("NS record value %q is not a valid nameserver name: %w", r.Value, err)
+		}
+		if len(r.GlueIPs) > DNSNSGlueMaxIPs {
+			return fmt.Errorf("NS record has %d glue IPs, maximum is %d", len(r.GlueIPs), DNSNSGlueMaxIPs)
+		}
+		seenGlue := make(map[string]bool, len(r.GlueIPs))
+		for _, raw := range r.GlueIPs {
+			// No TrimSpace: like ValidateDhcpConfig/ValidateDNSServerSettings,
+			// this value is interpolated verbatim into a `server=/<fqdn>/<ip>`
+			// line in pigate-dns.conf, so edge whitespace must be rejected
+			// outright rather than silently accepted then written.
+			// net.ParseIP already rejects newlines/spaces/zone-id suffixes,
+			// which closes off directive injection (e.g.
+			// "1.2.3.4\nserver=/evil/6.6.6.6").
+			ip := net.ParseIP(raw)
+			if ip == nil {
+				return fmt.Errorf("NS glue IP %q is not a valid IP address", raw)
+			}
+			if ip.IsLoopback() {
+				return fmt.Errorf("NS glue IP %q is a loopback address and would create a DNS forwarding loop with dnsmasq itself", raw)
+			}
+			if ip.IsUnspecified() {
+				return fmt.Errorf("NS glue IP %q is an unspecified address (0.0.0.0/::) and cannot be used as a delegation target", raw)
+			}
+			if ip.IsMulticast() {
+				return fmt.Errorf("NS glue IP %q is a multicast address and cannot be used as a delegation target", raw)
+			}
+			// Private/RFC1918 addresses are intentionally allowed: delegating
+			// to a nameserver on the LAN (e.g. 192.168.1.53) is a legitimate
+			// use case here, unlike isGloballyRoutable's outbound-HTTP-fetch
+			// SSRF guard (dns_blocklist_fetch.go/ipinfo.go) which must reject
+			// them because that code actually connects to the address.
+			canon := ip.String()
+			if seenGlue[canon] {
+				return fmt.Errorf("NS glue IP %q is listed more than once", raw)
+			}
+			seenGlue[canon] = true
 		}
 	default:
 		return fmt.Errorf("unsupported DNS record type %q", r.Type)

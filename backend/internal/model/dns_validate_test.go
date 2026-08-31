@@ -65,6 +65,20 @@ func TestValidateDNSRecord(t *testing.T) {
 		{"NS bad label", DNSRecord{Name: "@", Type: "NS", Value: "ns1..example.com"}, true},
 		{"unsupported type", DNSRecord{Name: "www", Type: "SRV", Value: "x"}, true},
 		{"invalid name chars", DNSRecord{Name: "bad name", Type: "A", Value: "1.2.3.4"}, true},
+
+		// NS-delegation glue IPs (docs/ref/todo/dns-ns-delegation-plan.md T-10)
+		{"NS glue single v4", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", GlueIPs: []string{"203.0.113.53"}}, false},
+		{"NS glue v4+v6", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", GlueIPs: []string{"203.0.113.53", "2001:db8::53"}}, false},
+		{"NS glue private allowed", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", GlueIPs: []string{"192.168.1.53"}}, false},
+		{"NS glue loopback", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", GlueIPs: []string{"127.0.0.1"}}, true},
+		{"NS glue unspecified v4", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", GlueIPs: []string{"0.0.0.0"}}, true},
+		{"NS glue multicast", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", GlueIPs: []string{"224.0.0.1"}}, true},
+		{"NS glue injection", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", GlueIPs: []string{"1.2.3.4\nserver=/evil/6.6.6.6"}}, true},
+		{"NS glue leading space", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", GlueIPs: []string{" 1.2.3.4"}}, true},
+		{"NS glue duplicate", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", GlueIPs: []string{"1.2.3.4", "1.2.3.4"}}, true},
+		{"NS glue too many", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", GlueIPs: []string{"1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4", "5.5.5.5"}}, true},
+		{"A with glueIps rejected", DNSRecord{Name: "www", Type: "A", Value: "1.2.3.4", GlueIPs: []string{"1.2.3.4"}}, true},
+		{"NS no glue (no regression)", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

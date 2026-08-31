@@ -190,6 +190,28 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
+	// Add glue_ips column to dns_records if it doesn't exist
+	// (docs/ref/todo/dns-ns-delegation-plan.md T-03). Additive only — no
+	// CHECK constraint changes, so a plain ALTER is enough (unlike the
+	// 'NS' rebuild above). NOT NULL DEFAULT '' means every pre-existing
+	// row reads back as "no glue" = the previous publish-only behaviour.
+	// Must run after the 'NS' rebuild above: an old DB that still needs
+	// that rebuild has a dns_records table (created via
+	// CREATE TABLE dns_records_new above) that does not have glue_ips yet,
+	// so this block re-queries sqlite_master fresh rather than reusing
+	// sqlCreateDNSRecords (which reflects the pre-rebuild schema).
+	var sqlCreateDNSRecordsGlue string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='dns_records'").Scan(&sqlCreateDNSRecordsGlue)
+	if err == nil {
+		if !strings.Contains(sqlCreateDNSRecordsGlue, "glue_ips") {
+			_, err = db.Exec("ALTER TABLE dns_records ADD COLUMN glue_ips TEXT NOT NULL DEFAULT ''")
+			if err != nil {
+				return fmt.Errorf("failed to add glue_ips column: %w", err)
+			}
+			log.Println("[Migration] Added glue_ips column to dns_records table")
+		}
+	}
+
 	// Add subtype column to network_interfaces if it doesn't exist
 	var sqlCreateIfaceSubtype string
 	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='network_interfaces'").Scan(&sqlCreateIfaceSubtype)
@@ -463,6 +485,7 @@ func migrate(db *sql.DB) error {
 			type       TEXT NOT NULL CHECK(type IN ('A','AAAA','CNAME','MX','TXT','PTR','NS')),
 			value      TEXT NOT NULL,
 			ttl        INTEGER DEFAULT 300,
+			glue_ips   TEXT NOT NULL DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (zone_id) REFERENCES dns_zones(id) ON DELETE CASCADE
 		);`,

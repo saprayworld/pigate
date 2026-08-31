@@ -17,6 +17,15 @@ type DNSRecord struct {
 	Type   string `json:"type"`
 	Value  string `json:"value"`
 	TTL    int    `json:"ttl"`
+	// GlueIPs is the NS-delegation glue: the IP address(es) of the
+	// nameserver named in Value. Only meaningful for Type == "NS" and only
+	// for a non-apex record name. When non-empty, the generator emits
+	// `server=/<fqdn>/<ip>` per IP so dnsmasq actually FORWARDS queries
+	// under that name to the delegated nameserver (forwarding-based
+	// delegation), instead of only publishing the NS record via dns-rr.
+	// Empty (the default, and the value of every pre-existing row) keeps
+	// the previous publish-only behaviour byte-for-byte.
+	GlueIPs []string `json:"glueIps"`
 }
 
 type DNSZoneInput struct {
@@ -28,11 +37,18 @@ type DNSZoneInput struct {
 }
 
 type DNSRecordInput struct {
-	Name  string `json:"name"`
-	Type  string `json:"type"`
-	Value string `json:"value"`
-	TTL   int    `json:"ttl"`
+	Name    string   `json:"name"`
+	Type    string   `json:"type"`
+	Value   string   `json:"value"`
+	TTL     int      `json:"ttl"`
+	GlueIPs []string `json:"glueIps"`
 }
+
+// DNSNSGlueMaxIPs caps how many glue IPs one NS record may carry. Each
+// one becomes its own `server=` line in pigate-dns.conf; 4 covers every
+// realistic delegation (2 NS x A+AAAA) without letting one record bloat
+// the config.
+const DNSNSGlueMaxIPs = 4
 
 // DNSServerSettings holds which real LAN interfaces the DNS Server should bind
 // (auth-server) to. Independent from DHCP Server configs.

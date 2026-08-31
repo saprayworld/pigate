@@ -714,4 +714,24 @@ export const dnsServerService = {
     }
     return response.json();
   },
+
+  // NS-delegation glue auto-lookup (docs/ref/todo/dns-ns-delegation-plan.md
+  // T-08) — used by the "ค้นหา IP อัตโนมัติ" button next to an NS record's
+  // glue IP field. name must be the raw nameserver name typed by the user;
+  // the backend re-validates/normalizes it, so this function never trims or
+  // otherwise mutates it before sending.
+  resolveNameserver: async (name: string): Promise<string[]> => {
+    if (IS_MOCK_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      // Mock lookup result — no real DNS query is issued in mock mode.
+      return ["203.0.113.53"];
+    }
+
+    const response = await fetch(`${API_BASE_URL}/dns/resolve-ns?name=${encodeURIComponent(name)}`);
+    if (!response.ok) {
+      await parseBlocklistError(response, `Failed to resolve nameserver: ${response.statusText}`);
+    }
+    const data = await response.json();
+    return data.ips ?? [];
+  },
 };

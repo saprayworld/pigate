@@ -82,6 +82,25 @@ import { ifaceLabel } from "@/lib/ifaceLabel"
 // for the Blocklists tab's summary bar only.
 const DNS_BLOCKLIST_TOTAL_DOMAINS_MAX = 500000
 
+// Mirrors backend model.DNSNSGlueMaxIPs (docs/ref/todo/
+// dns-ns-delegation-plan.md) — the max number of glue IPs one NS record may
+// carry.
+const DNS_NS_GLUE_MAX_IPS = 4
+
+// Loose IPv6 shape check for the NS-delegation glue IP field (docs/ref/todo/
+// dns-ns-delegation-plan.md T-09) — isValidIp (@/lib/utils) is IPv4-only, so
+// this covers IPv6. Deliberately not as strict as net.ParseIP: the backend
+// (model.ValidateDNSRecord, T-02) is the real gatekeeper, this only needs to
+// avoid being STRICTER than it (rejecting something the backend would
+// accept).
+function isValidIpv6Loose(ip: string): boolean {
+  if (!/^[0-9a-fA-F:]+$/.test(ip)) return false
+  if (!ip.includes(":")) return false
+  const doubleColonCount = (ip.match(/::/g) || []).length
+  if (doubleColonCount > 1) return false
+  return true
+}
+
 export default function DnsServer() {
   const { alert, confirm } = useAlert()
 
@@ -141,6 +160,11 @@ export default function DnsServer() {
   const [recValue, setRecValue] = useState("")
   const [recTtl, setRecTtl] = useState("300")
   const [recError, setRecError] = useState("")
+  // NS-delegation glue IPs (docs/ref/todo/dns-ns-delegation-plan.md T-09) —
+  // comma-separated string as typed by the user, only meaningful/shown when
+  // recType === "NS".
+  const [recGlueIps, setRecGlueIps] = useState("")
+  const [isResolvingNs, setIsResolvingNs] = useState(false)
 
   // Blocked Domains (deny-list, docs/ref/todo/dns-blocked-domains-plan.md)
   const [blockedDomains, setBlockedDomains] = useState<BlockedDomain[]>([])
@@ -592,6 +616,7 @@ export default function DnsServer() {
     setRecValue("")
     setRecTtl("300")
     setRecError("")
+    setRecGlueIps("")
     setIsRecModalOpen(true)
   }
 
@@ -602,7 +627,35 @@ export default function DnsServer() {
     setRecValue(rec.value)
     setRecTtl(rec.ttl.toString())
     setRecError("")
+    setRecGlueIps(rec.glueIps?.join(", ") ?? "")
     setIsRecModalOpen(true)
+  }
+
+  // Apex guard (UI layer, docs/ref/todo/dns-ns-delegation-plan.md §2.5/T-09
+  // item 3): glue IPs are never valid on the zone apex — the backend (T-06)
+  // is still the actual gatekeeper, this only disables the field so the
+  // user isn't led to fill in something that will be rejected.
+  const isRecNameApex = (() => {
+    const trimmed = recName.trim()
+    return trimmed === "" || trimmed === "@" || trimmed.toLowerCase() === (selectedZone?.zoneName ?? "").toLowerCase()
+  })()
+
+  const handleResolveNsClick = async () => {
+    const target = recValue.trim()
+    if (!target) {
+      setRecError("กรุณากรอกชื่อ Nameserver (Record Value) ก่อนค้นหา IP อัตโนมัติ")
+      return
+    }
+    setRecError("")
+    setIsResolvingNs(true)
+    try {
+      const ips = await dnsServerService.resolveNameserver(target)
+      setRecGlueIps(ips.join(", "))
+    } catch (err) {
+      setRecError("ค้นหา IP ของ Nameserver ไม่สำเร็จ: " + getErrorMessage(err))
+    } finally {
+      setIsResolvingNs(false)
+    }
   }
 
   const handleDeleteRecord = async (id: string, name: string) => {
@@ -672,12 +725,34 @@ export default function DnsServer() {
       }
     }
 
+    // NS-delegation glue IPs (docs/ref/todo/dns-ns-delegation-plan.md T-09
+    // item 4) — only meaningful/sent for NS records. Trim client-side
+    // (backend rejects edge whitespace outright rather than trimming it).
+    let glueIps: string[] = []
+    if (recType === "NS") {
+      glueIps = recGlueIps.split(",").map((s) => s.trim()).filter(Boolean)
+      if (glueIps.length > DNS_NS_GLUE_MAX_IPS) {
+        setRecError(`Glue IP ของ Nameserver ระบุได้สูงสุด ${DNS_NS_GLUE_MAX_IPS} รายการ`)
+        setIsSaving(false)
+        return
+      }
+      const invalidGlue = glueIps.find((ip) => !isValidIp(ip) && !isValidIpv6Loose(ip))
+      if (invalidGlue) {
+        setRecError(`Glue IP "${invalidGlue}" ไม่ใช่ที่อยู่ IP ที่ถูกต้อง`)
+        setIsSaving(false)
+        return
+      }
+    }
+
     try {
       const payload = {
         name: name || "@",
         type: recType,
         value: value,
-        ttl: ttlVal
+        ttl: ttlVal,
+        // Only sent for NS records — the backend rejects glueIps on any
+        // other type (model.ValidateDNSRecord, T-02).
+        ...(recType === "NS" ? { glueIps } : {}),
       }
 
       if (editingRecord) {
@@ -1230,6 +1305,9 @@ export default function DnsServer() {
                                   </TableCell>
                                   <TableCell className="max-w-[200px] truncate py-3 font-mono text-xs font-medium text-foreground" title={rec.value}>
                                     {rec.value}
+                                    {rec.type === "NS" && rec.glueIps && rec.glueIps.length > 0 && (
+                                      <span className="text-muted-foreground"> {"->"} {rec.glueIps.join(", ")}</span>
+                                    )}
                                   </TableCell>
                                   <TableCell className="py-3 font-mono text-xs text-muted-foreground">
                                     {rec.ttl}s
@@ -1297,7 +1375,13 @@ export default function DnsServer() {
                 <li><strong className="text-foreground">CNAME</strong>: ชื่อสมญา/ส่งต่อไปหาชื่อเครื่องอื่น (เช่น printer.pigate.local {"->"} hp-laser.pigate.local)</li>
                 <li><strong className="text-foreground">MX</strong>: ชี้เซิร์ฟเวอร์รับส่งอีเมลประจำโดเมน (ระบุรูปแบบ [Preference] [Host] เช่น 10 mail.example.com)</li>
                 <li><strong className="text-foreground">TXT</strong>: ระบุข้อมูลข้อความทั่วไป เช่น SPF หรือคีย์ยืนยันตัวตน</li>
-                <li><strong className="text-foreground">NS</strong>: ระบุ nameserver ของโดเมน/โดเมนย่อย (PiGate จะประกาศ (publish) ระเบียน NS นี้ให้เท่านั้น ไม่ได้ส่งต่อ (delegate) คำถามใต้โดเมนนั้นไปยัง nameserver ที่ระบุจริง)</li>
+                <li>
+                  <strong className="text-foreground">NS</strong>: ระบุ nameserver ของโดเมน/โดเมนย่อย —
+                  หากไม่ระบุ Glue IP, PiGate จะประกาศ (publish) ระเบียน NS นี้ให้เท่านั้น (เหมือนเดิม);
+                  หากระบุ Glue IP, PiGate จะส่งต่อ (forward) คำถามทั้งหมดใต้ชื่อนั้นไปยัง nameserver ปลายทางจริง
+                  (delegation แบบ forwarding ผ่าน dnsmasq ไม่ใช่ referral ตามโปรโตคอลแบบ bind9)
+                  ใช้กับ apex ของโซนไม่ได้
+                </li>
               </ul>
             </div>
           </div>
@@ -2107,6 +2191,48 @@ export default function DnsServer() {
                 className="h-9 font-mono text-sm"
               />
             </div>
+
+            {/* Field: NS delegation glue IP (docs/ref/todo/
+                dns-ns-delegation-plan.md T-09) — shown only for NS records */}
+            {recType === "NS" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="rec-glue-ips" className="block text-xs font-medium text-muted-foreground">
+                  Glue IP ของ Nameserver (ไม่บังคับ)
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="rec-glue-ips"
+                    type="text"
+                    value={recGlueIps}
+                    onChange={(e) => setRecGlueIps(e.target.value)}
+                    placeholder="เช่น 203.0.113.53, 2001:db8::53"
+                    disabled={isRecNameApex}
+                    className="h-9 flex-1 font-mono text-sm"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={isRecNameApex || isResolvingNs}
+                    onClick={handleResolveNsClick}
+                    className="h-9 shrink-0 cursor-pointer text-xs"
+                  >
+                    {isResolvingNs ? "กำลังค้นหา..." : "ค้นหา IP อัตโนมัติ"}
+                  </Button>
+                </div>
+                {isRecNameApex ? (
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">
+                    ใช้ Glue IP กับ NS record ที่ apex ของโซนไม่ได้ (จะทำให้ทั้งโซนถูกส่งต่อออกไป) —
+                    หากต้องการส่งต่อทั้งโซนให้ใช้ "Forward Zone" แทน
+                  </p>
+                ) : (
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">
+                    ระบุที่อยู่ IP ของ nameserver ได้เอง หรือกดค้นหาอัตโนมัติ — ใส่ได้หลายรายการคั่นด้วยจุลภาค
+                    (สูงสุด {DNS_NS_GLUE_MAX_IPS} รายการ) หากเว้นว่างไว้ ระบบจะเพียงประกาศ (publish) ระเบียน NS
+                    นี้เท่านั้น ไม่ส่งต่อคำถามจริงไปยัง nameserver ปลายทาง
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* Field: TTL */}
             <div className="space-y-1.5">
