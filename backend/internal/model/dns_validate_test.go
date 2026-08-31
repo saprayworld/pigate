@@ -57,6 +57,12 @@ func TestValidateDNSRecord(t *testing.T) {
 		{"TXT injection", DNSRecord{Name: "@", Type: "TXT", Value: "abc\ntxt-record=x,y"}, true},
 		{"PTR valid", DNSRecord{Name: "1", Type: "PTR", Value: "host.example.com"}, false},
 		{"PTR injection", DNSRecord{Name: "1", Type: "PTR", Value: "host\nptr-record=x,y"}, true},
+		{"NS valid fqdn", DNSRecord{Name: "@", Type: "NS", Value: "ns1.example.com"}, false},
+		{"NS valid short", DNSRecord{Name: "@", Type: "NS", Value: "ns1"}, false},
+		{"NS trailing dot", DNSRecord{Name: "@", Type: "NS", Value: "ns1.example.com."}, false},
+		{"NS empty", DNSRecord{Name: "@", Type: "NS", Value: ""}, true},
+		{"NS injection", DNSRecord{Name: "@", Type: "NS", Value: "ns1\ndns-rr=x,2,00"}, true},
+		{"NS bad label", DNSRecord{Name: "@", Type: "NS", Value: "ns1..example.com"}, true},
 		{"unsupported type", DNSRecord{Name: "www", Type: "SRV", Value: "x"}, true},
 		{"invalid name chars", DNSRecord{Name: "bad name", Type: "A", Value: "1.2.3.4"}, true},
 	}

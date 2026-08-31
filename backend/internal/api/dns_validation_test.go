@@ -39,11 +39,25 @@ func TestDNSAndDHCPInjectionRejected(t *testing.T) {
 		t.Errorf("injected DNS record: expected 400, got %d", code)
 	}
 
-	// Clean A record → not 400.
+	// Clean A record → 200 (HandleCreateDNSRecord succeeds with http.StatusOK).
 	if code := post("/api/dns/zones/zone-test/records", model.DNSRecordInput{
 		Name: "www", Type: "A", Value: "192.168.1.10",
-	}); code == http.StatusBadRequest {
-		t.Errorf("valid DNS record was rejected with 400")
+	}); code != http.StatusOK {
+		t.Errorf("valid DNS record was rejected: expected 200, got %d", code)
+	}
+
+	// Injected NS record → 400.
+	if code := post("/api/dns/zones/zone-test/records", model.DNSRecordInput{
+		Name: "@", Type: "NS", Value: "ns1\ndns-rr=evil",
+	}); code != http.StatusBadRequest {
+		t.Errorf("injected NS record: expected 400, got %d", code)
+	}
+
+	// Clean NS record → 200 (HandleCreateDNSRecord succeeds with http.StatusOK).
+	if code := post("/api/dns/zones/zone-test/records", model.DNSRecordInput{
+		Name: "@", Type: "NS", Value: "ns1.example.com",
+	}); code != http.StatusOK {
+		t.Errorf("valid NS record was rejected: expected 200, got %d", code)
 	}
 
 	// Injected reservation device name → 400.

@@ -79,8 +79,9 @@ func ValidateDNSZone(z DNSZone) error {
 }
 
 // ValidateDNSRecord validates a record's name and its value according to the
-// record type, matching exactly what the generator (kernel/dns_server.go) will
-// accept — no stricter, so it never rejects a value the writer handles fine.
+// record type (A, AAAA, CNAME, MX, TXT, PTR, NS), matching exactly what the
+// generator (kernel/dns_server.go) will accept — no stricter, so it never
+// rejects a value the writer handles fine.
 func ValidateDNSRecord(r DNSRecord) error {
 	name := strings.TrimSpace(r.Name)
 	if name != "" && name != "@" && !reZoneName.MatchString(name) {
@@ -144,6 +145,19 @@ func ValidateDNSRecord(r DNSRecord) error {
 	case "PTR":
 		if value == "" || !reZoneName.MatchString(value) {
 			return fmt.Errorf("PTR record value %q is not a valid name", r.Value)
+		}
+	case "NS":
+		// dnsmasq has no ns-record directive; the generator publishes NS via
+		// dns-rr=<fqdn>,2,<hex> (kernel/dns_server.go), so calling the same
+		// encoder here is what guarantees this validator and the generator can
+		// never disagree — and it rejects embedded newlines/control chars for
+		// free (see EncodeDNSNameHex).
+		target := strings.TrimSuffix(value, ".")
+		if target == "" {
+			return fmt.Errorf("NS record value must not be empty")
+		}
+		if _, err := EncodeDNSNameHex(target); err != nil {
+			return fmt.Errorf("NS record value %q is not a valid nameserver name: %w", r.Value, err)
 		}
 	default:
 		return fmt.Errorf("unsupported DNS record type %q", r.Type)

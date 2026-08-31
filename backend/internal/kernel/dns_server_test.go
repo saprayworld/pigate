@@ -91,6 +91,100 @@ func TestBuildDNSConfig_ZonesAndUpstreams(t *testing.T) {
 	}
 }
 
+// TestBuildDNSConfig_NSRecord covers the NS record case in buildDNSConfig
+// (docs/ref/todo/dns-ns-record-support-plan.md T-07): dnsmasq has no
+// ns-record directive, so NS is published via dns-rr=<fqdn>,2,<hex>.
+func TestBuildDNSConfig_NSRecord(t *testing.T) {
+	t.Run("apex NS record", func(t *testing.T) {
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					{Name: "@", Type: "NS", Value: "ns1.example.local"},
+				},
+			},
+		}
+		cfg := buildDNSConfig(zones, nil, nil, false, nil, nil)
+
+		wantHex, err := model.EncodeDNSNameHex("ns1.example.local")
+		if err != nil {
+			t.Fatalf("EncodeDNSNameHex: %v", err)
+		}
+		wantLine := "dns-rr=example.local,2," + wantHex
+		if !strings.Contains(cfg, wantLine) {
+			t.Errorf("expected config to contain %q, got:\n%s", wantLine, cfg)
+		}
+		if !strings.Contains(cfg, "dns-rr=example.local,2,") {
+			t.Errorf("expected dns-rr prefix for apex NS record, got:\n%s", cfg)
+		}
+	})
+
+	t.Run("subdomain NS record with short target", func(t *testing.T) {
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					{Name: "sub", Type: "NS", Value: "ns1"},
+				},
+			},
+		}
+		cfg := buildDNSConfig(zones, nil, nil, false, nil, nil)
+
+		wantHex, err := model.EncodeDNSNameHex("ns1.example.local")
+		if err != nil {
+			t.Fatalf("EncodeDNSNameHex: %v", err)
+		}
+		wantLine := "dns-rr=sub.example.local,2," + wantHex
+		if !strings.Contains(cfg, wantLine) {
+			t.Errorf("expected short NS target to be qualified with zone name, got:\n%s", cfg)
+		}
+	})
+
+	t.Run("invalid NS value is skipped, not injected", func(t *testing.T) {
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					{Name: "@", Type: "NS", Value: "ns1\ndns-rr=evil"},
+				},
+			},
+		}
+		cfg := buildDNSConfig(zones, nil, nil, false, nil, nil)
+
+		if strings.Contains(cfg, "evil") {
+			t.Errorf("invalid NS value must not leak into config, got:\n%s", cfg)
+		}
+		if strings.Contains(cfg, "dns-rr=") {
+			t.Errorf("no dns-rr line should be emitted for an invalid NS record, got:\n%s", cfg)
+		}
+	})
+
+	t.Run("no NS record is no-regression", func(t *testing.T) {
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					{Name: "www", Type: "A", Value: "192.168.1.10"},
+					{Name: "alias", Type: "CNAME", Value: "www"},
+				},
+			},
+		}
+		cfg := buildDNSConfig(zones, nil, nil, false, nil, nil)
+
+		if strings.Contains(cfg, "dns-rr=") {
+			t.Errorf("zone without NS records must not contain dns-rr=, got:\n%s", cfg)
+		}
+	})
+}
+
 // TestBuildDNSConfig_QueryLogByteIdentical locks in that queryLog=false
 // produces byte-for-byte the same config as before this feature existed
 // (docs/ref/todo/statistics-dns-top-domain-plan.md T-11 item 12 / §5 item 20)
