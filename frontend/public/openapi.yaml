@@ -9033,13 +9033,15 @@ components:
           example: nas
         type:
           type: string
-          description: One of A, AAAA, CNAME, MX, TXT, PTR. Any other type is rejected with 400.
+          description: One of A, AAAA, CNAME, MX, TXT, PTR, NS. Any other type is rejected with 400.
           example: A
         value:
           type: string
           description: >-
             Validated per type (A=IPv4, AAAA=IPv6, CNAME/PTR=FQDN charset,
-            MX="<pref> <target>" or "<target>", TXT<=255 chars, no quotes).
+            MX="<pref> <target>" or "<target>", TXT<=255 chars, no quotes,
+            NS=nameserver name; a short name is appended with the zone name;
+            published as-is via dnsmasq's dns-rr type 2, no real delegation).
             Values with newlines/invalid charset return 400 (dnsmasq injection guard).
           example: 192.168.1.50
         ttl:

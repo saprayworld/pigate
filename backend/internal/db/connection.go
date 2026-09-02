@@ -154,6 +154,42 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
+	// Rebuild dns_records table if the existing CHECK constraint on `type` doesn't
+	// yet include 'NS' (docs/ref/todo/dns-ns-record-support-plan.md). SQLite can't
+	// ALTER a CHECK constraint in place, so rebuild the table the same way as
+	// static_routes/network_interfaces above: create a new table with the wider
+	// constraint, copy all existing rows, drop the old table, rename. Detected via
+	// the CHECK constraint token "'NS'" so this only runs once, on upgrade.
+	var sqlCreateDNSRecords string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='dns_records'").Scan(&sqlCreateDNSRecords)
+	if err == nil {
+		if !strings.Contains(sqlCreateDNSRecords, "'NS'") {
+			migrationQueries := []string{
+				"PRAGMA foreign_keys=OFF;",
+				`CREATE TABLE dns_records_new (
+					id         TEXT PRIMARY KEY,
+					zone_id    TEXT NOT NULL,
+					name       TEXT NOT NULL,
+					type       TEXT NOT NULL CHECK(type IN ('A','AAAA','CNAME','MX','TXT','PTR','NS')),
+					value      TEXT NOT NULL,
+					ttl        INTEGER DEFAULT 300,
+					created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+					FOREIGN KEY (zone_id) REFERENCES dns_zones(id) ON DELETE CASCADE
+				);`,
+				"INSERT INTO dns_records_new (id, zone_id, name, type, value, ttl, created_at) SELECT id, zone_id, name, type, value, ttl, created_at FROM dns_records;",
+				"DROP TABLE dns_records;",
+				"ALTER TABLE dns_records_new RENAME TO dns_records;",
+				"PRAGMA foreign_keys=ON;",
+			}
+			for _, q := range migrationQueries {
+				if _, err := db.Exec(q); err != nil {
+					return fmt.Errorf("failed to migrate dns_records table: %w (query: %s)", err, q)
+				}
+			}
+			log.Println("[Migration] Rebuilt dns_records table to allow 'NS' in the type CHECK constraint")
+		}
+	}
+
 	// Add subtype column to network_interfaces if it doesn't exist
 	var sqlCreateIfaceSubtype string
 	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='network_interfaces'").Scan(&sqlCreateIfaceSubtype)
@@ -424,7 +460,7 @@ func migrate(db *sql.DB) error {
 			id         TEXT PRIMARY KEY,
 			zone_id    TEXT NOT NULL,
 			name       TEXT NOT NULL,
-			type       TEXT NOT NULL CHECK(type IN ('A','AAAA','CNAME','MX','TXT','PTR')),
+			type       TEXT NOT NULL CHECK(type IN ('A','AAAA','CNAME','MX','TXT','PTR','NS')),
 			value      TEXT NOT NULL,
 			ttl        INTEGER DEFAULT 300,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

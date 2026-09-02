@@ -266,6 +266,24 @@ func buildDNSConfig(zones []model.DNSZone, interfaces []string, upstreamServers 
 				case "PTR":
 					// ptr-record=name,fqdn
 					sb.WriteString(fmt.Sprintf("ptr-record=%s,%s\n", fullName, rec.Value))
+				case "NS":
+					// dnsmasq has no dedicated ns-record directive, so publish
+					// via the generic dns-rr=<fqdn>,<type>,<hex-rdata> directive
+					// (2 = NS), with the target encoded as uncompressed DNS
+					// wire format. This only makes dnsmasq ANSWER a direct
+					// "type NS" query for fullName — it does NOT delegate
+					// queries under the target to another nameserver, and does
+					// not create a glue A record.
+					target := strings.TrimSuffix(strings.TrimSpace(rec.Value), ".")
+					if target != "" && !strings.Contains(target, ".") {
+						target = fmt.Sprintf("%s.%s", target, zoneName)
+					}
+					hex, err := model.EncodeDNSNameHex(target)
+					if err != nil {
+						log.Printf("[DNS Server] Skipping invalid NS record %q (target %q) in zone %q: %v", rec.Name, rec.Value, zoneName, err)
+						continue
+					}
+					sb.WriteString(fmt.Sprintf("dns-rr=%s,2,%s\n", fullName, hex))
 				}
 			}
 		} else {

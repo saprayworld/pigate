@@ -653,6 +653,25 @@ export default function DnsServer() {
       return
     }
 
+    if (recType === "NS") {
+      // Client-side UX check only — mirrors backend model.EncodeDNSNameHex
+      // (trailing dot trimmed; labels are [A-Za-z0-9-], 1-63 chars, no
+      // leading/trailing '-', no empty label; total length <=253). The
+      // backend remains the actual gatekeeper.
+      const target = value.replace(/\.$/, "")
+      const labelRe = /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/
+      const labels = target.split(".")
+      const isValidNsName =
+        target.length > 0 &&
+        target.length <= 253 &&
+        labels.every((label) => labelRe.test(label))
+      if (!isValidNsName) {
+        setRecError("สำหรับระเบียนประเภท NS ค่าของระเบียนต้องเป็นชื่อ nameserver ที่ถูกต้อง เช่น ns1.example.com")
+        setIsSaving(false)
+        return
+      }
+    }
+
     try {
       const payload = {
         name: name || "@",
@@ -1278,6 +1297,7 @@ export default function DnsServer() {
                 <li><strong className="text-foreground">CNAME</strong>: ชื่อสมญา/ส่งต่อไปหาชื่อเครื่องอื่น (เช่น printer.pigate.local {"->"} hp-laser.pigate.local)</li>
                 <li><strong className="text-foreground">MX</strong>: ชี้เซิร์ฟเวอร์รับส่งอีเมลประจำโดเมน (ระบุรูปแบบ [Preference] [Host] เช่น 10 mail.example.com)</li>
                 <li><strong className="text-foreground">TXT</strong>: ระบุข้อมูลข้อความทั่วไป เช่น SPF หรือคีย์ยืนยันตัวตน</li>
+                <li><strong className="text-foreground">NS</strong>: ระบุ nameserver ของโดเมน/โดเมนย่อย (PiGate จะประกาศ (publish) ระเบียน NS นี้ให้เท่านั้น ไม่ได้ส่งต่อ (delegate) คำถามใต้โดเมนนั้นไปยัง nameserver ที่ระบุจริง)</li>
               </ul>
             </div>
           </div>
@@ -2058,6 +2078,7 @@ export default function DnsServer() {
                 <option value="MX">MX (Mail Exchange)</option>
                 <option value="TXT">TXT (Text)</option>
                 <option value="PTR">PTR (Pointer)</option>
+                <option value="NS">NS (Name Server)</option>
               </select>
             </div>
 
@@ -2079,7 +2100,9 @@ export default function DnsServer() {
                       ? "เช่น pigate.local"
                       : recType === "MX"
                         ? "ระบุลำดับความสำคัญและชื่อเซิร์ฟเวอร์ เช่น 10 mail.example.com"
-                        : "ค่าระเบียนตามประเภท"
+                        : recType === "NS"
+                          ? "เช่น ns1.example.com"
+                          : "ค่าระเบียนตามประเภท"
                 }
                 className="h-9 font-mono text-sm"
               />
