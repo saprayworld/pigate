@@ -34,6 +34,10 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
+  SortableTableHead,
+  type SortState,
+} from "@/components/ui/sortable-table-head"
+import {
   Drawer,
   DrawerContent,
   DrawerHeader,
@@ -101,6 +105,26 @@ function isValidIpv6Loose(ip: string): boolean {
   return true
 }
 
+// Natural sort collator for the DNS Records table (docs/ref/todo/
+// dns-record-table-sort-filter-plan.md T-02): `numeric: true` makes "host2"
+// sort before "host10" instead of comparing digit-by-digit as plain strings.
+// Created once at module scope since Intl.Collator is stateless/reusable.
+const recordCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" })
+
+// Single source of truth for the DNS record types the UI supports (docs/
+// ref/todo/dns-record-table-sort-filter-plan.md T-03) — used both by the
+// Records table's Type filter dropdown and by the Add/Edit Record drawer's
+// <select>, so a new type only needs to be added in one place.
+const DNS_RECORD_TYPE_OPTIONS = [
+  { value: "A", label: "A (Address)" },
+  { value: "AAAA", label: "AAAA (IPv6 Address)" },
+  { value: "CNAME", label: "CNAME (Alias)" },
+  { value: "MX", label: "MX (Mail Exchange)" },
+  { value: "TXT", label: "TXT (Text)" },
+  { value: "PTR", label: "PTR (Pointer)" },
+  { value: "NS", label: "NS (Name Server)" },
+] as const
+
 export default function DnsServer() {
   const { alert, confirm } = useAlert()
 
@@ -139,6 +163,24 @@ export default function DnsServer() {
   // Search queries
   const [zoneSearchQuery, setZoneSearchQuery] = useState("")
   const [recordSearchQuery, setRecordSearchQuery] = useState("")
+  // Type filter for the DNS Records table (docs/ref/todo/
+  // dns-record-table-sort-filter-plan.md T-03) — "all" means no filtering.
+  const [recordTypeFilter, setRecordTypeFilter] = useState<string>("all")
+
+  // Sort state for the DNS Records table (docs/ref/todo/
+  // dns-record-table-sort-filter-plan.md T-02) — defaults to name ASC on
+  // first load and whenever the selected zone changes (not reset on purpose,
+  // see plan T-03 step 7).
+  type RecordSortKey = "name" | "type" | "value" | "ttl"
+  const [recordSort, setRecordSort] = useState<SortState<RecordSortKey>>({ key: "name", direction: "asc" })
+
+  const handleRecordSort = (key: string) => {
+    setRecordSort((prev) =>
+      prev.key === key
+        ? { key: prev.key, direction: prev.direction === "asc" ? "desc" : "asc" }
+        : { key: key as RecordSortKey, direction: "asc" }
+    )
+  }
 
   // Modals state
   const [isZoneModalOpen, setIsZoneModalOpen] = useState(false)
@@ -449,16 +491,60 @@ export default function DnsServer() {
     )
   }, [zones, zoneSearchQuery])
 
-  // Filtered Records
-  const filteredRecords = useMemo(() => {
+  // Filtered + sorted Records. Computed fresh from selectedZone.records on
+  // every render (never cached in its own useState) so that the optimistic
+  // create/update/delete writes into `zones` (below) are reflected
+  // immediately without a stale sorted snapshot lingering around.
+  const visibleRecords = useMemo(() => {
     if (!selectedZone) return []
     if (!selectedZone.records || selectedZone.records.length === 0) return []
-    return selectedZone.records.filter(r => 
-      r.name.toLowerCase().includes(recordSearchQuery.toLowerCase()) ||
-      r.type.toLowerCase().includes(recordSearchQuery.toLowerCase()) ||
-      r.value.toLowerCase().includes(recordSearchQuery.toLowerCase())
-    )
-  }, [selectedZone, recordSearchQuery])
+
+    const q = recordSearchQuery.trim().toLowerCase()
+
+    // .filter() always returns a new array, so the subsequent .sort() below
+    // is safe — it must never run directly on selectedZone.records, which is
+    // the same object reference held in the `zones` state (sorting in place
+    // would silently mutate state without triggering a re-render).
+    const filtered = selectedZone.records.filter(r => {
+      const matchText =
+        q === "" ||
+        r.name.toLowerCase().includes(q) ||
+        r.type.toLowerCase().includes(q) ||
+        r.value.toLowerCase().includes(q) ||
+        (r.glueIps ?? []).some(ip => ip.toLowerCase().includes(q))
+      const matchType = recordTypeFilter === "all" || r.type === recordTypeFilter
+      return matchText && matchType
+    })
+
+    return filtered.sort((a, b) => {
+      let cmp: number
+      switch (recordSort.key) {
+        case "ttl":
+          // Numeric comparison on purpose — comparing String(ttl) with
+          // localeCompare would sort "300" < "3600" < "86400" as strings,
+          // producing 300, 86400, 3600 instead of the correct numeric order.
+          cmp = a.ttl - b.ttl
+          break
+        case "type":
+          cmp = recordCollator.compare(a.type, b.type)
+          break
+        case "value":
+          // Sorts on rec.value only — glueIps are display-only supplementary
+          // data for NS records, not part of the sort key.
+          cmp = recordCollator.compare(a.value, b.value)
+          break
+        case "name":
+        default:
+          cmp = recordCollator.compare(a.name, b.name)
+          break
+      }
+      cmp = cmp * (recordSort.direction === "asc" ? 1 : -1)
+      // Deterministic tie-breaker: the backend's GetDNSRecordsByZone has no
+      // ORDER BY (backend/internal/db/repository.go), so rows with an equal
+      // sort value would otherwise appear to reorder themselves on reload.
+      return cmp || recordCollator.compare(a.name, b.name) || recordCollator.compare(a.id, b.id)
+    })
+  }, [selectedZone, recordSearchQuery, recordTypeFilter, recordSort])
 
   // Filtered Blocked Domains
   const filteredBlockedDomains = useMemo(() => {
@@ -1242,6 +1328,11 @@ export default function DnsServer() {
                       <CardTitle className="flex items-center gap-2 text-base font-semibold">
                         <Server className="h-4 w-4 text-muted-foreground" />
                         DNS Records ของโซน <span className="font-mono">{selectedZone.zoneName}</span>
+                        {selectedZone.isAuthoritative && (
+                          <Badge variant="secondary" className="rounded-full px-2 py-0 text-xs font-semibold">
+                            {visibleRecords.length}
+                          </Badge>
+                        )}
                       </CardTitle>
                       <CardDescription className="text-xs">
                         {selectedZone.isAuthoritative
@@ -1264,36 +1355,96 @@ export default function DnsServer() {
                   <CardContent className="space-y-4">
                     {selectedZone.isAuthoritative ? (
                       <>
-                        <div className="relative">
-                          <Search className="pointer-events-none absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground" />
-                          <Input
-                            type="text"
-                            value={recordSearchQuery}
-                            onChange={(e) => setRecordSearchQuery(e.target.value)}
-                            placeholder="ค้นหาชื่อระเบียน, ประเภท หรือข้อมูล..."
-                            className="h-9 pl-8 text-xs"
-                          />
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                          <div className="relative sm:flex-1">
+                            <Search className="pointer-events-none absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground" />
+                            <Input
+                              type="text"
+                              value={recordSearchQuery}
+                              onChange={(e) => setRecordSearchQuery(e.target.value)}
+                              placeholder="ค้นหาชื่อระเบียน, ประเภท, ข้อมูล หรือ glue IP..."
+                              className="h-9 pl-8 text-xs"
+                            />
+                          </div>
+                          <Select value={recordTypeFilter} onValueChange={setRecordTypeFilter}>
+                            <SelectTrigger className="h-9 w-full text-xs sm:w-[170px]">
+                              <SelectValue placeholder="All Types" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="all">All Types</SelectItem>
+                              {DNS_RECORD_TYPE_OPTIONS.map((opt) => (
+                                <SelectItem key={opt.value} value={opt.value}>
+                                  {opt.value}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </div>
 
                         <Table>
                           <TableHeader>
                             <TableRow className="hover:bg-transparent">
-                              <TableHead className="w-[25%] text-xs font-medium text-muted-foreground">Host Name</TableHead>
-                              <TableHead className="w-[15%] text-xs font-medium text-muted-foreground">Type</TableHead>
-                              <TableHead className="w-[40%] text-xs font-medium text-muted-foreground">Value</TableHead>
-                              <TableHead className="w-[10%] text-xs font-medium text-muted-foreground">TTL</TableHead>
+                              <SortableTableHead
+                                sortKey="name"
+                                sortState={recordSort}
+                                onSort={handleRecordSort}
+                                className="w-[25%] text-xs font-medium text-muted-foreground"
+                              >
+                                Host Name
+                              </SortableTableHead>
+                              <SortableTableHead
+                                sortKey="type"
+                                sortState={recordSort}
+                                onSort={handleRecordSort}
+                                className="w-[15%] text-xs font-medium text-muted-foreground"
+                              >
+                                Type
+                              </SortableTableHead>
+                              <SortableTableHead
+                                sortKey="value"
+                                sortState={recordSort}
+                                onSort={handleRecordSort}
+                                className="w-[40%] text-xs font-medium text-muted-foreground"
+                              >
+                                Value
+                              </SortableTableHead>
+                              <SortableTableHead
+                                sortKey="ttl"
+                                sortState={recordSort}
+                                onSort={handleRecordSort}
+                                className="w-[10%] text-xs font-medium text-muted-foreground"
+                              >
+                                TTL
+                              </SortableTableHead>
                               <TableHead className="w-[10%] text-right text-xs font-medium text-muted-foreground"></TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
-                            {filteredRecords.length === 0 ? (
+                            {visibleRecords.length === 0 ? (
                               <TableRow>
                                 <TableCell colSpan={5} className="py-8 text-center text-xs text-muted-foreground">
-                                  {recordSearchQuery ? "ไม่พบระเบียน DNS ตามข้อความค้นหา" : "ยังไม่มีข้อมูลระเบียน DNS ในโซนนี้"}
+                                  {selectedZone.records && selectedZone.records.length > 0 ? (
+                                    <div className="flex flex-col items-center gap-2">
+                                      <span>ไม่พบระเบียน DNS ตามเงื่อนไขที่กรอง</span>
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="cursor-pointer"
+                                        onClick={() => {
+                                          setRecordSearchQuery("")
+                                          setRecordTypeFilter("all")
+                                        }}
+                                      >
+                                        ล้างตัวกรอง
+                                      </Button>
+                                    </div>
+                                  ) : (
+                                    "ยังไม่มีข้อมูลระเบียน DNS ในโซนนี้"
+                                  )}
                                 </TableCell>
                               </TableRow>
                             ) : (
-                              filteredRecords.map((rec) => (
+                              visibleRecords.map((rec) => (
                                 <TableRow key={rec.id}>
                                   <TableCell className="py-3">
                                     <span className="text-xs font-medium text-foreground">{rec.name}</span>
@@ -2156,13 +2307,9 @@ export default function DnsServer() {
                 onChange={(e) => setRecType(e.target.value)}
                 className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
               >
-                <option value="A">A (Address)</option>
-                <option value="AAAA">AAAA (IPv6 Address)</option>
-                <option value="CNAME">CNAME (Alias)</option>
-                <option value="MX">MX (Mail Exchange)</option>
-                <option value="TXT">TXT (Text)</option>
-                <option value="PTR">PTR (Pointer)</option>
-                <option value="NS">NS (Name Server)</option>
+                {DNS_RECORD_TYPE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
               </select>
             </div>
 
