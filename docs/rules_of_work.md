@@ -66,6 +66,16 @@
 * **ปุ่ม "ดู … Objects" ท้าย popover ทุกตัวต้องส่ง `?q=<ชื่อ object>`** (`?q=${encodeURIComponent(object.name)}`) และหน้าปลายทางต้อง seed ตัวกรองจาก `?q=` ตอนโหลดแบบ seed-then-sync (`setSearchParams(..., { replace: true })`, `q` ว่าง = ลบ param ทิ้ง — ห้าม push history ทุกตัวอักษร) เป็นกติกากลาง ไม่ใช่ทางเลือกรายหน้า (ดูแม่แบบ `DnsServer.tsx`'s `?tab=`, ตัวอย่างคู่ `/policy/addresses?q=` และ `/policy/services?q=`)
 * **เซลล์ที่แสดง IP/Domain ในหน้า/ตารางที่เขียนใหม่ ต้อง wire ผ่าน `HostReferenceTrigger`** (`frontend/src/components/reference/HostReferenceTrigger.tsx` — รับ `ip`/`domain` แยกกัน แล้ว classify + เลือก Ip/Domain/Combined content ให้เอง) ห่อด้วย `<ReferenceHoverProvider>` เพียงชั้นเดียวต่อหน้า (ที่ root ของหน้านั้น หรือของ Drawer/Portal ตัวเองตามข้อด้านบน) — ห้าม provider ซ้อนกัน และห้ามสร้าง Popover Root ต่อแถวเด็ดขาด
 
+### 1.5 หัวตารางที่ต้องการให้จัดเรียงได้ (Sortable Table Headers)
+
+ตารางใดในโปรเจกต์ที่ต้องการให้คอลัมน์กดเพื่อจัดเรียงได้ (asc/desc) ต้องใช้คอมโพเนนต์กลาง `SortableTableHead` (`frontend/src/components/ui/sortable-table-head.tsx`, export คู่กับ type `SortDirection`/`SortState<K>`) แทนการเขียน sort header เองใหม่ทุกครั้ง (ดูตัวอย่างการใช้งานจริงที่ตาราง DNS Records ใน `DnsServer.tsx`, docs/ref/todo/dns-record-table-sort-filter-plan.md):
+
+* **ห้ามผูก `onClick` เข้ากับ `TableHead` เอง** — ให้แทนที่ด้วย `<SortableTableHead sortKey="..." sortState={...} onSort={...} className="...">` ทุกคอลัมน์ที่ sort ได้ (คง `className` ความกว้าง/สไตล์เดิมไว้บน element เดียวกัน ไม่ย้ายไปไว้ที่ปุ่มด้านใน ไม่งั้นคอลัมน์จะกระตุกตอนกด sort) คอลัมน์ที่ไม่ต้อง sort (เช่นคอลัมน์ปุ่ม action) ยังคงเป็น `TableHead` ธรรมดา
+* **`SortableTableHead` เป็น controlled component ล้วน ไม่มี state ภายใน** — หน้า/คอมโพเนนต์ที่เรียกใช้ต้องถือ `SortState<K>` เอง (`useState`) และเขียนฟังก์ชันสลับ asc/desc เอง (สลับเฉพาะ asc ↔ desc เมื่อกดคอลัมน์เดิมซ้ำ ไม่มีสถานะที่สาม "ไม่เรียง")
+* **ค่าเริ่มต้นของทุกตารางควรเป็นคอลัมน์ชื่อ (name) เรียง ASC** และต้องคำนวณผลลัพธ์ sort เป็น derived value ทุกครั้งที่ render (เช่นผ่าน `useMemo`) จาก array ที่ได้จาก `.filter()` เท่านั้น — ห้าม sort array ต้นฉบับใน state ตรง ๆ (in place) และห้ามแคชผลลัพธ์ sort ไว้ใน `useState` แยก เพราะจะค้างข้อมูลเก่าเมื่อมีการแก้ไข/เพิ่ม/ลบแบบ optimistic update
+* **ต้องมี tie-breaker ที่ deterministic เสมอ** (เช่นเทียบด้วย `name` แล้วตามด้วย `id`) เมื่อค่าที่ใช้เรียงเท่ากัน โดยเฉพาะตารางที่ backend ไม่มี `ORDER BY` ในคำสั่งดึงข้อมูล มิฉะนั้นลำดับแถวจะดูเหมือนสลับเองระหว่าง reload
+* คอลัมน์ตัวเลข (เช่น TTL) ต้องเทียบเป็นตัวเลขตรง ๆ ห้ามใช้ `localeCompare`/string comparison ซึ่งจะได้ผลผิด (เช่น `"300" < "3600" < "86400"` แบบ string จะเรียงผิดเป็น 300, 86400, 3600)
+
 ---
 
 ## 2. กฎการเลือกใช้สไตล์และโทนสี (Styling & Theme Rules)
