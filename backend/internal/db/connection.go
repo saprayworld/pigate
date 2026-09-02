@@ -212,6 +212,26 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
+	// Add delegation_mode column to dns_records if it doesn't exist
+	// (docs/ref/todo/dns-ns-delegation-cname-fix-plan.md T-03). Additive only,
+	// same pattern as glue_ips above. NOT NULL DEFAULT '' means every
+	// pre-existing row reads back as "" -> model.EffectiveNSDelegationMode
+	// normalizes that to "glue" = the previous forwarding behaviour, byte for
+	// byte. Must run after the glue_ips block above (and re-query
+	// sqlite_master fresh into its own variable — reusing
+	// sqlCreateDNSRecordsGlue would read the pre-ALTER schema).
+	var sqlCreateDNSRecordsDelegationMode string
+	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='dns_records'").Scan(&sqlCreateDNSRecordsDelegationMode)
+	if err == nil {
+		if !strings.Contains(sqlCreateDNSRecordsDelegationMode, "delegation_mode") {
+			_, err = db.Exec("ALTER TABLE dns_records ADD COLUMN delegation_mode TEXT NOT NULL DEFAULT ''")
+			if err != nil {
+				return fmt.Errorf("failed to add delegation_mode column: %w", err)
+			}
+			log.Println("[Migration] Added delegation_mode column to dns_records table")
+		}
+	}
+
 	// Add subtype column to network_interfaces if it doesn't exist
 	var sqlCreateIfaceSubtype string
 	err = db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='network_interfaces'").Scan(&sqlCreateIfaceSubtype)
@@ -486,6 +506,7 @@ func migrate(db *sql.DB) error {
 			value      TEXT NOT NULL,
 			ttl        INTEGER DEFAULT 300,
 			glue_ips   TEXT NOT NULL DEFAULT '',
+			delegation_mode TEXT NOT NULL DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (zone_id) REFERENCES dns_zones(id) ON DELETE CASCADE
 		);`,

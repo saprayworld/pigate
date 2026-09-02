@@ -1,5 +1,7 @@
 package model
 
+import "strings"
+
 type DNSZone struct {
 	ID              string      `json:"id"`
 	ZoneName        string      `json:"zoneName"`
@@ -26,6 +28,15 @@ type DNSRecord struct {
 	// Empty (the default, and the value of every pre-existing row) keeps
 	// the previous publish-only behaviour byte-for-byte.
 	GlueIPs []string `json:"glueIps"`
+	// DelegationMode selects HOW an NS record's subtree is forwarded.
+	// "" (every pre-existing row) and "glue" behave identically to before:
+	// forward to the GlueIPs, or publish-only when there are none.
+	// "upstream" emits a single `server=/<fqdn>/#` instead, handing the
+	// subtree to the box's normal upstream resolvers — the only way to get
+	// a complete answer when the delegated nameserver replies with a CNAME
+	// pointing outside its own zone (dnsmasq cannot merge records from two
+	// different sources; see docs/ref/todo/dns-ns-delegation-cname-fix-plan.md §2).
+	DelegationMode string `json:"delegationMode"`
 }
 
 type DNSZoneInput struct {
@@ -37,11 +48,12 @@ type DNSZoneInput struct {
 }
 
 type DNSRecordInput struct {
-	Name    string   `json:"name"`
-	Type    string   `json:"type"`
-	Value   string   `json:"value"`
-	TTL     int      `json:"ttl"`
-	GlueIPs []string `json:"glueIps"`
+	Name           string   `json:"name"`
+	Type           string   `json:"type"`
+	Value          string   `json:"value"`
+	TTL            int      `json:"ttl"`
+	GlueIPs        []string `json:"glueIps"`
+	DelegationMode string   `json:"delegationMode"`
 }
 
 // DNSNSGlueMaxIPs caps how many glue IPs one NS record may carry. Each
@@ -49,6 +61,28 @@ type DNSRecordInput struct {
 // realistic delegation (2 NS x A+AAAA) without letting one record bloat
 // the config.
 const DNSNSGlueMaxIPs = 4
+
+// NS delegation modes — see DNSRecord.DelegationMode doc comment.
+const (
+	DNSNSDelegationModeGlue     = "glue"
+	DNSNSDelegationModeUpstream = "upstream"
+)
+
+// EffectiveNSDelegationMode normalizes DelegationMode to exactly one of
+// the two real modes. Called by BOTH ValidateDNSRecord and the generator
+// so the two can never disagree (same discipline as EncodeDNSNameHex).
+func EffectiveNSDelegationMode(r DNSRecord) string {
+	switch strings.ToLower(strings.TrimSpace(r.DelegationMode)) {
+	case DNSNSDelegationModeUpstream:
+		return DNSNSDelegationModeUpstream
+	default:
+		// "" (pre-existing rows), "glue", and any unrecognized/garbage value
+		// all fall back to the pre-existing glue behaviour — the generator
+		// stays safe by default, the validator is the one that rejects
+		// unrecognized values outright.
+		return DNSNSDelegationModeGlue
+	}
+}
 
 // DNSServerSettings holds which real LAN interfaces the DNS Server should bind
 // (auth-server) to. Independent from DHCP Server configs.

@@ -79,12 +79,47 @@ func TestValidateDNSRecord(t *testing.T) {
 		{"NS glue too many", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", GlueIPs: []string{"1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4", "5.5.5.5"}}, true},
 		{"A with glueIps rejected", DNSRecord{Name: "www", Type: "A", Value: "1.2.3.4", GlueIPs: []string{"1.2.3.4"}}, true},
 		{"NS no glue (no regression)", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com"}, false},
+
+		// NS delegation mode (docs/ref/todo/dns-ns-delegation-cname-fix-plan.md T-09)
+		{"NS delegationMode empty", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", DelegationMode: ""}, false},
+		{"NS delegationMode glue", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", DelegationMode: "glue"}, false},
+		{"NS delegationMode upstream", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", DelegationMode: "upstream"}, false},
+		{"NS delegationMode UPSTREAM case-insensitive", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", DelegationMode: "UPSTREAM"}, false},
+		{"NS delegationMode padded upstream", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", DelegationMode: " upstream "}, false},
+		{"NS delegationMode invalid value", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", DelegationMode: "recursive"}, true},
+		{"NS delegationMode hash literal", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", DelegationMode: "#"}, true},
+		{"NS delegationMode injection", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", DelegationMode: "upstream\nserver=/evil/6.6.6.6"}, true},
+		{"NS upstream mode without glue IPs", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", DelegationMode: "upstream"}, false},
+		{"NS upstream mode with glue IPs allowed", DNSRecord{Name: "sub", Type: "NS", Value: "ns1.example.com", DelegationMode: "upstream", GlueIPs: []string{"203.0.113.53"}}, false},
+		{"A with delegationMode rejected", DNSRecord{Name: "www", Type: "A", Value: "1.2.3.4", DelegationMode: "upstream"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := ValidateDNSRecord(tt.rec)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateDNSRecord(%+v) err = %v, wantErr %v", tt.rec, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestEffectiveNSDelegationMode(t *testing.T) {
+	tests := []struct {
+		name string
+		rec  DNSRecord
+		want string
+	}{
+		{"empty -> glue", DNSRecord{DelegationMode: ""}, DNSNSDelegationModeGlue},
+		{"glue -> glue", DNSRecord{DelegationMode: "glue"}, DNSNSDelegationModeGlue},
+		{"upstream -> upstream", DNSRecord{DelegationMode: "upstream"}, DNSNSDelegationModeUpstream},
+		{"UPSTREAM case-insensitive -> upstream", DNSRecord{DelegationMode: "UPSTREAM"}, DNSNSDelegationModeUpstream},
+		{"padded upstream -> upstream", DNSRecord{DelegationMode: " upstream "}, DNSNSDelegationModeUpstream},
+		{"garbage -> glue (safe default)", DNSRecord{DelegationMode: "bogus"}, DNSNSDelegationModeGlue},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := EffectiveNSDelegationMode(tt.rec); got != tt.want {
+				t.Errorf("EffectiveNSDelegationMode(%+v) = %q, want %q", tt.rec, got, tt.want)
 			}
 		})
 	}

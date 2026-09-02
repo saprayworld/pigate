@@ -614,3 +614,62 @@ containers/dev machines are a substitute):
 
 Until these are measured, `DNSBlocklistMaxNXDomainDomains` stays at its current
 plan-derived value of 150,000 and should not be assumed final.
+
+## Cross-reference: NS delegation and dnsmasq's CNAME limitation (2026-09-02)
+
+`docs/ref/todo/dns-ns-delegation-cname-fix-plan.md` adds a second **delegation mode**
+(`DNSRecord.DelegationMode`, `"glue"` default / `"upstream"`) to the forwarding-based NS
+delegation feature (`docs/ref/todo/dns-ns-delegation-plan.md`), to work around a
+fundamental limitation of dnsmasq rather than a bug in PiGate's own code.
+
+### dnsmasq cannot merge records from two different sources
+
+dnsmasq is a **forwarder + cache**, not a recursive resolver: it relays a query to one
+upstream and returns exactly what that upstream answered, without following a CNAME
+chain itself. Simon Kelley (dnsmasq's author), dnsmasq-discuss, 2020q1 ("dnsmasq not
+returning A record for a CNAME with a server= config"):
+
+> "All the parts of an answer have to come from the same source ... a CNAME cannot
+> point to records which comes from a different server."
+
+Concretely: when an NS record delegates a subtree (`server=/sub.example.net/<glue-ip>`)
+and the delegated nameserver answers a query under that subtree with a **CNAME pointing
+outside the delegated zone** (out-of-bailiwick — e.g. a CDN alias like
+`xxx.pages.dev`), dnsmasq relays that CNAME to the client as-is and does **not** go
+fetch the target's A/AAAA itself, because that record would have to come from a
+different server than the one that answered the CNAME. The client's stub resolver
+doesn't chase the CNAME either, so it ends up with no usable address — even though
+plain A/AAAA records under the same delegated subtree resolve correctly, because those
+already arrive complete from the delegated nameserver's own answer.
+
+### The fix: an `"upstream"` delegation mode, per NS record
+
+Instead of forwarding straight to the glue IP, `DelegationMode: "upstream"` makes the
+generator emit `server=/<fqdn>/#` for that NS record. dnsmasq's `#` is a documented
+special server address meaning "use the standard servers" — it hands the subtree to
+PiGate's normal upstream resolvers instead of the delegated nameserver directly. Those
+upstreams are real recursive resolvers, so they return the CNAME chain **and** its
+final A/AAAA in a single answer from a single source, which satisfies dnsmasq's
+same-source rule above and the client gets a complete answer.
+
+| mode | `glueIps` | Config emitted | CNAME-out-of-zone behavior |
+|---|---|---|---|
+| `""` / `glue` (default) | empty | `dns-rr=` only (publish-only) | n/a (no forwarding) |
+| `""` / `glue` (default) | set | `dns-rr=` + `server=/<fqdn>/<ip>` per IP | Returns only the CNAME, no A/AAAA (dnsmasq limitation above) |
+| `upstream` | empty | `dns-rr=` + `server=/<fqdn>/#` | Fixed — CNAME + A/AAAA in one answer |
+| `upstream` | set | `dns-rr=` + `server=/<fqdn>/#` (glue IPs used only for the nameserver's own `host-record=`, not for forwarding) | Fixed |
+| any mode, at the zone apex | – | never emits a `server=` line (apex guard, 3 layers: UI, API, generator) | n/a — delegating the whole zone must go through a Forward Zone instead |
+
+Both modes are mutually exclusive **per name**: the generator never emits both
+`server=/x/<ip>` and `server=/x/#` for the same fully-qualified name, because dnsmasq
+would then pick one non-deterministically per query (or all of them with
+`--all-servers`), which is worse than either mode alone.
+
+### Known limitation that remains out of scope
+
+`upstream` mode only works when the delegated name is actually resolvable from
+PiGate's normal upstream resolvers (i.e. it has a real public DNS delegation).  A
+delegation that exists purely inside PiGate, pointing at a nameserver reachable only on
+the LAN, is not helped by this mode — dnsmasq's same-source rule still applies, and
+there is currently no CNAME-chasing forwarder in PiGate to work around it (that would
+require a new DNS listener component; deliberately out of scope, see plan §7 item 1).

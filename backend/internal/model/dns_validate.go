@@ -81,11 +81,11 @@ func ValidateDNSZone(z DNSZone) error {
 // ValidateDNSRecord validates a record's name and its value according to the
 // record type (A, AAAA, CNAME, MX, TXT, PTR, NS), matching exactly what the
 // generator (kernel/dns_server.go) will accept — no stricter, so it never
-// rejects a value the writer handles fine. GlueIPs is only allowed on NS
-// records (each entry becomes a `server=/<fqdn>/<ip>` forwarding-delegation
-// line in the generator — see docs/ref/todo/dns-ns-delegation-plan.md); this
-// function does not know the zone name, so the apex guard (NS record name ==
-// the zone's own apex) is enforced one layer up, at the API handler.
+// rejects a value the writer handles fine. GlueIPs and DelegationMode are
+// only allowed on NS records (see docs/ref/todo/dns-ns-delegation-plan.md and
+// docs/ref/todo/dns-ns-delegation-cname-fix-plan.md); this function does not
+// know the zone name, so the apex guard (NS record name == the zone's own
+// apex) is enforced one layer up, at the API handler.
 func ValidateDNSRecord(r DNSRecord) error {
 	name := strings.TrimSpace(r.Name)
 	if name != "" && name != "@" && !reZoneName.MatchString(name) {
@@ -94,6 +94,9 @@ func ValidateDNSRecord(r DNSRecord) error {
 
 	if len(r.GlueIPs) > 0 && strings.ToUpper(r.Type) != "NS" {
 		return fmt.Errorf("glueIps is only allowed on NS records, not %q", r.Type)
+	}
+	if strings.TrimSpace(r.DelegationMode) != "" && strings.ToUpper(r.Type) != "NS" {
+		return fmt.Errorf("delegationMode is only allowed on NS records, not %q", r.Type)
 	}
 
 	value := strings.TrimSpace(r.Value)
@@ -167,6 +170,25 @@ func ValidateDNSRecord(r DNSRecord) error {
 		if _, err := EncodeDNSNameHex(target); err != nil {
 			return fmt.Errorf("NS record value %q is not a valid nameserver name: %w", r.Value, err)
 		}
+		// DelegationMode: unlike GlueIPs (interpolated verbatim into
+		// `server=/<fqdn>/<ip>`), this value is NEVER interpolated into the
+		// generated config — the generator only ever writes the literal `#` or
+		// an IP that already passed net.ParseIP, never r.DelegationMode itself
+		// (see model.EffectiveNSDelegationMode / kernel/dns_server.go). So it
+		// is safe (and desirable for UX) to TrimSpace + case-fold it here,
+		// unlike the glue IPs above which must be rejected outright on any
+		// edge whitespace.
+		switch strings.ToLower(strings.TrimSpace(r.DelegationMode)) {
+		case "", DNSNSDelegationModeGlue, DNSNSDelegationModeUpstream:
+			// ok
+		default:
+			return fmt.Errorf("NS delegationMode %q is invalid (allowed: %q, %q)", r.DelegationMode, DNSNSDelegationModeGlue, DNSNSDelegationModeUpstream)
+		}
+		// Intentionally NOT requiring that "upstream" have zero GlueIPs: glue
+		// IPs remain useful in this mode to publish a `host-record=` for the
+		// nameserver's own name when it lives inside the parent zone (see
+		// generator), and forcing the user to clear GlueIPs before switching
+		// modes would be a pointless UX trap.
 		if len(r.GlueIPs) > DNSNSGlueMaxIPs {
 			return fmt.Errorf("NS record has %d glue IPs, maximum is %d", len(r.GlueIPs), DNSNSGlueMaxIPs)
 		}

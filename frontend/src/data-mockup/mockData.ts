@@ -749,6 +749,13 @@ export interface DNSRecord {
   // mock data / older records without this field keep working unchanged
   // (docs/ref/todo/dns-ns-delegation-plan.md).
   glueIps?: string[]
+  // NS-delegation mode (NS records only). "glue" (default) forwards to
+  // glueIps; "upstream" hands the subtree to the box's normal upstream
+  // resolvers instead, needed when the delegated nameserver answers with a
+  // CNAME pointing outside its own zone (docs/ref/todo/
+  // dns-ns-delegation-cname-fix-plan.md). Optional so existing mock data /
+  // older records without this field keep working unchanged.
+  delegationMode?: "glue" | "upstream"
 }
 
 export interface DNSZone {

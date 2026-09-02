@@ -252,6 +252,35 @@ func buildDNSConfig(zones []model.DNSZone, interfaces []string, upstreamServers 
 			emittedGlue := make(map[string]bool)
 			delegationHeaderWritten := false
 
+			// Pre-pass (docs/ref/todo/dns-ns-delegation-cname-fix-plan.md
+			// T-04 item 1): collect the set of non-apex NS record fullNames
+			// using upstream-mode delegation BEFORE the main record loop
+			// below, so skipping a colliding glue server= line is
+			// deterministic and does NOT depend on the order records happen
+			// to appear in zone.Records (Caution 2 — never emit both
+			// `server=/x/<ip>` and `server=/x/#` for the same name).
+			upstreamDelegatedNames := make(map[string]bool, len(zone.Records))
+			for _, ar := range zone.Records {
+				if strings.ToUpper(ar.Type) != "NS" {
+					continue
+				}
+				if model.EffectiveNSDelegationMode(ar) != model.DNSNSDelegationModeUpstream {
+					continue
+				}
+				an := strings.TrimSpace(ar.Name)
+				afn := zoneName
+				if an != "" && an != "@" && an != zoneName {
+					afn = fmt.Sprintf("%s.%s", an, zoneName)
+				}
+				if strings.EqualFold(afn, zoneName) {
+					// Apex rows never emit a server= line regardless of mode
+					// (the apex guard below rejects them) — don't let one
+					// poison this set for other records.
+					continue
+				}
+				upstreamDelegatedNames[strings.ToLower(afn)] = true
+			}
+
 			for _, rec := range zone.Records {
 				if err := model.ValidateDNSRecord(rec); err != nil {
 					log.Printf("[DNS Server] Skipping invalid record %q (type %s) in zone %q: %v", rec.Name, rec.Type, zoneName, err)
@@ -316,16 +345,31 @@ func buildDNSConfig(zones []model.DNSZone, interfaces []string, upstreamServers 
 					}
 					sb.WriteString(fmt.Sprintf("dns-rr=%s,2,%s\n", fullName, hex))
 
-					// Forwarding-based delegation (plan §2.6): only when glue
-					// IPs are present, and never at the zone apex (see the
-					// block comment above existingAddrNames for why). When
-					// GlueIPs is empty this whole block is a no-op, so
-					// output for every pre-existing record (and every zone
-					// not using this feature) is byte-for-byte unchanged.
-					if len(rec.GlueIPs) == 0 {
+					// Forwarding-based delegation (docs/ref/todo/
+					// dns-ns-delegation-plan.md, extended by
+					// dns-ns-delegation-cname-fix-plan.md §2/§3 to add a
+					// second mode): only for a non-apex NS record that
+					// actually wants to forward — mode "glue" (default) with
+					// at least one glue IP, or mode "upstream" regardless of
+					// glue IPs. A bare publish-only "glue" record with no
+					// IPs is a no-op here, so output for every pre-existing
+					// record (and every zone not using either feature) is
+					// byte-for-byte unchanged.
+					mode := model.EffectiveNSDelegationMode(rec)
+					if mode == model.DNSNSDelegationModeGlue && len(rec.GlueIPs) == 0 {
 						continue
 					}
 					if strings.EqualFold(fullName, zoneName) {
+						// Never at the zone apex, in EITHER mode: forwarding
+						// the apex would forward (and override) the ENTIRE
+						// zone, including every other record in it. In
+						// upstream mode this is worse still — `server=/x/#`
+						// at the apex throws the whole zone at the box's
+						// normal upstream resolvers, silently discarding
+						// every host-record=/cname=/etc. line written above
+						// for it (Caution 1). That case must go through a
+						// Forward Zone instead (also enforced at the API
+						// handler and in the UI).
 						log.Printf("[DNS Server] Skipping NS delegation server= for zone-apex record in zone %q (glue IPs are only valid on a non-apex NS record; use a Forward Zone to delegate the whole zone)", zoneName)
 						continue
 					}
@@ -334,23 +378,58 @@ func buildDNSConfig(zones []model.DNSZone, interfaces []string, upstreamServers 
 						sb.WriteString("# NS delegation (forwarding-based)\n")
 						delegationHeaderWritten = true
 					}
-					for _, ip := range rec.GlueIPs {
-						parsed := net.ParseIP(ip)
-						if parsed == nil || parsed.IsLoopback() || parsed.IsUnspecified() || parsed.IsMulticast() {
-							// Defense-in-depth: the same checks as
-							// model.ValidateDNSRecord, repeated here in case
-							// an invalid value ever reaches the DB via a path
-							// that skipped validation — never let it reach
-							// the config file (Caution 3).
-							log.Printf("[DNS Server] Skipping invalid NS glue IP for %q in zone %q", fullName, zoneName)
-							continue
+
+					if mode == model.DNSNSDelegationModeUpstream {
+						// dnsmasq's `--server` special address '#' means "use
+						// the standard servers": `server=/<fqdn>/#` punches a
+						// hole through this zone's `local=/<zoneName>/` for
+						// just this subtree and hands it to the box's normal
+						// upstream resolvers (the `no-resolv` + `server=<ip>`
+						// lines written earlier in this function, or
+						// /etc/resolv.conf when none are configured). Unlike
+						// forwarding straight to the glue IP, those upstreams
+						// are real recursive resolvers, so they return a
+						// CNAME chain AND its final A/AAAA in one answer from
+						// one source — required because dnsmasq refuses to
+						// merge records that came from two different sources
+						// (a CNAME cannot be answered using a record fetched
+						// elsewhere; see dns-ns-delegation-cname-fix-plan.md
+						// §2.1/§2.3). We deliberately do NOT also emit the
+						// glue server=/x/<ip> lines for this name (§2.4):
+						// dnsmasq would pick one of the two per query (or all
+						// of them with --all-servers), making answers
+						// non-deterministic — worse than either mode alone.
+						key := fullName + "|#"
+						if !emittedDelegation[key] {
+							emittedDelegation[key] = true
+							sb.WriteString(fmt.Sprintf("server=/%s/#\n", fullName))
 						}
-						key := fullName + "|" + ip
-						if emittedDelegation[key] {
-							continue
+					} else if upstreamDelegatedNames[strings.ToLower(fullName)] {
+						// Another NS record for this same fullName is using
+						// upstream mode — skip these glue lines rather than
+						// emit both variants for the same name (§2.4 above).
+						// Upstream mode wins because it is the one capable of
+						// returning a complete answer.
+						log.Printf("[DNS Server] Skipping glue server= lines for %q in zone %q: already delegated in upstream mode by another NS record", fullName, zoneName)
+					} else {
+						for _, ip := range rec.GlueIPs {
+							parsed := net.ParseIP(ip)
+							if parsed == nil || parsed.IsLoopback() || parsed.IsUnspecified() || parsed.IsMulticast() {
+								// Defense-in-depth: the same checks as
+								// model.ValidateDNSRecord, repeated here in case
+								// an invalid value ever reaches the DB via a path
+								// that skipped validation — never let it reach
+								// the config file (Caution 3).
+								log.Printf("[DNS Server] Skipping invalid NS glue IP for %q in zone %q", fullName, zoneName)
+								continue
+							}
+							key := fullName + "|" + ip
+							if emittedDelegation[key] {
+								continue
+							}
+							emittedDelegation[key] = true
+							sb.WriteString(fmt.Sprintf("server=/%s/%s\n", fullName, ip))
 						}
-						emittedDelegation[key] = true
-						sb.WriteString(fmt.Sprintf("server=/%s/%s\n", fullName, ip))
 					}
 
 					// Glue host-record for the NS target itself (plan
@@ -362,7 +441,11 @@ func buildDNSConfig(zones []model.DNSZone, interfaces []string, upstreamServers 
 					// already defined an A/AAAA record for that exact name
 					// themselves. Never emit for a target outside this zone
 					// (Caution 2 — that would hijack a public name like
-					// *.ns.cloudflare.com on the whole LAN's resolver).
+					// *.ns.cloudflare.com on the whole LAN's resolver). Runs
+					// in BOTH delegation modes: even in upstream mode, the
+					// nameserver's own name may still need to resolve
+					// locally so the delegated server itself stays
+					// reachable.
 					lowerTarget := strings.ToLower(target)
 					lowerZone := strings.ToLower(zoneName)
 					lowerFullName := strings.ToLower(fullName)
