@@ -90,6 +90,56 @@ func TestDNSAndDHCPInjectionRejected(t *testing.T) {
 		t.Errorf("glueIps on A record: expected 400, got %d", code)
 	}
 
+	// NS delegation mode (docs/ref/todo/dns-ns-delegation-cname-fix-plan.md
+	// T-12).
+
+	// NS at a subdomain with delegationMode=upstream, no glueIps → not 400
+	// (the whole point of this feature).
+	if code := post("/api/dns/zones/zone-test/records", model.DNSRecordInput{
+		Name: "sub2", Type: "NS", Value: "ns1.example.com", DelegationMode: "upstream",
+	}); code == http.StatusBadRequest {
+		t.Errorf("valid NS upstream delegation at subdomain was rejected with 400")
+	}
+
+	// NS at the zone apex ("@") with delegationMode=upstream and NO glueIps →
+	// 400 (apex guard must fire even without glue — this is the regression
+	// guard for nsRecordEmitsDelegation/T-05, Caution 1).
+	if code := post("/api/dns/zones/zone-test/records", model.DNSRecordInput{
+		Name: "@", Type: "NS", Value: "ns1.example.com", DelegationMode: "upstream",
+	}); code != http.StatusBadRequest {
+		t.Errorf("NS upstream delegation at zone apex (no glue): expected 400, got %d", code)
+	}
+
+	// Injected delegationMode → 400.
+	if code := post("/api/dns/zones/zone-test/records", model.DNSRecordInput{
+		Name: "sub3", Type: "NS", Value: "ns1.example.com", DelegationMode: "upstream\nserver=/evil/6.6.6.6",
+	}); code != http.StatusBadRequest {
+		t.Errorf("injected NS delegationMode: expected 400, got %d", code)
+	}
+
+	// delegationMode on a non-NS record type → 400.
+	if code := post("/api/dns/zones/zone-test/records", model.DNSRecordInput{
+		Name: "www3", Type: "A", Value: "1.2.3.4", DelegationMode: "upstream",
+	}); code != http.StatusBadRequest {
+		t.Errorf("delegationMode on A record: expected 400, got %d", code)
+	}
+
+	// PUT an existing record to delegationMode=upstream at the zone apex → 400.
+	{
+		existing := model.DNSRecord{ID: "rec-put-apex-test", ZoneID: zone.ID, Name: "sub4", Type: "NS", Value: "ns1.example.com", TTL: 300}
+		if err := repo.CreateDNSRecord(existing); err != nil {
+			t.Fatalf("seed record for PUT test: %v", err)
+		}
+		body, _ := json.Marshal(model.DNSRecordInput{Name: "@", Type: "NS", Value: "ns1.example.com", DelegationMode: "upstream"})
+		req := httptest.NewRequest("PUT", "/api/dns/records/"+existing.ID, bytes.NewBuffer(body))
+		addSessionCookie(req, authToken)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("PUT NS upstream delegation to zone apex: expected 400, got %d", rec.Code)
+		}
+	}
+
 	// GET /api/dns/resolve-ns with a newline-injected name → 400 (rejected by
 	// model.EncodeDNSNameHex before any DNS lookup is issued).
 	{

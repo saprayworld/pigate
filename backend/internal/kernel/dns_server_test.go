@@ -370,6 +370,211 @@ func TestBuildDNSConfig_NSDelegation(t *testing.T) {
 	})
 }
 
+// TestBuildDNSConfig_NSDelegationUpstreamMode covers the "upstream" delegation
+// mode added by docs/ref/todo/dns-ns-delegation-cname-fix-plan.md T-04/T-10:
+// an NS record with DelegationMode "upstream" emits `server=/<fqdn>/#`
+// instead of (or on top of skipping) the glue-IP server= lines, so dnsmasq
+// hands the subtree to the box's normal upstream resolvers — required to get
+// a complete answer when the delegated nameserver replies with a CNAME
+// pointing outside its own zone.
+func TestBuildDNSConfig_NSDelegationUpstreamMode(t *testing.T) {
+	t.Run("subdomain upstream mode without glue emits server=/name/# only", func(t *testing.T) {
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					{Name: "sub", Type: "NS", Value: "ns1.provider.example", DelegationMode: "upstream"},
+				},
+			},
+		}
+		cfg := buildDNSConfig(zones, nil, nil, false, nil, nil)
+
+		wantHex, err := model.EncodeDNSNameHex("ns1.provider.example")
+		if err != nil {
+			t.Fatalf("EncodeDNSNameHex: %v", err)
+		}
+		if !strings.Contains(cfg, "dns-rr=sub.example.local,2,"+wantHex) {
+			t.Errorf("expected publish (dns-rr=) line to still be present, got:\n%s", cfg)
+		}
+		if !strings.Contains(cfg, "server=/sub.example.local/#") {
+			t.Errorf("expected upstream delegation line server=/sub.example.local/#, got:\n%s", cfg)
+		}
+		for _, line := range strings.Split(cfg, "\n") {
+			if strings.HasPrefix(line, "server=/sub.example.local/") && line != "server=/sub.example.local/#" {
+				t.Errorf("must not emit a glue-IP server= line in upstream mode, got line: %q\nfull config:\n%s", line, cfg)
+			}
+		}
+	})
+
+	t.Run("upstream mode with glue IP suppresses glue server= but keeps glue host-record", func(t *testing.T) {
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					{Name: "sub", Type: "NS", Value: "ns1.example.local", DelegationMode: "upstream", GlueIPs: []string{"203.0.113.53"}},
+				},
+			},
+		}
+		cfg := buildDNSConfig(zones, nil, nil, false, nil, nil)
+
+		if !strings.Contains(cfg, "server=/sub.example.local/#") {
+			t.Errorf("expected upstream delegation line, got:\n%s", cfg)
+		}
+		if strings.Contains(cfg, "server=/sub.example.local/203.0.113.53") {
+			t.Errorf("must not also emit the glue-IP server= line in upstream mode, got:\n%s", cfg)
+		}
+		if !strings.Contains(cfg, "host-record=ns1.example.local,203.0.113.53") {
+			t.Errorf("glue host-record for the nameserver's own name (in the parent zone) must still be emitted, got:\n%s", cfg)
+		}
+	})
+
+	t.Run("apex upstream mode never emits server= for the zone", func(t *testing.T) {
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					{Name: "@", Type: "NS", Value: "ns1.example.local", DelegationMode: "upstream"},
+				},
+			},
+		}
+		cfg := buildDNSConfig(zones, nil, nil, false, nil, nil)
+
+		wantHex, err := model.EncodeDNSNameHex("ns1.example.local")
+		if err != nil {
+			t.Fatalf("EncodeDNSNameHex: %v", err)
+		}
+		if !strings.Contains(cfg, "dns-rr=example.local,2,"+wantHex) {
+			t.Errorf("expected apex dns-rr= publish line to still be present, got:\n%s", cfg)
+		}
+		if strings.Contains(cfg, "server=/example.local/") {
+			t.Errorf("apex NS record must NEVER emit server=/<zone>/ even in upstream mode (would forward-hijack the whole zone), got:\n%s", cfg)
+		}
+	})
+
+	t.Run("apex upstream mode with glue also never emits server= for the zone", func(t *testing.T) {
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					{Name: "@", Type: "NS", Value: "ns1.example.local", DelegationMode: "upstream", GlueIPs: []string{"203.0.113.53"}},
+				},
+			},
+		}
+		cfg := buildDNSConfig(zones, nil, nil, false, nil, nil)
+		if strings.Contains(cfg, "server=/example.local/") {
+			t.Errorf("apex NS record with glue IPs AND upstream mode must NEVER emit server=/<zone>/, got:\n%s", cfg)
+		}
+	})
+
+	t.Run("colliding glue and upstream records for the same name yield only server=/name/# regardless of order", func(t *testing.T) {
+		glueRec := model.DNSRecord{Name: "sub", Type: "NS", Value: "ns1.provider.example", GlueIPs: []string{"203.0.113.53"}}
+		upstreamRec := model.DNSRecord{Name: "sub", Type: "NS", Value: "ns2.provider.example", DelegationMode: "upstream"}
+
+		orderA := []model.DNSZone{{
+			ZoneName: "example.local", Enabled: true, IsAuthoritative: true,
+			Records: []model.DNSRecord{glueRec, upstreamRec},
+		}}
+		orderB := []model.DNSZone{{
+			ZoneName: "example.local", Enabled: true, IsAuthoritative: true,
+			Records: []model.DNSRecord{upstreamRec, glueRec},
+		}}
+
+		cfgA := buildDNSConfig(orderA, nil, nil, false, nil, nil)
+		cfgB := buildDNSConfig(orderB, nil, nil, false, nil, nil)
+
+		// The two dns-rr= publish lines legitimately differ in relative order
+		// (each is written as its own record is processed, and the two
+		// records have different Values/targets), so we don't assert full
+		// byte-identical output here — only that the delegation OUTCOME
+		// (which server= line survives) is the same regardless of order,
+		// which is exactly what the upstreamDelegatedNames pre-pass
+		// (T-04 item 1) guarantees.
+		for _, cfg := range []string{cfgA, cfgB} {
+			if !strings.Contains(cfg, "server=/sub.example.local/#") {
+				t.Errorf("expected server=/sub.example.local/#, got:\n%s", cfg)
+			}
+			if strings.Contains(cfg, "server=/sub.example.local/203.0.113.53") {
+				t.Errorf("must not emit the glue server= line when another record for the same name uses upstream mode, got:\n%s", cfg)
+			}
+			if strings.Count(cfg, "server=/sub.example.local/#") != 1 {
+				t.Errorf("expected exactly one server=/sub.example.local/# line, got:\n%s", cfg)
+			}
+		}
+	})
+
+	t.Run("unknown DelegationMode value is rejected by the record validator, not leaked into output", func(t *testing.T) {
+		// buildDNSConfig runs model.ValidateDNSRecord on every record before
+		// processing it (pre-existing defense-in-depth against a DB row that
+		// bypassed handler validation), and that validator rejects any
+		// DelegationMode outside {"", "glue", "upstream"} (T-02). So an
+		// invalid value never reaches the mode == "upstream"/"glue" branch at
+		// all — the whole record (dns-rr= included) is skipped, which is a
+		// stronger guarantee than merely "falls back to glue" and still
+		// satisfies the same invariant: the garbage string must never appear
+		// in the generated config. (model.EffectiveNSDelegationMode's own
+		// "unrecognized -> glue" fallback is covered directly, independent
+		// of this record-level gate, by TestEffectiveNSDelegationMode in
+		// internal/model.)
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					{Name: "sub", Type: "NS", Value: "ns1.provider.example", DelegationMode: "bogus", GlueIPs: []string{"203.0.113.53"}},
+				},
+			},
+		}
+		cfg := buildDNSConfig(zones, nil, nil, false, nil, nil)
+
+		if strings.Contains(cfg, "bogus") {
+			t.Errorf("garbage DelegationMode value must never appear in the generated config, got:\n%s", cfg)
+		}
+		if strings.Contains(cfg, "dns-rr=sub.example.local,") {
+			t.Errorf("record with an invalid DelegationMode must be skipped entirely (fails model.ValidateDNSRecord), got:\n%s", cfg)
+		}
+		if strings.Contains(cfg, "server=/sub.example.local/") {
+			t.Errorf("record with an invalid DelegationMode must not emit any server= line, got:\n%s", cfg)
+		}
+	})
+
+	t.Run("record with explicit empty DelegationMode is byte-for-byte no-regression", func(t *testing.T) {
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					{Name: "sub", Type: "NS", Value: "ns1.example.local", GlueIPs: []string{"203.0.113.53"}, DelegationMode: ""},
+				},
+			},
+		}
+		got := buildDNSConfig(zones, nil, nil, false, nil, nil)
+
+		wantHex, err := model.EncodeDNSNameHex("ns1.example.local")
+		if err != nil {
+			t.Fatalf("EncodeDNSNameHex: %v", err)
+		}
+		want := "# /etc/dnsmasq.d/pigate-dns.conf — Generated by PiGate\n\n" +
+			"# Zone: example.local\nlocal=/example.local/\n" +
+			"dns-rr=sub.example.local,2," + wantHex + "\n" +
+			"# NS delegation (forwarding-based)\n" +
+			"server=/sub.example.local/203.0.113.53\n" +
+			"host-record=ns1.example.local,203.0.113.53\n\n"
+		if got != want {
+			t.Errorf("empty DelegationMode must produce byte-identical output to the pre-delegation-mode generator.\nwant:\n%q\ngot:\n%q", want, got)
+		}
+	})
+}
+
 // TestBuildDNSConfig_QueryLogByteIdentical locks in that queryLog=false
 // produces byte-for-byte the same config as before this feature existed
 // (docs/ref/todo/statistics-dns-top-domain-plan.md T-11 item 12 / §5 item 20)

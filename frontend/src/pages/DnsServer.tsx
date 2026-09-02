@@ -207,6 +207,10 @@ export default function DnsServer() {
   // recType === "NS".
   const [recGlueIps, setRecGlueIps] = useState("")
   const [isResolvingNs, setIsResolvingNs] = useState(false)
+  // NS-delegation mode (docs/ref/todo/dns-ns-delegation-cname-fix-plan.md
+  // T-08) — only meaningful/shown when recType === "NS". "glue" is the
+  // default (matches the pre-existing forwarding behaviour).
+  const [recDelegationMode, setRecDelegationMode] = useState<"glue" | "upstream">("glue")
 
   // Blocked Domains (deny-list, docs/ref/todo/dns-blocked-domains-plan.md)
   const [blockedDomains, setBlockedDomains] = useState<BlockedDomain[]>([])
@@ -703,6 +707,7 @@ export default function DnsServer() {
     setRecTtl("300")
     setRecError("")
     setRecGlueIps("")
+    setRecDelegationMode("glue")
     setIsRecModalOpen(true)
   }
 
@@ -714,6 +719,7 @@ export default function DnsServer() {
     setRecTtl(rec.ttl.toString())
     setRecError("")
     setRecGlueIps(rec.glueIps?.join(", ") ?? "")
+    setRecDelegationMode(rec.delegationMode ?? "glue")
     setIsRecModalOpen(true)
   }
 
@@ -836,9 +842,9 @@ export default function DnsServer() {
         type: recType,
         value: value,
         ttl: ttlVal,
-        // Only sent for NS records — the backend rejects glueIps on any
-        // other type (model.ValidateDNSRecord, T-02).
-        ...(recType === "NS" ? { glueIps } : {}),
+        // Only sent for NS records — the backend rejects glueIps/
+        // delegationMode on any other type (model.ValidateDNSRecord, T-02).
+        ...(recType === "NS" ? { glueIps, delegationMode: recDelegationMode } : {}),
       }
 
       if (editingRecord) {
@@ -1459,6 +1465,11 @@ export default function DnsServer() {
                                     {rec.type === "NS" && rec.glueIps && rec.glueIps.length > 0 && (
                                       <span className="text-muted-foreground"> {"->"} {rec.glueIps.join(", ")}</span>
                                     )}
+                                    {rec.type === "NS" && rec.delegationMode === "upstream" && (
+                                      <Badge variant="secondary" className="ml-1.5 rounded px-1.5 py-0 text-[10px] font-medium">
+                                        upstream
+                                      </Badge>
+                                    )}
                                   </TableCell>
                                   <TableCell className="py-3 font-mono text-xs text-muted-foreground">
                                     {rec.ttl}s
@@ -1531,7 +1542,11 @@ export default function DnsServer() {
                   หากไม่ระบุ Glue IP, PiGate จะประกาศ (publish) ระเบียน NS นี้ให้เท่านั้น (เหมือนเดิม);
                   หากระบุ Glue IP, PiGate จะส่งต่อ (forward) คำถามทั้งหมดใต้ชื่อนั้นไปยัง nameserver ปลายทางจริง
                   (delegation แบบ forwarding ผ่าน dnsmasq ไม่ใช่ referral ตามโปรโตคอลแบบ bind9)
-                  ใช้กับ apex ของโซนไม่ได้
+                  ใช้กับ apex ของโซนไม่ได้ — เลือก "วิธีการส่งต่อ" ได้ 2 แบบ: โหมด <strong className="text-foreground">glue</strong>
+                  (ค่าเริ่มต้น) ส่งตรงไปยัง nameserver ที่ระบุ แต่ถ้าปลายทางตอบเป็น CNAME ที่ชี้ออกนอกโซน จะได้แค่
+                  CNAME ไม่ได้ IP กลับมา (ข้อจำกัดของ dnsmasq); โหมด <strong className="text-foreground">upstream</strong>
+                  ส่งผ่าน upstream resolver ของเครื่องแทน ทำให้ได้ CNAME พร้อม IP ครบ แต่ใช้ได้เฉพาะเมื่อชื่อที่
+                  delegate หาเจอจาก upstream จริงเท่านั้น
                 </li>
               </ul>
             </div>
@@ -2339,6 +2354,39 @@ export default function DnsServer() {
               />
             </div>
 
+            {/* Field: NS delegation mode (docs/ref/todo/
+                dns-ns-delegation-cname-fix-plan.md T-08) — shown only for NS
+                records, above the glue IP field. */}
+            {recType === "NS" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="rec-delegation-mode" className="block text-xs font-medium text-muted-foreground">
+                  วิธีการส่งต่อ (Delegation Mode)
+                </Label>
+                <select
+                  id="rec-delegation-mode"
+                  value={recDelegationMode}
+                  onChange={(e) => setRecDelegationMode(e.target.value as "glue" | "upstream")}
+                  disabled={isRecNameApex}
+                  className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <option value="glue">ส่งต่อไปยัง Nameserver ที่ระบุ (ใช้ Glue IP)</option>
+                  <option value="upstream">ส่งต่อผ่าน Upstream Resolver (รองรับ CNAME ข้ามโซน)</option>
+                </select>
+                {recDelegationMode === "upstream" ? (
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">
+                    ส่งให้ upstream resolver ของเครื่องเป็นคนหาให้ทั้งสายรวม CNAME — ใช้ได้เฉพาะเมื่อชื่อที่
+                    delegate หาเจอจาก upstream จริง และคำถามใต้ชื่อนี้จะออกอินเทอร์เน็ตตามปกติ (ผ่านการกรอง
+                    blocklist ด้วย)
+                  </p>
+                ) : (
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">
+                    ส่งคำถามตรงไปที่ nameserver ที่ระบุ — ถ้าปลายทางตอบเป็น CNAME ที่ชี้ออกนอกโซน จะได้แค่
+                    CNAME ไม่ได้ IP (ข้อจำกัดของ dnsmasq)
+                  </p>
+                )}
+              </div>
+            )}
+
             {/* Field: NS delegation glue IP (docs/ref/todo/
                 dns-ns-delegation-plan.md T-09) — shown only for NS records */}
             {recType === "NS" && (
@@ -2370,6 +2418,11 @@ export default function DnsServer() {
                   <p className="mt-0.5 text-[10px] text-muted-foreground">
                     ใช้ Glue IP กับ NS record ที่ apex ของโซนไม่ได้ (จะทำให้ทั้งโซนถูกส่งต่อออกไป) —
                     หากต้องการส่งต่อทั้งโซนให้ใช้ "Forward Zone" แทน
+                  </p>
+                ) : recDelegationMode === "upstream" ? (
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">
+                    ในโหมด Upstream Resolver ค่านี้ไม่ได้ใช้ส่งต่อคำถามไปยัง nameserver — ใช้เพียงสร้าง A
+                    record ให้กับชื่อ nameserver เอง (เมื่อชื่อนั้นอยู่ในโซนแม่) เท่านั้น
                   </p>
                 ) : (
                   <p className="mt-0.5 text-[10px] text-muted-foreground">

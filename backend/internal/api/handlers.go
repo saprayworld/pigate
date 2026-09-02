@@ -3895,22 +3895,38 @@ func (s *Server) HandleGetDNSRecords(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, records)
 }
 
-// validateNSGlueAgainstZone enforces the apex guard for NS-delegation glue
-// (docs/ref/todo/dns-ns-delegation-plan.md T-06, plan §2.5/Caution 1): an NS
-// record at the zone apex must never carry glue IPs, because the generator
-// would have to skip its own server= line to avoid forwarding the entire
-// zone away (buildDNSConfig already refuses to emit it as defense-in-depth,
-// but the API must reject it outright so the user gets a clear 400 instead
-// of a silently-ignored setting). Shared by both create and update so the
-// two call sites can never drift apart. Returns a non-nil error with a
-// user-facing message when the record must be rejected.
+// nsRecordEmitsDelegation reports whether an NS record will make
+// buildDNSConfig emit a `server=` delegation line for it — either the
+// pre-existing glue-IP forwarding, or the newer "upstream" mode
+// (docs/ref/todo/dns-ns-delegation-cname-fix-plan.md §3/T-05), which emits
+// `server=/<fqdn>/#` even with zero glue IPs. Both call sites below
+// (validateNSGlueAgainstZone's apex guard and the create/update handlers)
+// must use this single helper so the apex guard can never miss the
+// glue-IP-less upstream case (Caution 1 — an apex record in upstream mode
+// with no glue IPs must still be rejected).
+func nsRecordEmitsDelegation(r model.DNSRecord) bool {
+	return strings.EqualFold(r.Type, "NS") &&
+		(len(r.GlueIPs) > 0 || model.EffectiveNSDelegationMode(r) == model.DNSNSDelegationModeUpstream)
+}
+
+// validateNSGlueAgainstZone enforces the apex guard for NS-delegation
+// forwarding (docs/ref/todo/dns-ns-delegation-plan.md T-06, extended by
+// dns-ns-delegation-cname-fix-plan.md §3/T-05 for upstream mode): an NS
+// record at the zone apex must never emit a server= delegation line (glue
+// IPs OR upstream mode), because the generator would have to skip it to
+// avoid forwarding the entire zone away (buildDNSConfig already refuses to
+// emit it as defense-in-depth, but the API must reject it outright so the
+// user gets a clear 400 instead of a silently-ignored setting). Shared by
+// both create and update so the two call sites can never drift apart.
+// Returns a non-nil error with a user-facing message when the record must be
+// rejected.
 func validateNSGlueAgainstZone(zone *model.DNSZone, record model.DNSRecord) error {
-	if !strings.EqualFold(record.Type, "NS") || len(record.GlueIPs) == 0 {
+	if !nsRecordEmitsDelegation(record) {
 		return nil
 	}
 	name := strings.TrimSpace(record.Name)
 	if name == "" || name == "@" || strings.EqualFold(name, zone.ZoneName) {
-		return fmt.Errorf("ไม่สามารถระบุ glue IP ให้กับ NS record ที่ apex ของโซนได้ เพราะจะทำให้ทั้งโซนถูกส่งต่อ (forward) ออกไปทั้งหมด หากต้องการส่งต่อทั้งโซน กรุณาใช้ \"Forward Zone\" แทน")
+		return fmt.Errorf("ไม่สามารถส่งต่อ (forward) NS record ที่ apex ของโซนได้ ไม่ว่าจะด้วย glue IP หรือโหมด upstream เพราะจะทำให้ทั้งโซนถูกส่งต่อออกไปทั้งหมด หากต้องการส่งต่อทั้งโซน กรุณาใช้ \"Forward Zone\" แทน")
 	}
 	return nil
 }
@@ -3929,13 +3945,14 @@ func (s *Server) HandleCreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	record := model.DNSRecord{
-		ID:      id,
-		ZoneID:  zoneID,
-		Name:    input.Name,
-		Type:    input.Type,
-		Value:   input.Value,
-		TTL:     input.TTL,
-		GlueIPs: input.GlueIPs,
+		ID:             id,
+		ZoneID:         zoneID,
+		Name:           input.Name,
+		Type:           input.Type,
+		Value:          input.Value,
+		TTL:            input.TTL,
+		GlueIPs:        input.GlueIPs,
+		DelegationMode: input.DelegationMode,
 	}
 
 	if err := model.ValidateDNSRecord(record); err != nil {
@@ -3943,7 +3960,7 @@ func (s *Server) HandleCreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.EqualFold(record.Type, "NS") && len(record.GlueIPs) > 0 {
+	if nsRecordEmitsDelegation(record) {
 		zone, err := s.repo.GetDNSZoneByID(zoneID)
 		if err != nil || zone == nil {
 			s.writeError(w, http.StatusBadRequest, "DNS zone not found")
@@ -3979,13 +3996,14 @@ func (s *Server) HandleUpdateDNSRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	record := model.DNSRecord{
-		ID:      id,
-		ZoneID:  existing.ZoneID,
-		Name:    input.Name,
-		Type:    input.Type,
-		Value:   input.Value,
-		TTL:     input.TTL,
-		GlueIPs: input.GlueIPs,
+		ID:             id,
+		ZoneID:         existing.ZoneID,
+		Name:           input.Name,
+		Type:           input.Type,
+		Value:          input.Value,
+		TTL:            input.TTL,
+		GlueIPs:        input.GlueIPs,
+		DelegationMode: input.DelegationMode,
 	}
 
 	if err := model.ValidateDNSRecord(record); err != nil {
@@ -3993,7 +4011,7 @@ func (s *Server) HandleUpdateDNSRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.EqualFold(record.Type, "NS") && len(record.GlueIPs) > 0 {
+	if nsRecordEmitsDelegation(record) {
 		zone, err := s.repo.GetDNSZoneByID(existing.ZoneID)
 		if err != nil || zone == nil {
 			s.writeError(w, http.StatusBadRequest, "DNS zone not found")

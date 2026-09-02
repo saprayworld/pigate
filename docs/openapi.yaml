@@ -9079,13 +9079,30 @@ components:
           items:
             type: string
           description: >-
-            NS-delegation glue IPs (NS records only, max 4). When set, PiGate also
-            emits `server=/<fqdn>/<ip>` so dnsmasq forwards every query under that
-            name to the delegated nameserver (forwarding-based delegation), on top
-            of publishing the NS record itself. Not allowed on the zone apex
-            (use a Forward Zone instead) and not allowed on non-NS records - both
-            return 400. Loopback/unspecified/multicast addresses are rejected.
+            NS-delegation glue IPs (NS records only, max 4). Meaning depends on
+            delegationMode: in "glue" mode (default), PiGate emits
+            `server=/<fqdn>/<ip>` per IP so dnsmasq forwards every query under
+            that name straight to the delegated nameserver, on top of
+            publishing the NS record itself. In "upstream" mode, glueIps are
+            NOT used for forwarding - they only create a `host-record=` for
+            the nameserver's own name when it lives in the parent zone. Not
+            allowed on the zone apex (use a Forward Zone instead) and not
+            allowed on non-NS records - both return 400. Loopback/unspecified/
+            multicast addresses are rejected.
           example: ["203.0.113.53"]
+        delegationMode:
+          type: string
+          enum: ["", "glue", "upstream"]
+          description: >-
+            NS records only. "" / "glue" (default) forwards the delegated subtree
+            straight to glueIps. "upstream" instead emits `server=/<fqdn>/#`, handing
+            the subtree to the box's normal upstream resolvers - required when the
+            delegated nameserver answers with a CNAME pointing outside its own zone,
+            because dnsmasq cannot combine records coming from two different servers
+            (the client would otherwise get the CNAME with no A/AAAA). Only works when
+            the delegated name is resolvable by those upstreams. Not allowed on the
+            zone apex, and not allowed on non-NS records - both return 400.
+          example: "upstream"
 
     DNSRecordInput:
       type: object
@@ -9112,7 +9129,8 @@ components:
             MX="<pref> <target>" or "<target>", TXT<=255 chars, no quotes,
             NS=nameserver name; a short name is appended with the zone name;
             published via dnsmasq's dns-rr type 2, and additionally forwarded
-            (forwarding-based delegation) when glueIps is set - see glueIps).
+            (forwarding-based delegation, glue or upstream mode - see
+            delegationMode/glueIps) when the record is set up to forward.
             Values with newlines/invalid charset return 400 (dnsmasq injection guard).
           example: 192.168.1.50
         ttl:
@@ -9123,13 +9141,30 @@ components:
           items:
             type: string
           description: >-
-            NS-delegation glue IPs (NS records only, max 4). When set, PiGate also
-            emits `server=/<fqdn>/<ip>` so dnsmasq forwards every query under that
-            name to the delegated nameserver (forwarding-based delegation), on top
-            of publishing the NS record itself. Not allowed on the zone apex
-            (use a Forward Zone instead) and not allowed on non-NS records - both
-            return 400. Loopback/unspecified/multicast addresses are rejected.
+            NS-delegation glue IPs (NS records only, max 4). Meaning depends on
+            delegationMode: in "glue" mode (default), PiGate emits
+            `server=/<fqdn>/<ip>` per IP so dnsmasq forwards every query under
+            that name straight to the delegated nameserver, on top of
+            publishing the NS record itself. In "upstream" mode, glueIps are
+            NOT used for forwarding - they only create a `host-record=` for
+            the nameserver's own name when it lives in the parent zone. Not
+            allowed on the zone apex (use a Forward Zone instead) and not
+            allowed on non-NS records - both return 400. Loopback/unspecified/
+            multicast addresses are rejected.
           example: ["203.0.113.53"]
+        delegationMode:
+          type: string
+          enum: ["", "glue", "upstream"]
+          description: >-
+            NS records only. "" / "glue" (default) forwards the delegated subtree
+            straight to glueIps. "upstream" instead emits `server=/<fqdn>/#`, handing
+            the subtree to the box's normal upstream resolvers - required when the
+            delegated nameserver answers with a CNAME pointing outside its own zone,
+            because dnsmasq cannot combine records coming from two different servers
+            (the client would otherwise get the CNAME with no A/AAAA). Only works when
+            the delegated name is resolvable by those upstreams. Not allowed on the
+            zone apex, and not allowed on non-NS records - both return 400.
+          example: "upstream"
 
     DNSServerSettings:
       type: object

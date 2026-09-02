@@ -331,8 +331,8 @@ func (r *Repository) RestoreConfig(cfg model.BackupConfig, includeUsers bool) er
 				ttl = 300
 			}
 			if _, err := tx.Exec(
-				"INSERT INTO dns_records (id, zone_id, name, type, value, ttl, glue_ips) VALUES (?, ?, ?, ?, ?, ?, ?)",
-				rec.ID, z.ID, rec.Name, rec.Type, rec.Value, ttl, joinGlueIPs(rec.GlueIPs),
+				"INSERT INTO dns_records (id, zone_id, name, type, value, ttl, glue_ips, delegation_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+				rec.ID, z.ID, rec.Name, rec.Type, rec.Value, ttl, joinGlueIPs(rec.GlueIPs), rec.DelegationMode,
 			); err != nil {
 				return fmt.Errorf("restore dns record %q: %w", rec.Name, err)
 			}
