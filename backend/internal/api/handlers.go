@@ -3895,6 +3895,26 @@ func (s *Server) HandleGetDNSRecords(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, records)
 }
 
+// validateNSGlueAgainstZone enforces the apex guard for NS-delegation glue
+// (docs/ref/todo/dns-ns-delegation-plan.md T-06, plan §2.5/Caution 1): an NS
+// record at the zone apex must never carry glue IPs, because the generator
+// would have to skip its own server= line to avoid forwarding the entire
+// zone away (buildDNSConfig already refuses to emit it as defense-in-depth,
+// but the API must reject it outright so the user gets a clear 400 instead
+// of a silently-ignored setting). Shared by both create and update so the
+// two call sites can never drift apart. Returns a non-nil error with a
+// user-facing message when the record must be rejected.
+func validateNSGlueAgainstZone(zone *model.DNSZone, record model.DNSRecord) error {
+	if !strings.EqualFold(record.Type, "NS") || len(record.GlueIPs) == 0 {
+		return nil
+	}
+	name := strings.TrimSpace(record.Name)
+	if name == "" || name == "@" || strings.EqualFold(name, zone.ZoneName) {
+		return fmt.Errorf("ไม่สามารถระบุ glue IP ให้กับ NS record ที่ apex ของโซนได้ เพราะจะทำให้ทั้งโซนถูกส่งต่อ (forward) ออกไปทั้งหมด หากต้องการส่งต่อทั้งโซน กรุณาใช้ \"Forward Zone\" แทน")
+	}
+	return nil
+}
+
 func (s *Server) HandleCreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("id")
 	var input model.DNSRecordInput
@@ -3909,17 +3929,30 @@ func (s *Server) HandleCreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	record := model.DNSRecord{
-		ID:     id,
-		ZoneID: zoneID,
-		Name:   input.Name,
-		Type:   input.Type,
-		Value:  input.Value,
-		TTL:    input.TTL,
+		ID:      id,
+		ZoneID:  zoneID,
+		Name:    input.Name,
+		Type:    input.Type,
+		Value:   input.Value,
+		TTL:     input.TTL,
+		GlueIPs: input.GlueIPs,
 	}
 
 	if err := model.ValidateDNSRecord(record); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	if strings.EqualFold(record.Type, "NS") && len(record.GlueIPs) > 0 {
+		zone, err := s.repo.GetDNSZoneByID(zoneID)
+		if err != nil || zone == nil {
+			s.writeError(w, http.StatusBadRequest, "DNS zone not found")
+			return
+		}
+		if err := validateNSGlueAgainstZone(zone, record); err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	if err := s.repo.CreateDNSRecord(record); err != nil {
@@ -3946,17 +3979,30 @@ func (s *Server) HandleUpdateDNSRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	record := model.DNSRecord{
-		ID:     id,
-		ZoneID: existing.ZoneID,
-		Name:   input.Name,
-		Type:   input.Type,
-		Value:  input.Value,
-		TTL:    input.TTL,
+		ID:      id,
+		ZoneID:  existing.ZoneID,
+		Name:    input.Name,
+		Type:    input.Type,
+		Value:   input.Value,
+		TTL:     input.TTL,
+		GlueIPs: input.GlueIPs,
 	}
 
 	if err := model.ValidateDNSRecord(record); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	if strings.EqualFold(record.Type, "NS") && len(record.GlueIPs) > 0 {
+		zone, err := s.repo.GetDNSZoneByID(existing.ZoneID)
+		if err != nil || zone == nil {
+			s.writeError(w, http.StatusBadRequest, "DNS zone not found")
+			return
+		}
+		if err := validateNSGlueAgainstZone(zone, record); err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	if err := s.repo.UpdateDNSRecord(record); err != nil {
@@ -3966,6 +4012,44 @@ func (s *Server) HandleUpdateDNSRecord(w http.ResponseWriter, r *http.Request) {
 	s.logEvent(r, model.EventCategoryDns, "dns.record_updated", model.EventSeverityInfo,
 		record.Name, "DNS record \""+record.Name+"\" ("+record.Type+") updated")
 	s.writeJSON(w, http.StatusOK, record)
+}
+
+// HandleResolveNameserver auto-looks-up the IP address(es) of an
+// NS-delegation nameserver name (docs/ref/todo/dns-ns-delegation-plan.md
+// T-06), for the "ค้นหา IP อัตโนมัติ" button next to an NS record's glue IP
+// field. Deliberately GET (a pure read, issues an outbound DNS query but
+// never mutates PiGate's own config) so DisableEditMiddleware and
+// RoleReadOnlyMiddleware — which only gate POST/PUT/DELETE/PATCH — never
+// block it, matching GET /api/interfaces/{id}/scan. Not logged via
+// s.logEvent: this reads/queries, it does not change any stored config.
+func (s *Server) HandleResolveNameserver(w http.ResponseWriter, r *http.Request) {
+	if s.dnsServerService == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "DNS Server service not available")
+		return
+	}
+	name := r.URL.Query().Get("name")
+	ips, err := s.dnsServerService.ResolveNameserver(r.Context(), name)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrNSLookupInvalidName):
+			s.writeError(w, http.StatusBadRequest, "Invalid nameserver name")
+		case errors.Is(err, service.ErrNSLookupNotFound):
+			s.writeError(w, http.StatusNotFound, "Nameserver name did not resolve to any address")
+		case errors.Is(err, service.ErrNSLookupRateLimited):
+			s.writeError(w, http.StatusTooManyRequests, "Too many lookups, please wait")
+		default:
+			s.writeError(w, http.StatusBadGateway, "DNS lookup failed")
+		}
+		return
+	}
+	// Echo back the validated/normalized name only — never the raw query
+	// param — so the response can never carry back anything that failed
+	// validation.
+	validatedName := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"name": validatedName,
+		"ips":  ips,
+	})
 }
 
 func (s *Server) HandleDeleteDNSRecord(w http.ResponseWriter, r *http.Request) {

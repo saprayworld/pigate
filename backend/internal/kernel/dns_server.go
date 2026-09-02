@@ -221,6 +221,37 @@ func buildDNSConfig(zones []model.DNSZone, interfaces []string, upstreamServers 
 			// zone — that is a global directive already set once in pigate-base.conf.
 			sb.WriteString(fmt.Sprintf("local=/%s/\n", zoneName))
 
+			// NS-delegation (forwarding-based) bookkeeping for this zone
+			// (docs/ref/todo/dns-ns-delegation-plan.md T-04). This is
+			// forwarding-based delegation, not an authoritative referral:
+			// dnsmasq's `local=` is a documented synonym of `server=`, and
+			// dnsmasq always picks the longest-matching domain among all
+			// server=/local= directives — so a `server=/<sub>/<ip>` line
+			// emitted below outranks this zone's own `local=/<zoneName>/`
+			// line above for anything under <sub>, causing those queries to
+			// be forwarded to <ip> instead of answered/NXDOMAIN'd locally
+			// (plan §2.1/§2.2). NS at the zone apex never gets a server=
+			// line: forwarding the apex would forward (and override) the
+			// ENTIRE zone, including every other record in it (plan §2.5) —
+			// that case must go through a Forward Zone instead (also
+			// enforced earlier, at the API handler and in the UI).
+			existingAddrNames := make(map[string]bool, len(zone.Records))
+			for _, ar := range zone.Records {
+				t := strings.ToUpper(ar.Type)
+				if t != "A" && t != "AAAA" {
+					continue
+				}
+				n := strings.TrimSpace(ar.Name)
+				fn := zoneName
+				if n != "" && n != "@" && n != zoneName {
+					fn = fmt.Sprintf("%s.%s", n, zoneName)
+				}
+				existingAddrNames[strings.ToLower(fn)] = true
+			}
+			emittedDelegation := make(map[string]bool)
+			emittedGlue := make(map[string]bool)
+			delegationHeaderWritten := false
+
 			for _, rec := range zone.Records {
 				if err := model.ValidateDNSRecord(rec); err != nil {
 					log.Printf("[DNS Server] Skipping invalid record %q (type %s) in zone %q: %v", rec.Name, rec.Type, zoneName, err)
@@ -284,6 +315,73 @@ func buildDNSConfig(zones []model.DNSZone, interfaces []string, upstreamServers 
 						continue
 					}
 					sb.WriteString(fmt.Sprintf("dns-rr=%s,2,%s\n", fullName, hex))
+
+					// Forwarding-based delegation (plan §2.6): only when glue
+					// IPs are present, and never at the zone apex (see the
+					// block comment above existingAddrNames for why). When
+					// GlueIPs is empty this whole block is a no-op, so
+					// output for every pre-existing record (and every zone
+					// not using this feature) is byte-for-byte unchanged.
+					if len(rec.GlueIPs) == 0 {
+						continue
+					}
+					if strings.EqualFold(fullName, zoneName) {
+						log.Printf("[DNS Server] Skipping NS delegation server= for zone-apex record in zone %q (glue IPs are only valid on a non-apex NS record; use a Forward Zone to delegate the whole zone)", zoneName)
+						continue
+					}
+
+					if !delegationHeaderWritten {
+						sb.WriteString("# NS delegation (forwarding-based)\n")
+						delegationHeaderWritten = true
+					}
+					for _, ip := range rec.GlueIPs {
+						parsed := net.ParseIP(ip)
+						if parsed == nil || parsed.IsLoopback() || parsed.IsUnspecified() || parsed.IsMulticast() {
+							// Defense-in-depth: the same checks as
+							// model.ValidateDNSRecord, repeated here in case
+							// an invalid value ever reaches the DB via a path
+							// that skipped validation — never let it reach
+							// the config file (Caution 3).
+							log.Printf("[DNS Server] Skipping invalid NS glue IP for %q in zone %q", fullName, zoneName)
+							continue
+						}
+						key := fullName + "|" + ip
+						if emittedDelegation[key] {
+							continue
+						}
+						emittedDelegation[key] = true
+						sb.WriteString(fmt.Sprintf("server=/%s/%s\n", fullName, ip))
+					}
+
+					// Glue host-record for the NS target itself (plan
+					// §2.4/§2.6): only when the target name would otherwise
+					// NXDOMAIN under this zone's own local= — i.e. it lives
+					// in this same parent zone but NOT under the delegated
+					// name (that subtree is now served by the delegated
+					// nameserver, not by us) — and only if the user hasn't
+					// already defined an A/AAAA record for that exact name
+					// themselves. Never emit for a target outside this zone
+					// (Caution 2 — that would hijack a public name like
+					// *.ns.cloudflare.com on the whole LAN's resolver).
+					lowerTarget := strings.ToLower(target)
+					lowerZone := strings.ToLower(zoneName)
+					lowerFullName := strings.ToLower(fullName)
+					inParentZone := lowerTarget != lowerZone && strings.HasSuffix(lowerTarget, "."+lowerZone)
+					underDelegatedName := lowerTarget == lowerFullName || strings.HasSuffix(lowerTarget, "."+lowerFullName)
+					if inParentZone && !underDelegatedName && !existingAddrNames[lowerTarget] {
+						for _, ip := range rec.GlueIPs {
+							parsed := net.ParseIP(ip)
+							if parsed == nil || parsed.IsLoopback() || parsed.IsUnspecified() || parsed.IsMulticast() {
+								continue
+							}
+							glueKey := target + "|" + ip
+							if emittedGlue[glueKey] {
+								continue
+							}
+							emittedGlue[glueKey] = true
+							sb.WriteString(fmt.Sprintf("host-record=%s,%s\n", target, ip))
+						}
+					}
 				}
 			}
 		} else {

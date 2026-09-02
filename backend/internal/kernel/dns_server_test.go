@@ -185,6 +185,191 @@ func TestBuildDNSConfig_NSRecord(t *testing.T) {
 	})
 }
 
+// TestBuildDNSConfig_NSDelegation covers forwarding-based NS delegation
+// (docs/ref/todo/dns-ns-delegation-plan.md T-04/T-11): NS records that carry
+// GlueIPs additionally emit `server=/<fqdn>/<ip>` (on top of the existing
+// dns-rr= publish line), except at the zone apex where server= must never be
+// emitted (§2.5) — plus the glue host-record= rules (§2.4/§2.6).
+func TestBuildDNSConfig_NSDelegation(t *testing.T) {
+	t.Run("subdomain NS with single glue IP emits both dns-rr and server", func(t *testing.T) {
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					{Name: "sub", Type: "NS", Value: "ns1.sub.example.local", GlueIPs: []string{"203.0.113.53"}},
+				},
+			},
+		}
+		cfg := buildDNSConfig(zones, nil, nil, false, nil, nil)
+
+		wantHex, err := model.EncodeDNSNameHex("ns1.sub.example.local")
+		if err != nil {
+			t.Fatalf("EncodeDNSNameHex: %v", err)
+		}
+		if !strings.Contains(cfg, "dns-rr=sub.example.local,2,"+wantHex) {
+			t.Errorf("expected publish (dns-rr=) line to still be present, got:\n%s", cfg)
+		}
+		if !strings.Contains(cfg, "server=/sub.example.local/203.0.113.53") {
+			t.Errorf("expected delegation (server=) line, got:\n%s", cfg)
+		}
+	})
+
+	t.Run("multiple glue IPs v4+v6 all emitted without duplicates", func(t *testing.T) {
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					{Name: "sub", Type: "NS", Value: "ns1.provider.example", GlueIPs: []string{"203.0.113.53", "2001:db8::53"}},
+				},
+			},
+		}
+		cfg := buildDNSConfig(zones, nil, nil, false, nil, nil)
+		for _, want := range []string{
+			"server=/sub.example.local/203.0.113.53",
+			"server=/sub.example.local/2001:db8::53",
+		} {
+			if !strings.Contains(cfg, want) {
+				t.Errorf("expected %q, got:\n%s", want, cfg)
+			}
+		}
+	})
+
+	t.Run("two NS records same name with overlapping glue IPs dedupe server lines", func(t *testing.T) {
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					{Name: "sub", Type: "NS", Value: "ns1.provider.example", GlueIPs: []string{"203.0.113.53"}},
+					{Name: "sub", Type: "NS", Value: "ns2.provider.example", GlueIPs: []string{"203.0.113.53", "198.51.100.10"}},
+				},
+			},
+		}
+		cfg := buildDNSConfig(zones, nil, nil, false, nil, nil)
+		count := strings.Count(cfg, "server=/sub.example.local/203.0.113.53")
+		if count != 1 {
+			t.Errorf("expected exactly 1 occurrence of the duplicated server= line, got %d in:\n%s", count, cfg)
+		}
+		if !strings.Contains(cfg, "server=/sub.example.local/198.51.100.10") {
+			t.Errorf("expected the non-duplicated glue IP's server= line, got:\n%s", cfg)
+		}
+	})
+
+	t.Run("apex NS with glue publishes but never emits server for the zone", func(t *testing.T) {
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					{Name: "@", Type: "NS", Value: "ns1.example.local", GlueIPs: []string{"203.0.113.53"}},
+				},
+			},
+		}
+		cfg := buildDNSConfig(zones, nil, nil, false, nil, nil)
+
+		wantHex, err := model.EncodeDNSNameHex("ns1.example.local")
+		if err != nil {
+			t.Fatalf("EncodeDNSNameHex: %v", err)
+		}
+		if !strings.Contains(cfg, "dns-rr=example.local,2,"+wantHex) {
+			t.Errorf("expected apex dns-rr= publish line to still be present, got:\n%s", cfg)
+		}
+		if strings.Contains(cfg, "server=/example.local/") {
+			t.Errorf("apex NS record must NEVER emit server=/<zone>/ (would forward-hijack the whole zone), got:\n%s", cfg)
+		}
+	})
+
+	t.Run("invalid glue IPs are skipped, not injected", func(t *testing.T) {
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					{Name: "sub", Type: "NS", Value: "ns1.provider.example", GlueIPs: []string{"1.2.3.4\nserver=/evil/6.6.6.6", "127.0.0.1"}},
+				},
+			},
+		}
+		cfg := buildDNSConfig(zones, nil, nil, false, nil, nil)
+		if strings.Contains(cfg, "evil") {
+			t.Errorf("injected glue IP value must not leak into config, got:\n%s", cfg)
+		}
+		if strings.Contains(cfg, "server=/sub.example.local/127.0.0.1") {
+			t.Errorf("loopback glue IP must not be emitted, got:\n%s", cfg)
+		}
+	})
+
+	t.Run("glue host-record rules", func(t *testing.T) {
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					// target in the parent zone, outside the delegated name -> glue host-record.
+					{Name: "sub", Type: "NS", Value: "ns1.example.local", GlueIPs: []string{"203.0.113.53"}},
+					// target under the delegated name itself -> no glue host-record.
+					{Name: "deleg", Type: "NS", Value: "ns1.deleg.example.local", GlueIPs: []string{"203.0.113.54"}},
+					// target outside the zone entirely (public name) -> no glue host-record.
+					{Name: "pub", Type: "NS", Value: "rohin.ns.cloudflare.com", GlueIPs: []string{"203.0.113.55"}},
+					// an existing A record for the same host name as another NS's target ->
+					// glue host-record must not override it.
+					{Name: "existing", Type: "NS", Value: "ns1exists.example.local", GlueIPs: []string{"203.0.113.56"}},
+					{Name: "ns1exists", Type: "A", Value: "192.168.9.9"},
+				},
+			},
+		}
+		cfg := buildDNSConfig(zones, nil, nil, false, nil, nil)
+
+		if !strings.Contains(cfg, "host-record=ns1.example.local,203.0.113.53") {
+			t.Errorf("expected glue host-record for target in parent zone, got:\n%s", cfg)
+		}
+		if strings.Contains(cfg, "host-record=ns1.deleg.example.local,") {
+			t.Errorf("must NOT emit glue host-record for a target under the delegated name, got:\n%s", cfg)
+		}
+		if strings.Contains(cfg, "cloudflare") {
+			t.Errorf("must NEVER emit a glue host-record for a target outside the zone (public-name hijack), got:\n%s", cfg)
+		}
+		if strings.Contains(cfg, "host-record=ns1exists.example.local,203.0.113.56") {
+			t.Errorf("must NOT override an existing A record with a glue host-record, got:\n%s", cfg)
+		}
+		if !strings.Contains(cfg, "host-record=ns1exists.example.local,192.168.9.9") {
+			t.Errorf("the user's own A record for ns1exists.example.local must still be emitted, got:\n%s", cfg)
+		}
+	})
+
+	t.Run("no glue is byte-for-byte no-regression", func(t *testing.T) {
+		zones := []model.DNSZone{
+			{
+				ZoneName:        "example.local",
+				Enabled:         true,
+				IsAuthoritative: true,
+				Records: []model.DNSRecord{
+					{Name: "sub", Type: "NS", Value: "ns1.example.local"},
+				},
+			},
+		}
+		got := buildDNSConfig(zones, nil, nil, false, nil, nil)
+
+		wantHex, err := model.EncodeDNSNameHex("ns1.example.local")
+		if err != nil {
+			t.Fatalf("EncodeDNSNameHex: %v", err)
+		}
+		want := "# /etc/dnsmasq.d/pigate-dns.conf — Generated by PiGate\n\n" +
+			"# Zone: example.local\nlocal=/example.local/\n" +
+			"dns-rr=sub.example.local,2," + wantHex + "\n\n"
+		if got != want {
+			t.Errorf("NS record without glue must produce byte-identical output to the pre-delegation generator.\nwant:\n%q\ngot:\n%q", want, got)
+		}
+	})
+}
+
 // TestBuildDNSConfig_QueryLogByteIdentical locks in that queryLog=false
 // produces byte-for-byte the same config as before this feature existed
 // (docs/ref/todo/statistics-dns-top-domain-plan.md T-11 item 12 / §5 item 20)

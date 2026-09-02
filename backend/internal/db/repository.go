@@ -3341,8 +3341,32 @@ func (r *Repository) ToggleDNSZone(id string) error {
 	return err
 }
 
+// joinGlueIPs/splitGlueIPs round-trip DNSRecord.GlueIPs to/from the
+// dns_records.glue_ips TEXT column (comma-joined, no spaces — docs/ref/todo/
+// dns-ns-delegation-plan.md §3/T-03). Validation is enforced at the model
+// (ValidateDNSRecord) and generator (kernel/dns_server.go) layers, not here;
+// splitGlueIPs only guards against producing a stray "" element from an empty
+// or trailing-comma string, so the JSON response is always [] rather than
+// [""] or null.
+func joinGlueIPs(ips []string) string {
+	return strings.Join(ips, ",")
+}
+
+func splitGlueIPs(s string) []string {
+	out := []string{}
+	if s == "" {
+		return out
+	}
+	for _, part := range strings.Split(s, ",") {
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
 func (r *Repository) GetDNSRecordsByZone(zoneID string) ([]model.DNSRecord, error) {
-	rows, err := r.db.Query("SELECT id, zone_id, name, type, value, ttl FROM dns_records WHERE zone_id = ?", zoneID)
+	rows, err := r.db.Query("SELECT id, zone_id, name, type, value, ttl, glue_ips FROM dns_records WHERE zone_id = ?", zoneID)
 	if err != nil {
 		return nil, err
 	}
@@ -3351,37 +3375,41 @@ func (r *Repository) GetDNSRecordsByZone(zoneID string) ([]model.DNSRecord, erro
 	records := []model.DNSRecord{}
 	for rows.Next() {
 		var rec model.DNSRecord
-		err := rows.Scan(&rec.ID, &rec.ZoneID, &rec.Name, &rec.Type, &rec.Value, &rec.TTL)
+		var glueIPs string
+		err := rows.Scan(&rec.ID, &rec.ZoneID, &rec.Name, &rec.Type, &rec.Value, &rec.TTL, &glueIPs)
 		if err != nil {
 			return nil, err
 		}
+		rec.GlueIPs = splitGlueIPs(glueIPs)
 		records = append(records, rec)
 	}
 	return records, nil
 }
 
 func (r *Repository) GetDNSRecordByID(id string) (*model.DNSRecord, error) {
-	row := r.db.QueryRow("SELECT id, zone_id, name, type, value, ttl FROM dns_records WHERE id = ?", id)
+	row := r.db.QueryRow("SELECT id, zone_id, name, type, value, ttl, glue_ips FROM dns_records WHERE id = ?", id)
 	var rec model.DNSRecord
-	err := row.Scan(&rec.ID, &rec.ZoneID, &rec.Name, &rec.Type, &rec.Value, &rec.TTL)
+	var glueIPs string
+	err := row.Scan(&rec.ID, &rec.ZoneID, &rec.Name, &rec.Type, &rec.Value, &rec.TTL, &glueIPs)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	rec.GlueIPs = splitGlueIPs(glueIPs)
 	return &rec, nil
 }
 
 func (r *Repository) CreateDNSRecord(record model.DNSRecord) error {
-	_, err := r.db.Exec("INSERT INTO dns_records (id, zone_id, name, type, value, ttl) VALUES (?, ?, ?, ?, ?, ?)",
-		record.ID, record.ZoneID, record.Name, record.Type, record.Value, record.TTL)
+	_, err := r.db.Exec("INSERT INTO dns_records (id, zone_id, name, type, value, ttl, glue_ips) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		record.ID, record.ZoneID, record.Name, record.Type, record.Value, record.TTL, joinGlueIPs(record.GlueIPs))
 	return err
 }
 
 func (r *Repository) UpdateDNSRecord(record model.DNSRecord) error {
-	_, err := r.db.Exec("UPDATE dns_records SET name = ?, type = ?, value = ?, ttl = ? WHERE id = ?",
-		record.Name, record.Type, record.Value, record.TTL, record.ID)
+	_, err := r.db.Exec("UPDATE dns_records SET name = ?, type = ?, value = ?, ttl = ?, glue_ips = ? WHERE id = ?",
+		record.Name, record.Type, record.Value, record.TTL, joinGlueIPs(record.GlueIPs), record.ID)
 	return err
 }
 

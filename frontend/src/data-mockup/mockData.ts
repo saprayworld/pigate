@@ -745,6 +745,10 @@ export interface DNSRecord {
   type: string
   value: string
   ttl: number
+  // NS-delegation glue IPs (NS records only, max 4). Optional so existing
+  // mock data / older records without this field keep working unchanged
+  // (docs/ref/todo/dns-ns-delegation-plan.md).
+  glueIps?: string[]
 }
 
 export interface DNSZone {

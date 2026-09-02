@@ -3689,6 +3689,64 @@ paths:
         '400':
           $ref: '#/components/responses/BadRequest'
 
+  /dns/resolve-ns:
+    get:
+      tags:
+        - DNS Server
+      summary: Auto-lookup the IP address(es) of an NS-delegation nameserver name
+      description: >
+        Resolves `name` to its IP address(es), for the "ค้นหา IP อัตโนมัติ" button
+        next to an NS record's glue IP field (docs/ref/todo/
+        dns-ns-delegation-plan.md). Resolution goes through this device's own
+        resolver (`/etc/resolv.conf`, the same resolver dnsmasq/systemd-resolved
+        uses) — NOT the upstream servers configured under `/dns/settings`, which
+        would be shadowed by this zone's own `local=` directive. The lookup has a
+        3 second timeout and a server-wide rate limit (burst 5, 1/s refill). A
+        read-only GET, so it is never blocked by read-only/edit-disabled mode.
+      parameters:
+        - name: name
+          in: query
+          required: true
+          schema:
+            type: string
+            example: ns1.example.com
+          description: >
+            Nameserver host name to resolve. Validated with the same
+            charset/label/length rules the DNS record generator uses; a value
+            with newlines or invalid characters returns 400 without ever being
+            looked up or logged raw.
+      responses:
+        '200':
+          description: Resolved address(es), deduplicated, IPv4 before IPv6, capped at 4
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                    description: The validated/normalized name that was resolved.
+                    example: ns1.example.com
+                  ips:
+                    type: array
+                    items:
+                      type: string
+                    example: ["203.0.113.53"]
+        '400':
+          description: Missing/invalid `name` (empty, malformed, or contains newlines)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: The name did not resolve to any address.
+        '429':
+          description: Server-wide rate limit for this lookup exceeded; retry later.
+        '502':
+          description: >-
+            The DNS lookup failed or timed out. The response message is
+            generic — the raw resolver error is never relayed to the client.
+        '503':
+          description: The DNS Server service is not available on this server instance.
+
   # =========================================================================
   # SYSTEM & MAINTENANCE
   # =========================================================================
@@ -9016,6 +9074,18 @@ components:
           type: integer
           description: Time-to-live in seconds.
           example: 3600
+        glueIps:
+          type: array
+          items:
+            type: string
+          description: >-
+            NS-delegation glue IPs (NS records only, max 4). When set, PiGate also
+            emits `server=/<fqdn>/<ip>` so dnsmasq forwards every query under that
+            name to the delegated nameserver (forwarding-based delegation), on top
+            of publishing the NS record itself. Not allowed on the zone apex
+            (use a Forward Zone instead) and not allowed on non-NS records - both
+            return 400. Loopback/unspecified/multicast addresses are rejected.
+          example: ["203.0.113.53"]
 
     DNSRecordInput:
       type: object
@@ -9041,12 +9111,25 @@ components:
             Validated per type (A=IPv4, AAAA=IPv6, CNAME/PTR=FQDN charset,
             MX="<pref> <target>" or "<target>", TXT<=255 chars, no quotes,
             NS=nameserver name; a short name is appended with the zone name;
-            published as-is via dnsmasq's dns-rr type 2, no real delegation).
+            published via dnsmasq's dns-rr type 2, and additionally forwarded
+            (forwarding-based delegation) when glueIps is set - see glueIps).
             Values with newlines/invalid charset return 400 (dnsmasq injection guard).
           example: 192.168.1.50
         ttl:
           type: integer
           example: 3600
+        glueIps:
+          type: array
+          items:
+            type: string
+          description: >-
+            NS-delegation glue IPs (NS records only, max 4). When set, PiGate also
+            emits `server=/<fqdn>/<ip>` so dnsmasq forwards every query under that
+            name to the delegated nameserver (forwarding-based delegation), on top
+            of publishing the NS record itself. Not allowed on the zone apex
+            (use a Forward Zone instead) and not allowed on non-NS records - both
+            return 400. Loopback/unspecified/multicast addresses are rejected.
+          example: ["203.0.113.53"]
 
     DNSServerSettings:
       type: object

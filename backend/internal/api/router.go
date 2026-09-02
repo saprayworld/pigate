@@ -214,6 +214,11 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("POST /api/dns/clear-cache", s.HandleClearDNSCache)
 	authRoute("GET /api/dns/settings", s.HandleGetDNSServerSettings)
 	authRoute("PUT /api/dns/settings", s.HandleUpdateDNSServerSettings)
+	// NS-delegation glue auto-lookup (docs/ref/todo/dns-ns-delegation-plan.md
+	// T-06): a read-only GET, so DisableEditMiddleware/RoleReadOnlyMiddleware
+	// never block it (they only gate POST/PUT/DELETE/PATCH), same as
+	// GET /api/interfaces/{id}/scan above.
+	authRoute("GET /api/dns/resolve-ns", s.HandleResolveNameserver)
 
 	// 8.2 DNS Server — Blocked Domains (deny-list, docs/ref/todo/
 	// dns-blocked-domains-plan.md)
