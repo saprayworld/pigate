@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -56,6 +57,19 @@ type wanRuntimeState struct {
 
 	lastProbeAt time.Time
 
+	// probeIntervalSec mirrors the uplink's own ProbeIntervalSeconds as of
+	// its most recent probe round — kept here (rather than re-reading it from
+	// the DB) so GetStates() can compute the Decision E staleness threshold
+	// (max(3xinterval, 30s)) without a repo round-trip.
+	probeIntervalSec int
+
+	// roundDeadlineLogged is Task 13.5's "log once per uplink, not every
+	// round" guard for the hard probe-round deadline (see probeUplink):
+	// true once a round has been cut short by the deadline until a
+	// subsequent round completes normally, at which point it resets so a
+	// future recurrence logs again.
+	roundDeadlineLogged bool
+
 	// icmpFailStreak/lastICMPRetryAt drive the D-5 sticky/re-test decision
 	// (selectProbeMethod below) — distinct from failStreak/recoverStreak,
 	// which drive the up/degraded/down health state machine (decideState).
@@ -84,6 +98,14 @@ type WanMonitor struct {
 
 	mu     sync.Mutex
 	states map[string]*wanRuntimeState
+	// inFlight is Task 13.5's per-uplink probe-round in-progress guard: tick
+	// spawns one goroutine per due uplink so a slow uplink can never delay
+	// another uplink's own round or the ticker itself, but the SAME uplink
+	// must never have two rounds running concurrently (that would race on
+	// rt's fields and produce nonsensical interleaved state transitions).
+	// Set (under mu) before a round's goroutine is spawned, cleared (under
+	// mu, via defer) when it returns.
+	inFlight map[string]bool
 }
 
 // NewWanMonitor constructs the monitor. Start(ctx) must be called separately
@@ -96,6 +118,7 @@ func NewWanMonitor(repo *db.Repository, probe kernel.PathProbeManager, eventLog 
 		bus:      bus,
 		ring:     ring,
 		states:   make(map[string]*wanRuntimeState),
+		inFlight: make(map[string]bool),
 	}
 }
 
@@ -117,7 +140,7 @@ func (m *WanMonitor) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-t.C:
-			m.tick(now)
+			m.tick(ctx, now)
 		}
 	}
 }
@@ -125,8 +148,10 @@ func (m *WanMonitor) run(ctx context.Context) {
 // tick evaluates every enabled uplink once, probing the ones due for a round
 // this pass (see wanMonitorTickInterval's doc comment). Guard order mirrors
 // DhcpHealthChecker.tick: bus-pause first (skip the whole tick during a
-// backup import so the monitor never races a config restore).
-func (m *WanMonitor) tick(now time.Time) {
+// backup import so the monitor never races a config restore). ctx is run()'s
+// context, threaded down to maybeProbe so an in-progress probe round is
+// canceled on shutdown rather than leaking past it (Task 13.5).
+func (m *WanMonitor) tick(ctx context.Context, now time.Time) {
 	if m.bus.IsPaused() {
 		return
 	}
@@ -143,7 +168,7 @@ func (m *WanMonitor) tick(now time.Time) {
 			continue
 		}
 		seen[u.ID] = true
-		m.maybeProbe(u, now)
+		m.maybeProbe(ctx, u, now)
 	}
 
 	// Drop RAM state for uplinks no longer present/enabled, mirroring
@@ -159,8 +184,13 @@ func (m *WanMonitor) tick(now time.Time) {
 }
 
 // maybeProbe runs a probe round for u only if its own ProbeIntervalSeconds
-// has elapsed since its last round.
-func (m *WanMonitor) maybeProbe(u model.WanUplink, now time.Time) {
+// has elapsed since its last round, and only if u does not already have a
+// round in flight (Task 13.5 in-flight guard). The due-ness/in-flight check
+// itself is quick (no I/O) and stays synchronous; the actual probe round
+// (probeUplink, which does network I/O) is dispatched to its own goroutine
+// so one slow/dead uplink can never delay another uplink's round or the
+// ticker's own cadence.
+func (m *WanMonitor) maybeProbe(ctx context.Context, u model.WanUplink, now time.Time) {
 	m.mu.Lock()
 	rt, ok := m.states[u.ID]
 	if !ok {
@@ -168,11 +198,24 @@ func (m *WanMonitor) maybeProbe(u model.WanUplink, now time.Time) {
 		m.states[u.ID] = rt
 	}
 	due := rt.lastProbeAt.IsZero() || now.Sub(rt.lastProbeAt) >= time.Duration(u.ProbeIntervalSeconds)*time.Second
+	running := m.inFlight[u.ID]
+	if due && !running {
+		m.inFlight[u.ID] = true
+	}
 	m.mu.Unlock()
-	if !due {
+
+	if !due || running {
 		return
 	}
-	m.probeUplink(u, now)
+
+	go func() {
+		defer func() {
+			m.mu.Lock()
+			delete(m.inFlight, u.ID)
+			m.mu.Unlock()
+		}()
+		m.probeUplink(ctx, u, now)
+	}()
 }
 
 // probeUplink runs one full probe round for u (all configured targets,
@@ -181,8 +224,10 @@ func (m *WanMonitor) maybeProbe(u model.WanUplink, now time.Time) {
 // its inputs (previous effective method / sticky counters) under m.mu,
 // performs the (possibly multi-second) network I/O WITHOUT holding the
 // lock, then re-locks to write the outcome back — the same pattern
-// DhcpHealthChecker.tickInterface uses.
-func (m *WanMonitor) probeUplink(u model.WanUplink, now time.Time) {
+// DhcpHealthChecker.tickInterface uses. parentCtx is run()'s context (or
+// context.Background() from a direct/test caller) so an in-progress round
+// is canceled on shutdown.
+func (m *WanMonitor) probeUplink(parentCtx context.Context, u model.WanUplink, now time.Time) {
 	m.mu.Lock()
 	rt, ok := m.states[u.ID]
 	if !ok {
@@ -194,6 +239,7 @@ func (m *WanMonitor) probeUplink(u model.WanUplink, now time.Time) {
 		m.states[u.ID] = rt
 	}
 	rt.lastProbeAt = now
+	rt.probeIntervalSec = u.ProbeIntervalSeconds
 	prevEffective := rt.effectiveMethod
 	icmpFailStreak := rt.icmpFailStreak
 	lastICMPRetryAt := rt.lastICMPRetryAt
@@ -203,11 +249,15 @@ func (m *WanMonitor) probeUplink(u model.WanUplink, now time.Time) {
 	m.mu.Unlock()
 
 	timeout := time.Duration(u.ProbeTimeoutMs) * time.Millisecond
-	// Outer safety margin: a single "auto" round can make at most two
-	// sub-probes (e.g. ICMP then an immediate TCP fallback), each of which
-	// PathProbeManager's contract already promises returns within
-	// count*timeout on its own.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Duration(u.ProbeCount)*timeout+5*time.Second)
+	// Hard cap (Task 13.5): a probe round must not outlive its own uplink's
+	// ProbeIntervalSeconds, or Phase 2's failover dampening timers
+	// (MinHoldSeconds/RevertDelaySeconds) lose their meaning against a round
+	// that itself runs longer than the gap between rounds. ValidateWanUplink's
+	// probe-round-budget check (Decision A) is meant to make this a no-op in
+	// the normal case — this timeout only bites when something outside that
+	// model went wrong (e.g. a row edited directly in the DB, bypassing
+	// validation). The extra 1s is scheduling grace, not part of the budget.
+	ctx, cancel := context.WithTimeout(parentCtx, time.Duration(u.ProbeIntervalSeconds)*time.Second+time.Second)
 	defer cancel()
 
 	sample, effectiveMethod, newICMPFailStreak, newLastICMPRetryAt, perr := m.runProbeRound(ctx, u, icmpFailStreak, lastICMPRetryAt, now, timeout)
@@ -218,9 +268,18 @@ func (m *WanMonitor) probeUplink(u model.WanUplink, now time.Time) {
 	rt.lastICMPRetryAt = newLastICMPRetryAt
 
 	if perr != nil {
-		// A probe-system failure (socket/permission/interface-not-found) is
-		// NOT the same as the target being unreachable — report "unknown",
-		// never advance the fail/recover strikes, and only log once per
+		if errors.Is(perr, context.DeadlineExceeded) {
+			// Log once per uplink (not every round it keeps happening) — see
+			// wanRuntimeState.roundDeadlineLogged's doc comment.
+			if !rt.roundDeadlineLogged {
+				m.logRoundDeadlineExceeded(u)
+				rt.roundDeadlineLogged = true
+			}
+		}
+		// A probe-system failure (socket/permission/interface-not-found, or
+		// this round's own deadline being exceeded) is NOT the same as the
+		// target being unreachable — report "unknown", never advance the
+		// fail/recover strikes, and only log the state transition once per
 		// transition into this state (never spam every tick).
 		if prevState != model.WanStateUnknown {
 			m.logStateChange(u, prevState, model.WanStateUnknown, "probe error: "+perr.Error())
@@ -230,6 +289,9 @@ func (m *WanMonitor) probeUplink(u model.WanUplink, now time.Time) {
 		rt.reason = "probe error: " + perr.Error()
 		return
 	}
+	// A round that completes without hitting the deadline clears the
+	// once-per-uplink log guard so a future recurrence logs again.
+	rt.roundDeadlineLogged = false
 
 	decision := decideState(wanDecideInput{
 		Sample:             sample,
@@ -344,12 +406,37 @@ func (m *WanMonitor) runProbeRound(ctx context.Context, u model.WanUplink, icmpF
 	return
 }
 
+// probeTargetResult is one goroutine's outcome in probeAllTargets, keyed by
+// its target's original index so results can be folded back in deterministic
+// (target-list) order regardless of which goroutine actually finished first.
+type probeTargetResult struct {
+	target string
+	sample model.WanProbeSample
+	err    error
+	valid  bool // false for a target that failed IPv4 parsing (see below) — skipped, not an error
+}
+
 // probeAllTargets probes every configured target of u with the given method
-// and sums the results into one combined model.WanProbeSample — "every
-// target replied with zero packets" (the D-5 fallback trigger) is exactly
-// "the combined sample's Received == 0". Returns an error only when the
-// underlying kernel.PathProbeManager call itself fails (probe-system
-// failure, not target unreachability — see the interface's doc comment).
+// CONCURRENTLY (one goroutine per target, capped at model.MaxWanProbeTargets
+// by model.ValidateWanUplink) and sums the results into one combined
+// model.WanProbeSample — "every target replied with zero packets" (the D-5
+// fallback trigger) is exactly "the combined sample's Received == 0".
+//
+// Probing targets in parallel rather than serially (Task 13.5) is safe
+// specifically for ICMP because kernel.PathProbeManager's real
+// implementation (real_path_probe.go icmpRoundOnce) opens its own socket per
+// call (closed via its own defer — no shared, reused socket) and
+// discriminates replies by a process-wide atomic (id, seq) pair, so replies
+// from concurrent rounds can never cross-match each other. Do not "simplify"
+// this back into a for loop without re-reading that guarantee.
+//
+// Results are folded back in target-list order (not completion order) so
+// RTTsMs/Sent/Received are always deterministic regardless of goroutine
+// scheduling. Returns an error only when the underlying
+// kernel.PathProbeManager call itself fails (probe-system failure, not
+// target unreachability — see the interface's doc comment) — specifically
+// the error belonging to the LOWEST-INDEX target that errored, never
+// whichever goroutine happened to finish first.
 func (m *WanMonitor) probeAllTargets(ctx context.Context, method string, u model.WanUplink, timeout time.Duration) (model.WanProbeSample, error) {
 	combined := model.WanProbeSample{
 		TimestampUnix: time.Now().Unix(),
@@ -361,29 +448,46 @@ func (m *WanMonitor) probeAllTargets(ctx context.Context, method string, u model
 		combined.MetricQuality = model.WanMetricQualityFull
 	}
 
-	for _, target := range u.ProbeTargets {
+	results := make([]probeTargetResult, len(u.ProbeTargets))
+	var wg sync.WaitGroup
+	for i, target := range u.ProbeTargets {
 		ip := net.ParseIP(target)
 		if ip == nil {
 			// Should never happen — targets are validated IPv4 literals
 			// before being persisted (model.ValidateWanUplink) — but skip
 			// defensively rather than erroring the whole round over a
 			// single corrupt entry.
+			results[i] = probeTargetResult{target: target, valid: false}
 			continue
 		}
 
-		var sample model.WanProbeSample
-		var err error
-		if method == model.WanProbeMethodTCP {
-			sample, err = m.probe.ProbeTCP(ctx, u.Interface, ip, u.ProbeTCPPort, u.ProbeCount, timeout)
-		} else {
-			sample, err = m.probe.ProbeICMP(ctx, u.Interface, ip, u.ProbeCount, timeout)
+		wg.Add(1)
+		go func(i int, target string, ip net.IP) {
+			defer wg.Done()
+			var sample model.WanProbeSample
+			var err error
+			if method == model.WanProbeMethodTCP {
+				sample, err = m.probe.ProbeTCP(ctx, u.Interface, ip, u.ProbeTCPPort, u.ProbeCount, timeout)
+			} else {
+				sample, err = m.probe.ProbeICMP(ctx, u.Interface, ip, u.ProbeCount, timeout)
+			}
+			results[i] = probeTargetResult{target: target, sample: sample, err: err, valid: true}
+		}(i, target, ip)
+	}
+	wg.Wait()
+
+	for _, r := range results {
+		if r.valid && r.err != nil {
+			return combined, fmt.Errorf("probe %s target %s on %s: %w", method, r.target, u.Interface, r.err)
 		}
-		if err != nil {
-			return combined, fmt.Errorf("probe %s target %s on %s: %w", method, target, u.Interface, err)
+	}
+	for _, r := range results {
+		if !r.valid {
+			continue
 		}
-		combined.Sent += sample.Sent
-		combined.Received += sample.Received
-		combined.RTTsMs = append(combined.RTTsMs, sample.RTTsMs...)
+		combined.Sent += r.sample.Sent
+		combined.Received += r.sample.Received
+		combined.RTTsMs = append(combined.RTTsMs, r.sample.RTTsMs...)
 	}
 	return combined, nil
 }
@@ -527,16 +631,55 @@ func (m *WanMonitor) logMethodSwitch(u model.WanUplink, from, to string) {
 		fmt.Sprintf("WAN uplink %q (%s) switched effective probe method %s -> %s", u.Name, u.Interface, from, to))
 }
 
+// logRoundDeadlineExceeded records that a probe round was cut short by Task
+// 13.5's hard "round must fit inside ProbeIntervalSeconds" deadline —
+// distinct from the ordinary probe-error path's logStateChange call, and
+// logged once per uplink per incident (see wanRuntimeState.roundDeadlineLogged).
+func (m *WanMonitor) logRoundDeadlineExceeded(u model.WanUplink) {
+	if m.eventLog == nil {
+		return
+	}
+	m.eventLog.Log(model.EventCategoryNetwork, "wan-uplink-probe-round-deadline", model.EventSeverityWarning,
+		model.EventActorSystem, u.Interface,
+		fmt.Sprintf("WAN uplink %q (%s) probe round exceeded its probeIntervalSeconds deadline and was cut short", u.Name, u.Interface))
+}
+
+// wanStaleMinThreshold is the floor of Decision E's staleness threshold
+// (max(3xProbeIntervalSeconds, wanStaleMinThreshold)) — even an uplink probed
+// every 2s (the minimum allowed ProbeIntervalSeconds) should get at least 30s
+// of slack before Phase 2's failover controller refuses to select it, so a
+// single slow-but-not-yet-cut-short round doesn't immediately make an
+// otherwise-healthy uplink ineligible.
+const wanStaleMinThreshold = 30 * time.Second
+
 // GetStates returns a snapshot of every uplink's current health state,
 // ordered by uplink ID for a stable API response. Active is always false in
-// Phase 1 — there is no failover controller yet to ever mark an uplink
-// active.
+// Phase 1/this file — only the Phase 2 failover controller (wan_failover.go)
+// ever marks an uplink active, by combining this snapshot with its own
+// decision (this package never mutates it here).
+//
+// LastProbeAt/Stale implement Decision E (docs/ref/todo/
+// multi-wan-failover-plan.md): Stale is true when the most recent probe
+// round is older than max(3x the uplink's own ProbeIntervalSeconds,
+// wanStaleMinThreshold) — the failover controller must never select a stale
+// uplink as active, even if its last-known State was "up".
 func (m *WanMonitor) GetStates() []model.WanUplinkState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	now := time.Now()
 	out := make([]model.WanUplinkState, 0, len(m.states))
 	for _, rt := range m.states {
+		var lastProbeAt string
+		var stale bool
+		if !rt.lastProbeAt.IsZero() {
+			lastProbeAt = rt.lastProbeAt.UTC().Format(time.RFC3339)
+			threshold := 3 * time.Duration(rt.probeIntervalSec) * time.Second
+			if threshold < wanStaleMinThreshold {
+				threshold = wanStaleMinThreshold
+			}
+			stale = now.Sub(rt.lastProbeAt) > threshold
+		}
 		out = append(out, model.WanUplinkState{
 			UplinkID:        rt.uplinkID,
 			Interface:       rt.ifaceName,
@@ -550,6 +693,8 @@ func (m *WanMonitor) GetStates() []model.WanUplinkState {
 			Strikes:         rt.failStreak,
 			LastChangeAt:    rt.lastChangeAt,
 			Reason:          rt.reason,
+			LastProbeAt:     lastProbeAt,
+			Stale:           stale,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UplinkID < out[j].UplinkID })

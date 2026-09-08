@@ -4457,10 +4457,11 @@ paths:
 
   # =========================================================================
   # MULTI-WAN FAILOVER (docs/ref/todo/multi-wan-failover-plan.md)
-  # Phase 1 only: uplink health-check configuration + read-only live
-  # status/metrics. No routing is ever changed by anything in this section —
-  # the kill switch/mode/manual-override endpoints (superAdminRoute) belong
-  # to Phase 2 and are not implemented yet.
+  # Phase 1: uplink health-check configuration + read-only live status/
+  # metrics (authRoute). Phase 2: automatic default-route failover, with
+  # kill switch/mode/manual-override endpoints (superAdminRoute) — feature
+  # is default OFF (wan_failover_settings.enabled=0) and never touches
+  # routing until explicitly enabled.
   # =========================================================================
   /wan/uplinks:
     get:
@@ -4575,10 +4576,12 @@ paths:
       summary: Get live health status of every configured WAN uplink
       description: >-
         Always returns one entry per configured uplink, even one that has
-        never been probed yet (state=unknown in that case). Phase 1 always
-        reports bypassedByStaticRoute=false, activeUplinkId="",
-        lastSwitchAt="", lastSwitchReason="" — those four fields are reserved
-        for the not-yet-implemented Phase 2 automatic failover controller.
+        never been probed yet (state=unknown in that case).
+        bypassedByStaticRoute/activeUplinkId/lastSwitchAt/lastSwitchReason are
+        populated from the Phase 2 automatic failover controller — they stay
+        at their zero value if the controller has never been enabled (kill
+        switch off, the shipped default) or has not made its first decision
+        yet.
       operationId: getWanStatus
       security:
         - cookieAuth: []
@@ -4635,6 +4638,102 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+
+  /wan/failover:
+    get:
+      tags:
+        - WAN
+      summary: Get the global WAN failover kill-switch/mode/dampening settings
+      description: >-
+        Read-only, authRoute (same sensitivity as the rest of the WAN
+        endpoints) — the mutating counterpart below is super_admin only.
+        Defaults to enabled=false (kill switch off) so installing this
+        feature never changes behavior on an existing deployment until an
+        operator opts in.
+      operationId: getWanFailoverSettings
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Current WAN failover settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WanFailoverSettings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      tags:
+        - WAN
+      summary: Update the global WAN failover kill-switch/mode/dampening settings
+      description: >-
+        Restricted to super_admin (D-8): this can move LAN traffic onto a
+        different physical uplink, the same class of "can take the whole
+        site offline" action reserved for super_admin elsewhere (system
+        reboot/shutdown, enableEditSystemRoute). mode="manual" requires
+        manualUplinkId to be non-empty AND refer to an existing WAN uplink
+        (400 otherwise). Triggers an immediate re-decision (non-blocking)
+        rather than waiting for the controller's own ~2s tick.
+      operationId: updateWanFailoverSettings
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WanFailoverSettings'
+      responses:
+        '200':
+          description: Updated WAN failover settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WanFailoverSettings'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Caller is not a super_admin, or the server is running with -disable-edit=true
+
+  /wan/failover/override:
+    post:
+      tags:
+        - WAN
+      summary: Force a specific WAN uplink active (manual override)
+      description: >-
+        Convenience shortcut over PUT /wan/failover: sets mode="manual" and
+        manualUplinkId to the given uplink (enabling the kill switch if it
+        was off), preserving the existing minHoldSeconds/revertDelaySeconds.
+        Restricted to super_admin (D-8), same rationale as PUT /wan/failover.
+      operationId: setWanFailoverManualOverride
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uplinkId]
+              properties:
+                uplinkId:
+                  type: string
+                  example: wan-3f9c2b1a
+      responses:
+        '200':
+          description: Updated WAN failover settings (mode=manual, manualUplinkId set)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WanFailoverSettings'
+        '400':
+          description: uplinkId is empty or does not refer to a configured WAN uplink
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Caller is not a super_admin, or the server is running with -disable-edit=true
 
 # =========================================================================
 # COMPONENTS & SCHEMAS
@@ -10419,7 +10518,10 @@ components:
           example: eth0
         priority:
           type: integer
-          description: Lower value = higher priority. Not used by anything in Phase 1.
+          description: >-
+            Lower value = higher priority. Not used in Phase 1 (read-only
+            monitoring); in Phase 2 auto mode, the failover controller
+            selects the healthy, non-stale uplink with the lowest priority.
           example: 1
         probeTargets:
           type: array
@@ -10562,7 +10664,10 @@ components:
           example: up
         active:
           type: boolean
-          description: Always false in Phase 1 (no failover controller exists yet).
+          description: >-
+            True when this uplink currently owns the default route. Always
+            false when the Phase 2 failover controller is disabled
+            (wan_failover_settings.enabled=0).
           example: false
         lastLatencyMs:
           type: number
@@ -10604,6 +10709,18 @@ components:
         reason:
           type: string
           example: healthy
+        lastProbeAt:
+          type: string
+          format: date-time
+          description: Empty until the first probe round has run for this uplink.
+          example: "2026-09-07T10:00:02Z"
+        stale:
+          type: boolean
+          description: >-
+            True when lastProbeAt is older than max(3x the uplink's own
+            probeIntervalSeconds, 30s). The Phase 2 failover controller never
+            selects a stale uplink as active, even if state="up".
+          example: false
 
     WanStatusEntry:
       description: One WanUplinkState plus its static name/priority.
@@ -10628,21 +10745,66 @@ components:
         bypassedByStaticRoute:
           type: boolean
           description: >-
-            Phase 2 field (reserved). Always false in Phase 1 — nothing here
-            can change routing yet.
+            True when the currently active uplink's interface has a WAN
+            failover metric override that is being overridden by an
+            even-higher-precedence active DB static 0.0.0.0/0 route — the
+            override exists but currently has no effect on kernel routing
+            until that static route is removed/disabled. Always false when
+            the failover controller has never been wired/enabled.
           example: false
         activeUplinkId:
           type: string
-          description: Phase 2 field (reserved). Always empty in Phase 1.
-          example: ""
+          description: >-
+            The uplink ID the Phase 2 failover controller currently considers
+            active. Empty until it has ever made a decision (e.g. kill switch
+            off, or still inside the startup grace window).
+          example: wan-3f9c2b1a
         lastSwitchAt:
           type: string
-          description: Phase 2 field (reserved). Always empty in Phase 1.
-          example: ""
+          format: date-time
+          description: Empty until the controller has ever switched the active uplink.
+          example: "2026-09-07T10:05:00Z"
         lastSwitchReason:
           type: string
-          description: Phase 2 field (reserved). Always empty in Phase 1.
-          example: ""
+          description: Empty until the controller has ever switched the active uplink.
+          example: 'auto mode: uplink "wan-3f9c2b1a" is the highest-priority healthy, non-stale uplink'
+
+    WanFailoverSettings:
+      type: object
+      description: >-
+        Single-row global Phase 2 failover configuration. There is
+        deliberately no field here to make a "degraded" reading drive a
+        failover decision (D-7) — only "down" ever does.
+      properties:
+        enabled:
+          type: boolean
+          description: The kill switch. Defaults to false on a fresh install.
+          example: false
+        mode:
+          type: string
+          enum: [auto, manual]
+          example: auto
+        manualUplinkId:
+          type: string
+          description: >-
+            The uplink forced active when mode="manual". Required (non-empty,
+            and must refer to an existing uplink) when mode="manual".
+          example: wan-3f9c2b1a
+        minHoldSeconds:
+          type: integer
+          description: >-
+            Minimum time between two failovers (anti-flap dampening).
+            AUTO mode only — a manual override always takes effect
+            immediately regardless of this value.
+          example: 60
+        revertDelaySeconds:
+          type: integer
+          description: >-
+            How long the primary uplink must stay healthy before the
+            controller reverts back to it from a backup. AUTO mode only,
+            same exemption as minHoldSeconds — a manual override to a
+            higher-priority uplink is never held up by this either.
+          example: 120
 
     WanMetricPoint:
       type: object

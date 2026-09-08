@@ -84,6 +84,15 @@ type Server struct {
 	// signature is already long. Every wan_handlers.go handler that reads it
 	// must nil-check explicitly rather than assume it is always set.
 	wanMonitor *service.WanMonitor
+
+	// wanFailover backs the Phase 2 kill-switch/manual-override/status
+	// handlers (docs/ref/todo/multi-wan-failover-plan.md Task 16) — optional
+	// (nil until SetWanFailover is called by main.go), same additive-setter
+	// pattern as wanMonitor above. HandleGetWanStatus falls back to the
+	// Phase 1 all-zero-value behavior when this is nil (so Phase 1-only
+	// callers/tests are unaffected); the other wan/failover handlers return
+	// 503 when nil.
+	wanFailover *service.WanFailoverController
 }
 
 // SetWanMonitor wires the Multi-WAN Failover health monitor into the server
@@ -93,6 +102,14 @@ type Server struct {
 // SetPolicyStatsService's "safe to never call" contract).
 func (s *Server) SetWanMonitor(m *service.WanMonitor) {
 	s.wanMonitor = m
+}
+
+// SetWanFailover wires the Multi-WAN Failover Phase 2 controller into the
+// server (docs/ref/todo/multi-wan-failover-plan.md Task 16). Safe to call
+// once after NewServer, and safe to never call at all (mirrors SetWanMonitor's
+// "safe to never call" contract).
+func (s *Server) SetWanFailover(c *service.WanFailoverController) {
+	s.wanFailover = c
 }
 
 // SetPolicyStatsService wires the optional per-rule usage stats service into

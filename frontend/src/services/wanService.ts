@@ -90,6 +90,81 @@ function saveLocalFailoverSettings(settings: WanFailoverSettings) {
   localStorage.setItem(FAILOVER_SETTINGS_KEY, JSON.stringify(settings))
 }
 
+const LAST_SWITCH_KEY = "pigate_wan_failover_last_switch"
+
+interface MockSwitchRecord {
+  activeUplinkId: string
+  lastSwitchAt: string
+  reason: string
+}
+
+function getLocalLastSwitch(): MockSwitchRecord {
+  const stored = localStorage.getItem(LAST_SWITCH_KEY)
+  if (!stored) return { activeUplinkId: "", lastSwitchAt: "", reason: "" }
+  try {
+    return JSON.parse(stored)
+  } catch {
+    return { activeUplinkId: "", lastSwitchAt: "", reason: "" }
+  }
+}
+
+function saveLocalLastSwitch(record: MockSwitchRecord) {
+  localStorage.setItem(LAST_SWITCH_KEY, JSON.stringify(record))
+}
+
+// mockDecideActiveUplink is a lightweight mirror of the backend's pure
+// decideActiveUplink (service/wan_failover.go) — just enough to make the
+// Failover Control card interactive/testable in mock mode (Task 18): flip
+// the kill switch/mode/uplink and see activeUplinkId/lastSwitchAt/
+// lastSwitchReason reflect it. It deliberately does NOT reimplement
+// MinHoldSeconds/RevertDelaySeconds dampening (a backend-only concern) — the
+// mock only needs to show SOME uplink becoming active/inactive, not
+// reproduce the anti-flap timers exactly. Stale/degraded exclusion (D-7,
+// Decision E) IS mirrored, since that's directly visible on the uplink
+// cards.
+function mockDecideActiveUplink(uplinks: WanUplink[], states: Record<string, WanUplinkState>): MockSwitchRecord {
+  const settings = getLocalFailoverSettings()
+  const prev = getLocalLastSwitch()
+
+  if (!settings.enabled) {
+    return { activeUplinkId: "", lastSwitchAt: prev.lastSwitchAt, reason: prev.reason }
+  }
+
+  let target = ""
+  let reason: string
+  if (settings.mode === "manual") {
+    const exists = uplinks.some((u) => u.id === settings.manualUplinkId)
+    if (settings.manualUplinkId && exists) {
+      target = settings.manualUplinkId
+      reason = `manual override: forced to uplink "${target}"`
+    } else {
+      reason = "manual mode but manualUplinkId does not refer to a configured uplink"
+    }
+  } else {
+    let best: WanUplink | null = null
+    for (const u of uplinks) {
+      if (!u.status) continue
+      const st = states[u.id]
+      if (!st || st.state !== "up" || st.stale) continue
+      if (!best || u.priority < best.priority) best = u
+    }
+    if (best) {
+      target = best.id
+      reason = `auto mode: uplink "${best.name}" is the highest-priority healthy, non-stale uplink`
+    } else {
+      reason = "no healthy (non-stale) uplink available; keeping the last-known active uplink to avoid a total blackout"
+      target = prev.activeUplinkId
+    }
+  }
+
+  const record: MockSwitchRecord =
+    target && target !== prev.activeUplinkId
+      ? { activeUplinkId: target, lastSwitchAt: new Date().toISOString(), reason }
+      : { activeUplinkId: target || prev.activeUplinkId, lastSwitchAt: prev.lastSwitchAt, reason: reason || prev.reason }
+  saveLocalLastSwitch(record)
+  return record
+}
+
 // mockMetricSeries synthesizes a plausible-looking time series around the
 // uplink's current mock state (a "down"/"unknown" uplink has no useful
 // latency, an "up"/"degraded" one gets gentle random jitter around its
@@ -197,6 +272,7 @@ export const wanService = {
       await new Promise((resolve) => setTimeout(resolve, 300))
       const uplinks = getLocalUplinks()
       const states = getLocalStates()
+      const decision = mockDecideActiveUplink(uplinks, states)
       return {
         uplinks: uplinks.map((u) => {
           const st = states[u.id] ?? {
@@ -212,13 +288,15 @@ export const wanService = {
             strikes: 0,
             lastChangeAt: "",
             reason: "",
+            lastProbeAt: "",
+            stale: false,
           }
-          return { ...st, name: u.name, priority: u.priority }
+          return { ...st, active: u.id === decision.activeUplinkId, name: u.name, priority: u.priority }
         }),
         bypassedByStaticRoute: false,
-        activeUplinkId: "",
-        lastSwitchAt: "",
-        lastSwitchReason: "",
+        activeUplinkId: decision.activeUplinkId,
+        lastSwitchAt: decision.activeUplinkId ? decision.lastSwitchAt : "",
+        lastSwitchReason: decision.reason,
       }
     }
     const response = await fetch(`${API_BASE_URL}/wan/status`)
@@ -242,10 +320,10 @@ export const wanService = {
   },
 
   // --- Failover settings / kill switch / manual override ----------------
-  // Reserved for Phase 2 (docs/ref/todo/multi-wan-failover-plan.md Task
-  // 16-18, superAdminRoute) — the backend endpoints do not exist yet, and no
-  // Phase 1 UI calls these. Included now so wanService.ts's shape already
-  // matches the eventual contract when that phase is approved.
+  // Phase 2 (docs/ref/todo/multi-wan-failover-plan.md Task 15-18). PUT
+  // /wan/failover and POST /wan/failover/override are superAdminRoute on the
+  // backend (D-8) — the WanFailover page only shows these controls to
+  // super_admin (authService.getRole()).
   getFailoverSettings: async (): Promise<WanFailoverSettings> => {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 200))
@@ -280,7 +358,9 @@ export const wanService = {
     if (IS_MOCK_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 300))
       const settings = getLocalFailoverSettings()
-      saveLocalFailoverSettings({ ...settings, mode: "manual", manualUplinkId: uplinkId })
+      // Mirrors HandleSetWanFailoverManualOverride: forces enabled=true too,
+      // preserving minHoldSeconds/revertDelaySeconds.
+      saveLocalFailoverSettings({ ...settings, enabled: true, mode: "manual", manualUplinkId: uplinkId })
       return
     }
     const response = await fetch(`${API_BASE_URL}/wan/failover/override`, {

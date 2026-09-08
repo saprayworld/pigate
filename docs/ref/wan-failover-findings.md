@@ -289,3 +289,15 @@ net.ipv4.conf.all.rp_filter = 2
    เพราะ Task นั้นแตะ routing โดยตรงและต้องมั่นใจเรื่อง route flapping/NAT/
    NetlinkMonitor timing มากกว่า Phase 1
 
+**หมายเหตุอัปเดต 2026-09-07 (Phase 2 โค้ดเสร็จแล้ว):** Task 13.5, 14-19 ของแผน
+(`docs/ref/todo/multi-wan-failover-plan.md`) implement ครบแล้วโดย ai-developer —
+build/vet/test ระดับ unit ผ่านทั้งหมด และทดสอบ mock-mode end-to-end ผ่าน curl
+จริงแล้ว (ดูบันทึกในแผนหลัก) แต่ **ยังไม่มีการรัน S-3/S-4/S-5 รอบใหม่บนบอร์ดจริง**
+ตามที่ระบุไว้ข้างต้น — ตาม Decision D งานนี้เป็นหน้าที่เจ้าของโปรเจกต์ ก่อนรันต้อง
+**ลบ fake static route ของ S-6** (`0.0.0.0/0 proto 120 metric 10` ผ่าน
+`wlx0cef1548ff2b`) ออกจากหน้า Static Routes ก่อนเสมอ (ดูข้อค้นพบข้อ 1 ด้านบน)
+มิฉะนั้น controller จะ "ยอมแพ้" ไม่สลับ WAN ให้ตามที่ออกแบบไว้ (D-2 precedence
+ระดับ 1) แล้วดูเหมือนฟีเจอร์ไม่ทำงาน ผลการทดสอบรอบใหม่ (S-3/S-4/S-5 พร้อม raw
+log) และผลทดสอบบอร์ดจริงของ Final Acceptance ข้อ 20-26 ในแผน Phase 2 ยังรอ
+เจ้าของโปรเจกต์กรอกเพิ่มในไฟล์นี้
+

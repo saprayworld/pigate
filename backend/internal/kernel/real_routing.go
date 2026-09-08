@@ -361,6 +361,33 @@ func (r *RealRouting) EnforceDefaultRouteMetric(ifaceName string, metric int) er
 	return nil
 }
 
+// DefaultRouteMetric reports the current priority of the IPv4 default
+// gateway route on ifaceName (Task 14, Decision C) without modifying
+// anything — the read-only counterpart to EnforceDefaultRouteMetric above,
+// used to snapshot a route's pre-override metric before a WAN failover
+// override changes it. found is false (not an error) when ifaceName simply
+// has no IPv4 default route with a gateway right now.
+func (r *RealRouting) DefaultRouteMetric(ifaceName string) (metric int, found bool, err error) {
+	link, err := netlink.LinkByName(ifaceName)
+	if err != nil {
+		return 0, false, fmt.Errorf("interface %q not found: %w", ifaceName, err)
+	}
+
+	routes, err := netlink.RouteList(link, netlink.FAMILY_V4)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to list IPv4 routes for %q: %w", ifaceName, err)
+	}
+
+	for _, rt := range routes {
+		isDefault := rt.Dst == nil || rt.Dst.String() == "0.0.0.0/0"
+		if !isDefault || rt.Gw == nil {
+			continue
+		}
+		return rt.Priority, true, nil
+	}
+	return 0, false, nil
+}
+
 func (r *RealRouting) DeleteRoute(route model.StaticRoute) error {
 	existingRoutes, err := netlink.RouteList(nil, netlink.FAMILY_V4)
 	if err != nil {

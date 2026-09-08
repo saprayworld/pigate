@@ -12,7 +12,21 @@ type trackingRoutingManager struct {
 	addedRoutes           []model.StaticRoute
 	deletedRoutes         []model.StaticRoute
 	enableEditSystemRoute bool
-	enforcedMetrics       map[string]int // ifaceName -> metric passed to EnforceDefaultRouteMetric
+	enforcedMetrics       map[string]int // ifaceName -> metric passed to EnforceDefaultRouteMetric (last call wins)
+	// enforceCalls is the full ordered history of EnforceDefaultRouteMetric
+	// calls (ifaceName, metric) — Task 14 tests need call ORDER and COUNT,
+	// not just each interface's most-recent value (enforcedMetrics above).
+	enforceCalls []enforceCall
+	// defaultRouteMetrics backs DefaultRouteMetric (Task 14, Decision C) —
+	// tests seed "the kernel currently has this metric on this interface"
+	// via SetDefaultRouteMetric before exercising the snapshot/restore path.
+	defaultRouteMetrics map[string]int
+	defaultRouteFound   map[string]bool
+}
+
+type enforceCall struct {
+	iface  string
+	metric int
 }
 
 func (t *trackingRoutingManager) EnforceDefaultRouteMetric(ifaceName string, metric int) error {
@@ -20,7 +34,26 @@ func (t *trackingRoutingManager) EnforceDefaultRouteMetric(ifaceName string, met
 		t.enforcedMetrics = make(map[string]int)
 	}
 	t.enforcedMetrics[ifaceName] = metric
+	t.enforceCalls = append(t.enforceCalls, enforceCall{iface: ifaceName, metric: metric})
 	return nil
+}
+
+// SetDefaultRouteMetric seeds what DefaultRouteMetric(ifaceName) reports —
+// mirrors kernel.MockRouting.SetDefaultRouteMetric's test-hook shape.
+func (t *trackingRoutingManager) SetDefaultRouteMetric(ifaceName string, metric int, found bool) {
+	if t.defaultRouteMetrics == nil {
+		t.defaultRouteMetrics = make(map[string]int)
+		t.defaultRouteFound = make(map[string]bool)
+	}
+	t.defaultRouteMetrics[ifaceName] = metric
+	t.defaultRouteFound[ifaceName] = found
+}
+
+func (t *trackingRoutingManager) DefaultRouteMetric(ifaceName string) (int, bool, error) {
+	if !t.defaultRouteFound[ifaceName] {
+		return 0, false, nil
+	}
+	return t.defaultRouteMetrics[ifaceName], true, nil
 }
 
 func (t *trackingRoutingManager) ApplyRoutes(routes []model.StaticRoute) error {
@@ -438,5 +471,385 @@ func TestEnableEditSystemRouteDirectly(t *testing.T) {
 	// Verify deletedRoutes length is 2
 	if len(tracker.deletedRoutes) != 2 || tracker.deletedRoutes[1].ID != systemRoute.ID {
 		t.Errorf("System route was not directly deleted from kernel during removal")
+	}
+}
+
+// --- Task 14: WAN failover metric override precedence ---------------------
+
+// TestEnforceInterfaceMetrics_NoOverridesRegressionOrder is the plan's
+// explicit regression requirement: with no overrides/restores in play at
+// all, enforceInterfaceMetrics must call EnforceDefaultRouteMetric in the
+// exact same order/count/values as pre-Task-14 (one call per dhcp+Metric-set
+// interface, in GetInterfacesFromDB's order, nothing more).
+func TestEnforceInterfaceMetrics_NoOverridesRegressionOrder(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	repo.SetMockMode(true, false)
+	if err := repo.ClearInterfaces(); err != nil {
+		t.Fatalf("Failed to clear interfaces: %v", err)
+	}
+
+	m10, m20, m30 := 10, 20, 30
+	seed := []model.NetworkInterface{
+		{ID: "if-a", Name: "wanA", Alias: "A", Role: "WAN", Type: "ethernet", AddressingMode: "dhcp", Status: "up", Metric: &m10},
+		{ID: "if-b", Name: "wanB", Alias: "B", Role: "WAN", Type: "ethernet", AddressingMode: "dhcp", Status: "up", Metric: &m20},
+		{ID: "if-c", Name: "wanC", Alias: "C", Role: "WAN", Type: "ethernet", AddressingMode: "dhcp", Status: "up", Metric: &m30},
+	}
+	for _, iface := range seed {
+		if err := repo.CreateInterfaceForTest(iface); err != nil {
+			t.Fatalf("Failed to seed interface %s: %v", iface.Name, err)
+		}
+	}
+
+	tracker := &trackingRoutingManager{}
+	svc := NewRoutingService(repo, tracker)
+
+	svc.enforceInterfaceMetrics(nil)
+
+	want := []enforceCall{{"wanA", 10}, {"wanB", 20}, {"wanC", 30}}
+	if len(tracker.enforceCalls) != len(want) {
+		t.Fatalf("expected %d EnforceDefaultRouteMetric calls, got %d: %+v", len(want), len(tracker.enforceCalls), tracker.enforceCalls)
+	}
+	for i, w := range want {
+		if tracker.enforceCalls[i] != w {
+			t.Errorf("call[%d] = %+v, want %+v (order must match GetInterfacesFromDB's order exactly with no overrides in play)", i, tracker.enforceCalls[i], w)
+		}
+	}
+}
+
+// TestFailoverOverride_WinsOverDhcpMetric covers precedence level 2 beating
+// level 4: a WAN failover override must be enforced instead of the
+// interface's own configured Metric, not in addition to / averaged with it.
+func TestFailoverOverride_WinsOverDhcpMetric(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	repo.SetMockMode(true, false)
+	if err := repo.ClearInterfaces(); err != nil {
+		t.Fatalf("Failed to clear interfaces: %v", err)
+	}
+	metric100 := 100
+	if err := repo.CreateInterfaceForTest(model.NetworkInterface{
+		ID: "if-wan0", Name: "wan0", Alias: "A", Role: "WAN", Type: "ethernet",
+		AddressingMode: "dhcp", Status: "up", Metric: &metric100,
+	}); err != nil {
+		t.Fatalf("Failed to seed interface: %v", err)
+	}
+
+	tracker := &trackingRoutingManager{}
+	svc := NewRoutingService(repo, tracker)
+
+	if changed := svc.SetFailoverMetricOverride("wan0", 50); !changed {
+		t.Fatal("expected SetFailoverMetricOverride to report changed=true on first set")
+	}
+
+	svc.enforceInterfaceMetrics(nil)
+
+	if got, ok := tracker.enforcedMetrics["wan0"]; !ok || got != 50 {
+		t.Errorf("expected override metric 50 to win over the interface's own Metric=100, got %d (present=%v)", got, ok)
+	}
+}
+
+// TestFailoverOverride_WorksOnStaticInterfaceWithNilMetric covers precedence
+// level 2 applying regardless of AddressingMode/Metric-nilness (D-2) — the
+// pre-Task-14 code would have skipped this interface entirely.
+func TestFailoverOverride_WorksOnStaticInterfaceWithNilMetric(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	repo.SetMockMode(true, false)
+	if err := repo.ClearInterfaces(); err != nil {
+		t.Fatalf("Failed to clear interfaces: %v", err)
+	}
+	if err := repo.CreateInterfaceForTest(model.NetworkInterface{
+		ID: "if-wan2", Name: "wan2", Alias: "C", Role: "WAN", Type: "ethernet",
+		AddressingMode: "static", Status: "up", // Metric left nil on purpose
+	}); err != nil {
+		t.Fatalf("Failed to seed interface: %v", err)
+	}
+
+	tracker := &trackingRoutingManager{}
+	svc := NewRoutingService(repo, tracker)
+	svc.SetFailoverMetricOverride("wan2", 50)
+
+	svc.enforceInterfaceMetrics(nil)
+
+	if got, ok := tracker.enforcedMetrics["wan2"]; !ok || got != 50 {
+		t.Errorf("expected the override to be enforced on a static interface with no configured Metric, got %d (present=%v)", got, ok)
+	}
+}
+
+// TestFailoverOverride_BypassedByActiveStaticDefaultRoute covers precedence
+// level 1: an active DB static 0.0.0.0/0 route on the interface must
+// suppress enforcement entirely, override or not, and the override must be
+// reported via FailoverBypassedInterfaces() while this is the case.
+func TestFailoverOverride_BypassedByActiveStaticDefaultRoute(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	repo.SetMockMode(true, false)
+	if err := repo.ClearInterfaces(); err != nil {
+		t.Fatalf("Failed to clear interfaces: %v", err)
+	}
+	if err := repo.CreateInterfaceForTest(model.NetworkInterface{
+		ID: "if-wan0", Name: "wan0", Alias: "A", Role: "WAN", Type: "ethernet",
+		AddressingMode: "dhcp", Status: "up",
+	}); err != nil {
+		t.Fatalf("Failed to seed interface: %v", err)
+	}
+
+	tracker := &trackingRoutingManager{}
+	svc := NewRoutingService(repo, tracker)
+	svc.SetFailoverMetricOverride("wan0", 50)
+
+	dbRoutes := []model.StaticRoute{
+		{ID: "route-wan0-default", Destination: "0.0.0.0/0", Gateway: "10.0.0.1", Interface: "wan0", Status: true, Type: "customgateway"},
+	}
+	svc.enforceInterfaceMetrics(dbRoutes)
+
+	if len(tracker.enforceCalls) != 0 {
+		t.Errorf("expected NO EnforceDefaultRouteMetric calls while an active static 0.0.0.0/0 route governs wan0, got %d calls: %+v", len(tracker.enforceCalls), tracker.enforceCalls)
+	}
+	bypassed := svc.FailoverBypassedInterfaces()
+	if len(bypassed) != 1 || bypassed[0] != "wan0" {
+		t.Errorf("expected FailoverBypassedInterfaces() == [wan0], got %v", bypassed)
+	}
+
+	// A second reconcile pass in the same state must stay silent/no-op too
+	// (transition-only logging is not directly observable here, but the
+	// zero-enforce-calls/bypassed-set invariant must hold every pass).
+	svc.enforceInterfaceMetrics(dbRoutes)
+	if len(tracker.enforceCalls) != 0 {
+		t.Errorf("expected still zero EnforceDefaultRouteMetric calls on the 2nd pass, got %d", len(tracker.enforceCalls))
+	}
+}
+
+// TestFailoverOverride_SetSameValueIsIdempotent covers the required
+// idempotency of the override-mutation API itself: re-setting the exact same
+// value must report changed=false so callers (T-15) know not to trigger a
+// redundant kernel reconcile.
+func TestFailoverOverride_SetSameValueIsIdempotent(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	repo.SetMockMode(true, false)
+
+	tracker := &trackingRoutingManager{}
+	svc := NewRoutingService(repo, tracker)
+
+	if changed := svc.SetFailoverMetricOverride("wan0", 50); !changed {
+		t.Fatal("expected changed=true on first set")
+	}
+	if changed := svc.SetFailoverMetricOverride("wan0", 50); changed {
+		t.Error("expected changed=false when re-setting the exact same override value (2nd call)")
+	}
+	if changed := svc.SetFailoverMetricOverride("wan0", 50); changed {
+		t.Error("expected changed=false on a 3rd identical re-set")
+	}
+
+	if got := svc.FailoverOverrides(); len(got) != 1 || got["wan0"] != 50 {
+		t.Errorf("expected FailoverOverrides() == {wan0:50}, got %v", got)
+	}
+}
+
+// TestFailoverOverride_ClearRestoresSnapshotOnceThenQuiet covers precedence
+// level 3: clearing an override must restore the pre-override snapshot
+// exactly once, then go quiet on subsequent reconcile passes. Uses a static
+// (non-dhcp) interface so precedence level 4 can never independently fire
+// and mask a restore bug.
+func TestFailoverOverride_ClearRestoresSnapshotOnceThenQuiet(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	repo.SetMockMode(true, false)
+	if err := repo.ClearInterfaces(); err != nil {
+		t.Fatalf("Failed to clear interfaces: %v", err)
+	}
+	if err := repo.CreateInterfaceForTest(model.NetworkInterface{
+		ID: "if-wan2", Name: "wan2", Alias: "C", Role: "WAN", Type: "ethernet",
+		AddressingMode: "static", Status: "up",
+	}); err != nil {
+		t.Fatalf("Failed to seed interface: %v", err)
+	}
+
+	tracker := &trackingRoutingManager{}
+	tracker.SetDefaultRouteMetric("wan2", 999, true) // pre-override kernel state
+	svc := NewRoutingService(repo, tracker)
+
+	svc.SetFailoverMetricOverride("wan2", 50)
+	svc.enforceInterfaceMetrics(nil)
+	if got, ok := tracker.enforcedMetrics["wan2"]; !ok || got != 50 {
+		t.Fatalf("expected override 50 enforced, got %d (present=%v)", got, ok)
+	}
+
+	svc.ClearFailoverMetricOverride("wan2")
+	svc.enforceInterfaceMetrics(nil) // restore pass
+
+	if len(tracker.enforceCalls) != 2 {
+		t.Fatalf("expected exactly 2 EnforceDefaultRouteMetric calls total (apply override, then restore), got %d: %+v", len(tracker.enforceCalls), tracker.enforceCalls)
+	}
+	if last := tracker.enforceCalls[len(tracker.enforceCalls)-1]; last.iface != "wan2" || last.metric != 999 {
+		t.Errorf("expected the restore call to use the snapshot metric 999, got %+v", last)
+	}
+
+	// The restore is one-time: a further reconcile pass must be quiet.
+	svc.enforceInterfaceMetrics(nil)
+	if len(tracker.enforceCalls) != 2 {
+		t.Errorf("expected still exactly 2 EnforceDefaultRouteMetric calls after a 3rd (post-restore) pass, got %d", len(tracker.enforceCalls))
+	}
+}
+
+// TestFailoverOverride_OnInterfaceNotInDB covers overrides pointing at an
+// interface with no row in `interfaces` at all — a WAN uplink may be
+// configured on an interface pigate hasn't learned about yet; it must still
+// be enforced.
+func TestFailoverOverride_OnInterfaceNotInDB(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	repo.SetMockMode(true, false)
+	if err := repo.ClearInterfaces(); err != nil {
+		t.Fatalf("Failed to clear interfaces: %v", err)
+	}
+
+	tracker := &trackingRoutingManager{}
+	svc := NewRoutingService(repo, tracker)
+	svc.SetFailoverMetricOverride("wan-ghost", 50)
+
+	svc.enforceInterfaceMetrics(nil)
+
+	if got, ok := tracker.enforcedMetrics["wan-ghost"]; !ok || got != 50 {
+		t.Errorf("expected the override to still be enforced for an interface with no DB row, got %d (present=%v)", got, ok)
+	}
+}
+
+// TestFailoverOverride_RestoreFallsBackToConfiguredMetricWhenNoSnapshot
+// covers the "no live default route to snapshot" edge case (QA finding,
+// kill-switch-off restore silently no-ops) when the interface DOES have its
+// own configured Metric: DefaultRouteMetric never reports found=true for
+// this interface (no live route was ever observed, e.g. the link never came
+// up), so applyFailoverOverride cannot take a snapshot — restore must then
+// fall back to the interface's own configured Metric rather than leaving
+// the overridden value stuck in the kernel forever.
+func TestFailoverOverride_RestoreFallsBackToConfiguredMetricWhenNoSnapshot(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	repo.SetMockMode(true, false)
+	if err := repo.ClearInterfaces(); err != nil {
+		t.Fatalf("Failed to clear interfaces: %v", err)
+	}
+	m77 := 77
+	if err := repo.CreateInterfaceForTest(model.NetworkInterface{
+		ID: "if-wan4", Name: "wan4", Alias: "D", Role: "WAN", Type: "ethernet",
+		AddressingMode: "static", Status: "up", Metric: &m77,
+	}); err != nil {
+		t.Fatalf("Failed to seed interface: %v", err)
+	}
+
+	// Deliberately do NOT seed tracker.defaultRouteMetrics for wan4 — this
+	// simulates DefaultRouteMetric(wan4) returning found=false, i.e. no live
+	// default route was ever observed on this interface.
+	tracker := &trackingRoutingManager{}
+	svc := NewRoutingService(repo, tracker)
+
+	svc.SetFailoverMetricOverride("wan4", 50)
+	svc.enforceInterfaceMetrics(nil)
+	if got, ok := tracker.enforcedMetrics["wan4"]; !ok || got != 50 {
+		t.Fatalf("expected override 50 enforced even without a snapshot-able live route, got %d (present=%v)", got, ok)
+	}
+
+	svc.ClearFailoverMetricOverride("wan4")
+	svc.enforceInterfaceMetrics(nil) // restore pass
+
+	if len(tracker.enforceCalls) != 2 {
+		t.Fatalf("expected exactly 2 EnforceDefaultRouteMetric calls total (apply override, then restore), got %d: %+v", len(tracker.enforceCalls), tracker.enforceCalls)
+	}
+	if last := tracker.enforceCalls[len(tracker.enforceCalls)-1]; last.iface != "wan4" || last.metric != 77 {
+		t.Errorf("expected the restore call to fall back to the interface's own configured Metric (77), got %+v", last)
+	}
+}
+
+// TestFailoverOverride_RestoreNoOpsWhenNeitherSnapshotNorMetricAvailable
+// covers the genuinely-uncoverable edge case documented on
+// restoreFailoverOverride: no live default route was ever observed (no
+// snapshot) AND the interface has no configured Metric of its own either.
+// There is nothing to restore TO, so the pending restore must be a
+// documented no-op (log + skip) rather than inventing a value — and,
+// crucially, it must not panic or otherwise misbehave, and must still
+// consume the pending-restore/snapshot state exactly once.
+func TestFailoverOverride_RestoreNoOpsWhenNeitherSnapshotNorMetricAvailable(t *testing.T) {
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	repo.SetMockMode(true, false)
+	if err := repo.ClearInterfaces(); err != nil {
+		t.Fatalf("Failed to clear interfaces: %v", err)
+	}
+	if err := repo.CreateInterfaceForTest(model.NetworkInterface{
+		ID: "if-wan5", Name: "wan5", Alias: "E", Role: "WAN", Type: "ethernet",
+		AddressingMode: "static", Status: "up", // Metric left nil on purpose
+	}); err != nil {
+		t.Fatalf("Failed to seed interface: %v", err)
+	}
+
+	tracker := &trackingRoutingManager{}
+	svc := NewRoutingService(repo, tracker)
+
+	svc.SetFailoverMetricOverride("wan5", 50)
+	svc.enforceInterfaceMetrics(nil)
+	if got, ok := tracker.enforcedMetrics["wan5"]; !ok || got != 50 {
+		t.Fatalf("expected override 50 enforced, got %d (present=%v)", got, ok)
+	}
+
+	svc.ClearFailoverMetricOverride("wan5")
+	svc.enforceInterfaceMetrics(nil) // restore pass: nothing to restore to
+
+	if len(tracker.enforceCalls) != 1 {
+		t.Fatalf("expected the restore pass to be a documented no-op (only the original override call), got %d calls: %+v", len(tracker.enforceCalls), tracker.enforceCalls)
+	}
+
+	// The pending-restore/snapshot state must still be consumed exactly
+	// once — a further reconcile pass must stay quiet too, not retry forever.
+	svc.enforceInterfaceMetrics(nil)
+	if len(tracker.enforceCalls) != 1 {
+		t.Errorf("expected still exactly 1 EnforceDefaultRouteMetric call after a 3rd (post-restore-attempt) pass, got %d", len(tracker.enforceCalls))
 	}
 }

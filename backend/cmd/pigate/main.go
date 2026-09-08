@@ -156,8 +156,16 @@ func main() {
 
 	if cfg.Mock || cfg.MockFromReal {
 		fw = kernel.NewMockFirewall(cfg.DockerCompat)
-		net = kernel.NewMockNetwork()
-		rt = kernel.NewMockRouting()
+		mockNet := kernel.NewMockNetwork()
+		mockRouting := kernel.NewMockRouting()
+		// SetRoutingSeed lets mockNet's ConfigureInterface seed a realistic
+		// baseline default-route metric into mockRouting (Task 14/Decision C
+		// DefaultRouteMetric), so WAN failover kill-switch restore has
+		// something to snapshot/restore under -mock=true (see
+		// MockNetwork.ConfigureInterface's doc comment).
+		mockNet.SetRoutingSeed(mockRouting)
+		net = mockNet
+		rt = mockRouting
 		qos = kernel.NewMockQos()
 		mDhcp := kernel.NewMockDhcp()
 		mDhcp.MockFromReal = cfg.MockFromReal
@@ -535,6 +543,16 @@ func main() {
 	wanMetricsRing := service.NewWanUplinkMetricsRing()
 	wanMonitor := service.NewWanMonitor(repo, pathProbe, eventLogService, eventBus, wanMetricsRing)
 
+	// Multi-WAN Failover Phase 2 automatic/manual failover controller
+	// (docs/ref/todo/multi-wan-failover-plan.md Task 15/17). It reads
+	// wanMonitor's health states and drives routingService's metric-override
+	// API — never touches netlink/kernel directly (D-2). Constructed
+	// unconditionally, but harmless by default: WanFailoverSettings.Enabled
+	// defaults to false (kill switch off) in a fresh DB, so this never
+	// touches routing state at all on an existing deployment until an
+	// operator explicitly opts in via the API.
+	wanFailoverController := service.NewWanFailoverController(repo, wanMonitor, routingService, eventLogService, eventBus)
+
 	// Netlink monitor is created here (but started later, after startup config is
 	// applied) so it can be injected into the BackupService, which pauses it (and
 	// hence the whole bus) around a config import.
@@ -586,6 +604,9 @@ func main() {
 	// (docs/ref/todo/multi-wan-failover-plan.md Task 8/9) — additive, same
 	// pattern as SetPolicyStatsService/SetPolicyCounterStore above.
 	server.SetWanMonitor(wanMonitor)
+	// SetWanFailover wires the Phase 2 kill-switch/manual-override/status
+	// endpoints (docs/ref/todo/multi-wan-failover-plan.md Task 16/17).
+	server.SetWanFailover(wanFailoverController)
 
 	// Apply config form database to kernel
 
@@ -841,6 +862,14 @@ func main() {
 	// uplinks configured (its tick() simply has nothing to do).
 	log.Printf("[Main] Starting Multi-WAN Failover health monitor...")
 	wanMonitor.Start(monitorCtx)
+
+	// Start the Phase 2 failover controller right after the monitor it reads
+	// from (docs/ref/todo/multi-wan-failover-plan.md Task 15/17) — default
+	// off (WanFailoverSettings.Enabled=false in a fresh DB), so this is a
+	// no-op on an already-installed host until an operator opts in via the
+	// API; it never touches routing/kernel state on its own (D-2).
+	log.Printf("[Main] Starting Multi-WAN Failover controller (Phase 2, default disabled)...")
+	wanFailoverController.Start(monitorCtx)
 
 	// FQDN re-resolve retry ticker (docs/ref/todo/
 	// fqdn-retry-and-monitored-counters-plan.md D-1, issue #141) — started

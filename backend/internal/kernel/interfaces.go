@@ -126,6 +126,16 @@ type RoutingManager interface {
 	// if the current priority differs. Used to override the metric of dhcpcd-managed
 	// default routes for multi-WAN failover ordering. IPv4 only.
 	EnforceDefaultRouteMetric(ifaceName string, metric int) error
+	// DefaultRouteMetric is a READ-ONLY counterpart to EnforceDefaultRouteMetric
+	// (docs/ref/todo/multi-wan-failover-plan.md Task 14, Decision C): it reports
+	// the current priority of the IPv4 default gateway route on ifaceName without
+	// modifying anything, so the WAN failover metric-override machinery
+	// (service.RoutingService) can snapshot a route's pre-override metric before
+	// overriding it and restore that exact value later (e.g. when the kill
+	// switch is turned off). found is false when ifaceName has no IPv4 default
+	// route with a gateway right now (nothing to snapshot) — that is not itself
+	// an error. IPv4 only, mirroring EnforceDefaultRouteMetric.
+	DefaultRouteMetric(ifaceName string) (metric int, found bool, err error)
 }
 
 // DhcpManager abstracts DHCP configuration updates and active lease logs parsing

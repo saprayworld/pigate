@@ -81,7 +81,7 @@ func TestWanUplinkCRUD(t *testing.T) {
 		ProbeTargets:         []string{"1.1.1.1", "8.8.8.8"},
 		ProbeMethod:          model.WanProbeMethodAuto,
 		ProbeTCPPort:         443,
-		ProbeIntervalSeconds: 5,
+		ProbeIntervalSeconds: 6,
 		ProbeCount:           3,
 		ProbeTimeoutMs:       1000,
 		LossThresholdPct:     50,

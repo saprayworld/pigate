@@ -361,6 +361,26 @@ linux`), `backend/internal/kernel/real_path_probe_test.go` (ใหม่)
   packet จริง
 - **depends_on:** Task 4
 
+**Task 13.5 — probe round scheduling hardening (SENSITIVE — concurrency; ต้องทำก่อน Task 15)**
+**ไฟล์:** `backend/internal/model/wan_uplink.go` (แก้), `backend/internal/model/wan_validate.go` (แก้),
+`backend/internal/model/wan_validate_test.go` (แก้), `backend/internal/service/wan_monitor.go` (แก้),
+`backend/internal/service/wan_monitor_test.go` (แก้), `backend/internal/kernel/mock.go` (แก้)
+- แก้ medium finding ที่ค้างจาก Phase 1 QA (ดูหมายเหตุด้านบน): `MaxWanProbeTargets=4` +
+  กันเป้าหมายซ้ำใน `ValidateWanUplink`; กฎ budget รอบ probe (Decision A, `f=2`
+  เมื่อ `auto`/`f=1` เมื่อ icmp/tcp ล้วน) ต้องไม่เกิน `ProbeIntervalSeconds`
+- `wan_monitor.go`: ยิง `probeUplink` ของแต่ละ uplink ใน goroutine แยกพร้อม
+  in-flight guard (กันรอบซ้อนของ uplink เดียวกัน, ไม่ให้ uplink ที่ตายหน่วง
+  ticker/uplink อื่น); `probeAllTargets` ยิงทุก target พร้อมกัน (deterministic
+  ตามลำดับ target); deadline ของรอบ = `ProbeIntervalSeconds` (+1s grace)
+- `model.WanUplinkState` เพิ่ม `LastProbeAt`/`Stale` (Decision E: stale เมื่อ
+  state เก่ากว่า `max(3×interval, 30s)`) ให้ Task 15 ใช้ตัดสินใจ
+- **acceptance:** `go build ./... && go vet ./... && go test ./internal/...`
+  ผ่าน (`-race` ไม่สามารถรันได้ในสภาพแวดล้อม dev บางเครื่องที่ไม่มี gcc —
+  ai-qa ควรรันซ้ำด้วย `-race` บนเครื่องที่มี cgo); uplink ช้าไม่หน่วง uplink
+  อื่น; in-flight guard กันรอบซ้อน; validation ปฏิเสธ target ซ้ำ/เกิน cap/
+  budget เกิน
+- **depends_on:** Task 7
+
 ### Phase 2 — Automatic Failover (เริ่มเปลี่ยน routing)
 
 **Task 14 — service: routing precedence + override API (SENSITIVE — review เข้ม)**
@@ -393,10 +413,18 @@ linux`), `backend/internal/kernel/real_path_probe_test.go` (ใหม่)
     สถานะจริง)
   - `Mode="auto"`→เลือก uplink `Status=true` และสถานะ `up` เท่านั้น
     (ไม่มี degraded — D-7) ที่ `Priority` ต่ำสุด
-  - **ห้ามสลับ** ถ้ายังไม่ครบ `MinHoldSeconds` จากการสลับครั้งก่อน (dampening)
+  - **ห้ามสลับ** ถ้ายังไม่ครบ `MinHoldSeconds` จากการสลับครั้งก่อน (dampening) —
+    **แก้ไขภายหลัง (QA Major 2, ตัดสินใจโดยเจ้าของโปรเจกต์):** กติกานี้บังคับใช้
+    เฉพาะ auto mode เท่านั้น; manual override ยกเว้นเสมอ เพราะเป็นการกระทำของ
+    super_admin ที่ authenticate แล้วโดยตรง ไม่ใช่ automation ที่เสี่ยง flap
   - **ห้าม blackhole:** ไม่มี uplink ไหน healthy เลย→คงของเดิม+log severity
     สูง (ไม่ถอน route ทิ้ง)
-  - กลับ primary ต้องรอครบ `RevertDelaySeconds` เพิ่มจาก RecoverStrikes
+  - กลับ primary ต้องรอครบ `RevertDelaySeconds` เพิ่มจาก RecoverStrikes —
+    **แก้ไขภายหลัง (QA รอบ 2 บน Major 2, ตัดสินใจโดยเจ้าของโปรเจกต์):** กติกานี้
+    บังคับใช้เฉพาะ auto mode เช่นกัน; manual override ยกเว้นเสมอด้วยเหตุผล
+    เดียวกับ `MinHoldSeconds` ข้างต้น (ก่อนแก้ manual override ไปยัง uplink ที่
+    เพิ่ง healthy ยังไม่ครบ RevertDelaySeconds จะเงียบๆ ไม่มีผลจริง ทั้งที่ API
+    ตอบ 200 OK)
   - บังคับใช้ผ่าน `RoutingService.SetFailoverMetricOverride`+
     `ReconcileKernelRoutingTable()` **เท่านั้น** ห้ามเรียก
     `kernel.RoutingManager` ตรงๆ (D-2)
@@ -405,7 +433,9 @@ linux`), `backend/internal/kernel/real_path_probe_test.go` (ใหม่)
 - **acceptance:** `go test -race ./internal/service/... -run Failover`
   ผ่าน; test: primary down→สลับ backup, primary ฟื้นก่อนครบ
   RevertDelay→**ไม่**สลับกลับ, ครบแล้ว→สลับกลับ, สลับสองครั้งใน
-  MinHold→ครั้งที่สองถูกปฏิเสธ, ทุก uplink down→ไม่เปลี่ยนอะไร+log critical,
+  MinHold (auto mode)→ครั้งที่สองถูกปฏิเสธ, manual override ภายใน MinHold หรือไปยัง
+  uplink priority ดีกว่าที่ยังไม่ครบ RevertDelaySeconds→ต้องสลับสำเร็จทันทีทั้งคู่
+  (ยกเว้น MinHold และ RevertDelay เสมอ), ทุก uplink down→ไม่เปลี่ยนอะไร+log critical,
   kill switch off→ล้าง override หมด, manual mode→ชนะสถานะ health; `grep -n
   "kernel\.\|netlink\|nftables\|fwmark"` ไม่พบในไฟล์นี้
 - **depends_on:** Task 14
@@ -552,21 +582,70 @@ linux`), `backend/internal/kernel/real_path_probe_test.go` (ใหม่)
 > ต้องพิจารณาก่อนเริ่ม Task 15 **หยุดพัก Phase 2 ตามคำสั่งเจ้าของโปรเจกต์
 > 2026-09-06 — รอการอนุมัติให้เริ่ม Task 14 ต่อ**
 
-- [ ] Task 14: `routing.go` precedence + override API
-- [ ] Task 15: `wan_failover.go` controller (dampening, anti-blackhole)
-- [ ] Task 16: API settings/kill switch/override (superAdminRoute)
-- [ ] Task 17: wiring controller ใน `cmd/pigate/main.go`
-- [ ] Task 18: frontend control card
-- [ ] Task 19: เอกสาร (README, tech_stack_design, interface-metric-design)
-- [ ] ทดสอบ mock mode ครบ flow
+> **Decision A/B/C/E อนุมัติโดยเจ้าของโปรเจกต์ 2026-09-07** (ดูรายละเอียดเต็มที่
+> scratchpad ของแผน Phase 2 — บันทึกไว้ที่นี่เพื่อไม่ให้หายไปกับ scratchpad ชั่วคราว):
+> - **A** — กฎ budget รอบ probe: `ProbeCount × ProbeTimeoutMs × f ≤
+>   ProbeIntervalSeconds × 1000`, `f=2` เมื่อ `ProbeMethod=auto`, `f=1` เมื่อ
+>   icmp/tcp ล้วน (Task 13.5)
+> - **B** — metric band ของ failover controller คงที่ ไม่ผูกกับ
+>   `interface.Metric` ของผู้ใช้: active=`50`, standby=`1000 + 10×priority`
+>   (Task 15, บันทึกถาวรที่ `docs/tech_stack_design.md` §11)
+> - **C** — เพิ่มเมธอด read-only `RoutingManager.DefaultRouteMetric(iface)`
+>   (real ใช้ `netlink.RouteList`, mock ใช้แมพภายใน+setter) เพื่อ snapshot
+>   metric เดิมก่อน override แล้วคืนค่าตอนปิด kill switch (Task 14)
+> - **D** — งานบนบอร์ดจริง (ลบ fake static route ของ S-6, รัน S-3/S-4/S-5 ซ้ำ)
+>   เป็นหน้าที่เจ้าของโปรเจกต์ทำเอง ไม่ใช่งานของ ai-developer — ยังไม่ทำ
+>   ณ เวลาที่ Phase 2 โค้ดเสร็จ (ดู `docs/ref/wan-failover-findings.md`)
+> - **E** — controller ห้ามเลือก uplink ที่ state ข้อมูลเก่าเกิน
+>   `max(3×probeIntervalSeconds, 30s)` เป็น active (ไม่ทำให้เกิดการสลับด้วย
+>   ตัวมันเอง — เป็นแค่ตัวกรองการเลือก, Task 13.5 + 15)
+>
+> **Phase 2 (Task 13.5, 14-19) เสร็จสมบูรณ์และผ่าน ai-qa แล้ว 2026-09-07/08**
+> (conditional pass รอบแรก → 2 major + 2 minor finding → รอบแก้บั๊กที่ 1 แก้
+> ครบ 3/4 ข้อ, รอบตรวจที่ 2 พบเพิ่มว่า manual override ยัง bypass
+> `RevertDelaySeconds` ไม่ได้ (bypass ได้แค่ `MinHoldSeconds`) → escalate ให้
+> เจ้าของโปรเจกต์ตัดสินใจ (ดูสองข้อเพิ่มเติมด้านล่าง) → แก้แล้วผ่าน
+> **verification round สุดท้ายสมบูรณ์**) build/vet/test ผ่านทุก package
+> (backend `go test ./...`, frontend `yarn build && yarn lint`); ทดสอบ
+> mock-mode end-to-end ผ่าน API จริงโดยทั้ง ai-developer และ ai-qa (เปิด/ปิด
+> kill switch, auto mode เลือก uplink ตาม priority, override metric ตรงตาม
+> Decision B, kill switch off คืน metric เดิมได้จริง, manual override สลับ
+> ทันทีข้าม MinHold/RevertDelay, auto mode ยังถูกทั้งสองกลไกบังคับตามปกติ
+> ไม่มี regression) — **ยังไม่ทดสอบบนบอร์ดจริง** (Decision D, เป็นหน้าที่
+> เจ้าของโปรเจกต์)
+>
+> **การตัดสินใจเพิ่มเติมของเจ้าของโปรเจกต์ระหว่างรอบแก้บั๊ก (นอกเหนือ Decision
+> A-E เดิม):**
+> - Manual override (ผ่าน `POST /api/wan/failover/override` หรือ
+>   `PUT /api/wan/failover` โหมด manual) **ต้องข้าม `MinHoldSeconds` ได้เสมอ**
+>   — เป็นการกระทำของ super_admin ที่ authenticate แล้ว ไม่ใช่ automation ที่
+>   เสี่ยง flap (`service/wan_failover.go` `decideActiveUplink`)
+> - Manual override **ต้องข้าม `RevertDelaySeconds` ได้เสมอเช่นกัน** — พบเป็น
+>   บั๊กจริงตอน ai-qa ทดสอบผ่าน API สด (API ตอบ 200 OK แต่ระบบไม่สลับจริง
+>   เงียบๆ) หลังแก้แล้วทั้ง MinHold และ RevertDelay จึงเป็น **AUTO mode
+>   เท่านั้น** ที่ทั้งสองกลไก anti-flap มีผล — บันทึกถาวรที่
+>   `docs/tech_stack_design.md` §11 และ doc comment ของ
+>   `model.WanFailoverSettings`
+
+- [x] Task 13.5: probe round scheduling hardening (concurrency + budget validation)
+- [x] Task 14: `routing.go` precedence + override API
+- [x] Task 15: `wan_failover.go` controller (dampening, anti-blackhole, manual bypass MinHold+RevertDelay)
+- [x] Task 16: API settings/kill switch/override (superAdminRoute)
+- [x] Task 17: wiring controller ใน `cmd/pigate/main.go`
+- [x] Task 18: frontend control card
+- [x] Task 19: เอกสาร (README, tech_stack_design, interface-metric-design)
+- [x] ทดสอบ mock mode ครบ flow (ai-qa ตรวจซ้ำอย่างเป็นทางการผ่านแล้ว รวม
+      verification round สุดท้ายหลังแก้บั๊ก manual-override bypass)
 - [ ] ทดสอบบนบอร์ดจริง (brownout, สายหลุด, anti-flap, kill switch, manual
-      override, precedence, ICMP block fallback)
-- [ ] `go build ./... && go vet ./... && go test -race ./...` +
-      `yarn build && yarn lint` ผ่านทั้งหมด
-- [ ] `grep -rn "exec.Command"` ไม่มีรายการใหม่จากฟีเจอร์นี้
-- [ ] `grep -rn "netlink.Rule\|RuleAdd\|Route.Table\|RT_TABLE"` ไม่พบ
+      override, precedence, ICMP block fallback) — Decision D, เจ้าของโปรเจกต์
+- [x] `go build ./... && go vet ./... && go test ./...` +
+      `yarn build && yarn lint` ผ่านทั้งหมด — [ ] `go test -race ./...` **ยังไม่
+      ได้รัน** (แซนด์บ็อกซ์ของทีม AI ไม่มี gcc/cgo ทุกรอบที่ลองมาตลอดทั้ง dev
+      และ qa) เป็นหน้าที่เจ้าของโปรเจกต์รันซ้ำบนเครื่องที่มี cgo ก่อน merge จริง
+- [x] `grep -rn "exec.Command"` ไม่มีรายการใหม่จากฟีเจอร์นี้
+- [x] `grep -rn "netlink.Rule\|RuleAdd\|Route.Table\|RT_TABLE"` ไม่พบ
       (ยืนยันไม่ได้แอบทำ policy routing)
-- [ ] diff ของ `real_firewall.go` ว่างเปล่า (ไม่แตะ firewall เลย)
-- [ ] `grep -rn "failoverOnDegraded\|FailoverOnDegraded"` ไม่พบเลย (ยืนยัน D-7)
-- [ ] `wan_metrics_ring.go` ไม่ import `internal/db`; `wan_monitor.go` ไม่
+- [x] diff ของ `real_firewall.go` ว่างเปล่า (ไม่แตะ firewall เลย)
+- [x] `grep -rn "failoverOnDegraded\|FailoverOnDegraded"` ไม่พบเลย (ยืนยัน D-7)
+- [x] `wan_metrics_ring.go` ไม่ import `internal/db`; `wan_monitor.go` ไม่
       import kernel routing; `wan_failover.go` ไม่ import kernel เลย

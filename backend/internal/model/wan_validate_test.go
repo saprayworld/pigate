@@ -14,9 +14,9 @@ func validWanUplinkInput() WanUplinkInput {
 		ProbeTargets:         []string{"1.1.1.1", "8.8.8.8"},
 		ProbeMethod:          WanProbeMethodAuto,
 		ProbeTCPPort:         443,
-		ProbeIntervalSeconds: 5,
-		ProbeCount:           3,
-		ProbeTimeoutMs:       1000,
+		ProbeIntervalSeconds: 10,
+		ProbeCount:           1,
+		ProbeTimeoutMs:       500,
 		LossThresholdPct:     50,
 		LatencyThresholdMs:   200,
 		FailStrikes:          3,
@@ -60,6 +60,54 @@ func TestValidateWanUplink_ProbeTargetEdgeCases(t *testing.T) {
 				t.Fatalf("expected target %q to be rejected", tt.target)
 			}
 		})
+	}
+}
+
+func TestValidateWanUplink_ProbeTargetsCap(t *testing.T) {
+	in := validWanUplinkInput()
+	in.ProbeTargets = []string{"1.1.1.1", "8.8.8.8", "9.9.9.9", "1.0.0.1"}
+	if err := ValidateWanUplink(in); err != nil {
+		t.Fatalf("expected exactly MaxWanProbeTargets (4) targets to be accepted, got: %v", err)
+	}
+
+	in.ProbeTargets = append(in.ProbeTargets, "4.4.4.4")
+	if err := ValidateWanUplink(in); err == nil {
+		t.Fatal("expected more than MaxWanProbeTargets targets to be rejected")
+	}
+}
+
+func TestValidateWanUplink_ProbeTargetsDuplicateRejected(t *testing.T) {
+	in := validWanUplinkInput()
+	in.ProbeTargets = []string{"1.1.1.1", "1.1.1.1"}
+	if err := ValidateWanUplink(in); err == nil {
+		t.Fatal("expected duplicate probe targets to be rejected")
+	}
+}
+
+func TestValidateWanUplink_ProbeRoundBudget(t *testing.T) {
+	// auto (f=2): 3 x 1000ms x 2 = 6000ms > 5000ms (interval=5s) -> rejected.
+	in := validWanUplinkInput()
+	in.ProbeMethod = WanProbeMethodAuto
+	in.ProbeCount = 3
+	in.ProbeTimeoutMs = 1000
+	in.ProbeIntervalSeconds = 5
+	if err := ValidateWanUplink(in); err == nil {
+		t.Fatal("expected probe round budget to be rejected when it exceeds probeIntervalSeconds (method=auto, f=2)")
+	}
+
+	// Same numbers, but interval bumped to 6s (6000ms) -> exactly at the
+	// budget, must be accepted.
+	in.ProbeIntervalSeconds = 6
+	if err := ValidateWanUplink(in); err != nil {
+		t.Fatalf("expected probe round budget to be accepted at the exact boundary, got: %v", err)
+	}
+
+	// icmp-only (f=1): 3 x 1000ms x 1 = 3000ms <= 5000ms (interval=5s) -> accepted.
+	in.ProbeMethod = WanProbeMethodICMP
+	in.ProbeTCPPort = 0
+	in.ProbeIntervalSeconds = 5
+	if err := ValidateWanUplink(in); err != nil {
+		t.Fatalf("expected icmp-only (f=1) round budget to fit within 5s interval, got: %v", err)
 	}
 }
 

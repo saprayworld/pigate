@@ -284,3 +284,57 @@ table ip pigate_nat {
 * **`db/`** — SQLite (ผ่าน `modernc.org/sqlite`) คือ source of truth ของ config ทั้งหมด
 * **`model/`** — struct/DTO ที่ใช้ร่วมกันทุกเลเยอร์
 * **`logs/`** — ring buffer ในหน่วยความจำสำหรับ log แบบ real-time (ดูหัวข้อที่ 8)
+
+---
+
+## 11. Multi-WAN Failover: Default-Route Metric Precedence (D-2)
+
+**IPv4 only.** ฟีเจอร์ Multi-WAN Failover (`service/wan_monitor.go` วัดสุขภาพ, `service/wan_failover.go`
+ตัดสินใจ, `service/routing.go` บังคับใช้) เลือก uplink ที่ active โดยการปรับ **priority ของ default route
+ที่มีอยู่แล้วในตาราง routing ปกติของ kernel เท่านั้น** ผ่าน `RoutingManager.EnforceDefaultRouteMetric`
+(Netlink `RouteDel`+`RouteAdd`, primitive เดิมที่มีอยู่ก่อนฟีเจอร์นี้ ไม่ใช่ความสามารถใหม่ของ kernel layer)
+— **ไม่มีการใช้ `fwmark`/`ip rule`/policy routing และไม่มีการสร้าง routing table ที่สองใดๆ ทั้งสิ้น**
+(`grep -rn "netlink.Rule\|RuleAdd\|Route.Table\|RT_TABLE" backend/` ต้องไม่พบเสมอ — เป็นส่วนหนึ่งของ Final
+Acceptance ของแผนฟีเจอร์นี้) `service/wan_failover.go` เองก็ห้าม import แพ็กเกจ `kernel` โดยตรง (D-2) —
+ทุกการแก้ไข routing ต้องผ่าน `RoutingService`'s metric-override API เท่านั้น เพื่อให้กฎ precedence ด้านล่างมีที่
+บังคับใช้จุดเดียว (`enforceInterfaceMetrics` ใน `routing.go`) ตรวจสอบ/ทดสอบได้ง่าย
+
+### Precedence 4 ระดับต่อ 1 อินเทอร์เฟซ (เรียงจากสำคัญที่สุด)
+
+| ระดับ | เงื่อนไข | พฤติกรรม |
+|---|---|---|
+| 1 | มี Static Route `0.0.0.0/0` ที่ **active** อยู่บนอินเทอร์เฟซนั้น (ตั้งค่าจากหน้า Static Routes) | **ไม่ enforce metric ใดๆ เลย** แม้จะมี failover override อยู่ก็ตาม — ผู้ใช้ตั้ง static route ไว้ ระบบต้องเคารพ ไม่ใช่แย่งชิงกัน ping-pong; override ที่ถูกข้ามแบบนี้ report ผ่าน `RoutingService.FailoverBypassedInterfaces()` (เห็นใน UI เป็น badge/alert "bypassed") |
+| 2 | มี WAN Failover metric override (จาก `wan_failover.go`) | บังคับ metric ตาม override **ไม่สนใจ** `AddressingMode`/`interface.Metric` ของผู้ใช้เลย — เพราะการตัดสินใจ failover ต้องย้ายทราฟฟิกออกจาก uplink ไหนก็ได้ ไม่ใช่แค่เส้นที่ผู้ใช้เคยตั้ง metric เอง (ต่างจากระดับ 4) ครั้งแรกที่ override เริ่มทำงานบนอินเทอร์เฟซนั้น ระบบจะ snapshot ค่า metric เดิมไว้ก่อน (ผ่าน `RoutingManager.DefaultRouteMetric`, read-only) เพื่อคืนค่าตอนปิด |
+| 3 | Override เพิ่งถูกถอดออก (restore-pending) | คืนค่า metric เป็นค่า snapshot ที่บันทึกไว้ (หรือ `interface.Metric` ถ้าไม่มี snapshot) **ครั้งเดียว** แล้วเงียบในรอบถัดไป |
+| 4 | ไม่เข้าเงื่อนไขข้างบนเลย | พฤติกรรมเดิมของ Phase 1 (`interface-metric-design.md`): enforce เฉพาะอินเทอร์เฟซ `AddressingMode=="dhcp"` ที่มี `Metric` ตั้งไว้เท่านั้น |
+
+### ตาราง Metric Band ของ Failover Controller (Decision B)
+
+Controller ใช้ **ค่าคงที่ตายตัว** (ไม่ผูกกับ `interface.Metric` ที่ผู้ใช้ตั้งเอง) เพื่อให้ลำดับความสำคัญที่ kernel
+เห็นชัดเจนและ test ได้แน่นอนเสมอ:
+
+| Uplink | Metric |
+|---|---|
+| Active (uplink ที่ระบบเลือกให้ทำงานอยู่ตอนนี้) | `50` |
+| Standby (uplink อื่นที่ยัง enabled อยู่) | `1000 + 10 × priority` ของ uplink นั้น |
+
+ค่าเหล่านี้จะไปปรากฏใน `ip route` จริงบนบอร์ด — เจตนาให้ standby ทุกเส้นมี metric สูงกว่า active มาก (kernel จะไม่มี
+ทางเลือกเส้น standby มาแทนโดยบังเอิญ) และไม่มีค่าเท่ากันระหว่าง standby สองเส้นที่ priority ต่างกัน (กัน tie-break
+ที่คาดเดายาก)
+
+### กฎ Anti-Flap/Anti-Blackhole ที่เกี่ยวข้อง (สรุปจาก `wan_failover.go`)
+
+* **MinHoldSeconds** — ห้ามสลับ uplink อัตโนมัติ (auto mode) ถี่กว่านี้
+* **RevertDelaySeconds** — การสลับ "กลับ" ไปหา uplink ที่ priority ดีกว่าตัวปัจจุบัน (auto mode) ต้องรอให้ uplink
+  นั้น healthy ต่อเนื่องมาแล้วอย่างน้อยเท่านี้ ก่อนจึงสลับกลับ (กัน flap ตอนสายเพิ่งจะกลับมาแล้วหลุดอีก)
+* **Manual override ยกเว้นทั้ง MinHoldSeconds และ RevertDelaySeconds เสมอ** — สองกลไก anti-flap ข้างต้นบังคับใช้
+  เฉพาะ auto mode เท่านั้น เพราะ manual override เป็นการกระทำของ super_admin ที่ authenticate แล้วโดยตรง ไม่ใช่
+  automation ที่เสี่ยง flap จึงต้องมีผลทันทีเสมอ ไม่ว่าจะเพิ่งสลับมาเมื่อไหร่หรือ uplink เป้าหมายเพิ่งจะ healthy
+  กลับมาหรือไม่ (แก้ไขภายหลัง QA รอบ 2 พบว่า revert-delay check ไม่มี guard นี้ ทำให้ manual override เงียบๆ
+  ไม่มีผลจริงแม้ API จะตอบ 200 OK)
+* **Stale (Decision E)** — uplink ที่ผลตรวจสุขภาพล่าสุดเก่ากว่า `max(3× probeIntervalSeconds, 30s)` จะไม่ถูกเลือก
+  เป็น active แม้ state ล่าสุดจะเป็น "up"
+* **Anti-blackhole** — ถ้าไม่มี uplink ไหน healthy เลย ระบบจะ**คงค่าเดิม**ไว้ (ไม่ตัดทุกเส้นทาง) พร้อม log
+  severity critical ครั้งเดียวจนกว่าสถานะจะเปลี่ยน
+* **"Degraded" ไม่มีผลต่อการสลับเลย (D-7)** — เป็นสถานะแสดงผลอย่างเดียว (latency เกิน threshold แต่ไม่มี packet
+  loss) มีแต่ state "down" (loss เกิน threshold ครบ `FailStrikes` รอบ) เท่านั้นที่ทำให้เกิดการสลับจริง

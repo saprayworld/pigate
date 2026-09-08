@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Link } from "react-router"
 import { getErrorMessage } from "@/lib/errors"
 import {
   Shuffle,
@@ -11,6 +12,8 @@ import {
   Activity,
   Gauge,
   RefreshCw,
+  ShieldAlert,
+  Clock,
 } from "lucide-react"
 import {
   ResponsiveContainer,
@@ -33,20 +36,33 @@ import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { wanService, type WanUplink, type WanStatusEntry, type WanMetricPoint } from "@/services/wanService"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { wanService, type WanUplink, type WanStatusEntry, type WanStatusResponse, type WanFailoverSettings, type WanMetricPoint } from "@/services/wanService"
 import { interfaceService } from "@/services/interfaceService"
 import { type NetworkInterface } from "@/data-mockup/mockData"
 import { useAlert } from "@/hooks/useAlert"
 import { useTheme } from "@/hooks/useTheme"
+import { authService } from "@/services/authService"
 import { cn, isValidIp } from "@/lib/utils"
 import { ifaceLabel, formatIfaceLabel } from "@/lib/ifaceLabel"
 
-// /network/wan — Multi-WAN Failover, Phase 1 (docs/ref/todo/
-// multi-wan-failover-plan.md Task 11). Read-only health monitoring UI: uplink
-// CRUD + live status cards + latency/loss history graph. There is
-// deliberately no kill switch / manual override control here yet — that is
-// Phase 2 (Task 18), gated on the not-yet-built automatic failover
-// controller and superAdminRoute.
+// /network/wan — Multi-WAN Failover (docs/ref/todo/
+// multi-wan-failover-plan.md). Uplink CRUD + live status cards +
+// latency/loss history graph (Task 11, Phase 1) plus the Phase 2 (Task 18)
+// Failover Control card: kill switch, auto/manual mode + dampening, and the
+// live active-uplink/last-switch summary. The mutating controls
+// (PUT /api/wan/failover, POST /api/wan/failover/override) are
+// superAdminRoute on the backend (D-8), so they are hidden entirely for any
+// role other than super_admin — mirrors EventLogs.tsx's isSuperAdmin gate.
 
 const REFRESH_INTERVAL_MS = 5_000
 
@@ -174,15 +190,44 @@ function MetricChart({ title, unit, dataKey, data, color, axis, grid, formatTool
   )
 }
 
+// emptyFailoverStatus is what loadStatus falls back to before the first
+// successful GET /api/wan/status ever completes — every Phase 2 field
+// zero-valued, matching how the backend itself reports before the failover
+// controller has ever made a decision.
+const emptyFailoverStatus: Pick<WanStatusResponse, "bypassedByStaticRoute" | "activeUplinkId" | "lastSwitchAt" | "lastSwitchReason"> = {
+  bypassedByStaticRoute: false,
+  activeUplinkId: "",
+  lastSwitchAt: "",
+  lastSwitchReason: "",
+}
+
+interface FailoverFormState {
+  mode: string // "auto" | "manual"
+  manualUplinkId: string
+  minHoldSeconds: string
+  revertDelaySeconds: string
+}
+
+function settingsToForm(s: WanFailoverSettings): FailoverFormState {
+  return {
+    mode: s.mode,
+    manualUplinkId: s.manualUplinkId,
+    minHoldSeconds: String(s.minHoldSeconds),
+    revertDelaySeconds: String(s.revertDelaySeconds),
+  }
+}
+
 export default function WanFailover() {
   const { alert: showAlert, confirm } = useAlert()
   const { theme } = useTheme()
   const isDark = theme === "dark"
   const grid = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"
   const axis = isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.45)"
+  const isSuperAdmin = authService.getRole() === "super_admin"
 
   const [uplinks, setUplinks] = useState<WanUplink[]>([])
   const [statusById, setStatusById] = useState<Record<string, WanStatusEntry>>({})
+  const [failoverStatus, setFailoverStatus] = useState(emptyFailoverStatus)
   const [interfaces, setInterfaces] = useState<NetworkInterface[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
@@ -197,15 +242,47 @@ export default function WanFailover() {
   const [form, setForm] = useState<UplinkFormState>(emptyForm)
   const [formError, setFormError] = useState("")
 
+  // --- Failover Control card state (Task 18, super_admin only) -----------
+  const [failoverSettings, setFailoverSettings] = useState<WanFailoverSettings | null>(null)
+  const [failoverForm, setFailoverForm] = useState<FailoverFormState>({
+    mode: "auto",
+    manualUplinkId: "",
+    minHoldSeconds: "60",
+    revertDelaySeconds: "120",
+  })
+  const [isFailoverSaving, setIsFailoverSaving] = useState(false)
+  const [isKillSwitchToggling, setIsKillSwitchToggling] = useState(false)
+  const [failoverError, setFailoverError] = useState("")
+  const [pendingKillSwitchValue, setPendingKillSwitchValue] = useState<boolean | null>(null)
+
   const loadStatus = useCallback(async () => {
     try {
       const status = await wanService.getStatus()
       const byId: Record<string, WanStatusEntry> = {}
       for (const entry of status.uplinks) byId[entry.uplinkId] = entry
       setStatusById(byId)
+      setFailoverStatus({
+        bypassedByStaticRoute: status.bypassedByStaticRoute,
+        activeUplinkId: status.activeUplinkId,
+        lastSwitchAt: status.lastSwitchAt,
+        lastSwitchReason: status.lastSwitchReason,
+      })
     } catch {
       // Background poll failures are swallowed — keep showing the last
       // known snapshot rather than flashing an error every 5s.
+    }
+  }, [])
+
+  const loadFailoverSettings = useCallback(async () => {
+    // GET /api/wan/failover is authRoute, readable by any authenticated role
+    // (D-8) — only the mutation controls below are gated to super_admin.
+    try {
+      const settings = await wanService.getFailoverSettings()
+      setFailoverSettings(settings)
+      setFailoverForm(settingsToForm(settings))
+    } catch {
+      // Same "swallow on background poll" contract as loadStatus — the last
+      // known settings stay on screen rather than flashing an error.
     }
   }, [])
 
@@ -218,12 +295,13 @@ export default function WanFailover() {
       setSelectedGraphUplink((prev) => prev || allUplinks[0]?.id || "")
       setError(null)
       await loadStatus()
+      await loadFailoverSettings()
     } catch (err) {
       if (showLoading) setError(getErrorMessage(err))
     } finally {
       if (showLoading) setIsLoading(false)
     }
-  }, [loadStatus])
+  }, [loadStatus, loadFailoverSettings])
 
   // loadAllRef/loadStatusRef indirection mirrors StatisticsTraffic.tsx: the
   // effect below calls the ref rather than the function identifier directly
@@ -386,6 +464,74 @@ export default function WanFailover() {
     }
   }
 
+  // --- Failover Control card handlers (Task 18, super_admin only) --------
+
+  // requestKillSwitchToggle opens the AlertDialog explaining the impact
+  // before actually flipping enabled — both turning it ON (starts moving
+  // traffic between uplinks automatically) and OFF (drops any active
+  // override, kernel metrics revert) can disrupt an in-progress session.
+  const requestKillSwitchToggle = (next: boolean) => {
+    if (!isSuperAdmin || !failoverSettings) return
+    setPendingKillSwitchValue(next)
+  }
+
+  const confirmKillSwitchToggle = async () => {
+    if (pendingKillSwitchValue === null || !failoverSettings) return
+    const next = pendingKillSwitchValue
+    try {
+      setIsKillSwitchToggling(true)
+      const updated = await wanService.updateFailoverSettings({ ...failoverSettings, enabled: next })
+      setFailoverSettings(updated)
+      setFailoverForm(settingsToForm(updated))
+      await loadStatus()
+    } catch (err) {
+      showAlert("Error", getErrorMessage(err) || "เปลี่ยนสถานะ Kill Switch ไม่สำเร็จ")
+    } finally {
+      setIsKillSwitchToggling(false)
+      setPendingKillSwitchValue(null)
+    }
+  }
+
+  const handleSaveFailoverForm = async () => {
+    if (!failoverSettings) return
+    setFailoverError("")
+
+    if (failoverForm.mode === "manual" && !failoverForm.manualUplinkId) {
+      setFailoverError("กรุณาเลือก Uplink ที่ต้องการบังคับใช้งานในโหมด Manual")
+      return
+    }
+    const minHoldSeconds = parseInt(failoverForm.minHoldSeconds, 10)
+    const revertDelaySeconds = parseInt(failoverForm.revertDelaySeconds, 10)
+    if (Number.isNaN(minHoldSeconds) || minHoldSeconds < 0 || minHoldSeconds > 3600) {
+      setFailoverError("Min Hold ต้องอยู่ระหว่าง 0-3600 วินาที")
+      return
+    }
+    if (Number.isNaN(revertDelaySeconds) || revertDelaySeconds < 0 || revertDelaySeconds > 3600) {
+      setFailoverError("Revert Delay ต้องอยู่ระหว่าง 0-3600 วินาที")
+      return
+    }
+
+    try {
+      setIsFailoverSaving(true)
+      const updated = await wanService.updateFailoverSettings({
+        ...failoverSettings,
+        mode: failoverForm.mode,
+        manualUplinkId: failoverForm.mode === "manual" ? failoverForm.manualUplinkId : failoverSettings.manualUplinkId,
+        minHoldSeconds,
+        revertDelaySeconds,
+      })
+      setFailoverSettings(updated)
+      setFailoverForm(settingsToForm(updated))
+      await loadStatus()
+    } catch (err) {
+      setFailoverError(getErrorMessage(err) || "บันทึกการตั้งค่า Failover ไม่สำเร็จ")
+    } finally {
+      setIsFailoverSaving(false)
+    }
+  }
+
+  const activeUplinkName = uplinks.find((u) => u.id === failoverStatus.activeUplinkId)?.name
+
   if (isLoading && uplinks.length === 0) {
     return (
       <div className="flex min-h-[400px] flex-col items-center justify-center space-y-4">
@@ -406,7 +552,7 @@ export default function WanFailover() {
           <div>
             <h1 className="text-lg font-bold tracking-tight">Multi-WAN Failover</h1>
             <p className="text-xs text-muted-foreground">
-              ตรวจสุขภาพ WAN แต่ละเส้นด้วย ICMP/TCP probe (Phase 1 — แสดงผลอย่างเดียว ยังไม่สลับ route อัตโนมัติ)
+              ตรวจสุขภาพ WAN แต่ละเส้นด้วย ICMP/TCP probe และสลับ default route อัตโนมัติเมื่อเปิดใช้งาน Failover Control ด้านล่าง
             </p>
           </div>
         </div>
@@ -421,9 +567,215 @@ export default function WanFailover() {
         <AlertCircle className="h-4 w-4 text-warning" />
         <AlertTitle className="text-warning">รองรับเฉพาะ IPv4</AlertTitle>
         <AlertDescription className="text-warning">
-          ฟีเจอร์นี้ตรวจสุขภาพและ (ในเฟสถัดไป) สลับเส้นทางสำหรับ IPv4 เท่านั้น — ยังไม่รองรับ IPv6
+          ฟีเจอร์นี้ตรวจสุขภาพและสลับเส้นทางสำหรับ IPv4 เท่านั้น — ยังไม่รองรับ IPv6
         </AlertDescription>
       </Alert>
+
+      {/* Permanent warning: switching WAN always risks the current session,
+          including this very page if it was reached through the uplink
+          being switched away from. */}
+      <Alert className="border-destructive/30 bg-destructive/10 px-3 py-2.5 text-destructive">
+        <ShieldAlert className="h-4 w-4 text-destructive" />
+        <AlertTitle className="text-destructive">คำเตือน: การสลับ WAN จะตัดการเชื่อมต่อที่ค้างอยู่</AlertTitle>
+        <AlertDescription className="text-destructive">
+          การสลับ WAN จะทำให้ session ที่ค้างอยู่ขาด รวมถึงหน้าเว็บนี้เองถ้าคุณเข้าใช้งานผ่าน WAN เส้นที่กำลังถูกสลับออก
+        </AlertDescription>
+      </Alert>
+
+      {failoverStatus.bypassedByStaticRoute && (
+        <Alert className="border-warning/30 bg-warning/10 px-3 py-2.5 text-warning">
+          <AlertCircle className="h-4 w-4 text-warning" />
+          <AlertTitle className="text-warning">Failover override ถูกข้ามโดย Static Route</AlertTitle>
+          <AlertDescription className="text-warning">
+            มี Static Route แบบ 0.0.0.0/0 ที่ยัง active อยู่บนอินเทอร์เฟซของ uplink ที่กำลัง active — การบังคับ metric
+            ของระบบ Failover จะไม่มีผลจนกว่าจะปิด/ลบ static route นั้นก่อน{" "}
+            <Link to="/network/routes" className="font-medium underline underline-offset-2">
+              ไปที่หน้า Static Routes
+            </Link>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Failover Control card (Task 18) */}
+      <Card>
+        <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0">
+          <div className="space-y-1">
+            <CardTitle className="flex items-center gap-2 text-base font-semibold">
+              <ShieldAlert className="h-4 w-4 text-muted-foreground" />
+              Failover Control
+            </CardTitle>
+            <CardDescription className="text-xs">
+              เปิด/ปิดการสลับ WAN อัตโนมัติ และตั้งค่าโหมด/ระยะหน่วงเวลา
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge
+              variant="outline"
+              className={cn(
+                "rounded px-2 py-0.5 text-[10px] font-semibold uppercase",
+                failoverSettings?.enabled ? "border-primary/20 bg-primary/10 text-primary" : "border-border bg-muted text-muted-foreground"
+              )}
+            >
+              {failoverSettings?.enabled ? "Enabled" : "Disabled"}
+            </Badge>
+            {isSuperAdmin ? (
+              <Switch
+                checked={failoverSettings?.enabled ?? false}
+                disabled={!failoverSettings || isKillSwitchToggling}
+                onCheckedChange={requestKillSwitchToggle}
+              />
+            ) : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <Switch checked={failoverSettings?.enabled ?? false} disabled />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>ต้องเป็น super_admin เท่านั้นจึงจะเปลี่ยนได้</TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 gap-3 rounded-lg border border-border bg-muted/50 p-3 text-xs sm:grid-cols-3">
+            <div>
+              <div className="text-[10px] text-muted-foreground">Active Uplink</div>
+              <div className="font-mono font-semibold text-foreground">
+                {activeUplinkName ?? (failoverStatus.activeUplinkId || "—")}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground">Last Switch</div>
+              <div className="flex items-center gap-1 font-mono text-foreground">
+                <Clock className="h-3 w-3 text-muted-foreground" />
+                {failoverStatus.lastSwitchAt ? new Date(failoverStatus.lastSwitchAt).toLocaleString() : "—"}
+              </div>
+            </div>
+            <div className="sm:col-span-1">
+              <div className="text-[10px] text-muted-foreground">Reason</div>
+              <div className="truncate text-foreground" title={failoverStatus.lastSwitchReason}>
+                {failoverStatus.lastSwitchReason || "—"}
+              </div>
+            </div>
+          </div>
+
+          {isSuperAdmin && (
+            <>
+              {failoverError && (
+                <Alert variant="destructive" className="px-3 py-2.5">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription className="text-xs">{failoverError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="space-y-1.5">
+                <Label className="block text-xs font-medium text-muted-foreground">โหมดการทำงาน</Label>
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  size="sm"
+                  value={failoverForm.mode}
+                  onValueChange={(v) => v && setFailoverForm({ ...failoverForm, mode: v })}
+                >
+                  <ToggleGroupItem value="auto" className="px-4 text-xs">Auto</ToggleGroupItem>
+                  <ToggleGroupItem value="manual" className="px-4 text-xs">Manual</ToggleGroupItem>
+                </ToggleGroup>
+              </div>
+
+              {failoverForm.mode === "manual" && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="wan-failover-manual-uplink" className="block text-xs font-medium text-muted-foreground">
+                    บังคับใช้งาน Uplink
+                  </Label>
+                  <Select
+                    value={failoverForm.manualUplinkId}
+                    onValueChange={(v) => setFailoverForm({ ...failoverForm, manualUplinkId: v })}
+                  >
+                    <SelectTrigger id="wan-failover-manual-uplink" className="h-9 w-full max-w-sm text-sm">
+                      <SelectValue placeholder="เลือก Uplink ที่จะบังคับ active" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {uplinks.map((u) => (
+                        <SelectItem key={u.id} value={u.id}>
+                          {u.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="wan-failover-minhold" className="block text-xs font-medium text-muted-foreground">
+                    Min Hold (วินาที) — ระยะเวลาต่ำสุดระหว่างการสลับ 2 ครั้ง
+                  </Label>
+                  <Input
+                    id="wan-failover-minhold"
+                    type="number"
+                    min="0"
+                    max="3600"
+                    value={failoverForm.minHoldSeconds}
+                    onChange={(e) => setFailoverForm({ ...failoverForm, minHoldSeconds: e.target.value })}
+                    className="h-9 font-mono text-sm"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="wan-failover-revertdelay" className="block text-xs font-medium text-muted-foreground">
+                    Revert Delay (วินาที) — รอก่อนสลับกลับ uplink หลัก
+                  </Label>
+                  <Input
+                    id="wan-failover-revertdelay"
+                    type="number"
+                    min="0"
+                    max="3600"
+                    value={failoverForm.revertDelaySeconds}
+                    onChange={(e) => setFailoverForm({ ...failoverForm, revertDelaySeconds: e.target.value })}
+                    className="h-9 font-mono text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <Button
+                  size="sm"
+                  className="cursor-pointer px-6 font-semibold"
+                  disabled={isFailoverSaving || !failoverSettings}
+                  onClick={handleSaveFailoverForm}
+                >
+                  {isFailoverSaving && <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />}
+                  บันทึกการตั้งค่า Failover
+                </Button>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Kill switch confirmation — impact must be explained before either
+          turning it on (starts automatic switching) or off (drops any
+          active override) takes effect. */}
+      <AlertDialog open={pendingKillSwitchValue !== null} onOpenChange={(open) => !open && setPendingKillSwitchValue(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {pendingKillSwitchValue ? "เปิดใช้งาน Automatic Failover?" : "ปิดใช้งาน Automatic Failover?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingKillSwitchValue
+                ? "เมื่อเปิด ระบบจะเริ่มสลับ default route ระหว่าง WAN uplink โดยอัตโนมัติตามสถานะสุขภาพ — การสลับแต่ละครั้งจะตัดการเชื่อมต่อที่ค้างอยู่บน uplink เดิม รวมถึงหน้าเว็บนี้ถ้าเข้าผ่าน uplink นั้น"
+                : "เมื่อปิด ระบบจะล้างค่า metric override ทั้งหมดทันทีและคืนค่า default route กลับสู่สถานะเดิมก่อนเปิดใช้งาน — WAN จะไม่ถูกสลับอัตโนมัติอีกจนกว่าจะเปิดใหม่"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isKillSwitchToggling}>ยกเลิก</AlertDialogCancel>
+            <AlertDialogAction disabled={isKillSwitchToggling} onClick={confirmKillSwitchToggle}>
+              {isKillSwitchToggling && <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />}
+              ยืนยัน
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {error && (
         <Card>
@@ -457,6 +809,18 @@ export default function WanFailover() {
                     <Badge variant="outline" className="rounded px-1.5 py-0 text-[9px] font-normal text-primary">
                       Active
                     </Badge>
+                  )}
+                  {st?.stale && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Badge variant="outline" className="rounded px-1.5 py-0 text-[9px] font-normal text-warning border-warning/30">
+                          Stale
+                        </Badge>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        ผลตรวจสอบล่าสุดเก่าเกินไป (ไม่มีการ probe ใหม่ทันเวลา) — ระบบ Failover จะไม่เลือก uplink นี้เป็น active จนกว่าจะมีผล probe ใหม่
+                      </TooltipContent>
+                    </Tooltip>
                   )}
                 </div>
               </CardHeader>

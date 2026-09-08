@@ -928,10 +928,12 @@ export const initialDNSBlocklists: DNSBlocklist[] = [
 ]
 
 // --- Multi-WAN Failover (docs/ref/todo/multi-wan-failover-plan.md) -------
-// Phase 1 only: uplink health-check config + read-only live status/metrics.
-// probeMethod/state/effectiveMethod/metricQuality are plain strings (not
-// literal unions) to mirror the backend's JSON contract exactly and avoid
-// the mock/service layer needing its own separate narrowing.
+// Phase 1: uplink health-check config + read-only live status/metrics.
+// Phase 2: automatic default-route failover (kill switch/mode/manual
+// override), default OFF. probeMethod/state/effectiveMethod/metricQuality
+// are plain strings (not literal unions) to mirror the backend's JSON
+// contract exactly and avoid the mock/service layer needing its own
+// separate narrowing.
 
 export interface WanUplink {
   id: string
@@ -968,6 +970,12 @@ export interface WanUplinkState {
   strikes: number
   lastChangeAt: string
   reason: string
+  // lastProbeAt/stale (Task 13.5, Decision E): stale=true means the most
+  // recent probe round is too old (> max(3x probeIntervalSeconds, 30s)) for
+  // the Phase 2 failover controller to trust — it never selects a stale
+  // uplink as active even if state="up".
+  lastProbeAt: string
+  stale: boolean
 }
 
 // WanStatusEntry mirrors the backend's flattened WanUplinkState + name +
@@ -980,8 +988,9 @@ export interface WanStatusEntry extends WanUplinkState {
 
 export interface WanStatusResponse {
   uplinks: WanStatusEntry[]
-  // Phase 2 (not-yet-built failover controller) fields — always the zero
-  // value in Phase 1.
+  // Phase 2 failover controller fields — zero value until the controller has
+  // ever been enabled/made a decision (kill switch off is the shipped
+  // default).
   bypassedByStaticRoute: boolean
   activeUplinkId: string
   lastSwitchAt: string
@@ -998,11 +1007,10 @@ export interface WanMetricPoint {
   lossPct: number
 }
 
-// WanFailoverSettings is reserved for the Phase 2 kill switch/mode
-// (docs/ref/todo/multi-wan-failover-plan.md Task 16-18) — defined now so
-// wanService.ts's shape matches the eventual backend contract, even though
-// no endpoint returns it yet in Phase 1. There is intentionally no field
-// here that would let a "degraded" reading drive a failover decision (D-7).
+// WanFailoverSettings is the Phase 2 kill switch/mode/dampening
+// configuration (docs/ref/todo/multi-wan-failover-plan.md Task 15-18).
+// There is intentionally no field here that would let a "degraded" reading
+// drive a failover decision (D-7).
 export interface WanFailoverSettings {
   enabled: boolean
   mode: string // "auto" | "manual"
@@ -1068,6 +1076,8 @@ export const initialWanUplinkStates: Record<string, WanUplinkState> = {
     strikes: 0,
     lastChangeAt: "2026-09-06T09:00:00Z",
     reason: "healthy",
+    lastProbeAt: "2026-09-06T09:10:00Z",
+    stale: false,
   },
   "wan-backup": {
     uplinkId: "wan-backup",
@@ -1082,6 +1092,8 @@ export const initialWanUplinkStates: Record<string, WanUplinkState> = {
     strikes: 0,
     lastChangeAt: "2026-09-06T09:05:00Z",
     reason: "latency 210.5ms exceeds threshold 150.0ms",
+    lastProbeAt: "2026-09-06T09:10:00Z",
+    stale: false,
   },
 }
 

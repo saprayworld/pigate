@@ -112,10 +112,30 @@ func (m *MockFirewall) FQDNResolutions() map[string][]string {
 }
 
 // MockNetwork implements NetworkManager for local testing
-type MockNetwork struct{}
+type MockNetwork struct {
+	// routingSeed, when wired via SetRoutingSeed, is told about every
+	// ConfigureInterface call so it can seed a realistic baseline
+	// default-route metric (Task 14/Decision C's DefaultRouteMetric) — see
+	// SetRoutingSeed's doc comment. Left nil, ConfigureInterface behaves
+	// exactly as before (log-only no-op); this keeps every existing
+	// NewMockNetwork() call site (tests that don't care about WAN failover
+	// restore behavior) unaffected.
+	routingSeed *MockRouting
+}
 
 func NewMockNetwork() *MockNetwork {
 	return &MockNetwork{}
+}
+
+// SetRoutingSeed wires rt so ConfigureInterface can seed its default-route
+// metric state (see ConfigureInterface's doc comment). main.go calls this
+// once at startup, right after constructing both mocks, so kill-switch
+// restore (WAN failover, T-15/T-18) has something realistic to snapshot and
+// restore under -mock=true — mirroring RealNetwork/RealRouting, where
+// ConfigureInterface installing a default route IS what a later
+// DefaultRouteMetric() read observes, without needing a real kernel.
+func (m *MockNetwork) SetRoutingSeed(rt *MockRouting) {
+	m.routingSeed = rt
 }
 
 func (m *MockNetwork) ToggleInterface(name string, up bool) error {
@@ -123,9 +143,43 @@ func (m *MockNetwork) ToggleInterface(name string, up bool) error {
 	return nil
 }
 
+// ConfigureInterface is a log-only no-op like the rest of MockNetwork, with
+// one addition (issue: WAN failover Phase 2 QA finding, "kill-switch-off
+// restore silently no-ops"): when wired via SetRoutingSeed, it also seeds
+// routingSeed's DefaultRouteMetric state for name, so the mock kernel
+// behaves like the real one after this call — a live default route now
+// exists with a known priority.
+//
+// The rule mirrors RealNetwork.ConfigureInterface exactly:
+//   - mode=="static" with no gateway: no default route is installed (e.g. a
+//     LAN-side interface) — nothing seeded, DefaultRouteMetric stays
+//     not-found, same as reality.
+//   - mode=="static" with a gateway: a default route is installed with
+//     priority = metric (if >0) or the historical default 100 — seeded
+//     verbatim.
+//   - mode=="dhcp": RealNetwork itself does nothing here (dhcpcd owns that
+//     route, outside pigate's control) — but unlike a fresh/never-connected
+//     link, an interface pigate is actively managing as a DHCP WAN uplink
+//     has, in practice, already completed a DHCP lease with SOME
+//     kernel-visible metric by the time an operator can trip the kill
+//     switch on it. We seed that same metric>0?metric:100 baseline so
+//     -mock=true exercises the same snapshot/restore path a real DHCP
+//     uplink would (Final Acceptance item 14) instead of the permanently
+//     empty state, which is not what production is really like on boot.
 func (m *MockNetwork) ConfigureInterface(name string, mode string, ip string, netmask string, gateway string, metric int) error {
 	// Mock success
 	log.Printf("[MockNetwork] ConfigureInterface: %s mode=%s ip=%s gateway=%s metric=%d", name, mode, ip, gateway, metric)
+
+	if m.routingSeed != nil {
+		hasDefaultRoute := mode == "dhcp" || (mode == "static" && gateway != "")
+		if hasDefaultRoute {
+			priority := 100
+			if metric > 0 {
+				priority = metric
+			}
+			m.routingSeed.SetDefaultRouteMetric(name, priority, true)
+		}
+	}
 	return nil
 }
 
@@ -188,11 +242,21 @@ func (m *MockNetwork) GetWifiStatus(name string) (*model.WifiConnectionStatus, e
 
 // MockRouting implements RoutingManager for local testing
 type MockRouting struct {
+	mu                    sync.Mutex
 	enableEditSystemRoute bool
+	// defaultRouteMetrics backs DefaultRouteMetric (Task 14, Decision C) —
+	// unlike the real backend, the mock has no actual kernel routing table to
+	// read from, so tests seed "the kernel currently has this metric on this
+	// interface" explicitly via SetDefaultRouteMetric. EnforceDefaultRouteMetric
+	// below deliberately does NOT write into this map: it stays a log-only
+	// no-op (matching its pre-Task-14 behavior) so tests can assert on
+	// "what was the interface's metric BEFORE the override" (the snapshot)
+	// independently of "what did we just tell the kernel to enforce".
+	defaultRouteMetrics map[string]int
 }
 
 func NewMockRouting() *MockRouting {
-	return &MockRouting{}
+	return &MockRouting{defaultRouteMetrics: make(map[string]int)}
 }
 
 func (m *MockRouting) SetEnableEditSystemRoute(enable bool) {
@@ -202,6 +266,29 @@ func (m *MockRouting) SetEnableEditSystemRoute(enable bool) {
 func (m *MockRouting) EnforceDefaultRouteMetric(ifaceName string, metric int) error {
 	log.Printf("[MockRouting] EnforceDefaultRouteMetric called: Interface: %s, Metric: %d", ifaceName, metric)
 	return nil
+}
+
+// SetDefaultRouteMetric seeds/updates what DefaultRouteMetric(ifaceName)
+// reports — a test hook, see the defaultRouteMetrics field's doc comment.
+// Pass found=false to simulate "this interface currently has no default
+// route" (clears any previously seeded value).
+func (m *MockRouting) SetDefaultRouteMetric(ifaceName string, metric int, found bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !found {
+		delete(m.defaultRouteMetrics, ifaceName)
+		return
+	}
+	m.defaultRouteMetrics[ifaceName] = metric
+}
+
+// DefaultRouteMetric implements kernel.RoutingManager's read-only Task 14
+// counterpart to EnforceDefaultRouteMetric — see SetDefaultRouteMetric.
+func (m *MockRouting) DefaultRouteMetric(ifaceName string) (metric int, found bool, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.defaultRouteMetrics[ifaceName]
+	return v, ok, nil
 }
 
 func (m *MockRouting) AddRoute(route model.StaticRoute) error {
@@ -1355,6 +1442,9 @@ type MockPathProbe struct {
 	icmpDead map[string]bool
 	allDead  map[string]bool
 	probeErr map[string]error
+	// delay is Task 13.5's concurrency-testing hook (SetDelay) — see its doc
+	// comment below.
+	delay map[string]time.Duration
 	// ICMPCalls/TCPCalls count invocations per interface so tests can assert
 	// e.g. "ProbeMethod=icmp never calls ProbeTCP even under 100% loss"
 	// (plan Task 7 acceptance).
@@ -1367,9 +1457,47 @@ func NewMockPathProbe() *MockPathProbe {
 		icmpDead:  make(map[string]bool),
 		allDead:   make(map[string]bool),
 		probeErr:  make(map[string]error),
+		delay:     make(map[string]time.Duration),
 		ICMPCalls: make(map[string]int),
 		TCPCalls:  make(map[string]int),
 	}
+}
+
+// ICMPCallCount/TCPCallCount safely return the number of ProbeICMP/ProbeTCP
+// calls made for ifaceName so far. Most of this package's existing tests
+// read the ICMPCalls/TCPCalls map fields directly, which is fine as long as
+// the calling code itself only ever probes synchronously in the test's own
+// goroutine — these getters exist for tests that need to observe calls made
+// by service.WanMonitor's OWN background goroutines (Task 13.5 concurrency
+// hardening), where a direct map read would race under `go test -race`.
+func (m *MockPathProbe) ICMPCallCount(ifaceName string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ICMPCalls[ifaceName]
+}
+
+func (m *MockPathProbe) TCPCallCount(ifaceName string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.TCPCalls[ifaceName]
+}
+
+// SetDelay makes ProbeICMP/ProbeTCP for ifaceName block for d before
+// returning (aborting early, with ctx.Err(), if ctx is canceled/expires
+// first) instead of returning immediately — it never opens a real socket or
+// sleeps via anything resembling a real probe timeout path; it's purely a
+// deterministic hook for Task 13.5's concurrency tests (e.g. proving one
+// slow uplink's round doesn't delay another uplink's round, or that N
+// targets are probed in parallel rather than N x serially). Pass d==0 (the
+// default) to clear it.
+func (m *MockPathProbe) SetDelay(ifaceName string, d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if d <= 0 {
+		delete(m.delay, ifaceName)
+		return
+	}
+	m.delay[ifaceName] = d
 }
 
 // SetICMPDead forces ProbeICMP (only) to report 100% loss for ifaceName;
@@ -1423,7 +1551,16 @@ func (m *MockPathProbe) ProbeICMP(ctx context.Context, ifaceName string, target 
 	m.ICMPCalls[ifaceName]++
 	dead := m.icmpDead[ifaceName] || m.allDead[ifaceName]
 	err := m.probeErr[ifaceName]
+	delay := m.delay[ifaceName]
 	m.mu.Unlock()
+
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return model.WanProbeSample{}, ctx.Err()
+		}
+	}
 	if err != nil {
 		return model.WanProbeSample{}, err
 	}
@@ -1447,7 +1584,16 @@ func (m *MockPathProbe) ProbeTCP(ctx context.Context, ifaceName string, target n
 	m.TCPCalls[ifaceName]++
 	dead := m.allDead[ifaceName]
 	err := m.probeErr[ifaceName]
+	delay := m.delay[ifaceName]
 	m.mu.Unlock()
+
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return model.WanProbeSample{}, ctx.Err()
+		}
+	}
 	if err != nil {
 		return model.WanProbeSample{}, err
 	}

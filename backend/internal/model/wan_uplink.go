@@ -43,6 +43,15 @@ const (
 	WanFailoverModeManual = "manual"
 )
 
+// MaxWanProbeTargets caps how many ProbeTargets a single WanUplink may
+// configure. Every configured target is probed every round (WanMonitor.
+// probeAllTargets), so this cap also bounds the worst-case width of one
+// probe round now that ValidateWanUplink enforces a hard "the round must fit
+// inside ProbeIntervalSeconds" budget (see the budget check below) — without
+// a cap on target count, that budget check alone could not prevent an
+// operator from configuring an unreasonably wide round.
+const MaxWanProbeTargets = 4
+
 // WanUplink is one configured WAN path (e.g. the primary wired uplink or a
 // 4G/backup Wi-Fi uplink) that PiGate health-checks via ICMP/TCP probes sent
 // out ifaceName with SO_BINDTODEVICE (kernel.PathProbeManager). It is
@@ -60,9 +69,9 @@ type WanUplink struct {
 	ID        string `json:"id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Interface string `json:"interface,omitempty"`
-	// Priority orders uplinks for the (future, Phase 2) auto-failover
-	// controller: lower value = higher priority = tried first. Not used by
-	// anything in Phase 1 (Task 1-13 are read-only with respect to routing).
+	// Priority orders uplinks for the Phase 2 auto-failover controller:
+	// lower value = higher priority = tried first. Not used in Phase 1
+	// (Task 1-13 are read-only with respect to routing).
 	Priority int `json:"priority,omitempty"`
 	// ProbeTargets is one or more IPv4 literals to probe every round. All
 	// configured targets are probed; a round is considered "received" for a
@@ -133,7 +142,8 @@ type WanUplinkState struct {
 	// failure, NOT the same thing as the remote target not answering).
 	State string `json:"state,omitempty"`
 	// Active reports whether this uplink is the one currently carrying
-	// traffic. Always false in Phase 1 (no failover controller exists yet).
+	// traffic, per the Phase 2 failover controller. Always false when that
+	// controller is disabled (wan_failover_settings.enabled=0).
 	Active        bool    `json:"active,omitempty"`
 	LastLatencyMs float64 `json:"lastLatencyMs,omitempty"`
 	// JitterMs is only meaningful when MetricQuality == WanMetricQualityFull
@@ -151,6 +161,20 @@ type WanUplinkState struct {
 	Strikes      int    `json:"strikes,omitempty"`
 	LastChangeAt string `json:"lastChangeAt,omitempty"` // RFC3339; empty until the first state change
 	Reason       string `json:"reason,omitempty"`
+	// LastProbeAt is RFC3339, the timestamp of the most recent probe round
+	// attempted for this uplink (whether it succeeded, errored, or was cut
+	// short by the round deadline) — empty until the first round ever runs.
+	LastProbeAt string `json:"lastProbeAt,omitempty"`
+	// Stale is Phase 2's "this reading is too old to make a failover decision
+	// from" signal (docs/ref/todo/multi-wan-failover-plan.md Decision E):
+	// true when LastProbeAt is older than max(3x its own ProbeIntervalSeconds,
+	// 30s). A stale uplink is never selected as the active uplink by
+	// service.wan_failover.go, even if its last-known State was "up" — but
+	// staleness never by itself forces a failover away from an uplink that IS
+	// currently active (see D-7's "display-only" precedent: the controller
+	// only reacts to State=="down", staleness is an additional selection
+	// filter, not a new state).
+	Stale bool `json:"stale,omitempty"`
 }
 
 // WanProbeSample is the raw result of one probe round for one uplink,
@@ -197,9 +221,10 @@ type WanStatusEntry struct {
 // separately just to know an uplink exists.
 //
 // BypassedByStaticRoute/ActiveUplinkID/LastSwitchAt/LastSwitchReason are
-// Phase 2 (automatic failover controller, not yet built) fields — Phase 1
-// always reports the zero value for all four (no uplink is ever "active" and
-// nothing is ever bypassed, since nothing here can change routing yet).
+// populated from the Phase 2 automatic failover controller — they stay at
+// their zero value whenever that controller is disabled
+// (wan_failover_settings.enabled=0), since nothing changes routing until
+// then.
 type WanStatusResponse struct {
 	Uplinks               []WanStatusEntry `json:"uplinks"`
 	BypassedByStaticRoute bool             `json:"bypassedByStaticRoute,omitempty"`
@@ -226,9 +251,33 @@ type WanFailoverSettings struct {
 	ManualUplinkID string `json:"manualUplinkId,omitempty"`
 	// MinHoldSeconds is the minimum time between two failovers (anti-flap
 	// dampening) — enforced by the Phase 2 controller, not anything in this
-	// package.
+	// package. AUTO mode only: a manual override always takes effect
+	// immediately regardless of this value (service/wan_failover.go
+	// decideActiveUplink).
 	MinHoldSeconds int `json:"minHoldSeconds,omitempty"`
 	// RevertDelaySeconds is how long the primary uplink must stay healthy
-	// before the controller reverts back to it from a backup.
+	// before the controller reverts back to it from a backup. AUTO mode
+	// only, same exemption as MinHoldSeconds above — a manual override to a
+	// higher-priority uplink is never held up by this either.
 	RevertDelaySeconds int `json:"revertDelaySeconds,omitempty"`
+}
+
+// WanFailoverStatus is the Phase 2 failover controller's (service.
+// WanFailoverController, T-15) live status snapshot, served by the api
+// layer (T-16) both standalone (GET /api/wan/failover, alongside the raw
+// WanFailoverSettings) and folded into WanStatusResponse's four Phase 2
+// fields above. Enabled/Mode here mirror the most recently observed
+// WanFailoverSettings (cheap, lock-only read) rather than hitting the DB
+// again.
+type WanFailoverStatus struct {
+	Enabled          bool   `json:"enabled,omitempty"`
+	Mode             string `json:"mode,omitempty"`
+	ActiveUplinkID   string `json:"activeUplinkId,omitempty"`
+	LastSwitchAt     string `json:"lastSwitchAt,omitempty"`
+	LastSwitchReason string `json:"lastSwitchReason,omitempty"`
+	// Bypassed is service.RoutingService.FailoverBypassedInterfaces()'s
+	// current value: interface names that have an active WAN failover
+	// metric override but are being overridden by an even-higher-precedence
+	// active DB static 0.0.0.0/0 route (D-2 precedence level 1).
+	Bypassed []string `json:"bypassed,omitempty"`
 }

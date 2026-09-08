@@ -134,6 +134,11 @@ per-interface แล้ว restart dhcpcd — ตัดทิ้งเพรา�
    **ต้องกำหนด precedence ชัดเจน**: ใน `reconcileKernelRoutingTable` ให้ข้าม enforcement
    ถ้ามี active DB route `0.0.0.0/0` บน interface เดียวกันอยู่แล้ว (ให้ static_routes ชนะ)
    และ/หรือแจ้งเตือนใน UI — และเขียนเทสต์ครอบเคสนี้
+   **อัปเดต (Multi-WAN Failover Task 14, D-2):** precedence นี้ถูกขยายเป็น 4 ระดับ — WAN
+   Failover metric override (จาก `service/wan_failover.go`) แทรกอยู่ระหว่าง static route
+   (ชนะสุด) กับ interface metric เดิม (แพ้สุด) ดูตาราง precedence เต็มที่
+   `docs/tech_stack_design.md` §11 และ implementation ที่ `RoutingService.
+   enforceInterfaceMetrics`/`enforceOneInterfaceMetric` ใน `service/routing.go`
 
 2. **Enforcement ต้อง idempotent** — แก้ metric ด้วย RouteDel+RouteAdd จะ trigger Route
    event เข้า NetlinkMonitor อีกรอบ → reconcile อีกรอบ ถ้าเช็ค `Priority != metric` ก่อน

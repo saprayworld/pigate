@@ -66,10 +66,19 @@ func ValidateWanUplink(input WanUplinkInput) error {
 	if len(input.ProbeTargets) == 0 {
 		return fmt.Errorf("probeTargets must not be empty — there is no built-in default target, please provide at least one IPv4 address")
 	}
+	if len(input.ProbeTargets) > MaxWanProbeTargets {
+		return fmt.Errorf("probeTargets: at most %d targets are allowed, got %d", MaxWanProbeTargets, len(input.ProbeTargets))
+	}
+	seenTargets := make(map[string]bool, len(input.ProbeTargets))
 	for _, t := range input.ProbeTargets {
 		if err := ValidateWanProbeTarget(t); err != nil {
 			return err
 		}
+		norm := strings.TrimSpace(t)
+		if seenTargets[norm] {
+			return fmt.Errorf("probeTargets: duplicate target %q is not allowed", norm)
+		}
+		seenTargets[norm] = true
 	}
 
 	if !validWanProbeMethods[input.ProbeMethod] {
@@ -106,6 +115,27 @@ func ValidateWanUplink(input WanUplinkInput) error {
 	}
 	if input.RecoverStrikes < 1 || input.RecoverStrikes > 20 {
 		return fmt.Errorf("recoverStrikes must be between 1 and 20")
+	}
+
+	// Decision A (docs/ref/todo/multi-wan-failover-plan.md, approved
+	// 2026-09-07): a probe round must finish within its own
+	// ProbeIntervalSeconds, or Phase 2's failover dampening timers
+	// (MinHoldSeconds/RevertDelaySeconds) lose their meaning against a round
+	// that can itself run longer than the interval between rounds. This does
+	// NOT account for multiple ProbeTargets running concurrently (Task 13.5
+	// probes all targets in parallel) — it is a per-target-serial worst case,
+	// intentionally conservative. f=2 accounts for probeMethod=="auto"
+	// potentially making an ICMP probe THEN an immediate TCP fallback within
+	// the same round (D-5); icmp-only/tcp-only never make a second
+	// sub-probe, so f=1.
+	f := 1
+	if input.ProbeMethod == WanProbeMethodAuto {
+		f = 2
+	}
+	budgetMs := input.ProbeCount * input.ProbeTimeoutMs * f
+	allowedMs := input.ProbeIntervalSeconds * 1000
+	if budgetMs > allowedMs {
+		return fmt.Errorf("probe round budget too large: probeCount(%d) x probeTimeoutMs(%d)ms x %d = %dms exceeds probeIntervalSeconds(%d)s = %dms — increase probeIntervalSeconds or reduce probeCount/probeTimeoutMs", input.ProbeCount, input.ProbeTimeoutMs, f, budgetMs, input.ProbeIntervalSeconds, allowedMs)
 	}
 
 	return nil
