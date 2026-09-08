@@ -32,6 +32,7 @@ import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/u
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -156,13 +157,18 @@ function MetricChart({ title, unit, dataKey, data, color, axis, grid, formatTool
   title: string
   unit: string
   dataKey: "avgLatencyMs" | "lossPct"
-  data: { time: string; avgLatencyMs: number; lossPct: number }[]
+  data: { time: string; avgLatencyMs: number | null; lossPct: number | null }[]
   color: string
   axis: string
   grid: string
   formatTooltip: (v: number) => string
 }) {
-  const hasSignal = data.length > 0
+  // A bucket the ring buffer never got a sample for reports `null` for this
+  // dataKey (mapped from the field being absent in the API response) — only
+  // count buckets that actually have a reading toward "there is a signal to
+  // draw", otherwise every fresh uplink would show an (empty) axis grid
+  // forever instead of the "no data yet" placeholder.
+  const hasSignal = data.some((d) => d[dataKey] !== null)
   return (
     <div className="space-y-2">
       <p className="text-xs font-medium text-muted-foreground">{title}</p>
@@ -184,7 +190,10 @@ function MetricChart({ title, unit, dataKey, data, color, axis, grid, formatTool
                 }}
                 contentStyle={{ fontSize: "11px", borderRadius: "8px" }}
               />
-              <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={2} dot={false} isAnimationActive={false} />
+              {/* connectNulls: buckets with no sample yet (null) shouldn't
+                  break the line into invisible fragments — bridge straight
+                  across the gap to the next real reading instead. */}
+              <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
             </LineChart>
           </ResponsiveContainer>
         )}
@@ -360,7 +369,16 @@ export default function WanFailover() {
         const label = Number.isNaN(d.getTime())
           ? p.timestamp
           : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })
-        return { time: label, avgLatencyMs: p.avgLatencyMs, lossPct: p.lossPct }
+        // Buckets the ring buffer never got a sample for come back with these
+        // fields absent (not zero — a genuine 0ms/0% would still be sent).
+        // Map that absence to `null` (not `undefined`) so MetricChart's
+        // connectNulls can bridge the gap with a line instead of Recharts
+        // silently rendering nothing there.
+        return {
+          time: label,
+          avgLatencyMs: p.avgLatencyMs ?? null,
+          lossPct: p.lossPct ?? null,
+        }
       }),
     [metricPoints]
   )
@@ -559,31 +577,40 @@ export default function WanFailover() {
             </p>
           </div>
         </div>
-        <Button variant="outline" size="sm" className="cursor-pointer gap-2" onClick={() => loadAll(true)}>
-          <RefreshCw className={isLoading ? "size-4 animate-spin" : "size-4"} />
-          Reload
-        </Button>
+        <div className="flex items-center gap-2">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="icon-sm" className="cursor-pointer" aria-label="ข้อมูลและคำเตือนสำคัญ">
+                <Info className="size-4" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="space-y-3">
+              <div className="flex gap-2">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                <div className="space-y-0.5">
+                  <p className="text-xs font-semibold text-foreground">รองรับเฉพาะ IPv4</p>
+                  <p className="text-xs text-muted-foreground">
+                    ฟีเจอร์นี้ตรวจสุขภาพและสลับเส้นทางสำหรับ IPv4 เท่านั้น — ยังไม่รองรับ IPv6
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                <div className="space-y-0.5">
+                  <p className="text-xs font-semibold text-foreground">คำเตือน: การสลับ WAN จะตัดการเชื่อมต่อที่ค้างอยู่</p>
+                  <p className="text-xs text-muted-foreground">
+                    การสลับ WAN จะทำให้ session ที่ค้างอยู่ขาด รวมถึงหน้าเว็บนี้เองถ้าคุณเข้าใช้งานผ่าน WAN เส้นที่กำลังถูกสลับออก
+                  </p>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+          <Button variant="outline" size="sm" className="cursor-pointer gap-2" onClick={() => loadAll(true)}>
+            <RefreshCw className={isLoading ? "size-4 animate-spin" : "size-4"} />
+            Reload
+          </Button>
+        </div>
       </div>
-
-      {/* Permanent IPv4-only notice */}
-      <Alert className="border-warning/30 bg-warning/10 px-3 py-2.5 text-warning">
-        <AlertCircle className="h-4 w-4 text-warning" />
-        <AlertTitle className="text-warning">รองรับเฉพาะ IPv4</AlertTitle>
-        <AlertDescription className="text-warning">
-          ฟีเจอร์นี้ตรวจสุขภาพและสลับเส้นทางสำหรับ IPv4 เท่านั้น — ยังไม่รองรับ IPv6
-        </AlertDescription>
-      </Alert>
-
-      {/* Permanent warning: switching WAN always risks the current session,
-          including this very page if it was reached through the uplink
-          being switched away from. */}
-      <Alert className="border-destructive/30 bg-destructive/10 px-3 py-2.5 text-destructive">
-        <ShieldAlert className="h-4 w-4 text-destructive" />
-        <AlertTitle className="text-destructive">คำเตือน: การสลับ WAN จะตัดการเชื่อมต่อที่ค้างอยู่</AlertTitle>
-        <AlertDescription className="text-destructive">
-          การสลับ WAN จะทำให้ session ที่ค้างอยู่ขาด รวมถึงหน้าเว็บนี้เองถ้าคุณเข้าใช้งานผ่าน WAN เส้นที่กำลังถูกสลับออก
-        </AlertDescription>
-      </Alert>
 
       {failoverStatus.bypassedByStaticRoute && (
         <Alert className="border-warning/30 bg-warning/10 px-3 py-2.5 text-warning">

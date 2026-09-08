@@ -999,12 +999,15 @@ export interface WanStatusResponse {
 
 export interface WanMetricPoint {
   timestamp: string
-  avgLatencyMs: number
-  maxLatencyMs: number
+  // avgLatencyMs/maxLatencyMs/lossPct are absent (not 0) on a bucket the
+  // ring buffer never got a sample for — never treat a missing value as a
+  // real zero reading (same reasoning as jitterMs below, D-6).
+  avgLatencyMs?: number
+  maxLatencyMs?: number
   // null when the bucket has no full-quality (ICMP) sample — never treat a
   // missing value as zero jitter (D-6).
   jitterMs: number | null
-  lossPct: number
+  lossPct?: number
 }
 
 // WanFailoverSettings is the Phase 2 kill switch/mode/dampening
