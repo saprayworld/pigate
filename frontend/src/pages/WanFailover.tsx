@@ -178,7 +178,10 @@ function MetricChart({ title, unit, dataKey, data, color, axis, grid, formatTool
               <XAxis dataKey="time" stroke={axis} fontSize={10} tickLine={false} axisLine={false} interval="preserveStartEnd" />
               <YAxis stroke={axis} fontSize={10} tickLine={false} axisLine={false} width={40} tickFormatter={(v) => `${v}${unit}`} />
               <RechartsTooltip
-                formatter={(value) => formatTooltip(Number(value))}
+                formatter={(value) => {
+                  const n = Number(value)
+                  return Number.isFinite(n) ? formatTooltip(n) : "ไม่มีข้อมูล"
+                }}
                 contentStyle={{ fontSize: "11px", borderRadius: "8px" }}
               />
               <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={2} dot={false} isAnimationActive={false} />
@@ -829,7 +832,7 @@ export default function WanFailover() {
                   <div className="rounded-lg border border-border bg-muted/50 py-2">
                     <div className="text-[10px] text-muted-foreground">Latency</div>
                     <div className="font-mono font-semibold text-foreground">
-                      {st ? `${st.lastLatencyMs.toFixed(1)}ms` : "—"}
+                      {st ? `${(st.lastLatencyMs ?? 0).toFixed(1)}ms` : "—"}
                     </div>
                   </div>
                   <div className="rounded-lg border border-border bg-muted/50 py-2">
@@ -847,12 +850,12 @@ export default function WanFailover() {
                       )}
                     </div>
                     <div className={cn("font-mono font-semibold", connectOnly ? "text-muted-foreground/50" : "text-foreground")}>
-                      {st && !connectOnly ? `${st.jitterMs.toFixed(1)}ms` : "—"}
+                      {st && !connectOnly ? `${(st.jitterMs ?? 0).toFixed(1)}ms` : "—"}
                     </div>
                   </div>
                   <div className="rounded-lg border border-border bg-muted/50 py-2">
                     <div className="text-[10px] text-muted-foreground">Loss</div>
-                    <div className="font-mono font-semibold text-foreground">{st ? `${st.lossPct.toFixed(0)}%` : "—"}</div>
+                    <div className="font-mono font-semibold text-foreground">{st ? `${(st.lossPct ?? 0).toFixed(0)}%` : "—"}</div>
                   </div>
                 </div>
                 <div className="flex items-center justify-between text-[11px] text-muted-foreground">

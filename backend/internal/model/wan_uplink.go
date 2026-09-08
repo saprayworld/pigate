@@ -144,13 +144,19 @@ type WanUplinkState struct {
 	// Active reports whether this uplink is the one currently carrying
 	// traffic, per the Phase 2 failover controller. Always false when that
 	// controller is disabled (wan_failover_settings.enabled=0).
-	Active        bool    `json:"active,omitempty"`
-	LastLatencyMs float64 `json:"lastLatencyMs,omitempty"`
+	Active bool `json:"active,omitempty"`
+	// LastLatencyMs/JitterMs/LossPct are deliberately WITHOUT omitempty: a
+	// healthy uplink legitimately reports 0 (no loss, no jitter) and that is
+	// meaningfully different from "field absent" — omitting them here would
+	// make the JSON encoder drop a true zero, which crashed the frontend
+	// (undefined.toFixed()) the first time a freshly probed uplink came back
+	// with 0% loss.
+	LastLatencyMs float64 `json:"lastLatencyMs"`
 	// JitterMs is only meaningful when MetricQuality == WanMetricQualityFull
 	// (D-6) — a connect-only round still fills this with 0, callers MUST
 	// check MetricQuality before displaying it.
-	JitterMs float64 `json:"jitterMs,omitempty"`
-	LossPct  float64 `json:"lossPct,omitempty"`
+	JitterMs float64 `json:"jitterMs"`
+	LossPct  float64 `json:"lossPct"`
 	// EffectiveMethod is the method actually used on the most recent round
 	// ("icmp" or "tcp") — may differ from the configured ProbeMethod when
 	// ProbeMethod=="auto" and ICMP has gone sticky-failed (D-5).
