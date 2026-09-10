@@ -76,6 +76,40 @@ type Server struct {
 	// it may still be nil in tests that don't need it, so every handler below
 	// checks for that explicitly rather than assuming it is always set.
 	dnsBlocklistService *service.DNSBlocklistService
+
+	// wanMonitor backs the /api/wan/status and /api/wan/metrics handlers
+	// (docs/ref/todo/multi-wan-failover-plan.md Task 8/9) — optional (nil
+	// until SetWanMonitor is called by main.go), same additive-setter
+	// pattern as policyStats/policyCounterStore above, since NewServer's
+	// signature is already long. Every wan_handlers.go handler that reads it
+	// must nil-check explicitly rather than assume it is always set.
+	wanMonitor *service.WanMonitor
+
+	// wanFailover backs the Phase 2 kill-switch/manual-override/status
+	// handlers (docs/ref/todo/multi-wan-failover-plan.md Task 16) — optional
+	// (nil until SetWanFailover is called by main.go), same additive-setter
+	// pattern as wanMonitor above. HandleGetWanStatus falls back to the
+	// Phase 1 all-zero-value behavior when this is nil (so Phase 1-only
+	// callers/tests are unaffected); the other wan/failover handlers return
+	// 503 when nil.
+	wanFailover *service.WanFailoverController
+}
+
+// SetWanMonitor wires the Multi-WAN Failover health monitor into the server
+// (docs/ref/todo/multi-wan-failover-plan.md Task 8). Safe to call once after
+// NewServer, and safe to never call at all (the status/metrics endpoints
+// then degrade to reporting every uplink as unknown/no data, mirroring
+// SetPolicyStatsService's "safe to never call" contract).
+func (s *Server) SetWanMonitor(m *service.WanMonitor) {
+	s.wanMonitor = m
+}
+
+// SetWanFailover wires the Multi-WAN Failover Phase 2 controller into the
+// server (docs/ref/todo/multi-wan-failover-plan.md Task 16). Safe to call
+// once after NewServer, and safe to never call at all (mirrors SetWanMonitor's
+// "safe to never call" contract).
+func (s *Server) SetWanFailover(c *service.WanFailoverController) {
+	s.wanFailover = c
 }
 
 // SetPolicyStatsService wires the optional per-rule usage stats service into
@@ -125,33 +159,33 @@ func NewServer(
 	dnsBlocklistService *service.DNSBlocklistService,
 ) *Server {
 	return &Server{
-		repo:              repo,
-		firewall:          fw,
-		network:           net,
-		routing:           rt,
-		dhcp:              dhcp,
-		logs:              l,
-		disableEdit:       disableEdit,
-		allowDevCORS:      allowDevCORS,
-		interfaceService:  ifaceService,
-		dhcpcdService:     dhcpcdService,
-		routingService:    routingService,
-		firewallService:   fwService,
-		dnsService:        dnsService,
-		qosService:        qosService,
-		dhcpServerService: dhcpServerService,
-		dnsServerService:  dnsServerService,
-		hostnameService:   hostnameService,
-		timeService:       timeService,
-		userService:       userService,
-		backupService:     backupService,
-		systemStatus:      systemStatus,
-		powerService:      powerService,
-		eventLog:          eventLog,
-		dhcpHealthChecker: dhcpHealthChecker,
-		wifiPresetService: wifiPresetService,
-		systemServiceSvc:  systemServiceSvc,
-		capabilityService: capabilityService,
+		repo:                repo,
+		firewall:            fw,
+		network:             net,
+		routing:             rt,
+		dhcp:                dhcp,
+		logs:                l,
+		disableEdit:         disableEdit,
+		allowDevCORS:        allowDevCORS,
+		interfaceService:    ifaceService,
+		dhcpcdService:       dhcpcdService,
+		routingService:      routingService,
+		firewallService:     fwService,
+		dnsService:          dnsService,
+		qosService:          qosService,
+		dhcpServerService:   dhcpServerService,
+		dnsServerService:    dnsServerService,
+		hostnameService:     hostnameService,
+		timeService:         timeService,
+		userService:         userService,
+		backupService:       backupService,
+		systemStatus:        systemStatus,
+		powerService:        powerService,
+		eventLog:            eventLog,
+		dhcpHealthChecker:   dhcpHealthChecker,
+		wifiPresetService:   wifiPresetService,
+		systemServiceSvc:    systemServiceSvc,
+		capabilityService:   capabilityService,
 		trafficStats:        trafficStats,
 		statistics:          statistics,
 		ipInfo:              ipInfo,

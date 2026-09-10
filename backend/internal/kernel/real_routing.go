@@ -3,14 +3,17 @@
 package kernel
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"pigate/internal/model"
 	"strconv"
 	"strings"
 
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 // RealRouting implements RoutingManager using netlink socket.
@@ -318,6 +321,36 @@ func (r *RealRouting) AddRoute(route model.StaticRoute) error {
 // priority as a distinct route, so RouteReplace won't move it). The check below is
 // guarded on Priority != metric so repeated calls (triggered by the Route event our
 // own del/add emits) converge to a no-op instead of looping.
+//
+// Contract (docs/ref/wan-failover-findings.md — T-20 fix for the WAN failover
+// route-disappears bug): this method MUST NEVER destroy ifaceName's existing
+// default route if it cannot successfully install the replacement at the new
+// metric. It is make-before-break: the new route is added FIRST, and the old
+// one is only deleted once the new one is confirmed live in the kernel (two
+// default routes briefly coexisting at different metrics is harmless — the
+// kernel simply prefers whichever has the lower metric). If RouteAdd fails,
+// the old route is left completely untouched and an error is returned,
+// wrapping kernel.ErrDefaultRouteMetricConflict (another interface already
+// holds this exact metric — EEXIST) or kernel.ErrDefaultRouteUnreachable
+// (ENETDOWN/ENETUNREACH) so callers (service.RoutingService) can tell those
+// two recoverable conditions apart from a generic failure via errors.Is. If
+// RouteAdd succeeds but the follow-up RouteDel of the old route fails, the
+// newly-added route is rolled back (deleted) so this interface never ends up
+// with two simultaneous default routes as a side effect of a half-failed
+// call.
+//
+// netlink.RouteReplace (NLM_F_REPLACE) is deliberately NEVER used here as a
+// substitute for delete+add: RouteReplace matches purely on the (dst, tos,
+// priority, table) FIB key — which does NOT include the outgoing interface —
+// so if another interface already owns a route at the target metric,
+// RouteReplace would silently re-point THAT interface's route onto this
+// interface's gateway instead of failing loudly. That is strictly worse than
+// today's EEXIST: it corrupts a different interface's routing instead of
+// merely failing this call.
+//
+// Multiple default routes on the same interface (unusual but possible) are
+// all processed rather than aborting on the first failure; individual
+// per-route errors are combined with errors.Join.
 func (r *RealRouting) EnforceDefaultRouteMetric(ifaceName string, metric int) error {
 	if metric <= 0 {
 		return nil
@@ -333,6 +366,7 @@ func (r *RealRouting) EnforceDefaultRouteMetric(ifaceName string, metric int) er
 		return fmt.Errorf("failed to list IPv4 routes for %q: %w", ifaceName, err)
 	}
 
+	var errs []error
 	for _, rt := range routes {
 		isDefault := rt.Dst == nil || rt.Dst.String() == "0.0.0.0/0"
 		if !isDefault || rt.Gw == nil {
@@ -346,19 +380,81 @@ func (r *RealRouting) EnforceDefaultRouteMetric(ifaceName string, metric int) er
 		oldRt := rt // preserve Protocol/Scope/Src/Gw/LinkIndex from the original
 		newRt := rt
 		newRt.Priority = metric
+		// rt was read live from the kernel via RouteList and may carry
+		// runtime-derived flags (e.g. RTNH_F_DEAD/RTNH_F_LINKDOWN set during a
+		// cable-pull/carrier-loss window) — these describe the CURRENT state
+		// of the OLD route, not desired config for the new one, and must not
+		// be carried into RouteAdd.
+		newRt.Flags &^= unix.RTNH_F_DEAD | unix.RTNH_F_LINKDOWN
 
 		log.Printf("[Routing] Enforcing default route metric on %s: %d -> %d (gw %s, proto %d)",
 			ifaceName, oldRt.Priority, metric, rt.Gw, rt.Protocol)
 
-		if err := netlink.RouteDel(&oldRt); err != nil {
-			return fmt.Errorf("failed to delete default route on %q while changing metric: %w", ifaceName, err)
-		}
+		// Make-before-break: add the new route before touching the old one.
 		if err := netlink.RouteAdd(&newRt); err != nil {
-			return fmt.Errorf("failed to re-add default route on %q with metric %d: %w", ifaceName, metric, err)
+			errs = append(errs, wrapEnforceMetricAddErr(err, ifaceName, metric))
+			continue
+		}
+
+		if err := netlink.RouteDel(&oldRt); err != nil {
+			// The new route is live but the old one (at a different metric)
+			// is still present too — roll back the add so this interface
+			// doesn't end up with two default routes as a side effect of a
+			// half-failed call, then report the failure.
+			if rollbackErr := netlink.RouteDel(&newRt); rollbackErr != nil {
+				errs = append(errs, fmt.Errorf("failed to delete old default route on %q while changing metric to %d (%v), AND failed to roll back the newly-added route: %w", ifaceName, metric, err, rollbackErr))
+				continue
+			}
+			errs = append(errs, fmt.Errorf("failed to delete old default route on %q while changing metric to %d (rolled back the newly-added route, old route at metric %d is intact): %w", ifaceName, metric, oldRt.Priority, err))
+			continue
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
+}
+
+// wrapEnforceMetricAddErr classifies a RouteAdd failure from
+// EnforceDefaultRouteMetric into one of the two documented sentinel errors
+// (ErrDefaultRouteMetricConflict / ErrDefaultRouteUnreachable) when
+// recognized, wrapping both err and the sentinel with %w so
+// errors.Is/errors.As both work from the service package; unrecognized
+// errors are still wrapped with %w so the original cause is never lost.
+func wrapEnforceMetricAddErr(err error, ifaceName string, metric int) error {
+	switch {
+	case errors.Is(err, os.ErrExist):
+		return fmt.Errorf("failed to add default route on %q at metric %d: %w: %w", ifaceName, metric, ErrDefaultRouteMetricConflict, err)
+	case errors.Is(err, unix.ENETDOWN), errors.Is(err, unix.ENETUNREACH):
+		return fmt.Errorf("failed to add default route on %q at metric %d: %w: %w", ifaceName, metric, ErrDefaultRouteUnreachable, err)
+	default:
+		return fmt.Errorf("failed to add default route on %q at metric %d: %w", ifaceName, metric, err)
+	}
+}
+
+// DefaultRouteMetric reports the current priority of the IPv4 default
+// gateway route on ifaceName (Task 14, Decision C) without modifying
+// anything — the read-only counterpart to EnforceDefaultRouteMetric above,
+// used to snapshot a route's pre-override metric before a WAN failover
+// override changes it. found is false (not an error) when ifaceName simply
+// has no IPv4 default route with a gateway right now.
+func (r *RealRouting) DefaultRouteMetric(ifaceName string) (metric int, found bool, err error) {
+	link, err := netlink.LinkByName(ifaceName)
+	if err != nil {
+		return 0, false, fmt.Errorf("interface %q not found: %w", ifaceName, err)
+	}
+
+	routes, err := netlink.RouteList(link, netlink.FAMILY_V4)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to list IPv4 routes for %q: %w", ifaceName, err)
+	}
+
+	for _, rt := range routes {
+		isDefault := rt.Dst == nil || rt.Dst.String() == "0.0.0.0/0"
+		if !isDefault || rt.Gw == nil {
+			continue
+		}
+		return rt.Priority, true, nil
+	}
+	return 0, false, nil
 }
 
 func (r *RealRouting) DeleteRoute(route model.StaticRoute) error {

@@ -279,6 +279,22 @@ func RegisterRoutes(s *Server) http.Handler {
 	authRoute("GET /api/qos/status/{iface}", s.HandleGetQosIfaceStatus)
 	authRoute("DELETE /api/qos/iface/{iface}", s.HandleClearQosIface)
 
+	// 11. Multi-WAN Failover (docs/ref/todo/multi-wan-failover-plan.md).
+	// Uplink CRUD + status/metrics (Task 9) are authRoute (same sensitivity
+	// as Static Routes/QoS above). The kill switch and manual override
+	// (Task 16, D-8) are superAdminRoute — see wan_handlers.go's file doc
+	// comment for the rationale; GET /api/wan/failover (read-only settings)
+	// stays authRoute like everything else here.
+	authRoute("GET /api/wan/uplinks", s.HandleGetWanUplinks)
+	authRoute("POST /api/wan/uplinks", s.HandleCreateWanUplink)
+	authRoute("PUT /api/wan/uplinks/{id}", s.HandleUpdateWanUplink)
+	authRoute("DELETE /api/wan/uplinks/{id}", s.HandleDeleteWanUplink)
+	authRoute("GET /api/wan/status", s.HandleGetWanStatus)
+	authRoute("GET /api/wan/metrics", s.HandleGetWanMetrics)
+	authRoute("GET /api/wan/failover", s.HandleGetWanFailoverSettings)
+	superAdminRoute("PUT /api/wan/failover", s.HandleUpdateWanFailoverSettings)
+	superAdminRoute("POST /api/wan/failover/override", s.HandleSetWanFailoverManualOverride)
+
 	// Serve embedded static frontend files
 	serveStatic(mux)
 

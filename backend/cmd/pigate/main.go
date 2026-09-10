@@ -151,12 +151,21 @@ func main() {
 	var systemServiceMgr kernel.SystemServiceManager
 	var capProber kernel.CapabilityProber
 	var trafficAcct kernel.TrafficAccountingManager
+	var pathProbe kernel.PathProbeManager
 	dns := kernel.NewDNSManager(cfg.Mock)
 
 	if cfg.Mock || cfg.MockFromReal {
 		fw = kernel.NewMockFirewall(cfg.DockerCompat)
-		net = kernel.NewMockNetwork()
-		rt = kernel.NewMockRouting()
+		mockNet := kernel.NewMockNetwork()
+		mockRouting := kernel.NewMockRouting()
+		// SetRoutingSeed lets mockNet's ConfigureInterface seed a realistic
+		// baseline default-route metric into mockRouting (Task 14/Decision C
+		// DefaultRouteMetric), so WAN failover kill-switch restore has
+		// something to snapshot/restore under -mock=true (see
+		// MockNetwork.ConfigureInterface's doc comment).
+		mockNet.SetRoutingSeed(mockRouting)
+		net = mockNet
+		rt = mockRouting
 		qos = kernel.NewMockQos()
 		mDhcp := kernel.NewMockDhcp()
 		mDhcp.MockFromReal = cfg.MockFromReal
@@ -190,6 +199,7 @@ func main() {
 		trafficLog = mTrafficLog
 		systemServiceMgr = kernel.NewMockSystemServiceManager()
 		capProber = kernel.NewMockCapabilityProber()
+		pathProbe = kernel.NewMockPathProbe()
 		// ruleIDs supplies live DB policy-rule ids so MockTrafficAccounting's
 		// synthetic Top Rules entries actually match something in the DB
 		// (docs/ref/todo/dashboard-traffic-detail-plan.md T-05).
@@ -230,6 +240,7 @@ func main() {
 		systemServiceMgr = kernel.NewRealSystemServiceManager()
 		capProber = kernel.NewRealCapabilityProber()
 		trafficAcct = kernel.NewRealTrafficAccounting()
+		pathProbe = kernel.NewRealPathProbe()
 	}
 
 	// 5. Instantiate Server & Router
@@ -409,6 +420,10 @@ func main() {
 	// service (RAM queue + async batch writer to SQLite; see event_log.go).
 	eventLogService := service.NewEventLogService(repo)
 	dhcpServerService.SetEventLog(eventLogService)
+	// T-23: lets RoutingService surface a stuck WAN failover metric
+	// override/restore (docs/ref/wan-failover-findings.md) to the central
+	// event log instead of only a server log line.
+	routingService.SetEventLog(eventLogService)
 
 	// Kernel capability detection (issue #94): probes whether the kernel
 	// subsystems PiGate depends on (nftables, D-Bus/systemd units) are
@@ -519,6 +534,29 @@ func main() {
 	// than part of the startup-apply sequence.
 	dhcpHealthChecker := service.NewDhcpHealthChecker(repo, ifaceService, dhcpcdService, net, eventLogService, eventBus)
 
+	// Multi-WAN Failover health monitor (docs/ref/todo/
+	// multi-wan-failover-plan.md Task 7/8) — Phase 1 only: this is a
+	// read-only observer (probes configured WAN uplinks, tracks up/degraded/
+	// down state + latency/jitter/loss in RAM) with no ability to change
+	// routing at all yet. Constructed here (needs eventLogService + eventBus,
+	// both now available) but started further down, after both the netlink
+	// monitor and the DHCP health-checker, since it is a third independent
+	// background self-heal/observation loop, not part of the startup-apply
+	// sequence. wanMetricsRing is RAM-only (D-3) and also handed to the API
+	// server via SetWanMonitor below.
+	wanMetricsRing := service.NewWanUplinkMetricsRing()
+	wanMonitor := service.NewWanMonitor(repo, pathProbe, eventLogService, eventBus, wanMetricsRing)
+
+	// Multi-WAN Failover Phase 2 automatic/manual failover controller
+	// (docs/ref/todo/multi-wan-failover-plan.md Task 15/17). It reads
+	// wanMonitor's health states and drives routingService's metric-override
+	// API — never touches netlink/kernel directly (D-2). Constructed
+	// unconditionally, but harmless by default: WanFailoverSettings.Enabled
+	// defaults to false (kill switch off) in a fresh DB, so this never
+	// touches routing state at all on an existing deployment until an
+	// operator explicitly opts in via the API.
+	wanFailoverController := service.NewWanFailoverController(repo, wanMonitor, routingService, eventLogService, eventBus)
+
 	// Netlink monitor is created here (but started later, after startup config is
 	// applied) so it can be injected into the BackupService, which pauses it (and
 	// hence the whole bus) around a config import.
@@ -566,6 +604,13 @@ func main() {
 	// SetPolicyCounterStore wires the toggle-monitor/monitor-reset endpoints
 	// (docs/ref/todo/fqdn-retry-and-monitored-counters-plan.md T-11).
 	server.SetPolicyCounterStore(policyCounterStore)
+	// SetWanMonitor wires the Multi-WAN Failover status/metrics endpoints
+	// (docs/ref/todo/multi-wan-failover-plan.md Task 8/9) — additive, same
+	// pattern as SetPolicyStatsService/SetPolicyCounterStore above.
+	server.SetWanMonitor(wanMonitor)
+	// SetWanFailover wires the Phase 2 kill-switch/manual-override/status
+	// endpoints (docs/ref/todo/multi-wan-failover-plan.md Task 16/17).
+	server.SetWanFailover(wanFailoverController)
 
 	// Apply config form database to kernel
 
@@ -812,6 +857,23 @@ func main() {
 	// part of the startup-apply sequence above.
 	log.Printf("[Main] Starting DHCP health-checker (link-local/no-IP self-heal)...")
 	dhcpHealthChecker.Start(monitorCtx)
+
+	// Start the Multi-WAN Failover health monitor after both the netlink
+	// monitor and the DHCP health-checker (docs/ref/todo/
+	// multi-wan-failover-plan.md Task 8) — read-only in Phase 1: it never
+	// touches routing, it only probes configured WAN uplinks and records
+	// their health/metrics for the UI/API. Safe to start even with zero
+	// uplinks configured (its tick() simply has nothing to do).
+	log.Printf("[Main] Starting Multi-WAN Failover health monitor...")
+	wanMonitor.Start(monitorCtx)
+
+	// Start the Phase 2 failover controller right after the monitor it reads
+	// from (docs/ref/todo/multi-wan-failover-plan.md Task 15/17) — default
+	// off (WanFailoverSettings.Enabled=false in a fresh DB), so this is a
+	// no-op on an already-installed host until an operator opts in via the
+	// API; it never touches routing/kernel state on its own (D-2).
+	log.Printf("[Main] Starting Multi-WAN Failover controller (Phase 2, default disabled)...")
+	wanFailoverController.Start(monitorCtx)
 
 	// FQDN re-resolve retry ticker (docs/ref/todo/
 	// fqdn-retry-and-monitored-counters-plan.md D-1, issue #141) — started
