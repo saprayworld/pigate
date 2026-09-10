@@ -59,8 +59,8 @@ func ValidateWanUplink(input WanUplinkInput) error {
 	if strings.TrimSpace(input.Interface) == "" {
 		return fmt.Errorf("interface must not be empty")
 	}
-	if input.Priority < 1 || input.Priority > 16 {
-		return fmt.Errorf("priority must be between 1 and 16")
+	if input.Priority < 1 || input.Priority > MaxWanUplinks {
+		return fmt.Errorf("priority must be between 1 and %d", MaxWanUplinks)
 	}
 
 	if len(input.ProbeTargets) == 0 {

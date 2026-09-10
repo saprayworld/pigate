@@ -77,13 +77,65 @@ func (r *Repository) GetWanUplinkByID(id string) (*model.WanUplink, error) {
 	return &u, nil
 }
 
+// wanUplinkPriorityInUse reports whether another wan_uplinks row (any row
+// other than excludeID) already uses priority — Decision F (docs/ref/todo/
+// multi-wan-failover-plan.md, T-24) requires Priority to be unique across
+// every uplink so the failover controller's active/standby metric bands stay
+// collision-free. model.ValidateWanUplink can only check the 1..16 range in
+// isolation (it is a DB-free pure function, see its doc comment), so the
+// cross-row uniqueness check has to live here, at the repo layer, where
+// every other row is visible. excludeID is empty on create (nothing to
+// exclude) and the uplink's own id on update (so keeping its own unchanged
+// priority is never rejected as "in use by itself"). The UNIQUE index on
+// wan_uplinks(priority) (db/connection.go) is the actual, unconditional
+// backstop — this check exists purely to give the caller a clear,
+// field-specific error message instead of a raw sqlite constraint failure.
+func (r *Repository) wanUplinkPriorityInUse(priority int, excludeID string) (bool, error) {
+	row := r.db.QueryRow(`SELECT COUNT(1) FROM wan_uplinks WHERE priority = ? AND id != ?`, priority, excludeID)
+	var n int
+	if err := row.Scan(&n); err != nil {
+		return false, fmt.Errorf("check wan_uplink priority uniqueness: %w", err)
+	}
+	return n > 0, nil
+}
+
+// wanUplinkCount returns the total number of wan_uplinks rows — used by
+// CreateWanUplink to enforce model.MaxWanUplinks (QA round-1 fix, Finding 3:
+// see that constant's doc comment for why 16 is a hard ceiling, not just a
+// per-row range check).
+func (r *Repository) wanUplinkCount() (int, error) {
+	row := r.db.QueryRow(`SELECT COUNT(1) FROM wan_uplinks`)
+	var n int
+	if err := row.Scan(&n); err != nil {
+		return 0, fmt.Errorf("count wan_uplinks: %w", err)
+	}
+	return n, nil
+}
+
 // CreateWanUplink validates then inserts a new uplink, returning the created
 // record. interface uniqueness is enforced by the UNIQUE constraint on
 // wan_uplinks.interface — a duplicate is returned as a plain wrapped sqlite
 // error, which the api layer maps to 400 like any other validation failure.
+// Priority uniqueness (Decision F, T-24) is checked explicitly below for a
+// clearer error message, backstopped by the UNIQUE index on
+// wan_uplinks(priority). The total-row-count cap (model.MaxWanUplinks) is
+// checked here too, so "there are never more than 16 wan_uplinks rows" is an
+// actual invariant the duplicate-priority migration
+// (db/connection.go ensureUniqueWanUplinkPriorityIndex) can rely on, rather
+// than an unenforced assumption.
 func (r *Repository) CreateWanUplink(input model.WanUplinkInput) (*model.WanUplink, error) {
 	if err := model.ValidateWanUplink(input); err != nil {
 		return nil, err
+	}
+	if count, err := r.wanUplinkCount(); err != nil {
+		return nil, err
+	} else if count >= model.MaxWanUplinks {
+		return nil, fmt.Errorf("cannot create a new WAN uplink: at most %d WAN uplinks are allowed (this cap keeps every possible priority's active/standby default-route metric inside Decision F's reserved bands)", model.MaxWanUplinks)
+	}
+	if inUse, err := r.wanUplinkPriorityInUse(input.Priority, ""); err != nil {
+		return nil, err
+	} else if inUse {
+		return nil, fmt.Errorf("priority %d is already in use by another WAN uplink — priorities must be unique", input.Priority)
 	}
 
 	id := "wan-" + uuid.New().String()
@@ -108,10 +160,16 @@ func (r *Repository) CreateWanUplink(input model.WanUplinkInput) (*model.WanUpli
 }
 
 // UpdateWanUplink validates then updates an existing uplink, returning the
-// updated record.
+// updated record. Priority uniqueness (Decision F, T-24) excludes id itself
+// so leaving the priority unchanged is never rejected as "in use by itself".
 func (r *Repository) UpdateWanUplink(id string, input model.WanUplinkInput) (*model.WanUplink, error) {
 	if err := model.ValidateWanUplink(input); err != nil {
 		return nil, err
+	}
+	if inUse, err := r.wanUplinkPriorityInUse(input.Priority, id); err != nil {
+		return nil, err
+	} else if inUse {
+		return nil, fmt.Errorf("priority %d is already in use by another WAN uplink — priorities must be unique", input.Priority)
 	}
 
 	statusInt := 0

@@ -177,8 +177,18 @@ func newTestWanMonitor(t *testing.T) (*WanMonitor, *db.Repository, *kernel.MockP
 
 func createTestUplink(t *testing.T, repo *db.Repository, iface, method string, tcpPort int) model.WanUplink {
 	t.Helper()
+	// Decision F (T-24) requires Priority to be unique across all
+	// wan_uplinks rows — derive it from how many uplinks already exist in
+	// this test's DB so multiple createTestUplink calls in the same test
+	// (e.g. TestWanMonitor_SlowUplinkDoesNotDelayAnotherUplink) never collide,
+	// while single-uplink tests keep getting Priority=1 exactly as before.
+	existing, err := repo.GetWanUplinks()
+	if err != nil {
+		t.Fatalf("GetWanUplinks failed: %v", err)
+	}
+	priority := len(existing) + 1
 	u, err := repo.CreateWanUplink(model.WanUplinkInput{
-		Name: "Test-" + iface, Interface: iface, Priority: 1,
+		Name: "Test-" + iface, Interface: iface, Priority: priority,
 		ProbeTargets: []string{"1.1.1.1"}, ProbeMethod: method, ProbeTCPPort: tcpPort,
 		ProbeIntervalSeconds: 2, ProbeCount: 3, ProbeTimeoutMs: 200,
 		LossThresholdPct: 50, LatencyThresholdMs: 200,

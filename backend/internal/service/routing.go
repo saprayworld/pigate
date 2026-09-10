@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -19,11 +20,36 @@ type RoutingService struct {
 	enableEditSystemRoute bool
 	disabledSystemRoutes  map[string]model.StaticRoute
 
-	// mu guards ONLY the four maps below (Task 14 WAN failover metric
-	// overrides) — it is a separate lock from disabledSystemRoutes above
-	// (which stays unguarded, matching its pre-Task-14 behavior; this file
-	// has never been safe for concurrent enable-edit-system-route callers
-	// and Task 14 does not change that).
+	// eventLog is the central audit/event log (T-23), injected via
+	// SetEventLog after both services exist (main.go, mirrors
+	// DhcpServerService.SetEventLog). Nil-safe: left nil, enforcement
+	// failures are still logged via log.Printf but never reach the event
+	// log/UI.
+	eventLog *EventLogService
+
+	// reconcileMu serializes the ENTIRE reconcileKernelRoutingTable operation
+	// (ApplyRoutes + enforceInterfaceMetrics together) — deliberately a
+	// SEPARATE lock from mu below (mu is locked/unlocked repeatedly, in short
+	// bursts, from deep inside the enforce path; holding mu across the whole
+	// reconcile would deadlock the very code that reconcile itself calls).
+	// Why this exists (T-22): every RouteDel/RouteAdd this service performs
+	// generates a kernel netlink route-change event that NetlinkMonitor picks
+	// up and republishes as AddrRouteChanged, which main.go's "routing" bus
+	// subscriber reacts to by calling ReconcileKernelRoutingTable() again —
+	// concurrently with the WAN failover controller's own periodic tick and
+	// any HTTP-triggered reconcile (e.g. a manual override POST). Without
+	// serialization, two goroutines could interleave RouteDel/RouteAdd calls
+	// on the very route T-20/T-21 are trying to move safely, widening the
+	// window for exactly the "route disappears" bug this whole fix addresses.
+	reconcileMu sync.Mutex
+
+	// mu guards ONLY the maps/fields below (Task 14 WAN failover metric
+	// overrides, extended by T-23's enforcement-failure log guard) — it is a
+	// separate lock from disabledSystemRoutes above (which stays unguarded,
+	// matching its pre-Task-14 behavior; this file has never been safe for
+	// concurrent enable-edit-system-route callers and Task 14 does not change
+	// that) and from reconcileMu above (see its doc comment for why they must
+	// stay separate).
 	mu sync.Mutex
 	// failoverOverrides is the WAN failover controller's (T-15,
 	// wan_failover.go) desired default-route metric per interface — set
@@ -48,6 +74,14 @@ type RoutingService struct {
 	// route (D-2 precedence level 1) — exposed read-only via
 	// FailoverBypassedInterfaces() for the API/UI (T-16).
 	bypassedIfaces map[string]bool
+	// enforceFailedLogged is T-23's per-interface "already logged this
+	// enforcement-failure episode to the event log" guard, mirroring
+	// wan_failover.go's bypassedLogged pattern — cleared the moment
+	// enforcement next succeeds (or becomes a no-op because the interface is
+	// already at the desired metric) on that interface, so a future
+	// recurrence logs again. Also exposed read-only via
+	// EnforceFailedInterfaces() for the API/UI status.
+	enforceFailedLogged map[string]bool
 }
 
 func NewRoutingService(repo *db.Repository, routing kernel.RoutingManager) *RoutingService {
@@ -60,7 +94,14 @@ func NewRoutingService(repo *db.Repository, routing kernel.RoutingManager) *Rout
 		preOverrideMetrics:    make(map[string]int),
 		restorePending:        make(map[string]bool),
 		bypassedIfaces:        make(map[string]bool),
+		enforceFailedLogged:   make(map[string]bool),
 	}
+}
+
+// SetEventLog injects the central event log (T-23). See the eventLog field
+// doc comment — nil-safe, wired once from main.go after both services exist.
+func (s *RoutingService) SetEventLog(eventLog *EventLogService) {
+	s.eventLog = eventLog
 }
 
 func (s *RoutingService) SetEnableEditSystemRoute(enable bool) {
@@ -453,8 +494,24 @@ func (s *RoutingService) ReconcileKernelRoutingTable() error {
 	return s.reconcileKernelRoutingTable()
 }
 
-// reconcileKernelRoutingTable loads all DB routes and reconciles kernel routing state.
+// reconcileKernelRoutingTable loads all DB routes and reconciles kernel
+// routing state. reconcileMu-guarded (T-22) for its entire duration — see the
+// field's doc comment; every exported path that mutates routing
+// (ApplyConfigRoute, RemoveConfigRoute, BulkRemoveConfigRoutes,
+// ToggleConfigRoute, ReconcileKernelRoutingTable) funnels through this one
+// unexported function, so locking here alone is sufficient. None of the code
+// this function calls (ApplyRoutes, enforceInterfaceMetrics and everything
+// it calls) ever calls back into reconcileKernelRoutingTable or
+// ReconcileKernelRoutingTable itself, so there is no self-deadlock risk.
+// InitApplyConfig (startup) deliberately does NOT go through this lock: it
+// runs once, synchronously, before NetlinkMonitor/the WAN failover
+// controller/the HTTP server are started (see cmd/pigate/main.go's startup
+// sequence), so there is nothing else that could be reconciling
+// concurrently at that point.
 func (s *RoutingService) reconcileKernelRoutingTable() error {
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+
 	dbRoutes, err := s.GetDatabaseRouting()
 	if err != nil {
 		return fmt.Errorf("failed to fetch database routes: %w", err)
@@ -496,6 +553,24 @@ func (s *RoutingService) reconcileKernelRoutingTable() error {
 //  4. Otherwise: the original (pre-Task-14) Phase 1 behavior, unchanged —
 //     enforce the interface's own configured Metric only when
 //     AddressingMode=="dhcp" and Metric is set.
+//
+// T-21 (docs/ref/wan-failover-findings.md): when overrides or a pending
+// restore ARE in play, the actual kernel calls are additionally split into
+// two ordered phases — every DEMOTE (moving an interface to a HIGHER,
+// worse metric) before every PROMOTE (moving an interface to a LOWER,
+// better metric). This is the invariant that actually fixes the WAN
+// failover route-disappears bug: Linux allows only one default route per
+// (dst, tos, priority) metric per routing table — netlink RouteAdd uses
+// NLM_F_EXCL, so adding a second default route at an already-occupied
+// metric fails with EEXIST even though the outgoing interface differs (see
+// kernel.ErrDefaultRouteMetricConflict). The uplink being PROMOTED into the
+// active band must only receive its new (lower) metric AFTER whatever
+// uplink previously held that exact metric has already been DEMOTED off of
+// it — i.e. the metric "slot" must be vacated before it is claimed by
+// someone else. Getting this ordering wrong (as the pre-T-21 single-pass
+// code did, processing interfaces in arbitrary DB order) is exactly what
+// let a losing interface's RouteDel succeed while the winning interface's
+// RouteAdd failed, leaving the losing interface with ZERO default route.
 func (s *RoutingService) enforceInterfaceMetrics(dbRoutes []model.StaticRoute) {
 	ifaces, err := s.repo.GetInterfacesFromDB()
 	if err != nil {
@@ -528,20 +603,21 @@ func (s *RoutingService) enforceInterfaceMetrics(dbRoutes []model.StaticRoute) {
 
 	newBypassed := make(map[string]bool)
 
-	// Pass 1: every interface known to the DB, in the SAME order
-	// GetInterfacesFromDB returned them. When there are no overrides/
-	// restores in play at all, this pass alone reproduces the pre-Task-14
-	// call order/count/values exactly (the plan's explicit regression
-	// requirement) — precedence levels 1-3 above are no-ops in that case.
-	seen := make(map[string]bool, len(ifaces))
-	for _, iface := range ifaces {
-		seen[iface.Name] = true
-		s.enforceOneInterfaceMetric(iface.Name, iface, true, dbDefaultRouteIfaces, overrides, restorePending, prevBypassed, newBypassed)
+	type ifaceTarget struct {
+		name        string
+		iface       model.NetworkInterface
+		hasIfaceRow bool
 	}
 
-	// Pass 2: any override/restore-pending target with no row in interfaces
-	// at all — a WAN uplink may be configured on an interface pigate hasn't
-	// learned about (yet), see D-2. Sorted for a deterministic order.
+	// Build the full target list in the SAME order/composition as before
+	// T-21: every DB interface (GetInterfacesFromDB order), then any
+	// override/restore-pending name with no DB row at all, sorted.
+	seen := make(map[string]bool, len(ifaces))
+	targets := make([]ifaceTarget, 0, len(ifaces))
+	for _, iface := range ifaces {
+		seen[iface.Name] = true
+		targets = append(targets, ifaceTarget{iface.Name, iface, true})
+	}
 	extraSet := make(map[string]bool)
 	for name := range overrides {
 		if !seen[name] {
@@ -559,7 +635,106 @@ func (s *RoutingService) enforceInterfaceMetrics(dbRoutes []model.StaticRoute) {
 	}
 	sort.Strings(extra)
 	for _, name := range extra {
-		s.enforceOneInterfaceMetric(name, model.NetworkInterface{}, false, dbDefaultRouteIfaces, overrides, restorePending, prevBypassed, newBypassed)
+		targets = append(targets, ifaceTarget{name, model.NetworkInterface{}, false})
+	}
+
+	// CRITICAL REGRESSION GUARD (Task 14): with no overrides and no pending
+	// restore in play at all, precedence levels 2/3 can never fire for ANY
+	// interface — only level 1 (bypass bookkeeping, no kernel call) and
+	// level 4 (unchanged Phase 1 behavior) ever run. The two-phase
+	// demote/promote machinery below would be a pure no-op in that case
+	// anyway (every entry would land in one bucket, in the same relative
+	// order), but classifying demote-vs-promote requires an EXTRA
+	// DefaultRouteMetric kernel round-trip per interface that pre-Task-14
+	// code never made — so short-circuit straight back to the original
+	// single-pass call sequence to guarantee byte-for-byte parity (call
+	// order/count/values) with pre-Task-14 behavior, exactly as the plan
+	// requires.
+	if len(overrides) == 0 && len(restorePending) == 0 {
+		for _, t := range targets {
+			_ = s.enforceOneInterfaceMetric(t.name, t.iface, t.hasIfaceRow, dbDefaultRouteIfaces, overrides, restorePending, prevBypassed, newBypassed)
+		}
+		s.mu.Lock()
+		s.bypassedIfaces = newBypassed
+		s.mu.Unlock()
+		return
+	}
+
+	// --- Two-phase path (T-21): overrides and/or a pending restore exist ---
+
+	// PLAN: classify every target, WITHOUT touching the kernel or mutating
+	// any service state, as either "nothing to enforce here right now"
+	// (level 1 bypass, or no applicable precedence level at all — dispatched
+	// immediately below since it never issues a kernel call and its ordering
+	// relative to the enforced group is irrelevant) or "will be enforced at
+	// metric X" (deferred into the demote/promote classification).
+	var toEnforce []ifaceTarget
+	targetMetric := make(map[string]int, len(targets))
+	for _, t := range targets {
+		if metric, ok := s.previewOneInterfaceMetric(t.name, t.iface, t.hasIfaceRow, dbDefaultRouteIfaces, overrides, restorePending); ok {
+			targetMetric[t.name] = metric
+			toEnforce = append(toEnforce, t)
+			continue
+		}
+		_ = s.enforceOneInterfaceMetric(t.name, t.iface, t.hasIfaceRow, dbDefaultRouteIfaces, overrides, restorePending, prevBypassed, newBypassed)
+	}
+
+	// Classify each planned target as a DEMOTE (target metric higher/worse
+	// than what RoutingManager.DefaultRouteMetric currently reports for that
+	// interface) or a PROMOTE (target lower/better than current). An unknown
+	// current value (no live default route yet, or the read itself errored)
+	// carries no collision risk either way, so it is treated as a promote —
+	// safe to run in any order since there is nothing on that interface to
+	// vacate yet.
+	var demotes, promotes []ifaceTarget
+	for _, t := range toEnforce {
+		metric := targetMetric[t.name]
+		cur, found, err := s.routing.DefaultRouteMetric(t.name)
+		switch {
+		case err != nil:
+			log.Printf("[Routing] Warning: could not read current default-route metric on %s before enforcing %d (proceeding without demote/promote ordering for this interface): %v", t.name, metric, err)
+			promotes = append(promotes, t)
+		case !found:
+			promotes = append(promotes, t)
+		case metric > cur:
+			demotes = append(demotes, t)
+		default:
+			promotes = append(promotes, t)
+		}
+	}
+
+	// EXECUTE: every demote, then every promote. If a kernel call reports
+	// kernel.ErrDefaultRouteMetricConflict (another interface still holds
+	// the target metric — an ordering edge case, e.g. an interface outside
+	// the DB, or the conflicting interface's own demote failing), retry it
+	// exactly once after the full demote+promote sweep has completed, by
+	// which point the conflict has very likely resolved itself.
+	type conflict struct {
+		name   string
+		metric int
+	}
+	var conflicts []conflict
+	commit := func(t ifaceTarget) {
+		if err := s.enforceOneInterfaceMetric(t.name, t.iface, t.hasIfaceRow, dbDefaultRouteIfaces, overrides, restorePending, prevBypassed, newBypassed); err != nil {
+			if errors.Is(err, kernel.ErrDefaultRouteMetricConflict) {
+				conflicts = append(conflicts, conflict{t.name, targetMetric[t.name]})
+			}
+		}
+	}
+	for _, t := range demotes {
+		commit(t)
+	}
+	for _, t := range promotes {
+		commit(t)
+	}
+	for _, c := range conflicts {
+		log.Printf("[Routing] Retrying metric enforcement on %s at %d after a metric-slot conflict (likely a demote/promote ordering edge case involving an interface outside the DB)", c.name, c.metric)
+		if err := s.routing.EnforceDefaultRouteMetric(c.name, c.metric); err != nil {
+			log.Printf("[Routing] Warning: retry failed to enforce metric %d on %s: %v", c.metric, c.name, err)
+			s.reportEnforceFailure(c.name, c.metric, "retry", err)
+		} else {
+			s.clearEnforceFailedInterface(c.name)
+		}
 	}
 
 	s.mu.Lock()
@@ -567,8 +742,55 @@ func (s *RoutingService) enforceInterfaceMetrics(dbRoutes []model.StaticRoute) {
 	s.mu.Unlock()
 }
 
+// previewOneInterfaceMetric mirrors enforceOneInterfaceMetric's 4-level
+// precedence decision, WITHOUT any side effect whatsoever (no kernel calls,
+// no snapshot-taking, no consuming restorePending, no logging) — used purely
+// by the two-phase (demote-before-promote) planning pass to learn what
+// target metric (if any) an interface WOULD be enforced to, so the real
+// (side-effecting) enforcement can be scheduled in the correct order. ok is
+// false when this interface has nothing to enforce right now, either because
+// level 1 (an active DB static default route) bypasses it, or because none
+// of levels 2-4 apply.
+func (s *RoutingService) previewOneInterfaceMetric(
+	name string,
+	iface model.NetworkInterface,
+	hasIfaceRow bool,
+	dbDefaultRouteIfaces map[string]bool,
+	overrides map[string]int,
+	restorePending map[string]bool,
+) (metric int, ok bool) {
+	if dbDefaultRouteIfaces[name] {
+		return 0, false
+	}
+	if m, hasOverride := overrides[name]; hasOverride {
+		return m, true
+	}
+	if restorePending[name] {
+		s.mu.Lock()
+		snapshot, hasSnapshot := s.preOverrideMetrics[name]
+		s.mu.Unlock()
+		if hasSnapshot {
+			return snapshot, true
+		}
+		if hasIfaceRow && iface.Metric != nil {
+			return *iface.Metric, true
+		}
+		return 0, false
+	}
+	if hasIfaceRow && iface.AddressingMode == "dhcp" && iface.Metric != nil {
+		return *iface.Metric, true
+	}
+	return 0, false
+}
+
 // enforceOneInterfaceMetric applies enforceInterfaceMetrics' 4-level
-// precedence to a single interface name.
+// precedence to a single interface name, actually touching the kernel (and
+// consuming/mutating service state for levels 2/3) as needed. Returns the
+// error (if any) the underlying kernel.RoutingManager.EnforceDefaultRouteMetric
+// call reported — nil when nothing needed enforcing or it succeeded — so the
+// two-phase caller can detect kernel.ErrDefaultRouteMetricConflict and retry.
+// Errors are always logged here regardless of what the caller does with the
+// return value, matching this function's pre-T-21 log-and-continue contract.
 func (s *RoutingService) enforceOneInterfaceMetric(
 	name string,
 	iface model.NetworkInterface,
@@ -578,7 +800,7 @@ func (s *RoutingService) enforceOneInterfaceMetric(
 	restorePending map[string]bool,
 	prevBypassed map[string]bool,
 	newBypassed map[string]bool,
-) {
+) error {
 	override, hasOverride := overrides[name]
 
 	if dbDefaultRouteIfaces[name] {
@@ -592,27 +814,27 @@ func (s *RoutingService) enforceOneInterfaceMetric(
 			// Preserves the exact pre-Task-14 skip log for the no-override case.
 			log.Printf("[Routing] Skipping metric enforcement on %s: an active static route for 0.0.0.0/0 already governs it", name)
 		}
-		return
+		return nil
 	}
 
 	if hasOverride {
 		// Level 2.
-		s.applyFailoverOverride(name, override)
-		return
+		return s.applyFailoverOverride(name, override)
 	}
 
 	if restorePending[name] {
 		// Level 3.
-		s.restoreFailoverOverride(name, iface, hasIfaceRow)
-		return
+		return s.restoreFailoverOverride(name, iface, hasIfaceRow)
 	}
 
 	// Level 4: unchanged Phase 1 behavior.
 	if hasIfaceRow && iface.AddressingMode == "dhcp" && iface.Metric != nil {
 		if err := s.routing.EnforceDefaultRouteMetric(name, *iface.Metric); err != nil {
 			log.Printf("[Routing] Warning: failed to enforce metric %d on %s: %v", *iface.Metric, name, err)
+			return err
 		}
 	}
+	return nil
 }
 
 // applyFailoverOverride enforces a Task 14 WAN failover metric override on
@@ -621,24 +843,45 @@ func (s *RoutingService) enforceOneInterfaceMetric(
 // override is seen for this interface — the snapshot survives across
 // reconcile passes until this override is cleared/restored (it is not
 // re-taken on every pass while the override simply keeps being present).
-func (s *RoutingService) applyFailoverOverride(name string, metric int) {
+//
+// T-21: also skips the actual EnforceDefaultRouteMetric call entirely when
+// the interface is already observed at the desired metric — this is safe to
+// add here (unlike inside enforceOneInterfaceMetric's shared level-4 branch)
+// because this function is only ever reached via the T-21 two-phase path
+// (the Task-14 regression guard above guarantees overrides is empty on the
+// legacy single-pass path, so this function is simply never called there).
+//
+// T-23: reports a failed enforcement to the central event log (log-once per
+// episode, see reportEnforceFailure) so a stuck WAN failover override is
+// visible to an operator instead of only ever appearing in a log line.
+func (s *RoutingService) applyFailoverOverride(name string, metric int) error {
 	s.mu.Lock()
 	_, alreadySnapshotted := s.preOverrideMetrics[name]
 	s.mu.Unlock()
 
-	if !alreadySnapshotted {
-		if cur, found, err := s.routing.DefaultRouteMetric(name); err != nil {
-			log.Printf("[Routing] Warning: could not snapshot current default-route metric on %s before applying WAN failover override: %v", name, err)
-		} else if found {
-			s.mu.Lock()
-			s.preOverrideMetrics[name] = cur
-			s.mu.Unlock()
-		}
+	cur, found, err := s.routing.DefaultRouteMetric(name)
+	if err != nil {
+		log.Printf("[Routing] Warning: could not read current default-route metric on %s before applying WAN failover override: %v", name, err)
+	} else if found && !alreadySnapshotted {
+		s.mu.Lock()
+		s.preOverrideMetrics[name] = cur
+		s.mu.Unlock()
 	}
 
-	if err := s.routing.EnforceDefaultRouteMetric(name, metric); err != nil {
-		log.Printf("[Routing] Warning: failed to enforce WAN failover metric override %d on %s: %v", metric, name, err)
+	if err == nil && found && cur == metric {
+		// Already at the desired metric — nothing to enforce, and any prior
+		// enforcement-failure episode for this interface is now over.
+		s.clearEnforceFailedInterface(name)
+		return nil
 	}
+
+	if enforceErr := s.routing.EnforceDefaultRouteMetric(name, metric); enforceErr != nil {
+		log.Printf("[Routing] Warning: failed to enforce WAN failover metric override %d on %s: %v", metric, name, enforceErr)
+		s.reportEnforceFailure(name, metric, "failover-override", enforceErr)
+		return enforceErr
+	}
+	s.clearEnforceFailedInterface(name)
+	return nil
 }
 
 // restoreFailoverOverride handles the restorePending precedence level: it
@@ -666,7 +909,15 @@ func (s *RoutingService) applyFailoverOverride(name string, metric int) {
 // interface that had gone through a normal ConfigureInterface call (which
 // happens for every DB interface at startup) should already have a
 // snapshot-able live metric, exactly like a real kernel would.
-func (s *RoutingService) restoreFailoverOverride(name string, iface model.NetworkInterface, hasIfaceRow bool) {
+// T-21: like applyFailoverOverride, this function is only ever reached via
+// the two-phase path — restorePending is guaranteed empty on the legacy
+// single-pass (regression-guarded) path — so it is safe to add a
+// skip-if-already-at-target check here without risking the Task 14
+// regression guard.
+//
+// T-23: reports a failed restore to the central event log (log-once per
+// episode) so a stuck kill-switch-off restore is visible to an operator.
+func (s *RoutingService) restoreFailoverOverride(name string, iface model.NetworkInterface, hasIfaceRow bool) error {
 	s.mu.Lock()
 	snapshot, hasSnapshot := s.preOverrideMetrics[name]
 	delete(s.preOverrideMetrics, name)
@@ -679,13 +930,73 @@ func (s *RoutingService) restoreFailoverOverride(name string, iface model.Networ
 			restoreTo = *iface.Metric
 		} else {
 			log.Printf("[Routing] Warning: no snapshot or configured metric available to restore %s after its WAN failover override was cleared; leaving the current kernel metric as-is", name)
-			return
+			return nil
 		}
+	}
+
+	if cur, found, err := s.routing.DefaultRouteMetric(name); err == nil && found && cur == restoreTo {
+		s.clearEnforceFailedInterface(name)
+		return nil
 	}
 
 	if err := s.routing.EnforceDefaultRouteMetric(name, restoreTo); err != nil {
 		log.Printf("[Routing] Warning: failed to restore default-route metric %d on %s after clearing its WAN failover override: %v", restoreTo, name, err)
+		s.reportEnforceFailure(name, restoreTo, "failover-restore", err)
+		return err
 	}
+	s.clearEnforceFailedInterface(name)
+	return nil
+}
+
+// reportEnforceFailure logs an EnforceDefaultRouteMetric failure occurring
+// while applying/restoring a Task 14 WAN failover metric override (T-23) —
+// the scenario where a failed enforcement is a genuinely urgent,
+// user-visible condition (a WAN uplink silently losing its default route).
+// cause is a short machine-readable tag ("failover-override"/
+// "failover-restore"/"retry") folded into the message. Logs to the central
+// event log at most ONCE per "episode" (see enforceFailedLogged's doc
+// comment), cleared by clearEnforceFailedInterface once enforcement next
+// succeeds, so a persisting failure does not spam the event log on every
+// reconcile tick. Nil-safe with respect to s.eventLog (log.Printf at the
+// call site always happens regardless).
+func (s *RoutingService) reportEnforceFailure(name string, metric int, cause string, err error) {
+	s.mu.Lock()
+	alreadyLogged := s.enforceFailedLogged[name]
+	s.enforceFailedLogged[name] = true
+	s.mu.Unlock()
+
+	if alreadyLogged || s.eventLog == nil {
+		return
+	}
+	s.eventLog.Log(model.EventCategoryNetwork, "wan-failover", model.EventSeverityCritical,
+		model.EventActorSystem, name,
+		fmt.Sprintf("Failed to enforce WAN failover default-route metric %d on interface %s (%s): %v", metric, name, cause, err))
+}
+
+// clearEnforceFailedInterface resets reportEnforceFailure's per-interface
+// "already logged this episode" guard once enforcement succeeds (or becomes
+// a no-op because the interface is already at the desired metric) — a
+// future recurrence logs again.
+func (s *RoutingService) clearEnforceFailedInterface(name string) {
+	s.mu.Lock()
+	delete(s.enforceFailedLogged, name)
+	s.mu.Unlock()
+}
+
+// EnforceFailedInterfaces returns the (sorted, defensive-copy) list of
+// interface names currently within a logged WAN-failover
+// enforcement-failure episode (T-23) — used by the API/UI to surface a
+// currently-stuck override/restore the same way FailoverBypassedInterfaces
+// already surfaces a bypassed one.
+func (s *RoutingService) EnforceFailedInterfaces() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.enforceFailedLogged))
+	for k := range s.enforceFailedLogged {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // SetFailoverMetricOverrides atomically replaces the FULL set of Task 14 WAN

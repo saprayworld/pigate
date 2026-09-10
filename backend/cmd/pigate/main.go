@@ -420,6 +420,10 @@ func main() {
 	// service (RAM queue + async batch writer to SQLite; see event_log.go).
 	eventLogService := service.NewEventLogService(repo)
 	dhcpServerService.SetEventLog(eventLogService)
+	// T-23: lets RoutingService surface a stuck WAN failover metric
+	// override/restore (docs/ref/wan-failover-findings.md) to the central
+	// event log instead of only a server log line.
+	routingService.SetEventLog(eventLogService)
 
 	// Kernel capability detection (issue #94): probes whether the kernel
 	// subsystems PiGate depends on (nftables, D-Bus/systemd units) are

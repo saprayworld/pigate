@@ -122,9 +122,23 @@ type RoutingManager interface {
 	DeleteRoute(route model.StaticRoute) error
 	SetEnableEditSystemRoute(enable bool)
 	// EnforceDefaultRouteMetric ensures the IPv4 default gateway route on ifaceName
-	// has the given priority, deleting and re-adding it (preserving proto/scope/src/gw)
-	// if the current priority differs. Used to override the metric of dhcpcd-managed
-	// default routes for multi-WAN failover ordering. IPv4 only.
+	// has the given priority (preserving proto/scope/src/gw) if the current priority
+	// differs. Used to override the metric of dhcpcd-managed default routes for
+	// multi-WAN failover ordering. IPv4 only.
+	//
+	// Contract (T-20, docs/ref/wan-failover-findings.md): implementations MUST be
+	// make-before-break — add the new route at the target metric BEFORE deleting
+	// the old one — and must NEVER destroy the interface's existing default route
+	// if the new one cannot be installed; on failure the old route must be left
+	// intact and an error returned. A failed add wraps ErrDefaultRouteMetricConflict
+	// when another interface already holds a route at that exact metric (EEXIST —
+	// Linux allows only one default route per metric per table, and NLM_F_EXCL
+	// rejects a second one even though the outgoing interface differs), or
+	// ErrDefaultRouteUnreachable when the interface/gateway is not currently
+	// reachable (ENETDOWN/ENETUNREACH). Both are wrapped with %w so callers can use
+	// errors.Is. netlink.RouteReplace must never be used as a substitute for
+	// delete+add here: it would silently re-point whatever OTHER interface already
+	// owns the target metric instead of failing loudly.
 	EnforceDefaultRouteMetric(ifaceName string, metric int) error
 	// DefaultRouteMetric is a READ-ONLY counterpart to EnforceDefaultRouteMetric
 	// (docs/ref/todo/multi-wan-failover-plan.md Task 14, Decision C): it reports

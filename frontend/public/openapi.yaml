@@ -4649,17 +4649,21 @@ paths:
         endpoints) — the mutating counterpart below is super_admin only.
         Defaults to enabled=false (kill switch off) so installing this
         feature never changes behavior on an existing deployment until an
-        operator opts in.
+        operator opts in. Also includes the controller's current
+        per-interface bypassed/enforceFailedInterfaces diagnostics (the same
+        data GET /wan/status folds into its bypassedByStaticRoute/
+        enforceFailed aggregate booleans) — always empty if the failover
+        controller has never been wired/enabled.
       operationId: getWanFailoverSettings
       security:
         - cookieAuth: []
       responses:
         '200':
-          description: Current WAN failover settings
+          description: Current WAN failover settings plus per-interface diagnostics
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WanFailoverSettings'
+                $ref: '#/components/schemas/WanFailoverSettingsResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
     put:
@@ -10768,6 +10772,17 @@ components:
           type: string
           description: Empty until the controller has ever switched the active uplink.
           example: 'auto mode: uplink "wan-3f9c2b1a" is the highest-priority healthy, non-stale uplink'
+        enforceFailed:
+          type: boolean
+          description: >-
+            True when at least one interface currently has a failed WAN
+            failover default-route metric override/restore enforcement (a
+            kernel-level failure, e.g. a metric-slot conflict, that persisted
+            past the automatic retry; see docs/ref/wan-failover-findings.md).
+            Mirrors bypassedByStaticRoute's shape (a single flag, not a
+            per-interface list). Always false when the failover controller
+            has never been wired/enabled.
+          example: false
 
     WanFailoverSettings:
       type: object
@@ -10805,6 +10820,36 @@ components:
             same exemption as minHoldSeconds — a manual override to a
             higher-priority uplink is never held up by this either.
           example: 120
+
+    WanFailoverSettingsResponse:
+      description: >-
+        GET /wan/failover's response: WanFailoverSettings plus the
+        controller's current per-interface diagnostics.
+      allOf:
+        - $ref: '#/components/schemas/WanFailoverSettings'
+        - type: object
+          properties:
+            bypassed:
+              type: array
+              items:
+                type: string
+              description: >-
+                Interface names that have an active WAN failover metric
+                override currently overridden by an even-higher-precedence
+                active DB static 0.0.0.0/0 route. Empty whenever the
+                failover controller has never been wired/enabled or nothing
+                is currently bypassed.
+              example: []
+            enforceFailedInterfaces:
+              type: array
+              items:
+                type: string
+              description: >-
+                Interface names whose most recent WAN failover default-route
+                metric override/restore enforcement failed at the kernel
+                level (e.g. a metric-slot conflict that persisted past the
+                automatic retry; see docs/ref/wan-failover-findings.md).
+              example: []
 
     WanMetricPoint:
       type: object

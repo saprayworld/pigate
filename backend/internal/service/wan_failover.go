@@ -49,13 +49,32 @@ const wanFailoverStartupGrace = 60 * time.Second
 // (not derived from the user-configurable model.NetworkInterface.Metric),
 // so the ordering the kernel actually sees is always unambiguous and
 // independent of whatever an operator separately typed into the Interfaces
-// page: the active uplink always gets wanFailoverActiveMetric; every other
-// currently-enabled uplink gets a "standby" metric far above it, spread out
-// by Priority (lower Priority number = lower/better standby metric = tried
-// first by the kernel if the active route ever disappeared for an unrelated
-// reason) so a tie between two standby uplinks can never happen.
+// page. Every other currently-enabled uplink gets a "standby" metric far
+// above the active band, spread out by Priority (lower Priority number =
+// lower/better standby metric = tried first by the kernel if the active
+// route ever disappeared for an unrelated reason) so a tie between two
+// standby uplinks can never happen.
+//
+// Decision F (docs/ref/todo/multi-wan-failover-plan.md, approved
+// 2026-09-09, refines Decision B): the active metric is no longer a single
+// value shared by whichever uplink happens to be active — it is now
+// per-uplink (wanFailoverActiveMetricBase + Priority), so every
+// currently-enabled uplink owns its OWN permanent slot in BOTH the active
+// and standby bands at ALL times, active or not. This closes the exact
+// collision Decision B's single shared "active" value left open: with only
+// one fixed active metric, the uplink being PROMOTED into it and the uplink
+// being DEMOTED off it briefly want that identical metric during a switch —
+// precisely the netlink NLM_F_EXCL/EEXIST race that caused the WAN failover
+// route-disappears bug (docs/ref/wan-failover-findings.md). This is
+// collision-free ONLY because WAN uplink Priority is enforced unique across
+// every wan_uplinks row (DB UNIQUE index + validation, see
+// db/connection.go/db/wan_repo.go) — Priority 1..16 maps 1:1 onto the active
+// band 51..66 (model.WanReservedActiveMetricMin/Max) and the standby band
+// 1010..1160 (within the wider reserved model.WanReservedStandbyMetricMin/
+// Max range, which also blocks a manually-configured interface Metric from
+// landing in either band — see model.ValidateWanUplinkInterfaceMetric).
 const (
-	wanFailoverActiveMetric      = 50
+	wanFailoverActiveMetricBase  = 50
 	wanFailoverStandbyMetricBase = 1000
 )
 
@@ -319,7 +338,7 @@ func (c *WanFailoverController) enforceOverrides(active string, uplinks []model.
 			continue
 		}
 		if u.ID == active {
-			desired[u.Interface] = wanFailoverActiveMetric
+			desired[u.Interface] = wanFailoverActiveMetricBase + u.Priority
 		} else {
 			desired[u.Interface] = wanFailoverStandbyMetricBase + 10*u.Priority
 		}
@@ -437,12 +456,13 @@ func (c *WanFailoverController) Status() model.WanFailoverStatus {
 	}
 
 	return model.WanFailoverStatus{
-		Enabled:          settings.Enabled,
-		Mode:             settings.Mode,
-		ActiveUplinkID:   activeUplinkID,
-		LastSwitchAt:     lastSwitchAt,
-		LastSwitchReason: lastSwitchReason,
-		Bypassed:         c.routing.FailoverBypassedInterfaces(),
+		Enabled:                 settings.Enabled,
+		Mode:                    settings.Mode,
+		ActiveUplinkID:          activeUplinkID,
+		LastSwitchAt:            lastSwitchAt,
+		LastSwitchReason:        lastSwitchReason,
+		Bypassed:                c.routing.FailoverBypassedInterfaces(),
+		EnforceFailedInterfaces: c.routing.EnforceFailedInterfaces(),
 	}
 }
 

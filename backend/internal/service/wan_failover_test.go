@@ -5,6 +5,7 @@ import (
 	"context"
 	"log"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -286,6 +287,13 @@ func newTestFailoverController(t *testing.T) (*WanFailoverController, *db.Reposi
 		t.Fatalf("InitDB failed: %v", err)
 	}
 	t.Cleanup(func() { sqlDB.Close() })
+	// modernc.org/sqlite's ":memory:" DSN is per-CONNECTION, not per *sql.DB
+	// — database/sql's pool can silently open a second connection under
+	// concurrent access (T-26's TestReconcile_ConcurrentCallersSerialized),
+	// which would see a completely separate, freshly-migrated-less empty
+	// database. Force a single shared connection so every goroutine in this
+	// test package actually reads/writes the same in-memory DB.
+	sqlDB.SetMaxOpenConns(1)
 
 	repo := db.NewRepository(sqlDB)
 
@@ -354,8 +362,9 @@ func TestWanFailoverController_PrimaryDownSwitchesToBackup(t *testing.T) {
 		t.Fatalf("expected backup uplink active after primary went down, got %q (reason=%q)", status.ActiveUplinkID, status.LastSwitchReason)
 	}
 
-	if got, ok := tracker.enforcedMetrics[backup.Interface]; !ok || got != wanFailoverActiveMetric {
-		t.Errorf("expected backup interface %s enforced at active metric %d, got %d (present=%v)", backup.Interface, wanFailoverActiveMetric, got, ok)
+	wantActive := wanFailoverActiveMetricBase + backup.Priority
+	if got, ok := tracker.enforcedMetrics[backup.Interface]; !ok || got != wantActive {
+		t.Errorf("expected backup interface %s enforced at active metric %d, got %d (present=%v)", backup.Interface, wantActive, got, ok)
 	}
 	wantStandby := wanFailoverStandbyMetricBase + 10*primary.Priority
 	if got, ok := tracker.enforcedMetrics[primary.Interface]; !ok || got != wantStandby {
@@ -671,8 +680,8 @@ func TestWanFailoverController_CheckBypassed_LogsPerInterfaceOnSwitch(t *testing
 	uplinkA := model.WanUplink{ID: "u1", Interface: ifaceA}
 	uplinkB := model.WanUplink{ID: "u2", Interface: ifaceB}
 
-	routing.SetFailoverMetricOverride(ifaceA, wanFailoverActiveMetric)
-	routing.SetFailoverMetricOverride(ifaceB, wanFailoverActiveMetric)
+	routing.SetFailoverMetricOverride(ifaceA, wanFailoverActiveMetricBase)
+	routing.SetFailoverMetricOverride(ifaceB, wanFailoverActiveMetricBase)
 
 	// An active DB static 0.0.0.0/0 route on BOTH interfaces makes both
 	// overrides bypassed (T-14 precedence level 1) at the same time — this
@@ -740,5 +749,145 @@ func TestWanFailoverController_BootGraceHoldsOverrideUntilStatesKnown(t *testing
 	}
 	if len(tracker.enforceCalls) != 0 {
 		t.Errorf("expected zero EnforceDefaultRouteMetric calls before the first decision, got %d", len(tracker.enforceCalls))
+	}
+}
+
+// --- T-26: bidirectional switching + concurrency regression tests ---------
+// (docs/ref/wan-failover-findings.md)
+
+// TestWanFailover_SwitchBothDirectionsKeepsEveryDefaultRoute drives repeated
+// A -> B -> A -> B switches (3+ round trips) directly through
+// RoutingService's failover-override API (mirroring what
+// WanFailoverController.enforceOverrides does every tick) and asserts that
+// after EVERY switch, BOTH interfaces still have a live default route (per
+// the T-25 simulated FIB) and the active one sits inside Decision F's
+// reserved active band. Run under both DB interface orderings — this is
+// what actually catches an ordering-dependent regression, even though
+// (see the T-26 handoff notes) Decision F's disjoint per-uplink bands make a
+// plain 2-uplink swap collision-free by construction; this test remains a
+// valuable end-to-end guard against a reordering/bookkeeping regression in
+// enforceInterfaceMetrics itself.
+func TestWanFailover_SwitchBothDirectionsKeepsEveryDefaultRoute(t *testing.T) {
+	for _, order := range [][2]string{{"wanA", "wanB"}, {"wanB", "wanA"}} {
+		t.Run(order[0]+","+order[1], func(t *testing.T) {
+			testWanFailoverBidirectionalSwitching(t, order[0], order[1])
+		})
+	}
+}
+
+func testWanFailoverBidirectionalSwitching(t *testing.T, firstInDB, secondInDB string) {
+	t.Helper()
+	sqliteDB, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init memory db: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	repo := db.NewRepository(sqliteDB)
+	repo.SetMockMode(true, false)
+	seedWanFailoverPairInterfaces(t, repo, firstInDB, secondInDB)
+
+	tracker := &trackingRoutingManager{}
+	svc := NewRoutingService(repo, tracker)
+
+	const priorityA, priorityB = 1, 2
+	priority := map[string]int{"wanA": priorityA, "wanB": priorityB}
+	other := map[string]string{"wanA": "wanB", "wanB": "wanA"}
+
+	switchActiveTo := func(active string) {
+		standby := other[active]
+		desired := map[string]int{
+			active:  wanFailoverActiveMetricBase + priority[active],
+			standby: wanFailoverStandbyMetricBase + 10*priority[standby],
+		}
+		svc.SetFailoverMetricOverrides(desired)
+		svc.enforceInterfaceMetrics(nil)
+
+		for _, name := range []string{"wanA", "wanB"} {
+			metric, found, err := tracker.DefaultRouteMetric(name)
+			if err != nil || !found {
+				t.Fatalf("after switching active to %q (DB order %s,%s): interface %q lost its default route entirely (found=%v err=%v)", active, firstInDB, secondInDB, name, found, err)
+			}
+			if name == active && (metric < model.WanReservedActiveMetricMin || metric > model.WanReservedActiveMetricMax) {
+				t.Errorf("after switching active to %q: active uplink %q metric %d is not inside the reserved active band %d-%d", active, name, metric, model.WanReservedActiveMetricMin, model.WanReservedActiveMetricMax)
+			}
+		}
+	}
+
+	// A -> B -> A -> B -> A -> B: 3 full round trips.
+	sequence := []string{"wanA", "wanB", "wanA", "wanB", "wanA", "wanB"}
+	for _, active := range sequence {
+		switchActiveTo(active)
+	}
+}
+
+// TestReconcile_ConcurrentCallersSerialized calls
+// RoutingService.ReconcileKernelRoutingTable concurrently from several
+// goroutines while the WAN failover controller keeps ticking (which itself
+// mutates overrides and reconciles) — T-22's reconcileMu must serialize all
+// of this so the simulated FIB ends up in a consistent state with no lost
+// routes. Intended to be run with -race (go test -race) to also catch a
+// data race in the shared maps, not just a logical inconsistency.
+func TestReconcile_ConcurrentCallersSerialized(t *testing.T) {
+	c, repo, tracker, monitor, _ := newTestFailoverController(t)
+
+	primary := createFailoverUplink(t, repo, "Primary", "wan-p", 1)
+	backup := createFailoverUplink(t, repo, "Backup", "wan-b", 2)
+
+	now := time.Now()
+	monitor.probeUplink(context.Background(), primary, now)
+	monitor.probeUplink(context.Background(), backup, now)
+
+	setFailoverSettings(t, repo, model.WanFailoverSettings{
+		Enabled: true, Mode: model.WanFailoverModeAuto, MinHoldSeconds: 0, RevertDelaySeconds: 0,
+	})
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	// Several goroutines hammering ReconcileKernelRoutingTable directly,
+	// exactly as main.go's "routing" NetEventBus subscriber and an
+	// HTTP-triggered reconcile would concurrently with the controller below.
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = c.routing.ReconcileKernelRoutingTable()
+				}
+			}
+		}()
+	}
+
+	// The controller keeps ticking concurrently, mutating overrides and
+	// triggering its own reconciles.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 25; i++ {
+			c.tick(now.Add(time.Duration(i) * time.Second))
+		}
+	}()
+
+	time.Sleep(200 * time.Millisecond) // let goroutines actually interleave
+	close(stop)
+	wg.Wait()
+
+	// After everything settles, both uplinks must still have SOME default
+	// route, and the active one must sit inside the reserved active band.
+	status := c.Status()
+	for _, u := range []model.WanUplink{primary, backup} {
+		metric, found, err := tracker.DefaultRouteMetric(u.Interface)
+		if err != nil || !found {
+			t.Errorf("interface %s (uplink %s) lost its default route entirely after concurrent reconciles (err=%v)", u.Interface, u.ID, err)
+			continue
+		}
+		if u.ID == status.ActiveUplinkID && (metric < model.WanReservedActiveMetricMin || metric > model.WanReservedActiveMetricMax) {
+			t.Errorf("active uplink %s metric %d is not inside the reserved active band %d-%d after concurrent reconciles", u.ID, metric, model.WanReservedActiveMetricMin, model.WanReservedActiveMetricMax)
+		}
 	}
 }

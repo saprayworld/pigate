@@ -1,5 +1,7 @@
 package model
 
+import "fmt"
+
 // Package-level WAN uplink probe method constants. ProbeMethod on WanUplink
 // must be exactly one of these three values (see ValidateWanUplink in
 // wan_validate.go). "auto" means: try ICMP first, and if that round gets zero
@@ -42,6 +44,61 @@ const (
 	WanFailoverModeAuto   = "auto"
 	WanFailoverModeManual = "manual"
 )
+
+// Decision F (docs/ref/todo/multi-wan-failover-plan.md, approved
+// 2026-09-09, alongside Decision B recorded in service/wan_failover.go): the
+// failover controller's active/standby default-route metric bands are
+// permanent, reserved ranges that a WAN uplink interface's
+// manually-configured Metric (Interfaces page, level-4 precedence in
+// service.RoutingService.enforceInterfaceMetrics) must never fall inside —
+// see ValidateWanUplinkInterfaceMetric. The active band (51..66) exactly
+// covers every possible wanFailoverActiveMetricBase+Priority value for
+// Priority 1..16; the standby band (1000..1200) covers every possible
+// wanFailoverStandbyMetricBase+10*Priority value (1010..1160) with generous
+// headroom.
+const (
+	WanReservedActiveMetricMin  = 51
+	WanReservedActiveMetricMax  = 66
+	WanReservedStandbyMetricMin = 1000
+	WanReservedStandbyMetricMax = 1200
+)
+
+// MaxWanUplinks is the hard ceiling on the TOTAL number of wan_uplinks rows
+// (QA round-1 fix, Finding 3). Decision F's entire collision-freedom
+// argument — active metric = wanFailoverActiveMetricBase+Priority, standby =
+// wanFailoverStandbyMetricBase+10*Priority — is built on Priority never
+// exceeding 16 (ValidateWanUplink already enforces 1..16 per row via this
+// same constant, and the two reserved bands above are sized exactly to
+// cover Priority 1..16). That per-row check alone is not enough: nothing
+// previously capped how many wan_uplinks rows could exist in total, so
+// db/connection.go's duplicate-priority migration could, in principle, need
+// to renumber a row above 16 if more than 16 rows ever existed — producing
+// an active-band metric (67+) outside the reserved bands and silently
+// reopening the exact collision class Decision F was built to close. This
+// constant is enforced both at creation time (db.Repository.CreateWanUplink,
+// rejecting a 17th uplink outright) and defensively inside the migration
+// itself (db/connection.go ensureUniqueWanUplinkPriorityIndex, which now
+// hard-fails at startup rather than assigning an out-of-band priority).
+const MaxWanUplinks = 16
+
+// ValidateWanUplinkInterfaceMetric checks that metric (a WAN uplink
+// interface's manually-configured model.NetworkInterface.Metric) does not
+// fall inside either of Decision F's reserved default-route metric bands —
+// doing so would create a NEW class of metric collision (this time between
+// an operator's own static setting and the failover controller's
+// active/standby bands) on top of the one Decision F already closed between
+// uplinks themselves. Called from service.InterfaceService.
+// ApplyInterfaceConfig only when the target interface is currently a WAN
+// uplink (db.Repository.GetWanUplinks).
+func ValidateWanUplinkInterfaceMetric(metric int) error {
+	if metric >= WanReservedActiveMetricMin && metric <= WanReservedActiveMetricMax {
+		return fmt.Errorf("metric %d is reserved for the WAN failover active-uplink band (%d-%d) and cannot be manually assigned to a WAN uplink interface", metric, WanReservedActiveMetricMin, WanReservedActiveMetricMax)
+	}
+	if metric >= WanReservedStandbyMetricMin && metric <= WanReservedStandbyMetricMax {
+		return fmt.Errorf("metric %d is reserved for the WAN failover standby-uplink band (%d-%d) and cannot be manually assigned to a WAN uplink interface", metric, WanReservedStandbyMetricMin, WanReservedStandbyMetricMax)
+	}
+	return nil
+}
 
 // MaxWanProbeTargets caps how many ProbeTargets a single WanUplink may
 // configure. Every configured target is probed every round (WanMonitor.
@@ -226,17 +283,26 @@ type WanStatusEntry struct {
 // case) — a caller must never need to cross-reference GET /api/wan/uplinks
 // separately just to know an uplink exists.
 //
-// BypassedByStaticRoute/ActiveUplinkID/LastSwitchAt/LastSwitchReason are
-// populated from the Phase 2 automatic failover controller — they stay at
-// their zero value whenever that controller is disabled
-// (wan_failover_settings.enabled=0), since nothing changes routing until
-// then.
+// BypassedByStaticRoute/ActiveUplinkID/LastSwitchAt/LastSwitchReason/
+// EnforceFailed are populated from the Phase 2 automatic failover
+// controller — they stay at their zero value whenever that controller is
+// disabled (wan_failover_settings.enabled=0), since nothing changes routing
+// until then.
 type WanStatusResponse struct {
 	Uplinks               []WanStatusEntry `json:"uplinks"`
 	BypassedByStaticRoute bool             `json:"bypassedByStaticRoute,omitempty"`
 	ActiveUplinkID        string           `json:"activeUplinkId,omitempty"`
 	LastSwitchAt          string           `json:"lastSwitchAt,omitempty"`
 	LastSwitchReason      string           `json:"lastSwitchReason,omitempty"`
+	// EnforceFailed (T-23, docs/ref/wan-failover-findings.md) is true when at
+	// least one interface currently has a failed WAN failover metric
+	// override/restore enforcement (kernel.RoutingManager.
+	// EnforceDefaultRouteMetric returned an error that persisted past the
+	// automatic retry) — mirrors BypassedByStaticRoute's shape (a single
+	// flag, not a per-interface list; per-interface detail is available via
+	// GET /api/wan/failover's enforceFailedInterfaces list instead). Always
+	// false when the failover controller has never been wired/enabled.
+	EnforceFailed bool `json:"enforceFailed,omitempty"`
 }
 
 // WanFailoverSettings is the single-row (id=1) global failover configuration
@@ -286,4 +352,15 @@ type WanFailoverStatus struct {
 	// metric override but are being overridden by an even-higher-precedence
 	// active DB static 0.0.0.0/0 route (D-2 precedence level 1).
 	Bypassed []string `json:"bypassed,omitempty"`
+	// EnforceFailedInterfaces (T-23, docs/ref/wan-failover-findings.md) is
+	// service.RoutingService.EnforceFailedInterfaces()'s current value:
+	// interface names whose most recent WAN failover metric
+	// override/restore enforcement failed at the kernel level (e.g. a
+	// metric-slot conflict that persisted past the automatic retry) — a
+	// stuck enforcement is otherwise only visible in the server log and the
+	// central event log, not in the live status a UI polls. Reachable via
+	// GET /api/wan/failover (api.WanFailoverSettingsResponse, QA round-1
+	// fix, Finding 2) — GET /api/wan/status only folds this down into the
+	// single aggregate "enforceFailed" boolean on WanStatusResponse.
+	EnforceFailedInterfaces []string `json:"enforceFailedInterfaces,omitempty"`
 }

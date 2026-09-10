@@ -1940,6 +1940,121 @@ func TestBackupWanUplinksRoundTrip(t *testing.T) {
 	}
 }
 
+// TestImportRejectsWanUplinksOverCap reproduces QA's round-2 finding-3-gap
+// repro: a backup carrying more than model.MaxWanUplinks wan_uplinks entries
+// (each individually valid, priorities 1-20) must be rejected before any DB
+// write, not silently accepted with all 20 rows persisted. Decision F's
+// active/standby default-route metric bands are only collision-free up to
+// priority 16 — see model.MaxWanUplinks's doc comment.
+func TestImportRejectsWanUplinksOverCap(t *testing.T) {
+	bs, repo := newBackupTestEnv(t)
+	seedCustomConfig(t, repo) // seeds one WAN uplink "Primary" (priority 1)
+
+	file, err := bs.Export(false, "", false)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	// Replace the exported uplinks with 20 individually-valid entries
+	// (priorities 1-20), well over model.MaxWanUplinks (16).
+	overCap := make([]model.WanUplink, 0, 20)
+	for i := 1; i <= 20; i++ {
+		overCap = append(overCap, model.WanUplink{
+			ID: fmt.Sprintf("wan-overcap-%d", i), Name: fmt.Sprintf("Uplink%d", i),
+			Interface: fmt.Sprintf("eth%d", i), Priority: i,
+			ProbeTargets: []string{"1.1.1.1"}, ProbeMethod: model.WanProbeMethodICMP,
+			ProbeIntervalSeconds: 6, ProbeCount: 3, ProbeTimeoutMs: 1000,
+			LossThresholdPct: 50, LatencyThresholdMs: 200, FailStrikes: 3, RecoverStrikes: 3, Status: true,
+		})
+	}
+	file.Config.WanUplinks = overCap
+	sum, _ := configChecksum(*file.Config)
+	file.Meta.Checksum = sum
+	raw, _ := json.Marshal(file)
+
+	beforeUplinks, _ := repo.GetWanUplinks()
+
+	if _, err := bs.Import(raw, model.ImportOptions{}); err == nil {
+		t.Fatalf("expected import to be rejected: wan_uplinks count (20) exceeds model.MaxWanUplinks (%d)", model.MaxWanUplinks)
+	}
+
+	afterUplinks, err := repo.GetWanUplinks()
+	if err != nil {
+		t.Fatalf("get wan uplinks after rejected import: %v", err)
+	}
+	if len(afterUplinks) != len(beforeUplinks) {
+		t.Fatalf("rollback failed: DB changed despite rejected import: wan_uplinks before=%d after=%d", len(beforeUplinks), len(afterUplinks))
+	}
+	for _, u := range afterUplinks {
+		if u.Priority > model.MaxWanUplinks {
+			t.Errorf("wan uplink with out-of-band priority %d leaked into DB despite rejected import", u.Priority)
+		}
+	}
+}
+
+// TestImportRejectsInvalidWanUplink covers the two other angles of the same
+// finding-3 gap: an individually-invalid wan_uplinks entry (priority outside
+// 1..model.MaxWanUplinks) and a backup with two entries sharing the same
+// priority must both be rejected — restore must not be able to smuggle past
+// model.ValidateWanUplink or the priority-uniqueness pre-check that
+// db.Repository.CreateWanUplink normally enforces.
+func TestImportRejectsInvalidWanUplink(t *testing.T) {
+	t.Run("priority out of range", func(t *testing.T) {
+		bs, repo := newBackupTestEnv(t)
+		seedCustomConfig(t, repo) // seeds priority 1
+
+		file, err := bs.Export(false, "", false)
+		if err != nil {
+			t.Fatalf("export: %v", err)
+		}
+		file.Config.WanUplinks = append(file.Config.WanUplinks, model.WanUplink{
+			ID: "wan-bad-priority", Name: "BadPriority", Interface: "eth9", Priority: 17,
+			ProbeTargets: []string{"1.1.1.1"}, ProbeMethod: model.WanProbeMethodICMP,
+			ProbeIntervalSeconds: 6, ProbeCount: 3, ProbeTimeoutMs: 1000,
+			LossThresholdPct: 50, LatencyThresholdMs: 200, FailStrikes: 3, RecoverStrikes: 3, Status: true,
+		})
+		sum, _ := configChecksum(*file.Config)
+		file.Meta.Checksum = sum
+		raw, _ := json.Marshal(file)
+
+		beforeUplinks, _ := repo.GetWanUplinks()
+		if _, err := bs.Import(raw, model.ImportOptions{}); err == nil {
+			t.Fatalf("expected import to be rejected: wan uplink priority 17 is out of range (max %d)", model.MaxWanUplinks)
+		}
+		afterUplinks, _ := repo.GetWanUplinks()
+		if len(afterUplinks) != len(beforeUplinks) {
+			t.Fatalf("rollback failed: wan_uplinks before=%d after=%d", len(beforeUplinks), len(afterUplinks))
+		}
+	})
+
+	t.Run("duplicate priority within the backup", func(t *testing.T) {
+		bs, repo := newBackupTestEnv(t)
+		seedCustomConfig(t, repo) // seeds "Primary" at priority 1
+
+		file, err := bs.Export(false, "", false)
+		if err != nil {
+			t.Fatalf("export: %v", err)
+		}
+		file.Config.WanUplinks = append(file.Config.WanUplinks, model.WanUplink{
+			ID: "wan-dup-priority", Name: "DupPriority", Interface: "eth9", Priority: 1,
+			ProbeTargets: []string{"1.1.1.1"}, ProbeMethod: model.WanProbeMethodICMP,
+			ProbeIntervalSeconds: 6, ProbeCount: 3, ProbeTimeoutMs: 1000,
+			LossThresholdPct: 50, LatencyThresholdMs: 200, FailStrikes: 3, RecoverStrikes: 3, Status: true,
+		})
+		sum, _ := configChecksum(*file.Config)
+		file.Meta.Checksum = sum
+		raw, _ := json.Marshal(file)
+
+		beforeUplinks, _ := repo.GetWanUplinks()
+		if _, err := bs.Import(raw, model.ImportOptions{}); err == nil {
+			t.Fatalf("expected import to be rejected: two wan_uplinks entries share priority 1")
+		}
+		afterUplinks, _ := repo.GetWanUplinks()
+		if len(afterUplinks) != len(beforeUplinks) {
+			t.Fatalf("rollback failed: wan_uplinks before=%d after=%d", len(beforeUplinks), len(afterUplinks))
+		}
+	})
+}
+
 // TestImportOldBackupWithoutWanKeysChecksumRegression mirrors
 // TestImportOldBackupWithoutBlocklistsKeyChecksumRegression: a backup file
 // that predates the Multi-WAN Failover feature entirely lacks the
@@ -1986,5 +2101,94 @@ func TestImportOldBackupWithoutWanKeysChecksumRegression(t *testing.T) {
 	}
 	if settings.Enabled {
 		t.Errorf("expected wan_failover_settings to be left at its default (enabled=false) when the backup carried no wanFailoverSettings key, got enabled=true")
+	}
+}
+
+// TestImportRejectsInvalidWanFailoverSettings covers T-28 (docs/ref/todo/
+// multi-wan-failover-plan.md, added from ai-qa's final verification pass):
+// db/backup_repo.go RestoreConfig writes wan_failover_settings via a raw
+// `UPDATE ... WHERE id = 1`, bypassing db.Repository.UpdateWanFailoverSettings
+// and therefore model.ValidateWanFailoverSettings entirely. A crafted or
+// corrupted backup carrying an out-of-range dampening value must be rejected
+// by validateConfig before any DB write — never silently installed, since
+// WanFailoverController.tick() re-reads these settings from the DB every 2s
+// with no restart backstop.
+func TestImportRejectsInvalidWanFailoverSettings(t *testing.T) {
+	tests := []struct {
+		name     string
+		mutate   func(s *model.WanFailoverSettings)
+		wantErrs string
+	}{
+		{
+			name: "negative MinHoldSeconds",
+			mutate: func(s *model.WanFailoverSettings) {
+				s.MinHoldSeconds = -1
+			},
+		},
+		{
+			name: "unbounded-large RevertDelaySeconds",
+			mutate: func(s *model.WanFailoverSettings) {
+				s.RevertDelaySeconds = 999999
+			},
+		},
+		{
+			name: "manual mode with empty ManualUplinkID",
+			mutate: func(s *model.WanFailoverSettings) {
+				s.Mode = model.WanFailoverModeManual
+				s.ManualUplinkID = ""
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bs, repo := newBackupTestEnv(t)
+			seedCustomConfig(t, repo)
+
+			if err := repo.UpdateWanFailoverSettings(model.WanFailoverSettings{
+				Enabled: true, Mode: model.WanFailoverModeManual, ManualUplinkID: "wan-manual-target",
+				MinHoldSeconds: 45, RevertDelaySeconds: 90,
+			}); err != nil {
+				t.Fatalf("update wan failover settings: %v", err)
+			}
+			before, err := repo.GetWanFailoverSettings()
+			if err != nil {
+				t.Fatalf("get wan failover settings before import: %v", err)
+			}
+
+			file, err := bs.Export(false, "", false)
+			if err != nil {
+				t.Fatalf("export: %v", err)
+			}
+			if file.Config.WanFailoverSettings == nil {
+				t.Fatalf("expected wan failover settings to be exported")
+			}
+			tt.mutate(file.Config.WanFailoverSettings)
+			sum, err := configChecksum(*file.Config)
+			if err != nil {
+				t.Fatalf("recompute checksum: %v", err)
+			}
+			file.Meta.Checksum = sum
+			raw, err := json.Marshal(file)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+
+			_, err = bs.Import(raw, model.ImportOptions{})
+			if err == nil {
+				t.Fatalf("expected import to be rejected for invalid wan failover settings")
+			}
+			if !strings.Contains(err.Error(), "wan failover settings:") {
+				t.Errorf("expected error prefixed with %q, got: %v", "wan failover settings:", err)
+			}
+
+			after, err := repo.GetWanFailoverSettings()
+			if err != nil {
+				t.Fatalf("get wan failover settings after rejected import: %v", err)
+			}
+			if *after != *before {
+				t.Errorf("rollback failed: wan_failover_settings changed despite rejected import: before=%+v after=%+v", before, after)
+			}
+		})
 	}
 }

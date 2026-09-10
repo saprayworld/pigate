@@ -162,6 +162,12 @@ func (s *Server) HandleGetWanStatus(w http.ResponseWriter, r *http.Request) {
 			resp.BypassedByStaticRoute = true
 			break
 		}
+		// EnforceFailed mirrors BypassedByStaticRoute's shape (T-23): a single
+		// flag, true as soon as ANY interface currently has a failed
+		// enforcement episode.
+		if len(status.EnforceFailedInterfaces) > 0 {
+			resp.EnforceFailed = true
+		}
 	}
 
 	entries := make([]model.WanStatusEntry, 0, len(uplinks))
@@ -178,17 +184,52 @@ func (s *Server) HandleGetWanStatus(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, resp)
 }
 
+// WanFailoverSettingsResponse is GET /api/wan/failover's response: the raw
+// model.WanFailoverSettings DB row plus (QA round-1 fix, Finding 2) the same
+// two per-interface diagnostic fields service.WanFailoverController.Status()
+// already exposes as model.WanFailoverStatus.Bypassed/
+// EnforceFailedInterfaces. Before this fix those two aggregate-only booleans
+// (bypassedByStaticRoute/enforceFailed on WanStatusResponse, GET
+// /api/wan/status) were the only thing reachable from any endpoint — an
+// operator could see "something is stuck" but never which interface, even
+// though this endpoint's own doc comments (and the two design docs) claimed
+// the per-interface list was available here. Mirrors WanStatusEntry's
+// embed-then-extend shape.
+type WanFailoverSettingsResponse struct {
+	model.WanFailoverSettings
+	// Bypassed mirrors model.WanFailoverStatus.Bypassed: interface names that
+	// have an active WAN failover metric override currently overridden by an
+	// even-higher-precedence active DB static 0.0.0.0/0 route. Empty
+	// (omitted) whenever the failover controller has never been wired/
+	// enabled or nothing is currently bypassed.
+	Bypassed []string `json:"bypassed,omitempty"`
+	// EnforceFailedInterfaces mirrors model.WanFailoverStatus.
+	// EnforceFailedInterfaces: interface names whose most recent WAN
+	// failover metric override/restore enforcement failed at the kernel
+	// level (see docs/ref/wan-failover-findings.md, T-23).
+	EnforceFailedInterfaces []string `json:"enforceFailedInterfaces,omitempty"`
+}
+
 // HandleGetWanFailoverSettings returns the global Phase 2 failover
-// kill-switch/mode/dampening configuration. authRoute (read-only, same
-// sensitivity as the rest of this file) — the mutating counterpart below is
-// superAdminRoute.
+// kill-switch/mode/dampening configuration, plus (Finding 2 fix) the
+// controller's current per-interface bypassed/enforce-failed diagnostics —
+// the same data GET /api/wan/status already folds into its two aggregate
+// booleans, now also reachable per-interface from this endpoint. authRoute
+// (read-only, same sensitivity as the rest of this file) — the mutating
+// counterpart below is superAdminRoute.
 func (s *Server) HandleGetWanFailoverSettings(w http.ResponseWriter, r *http.Request) {
 	settings, err := s.repo.GetWanFailoverSettings()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "failed to retrieve WAN failover settings")
 		return
 	}
-	s.writeJSON(w, http.StatusOK, settings)
+	resp := WanFailoverSettingsResponse{WanFailoverSettings: *settings}
+	if s.wanFailover != nil {
+		status := s.wanFailover.Status()
+		resp.Bypassed = status.Bypassed
+		resp.EnforceFailedInterfaces = status.EnforceFailedInterfaces
+	}
+	s.writeJSON(w, http.StatusOK, resp)
 }
 
 // HandleUpdateWanFailoverSettings updates the kill switch/mode/dampening

@@ -289,6 +289,81 @@ net.ipv4.conf.all.rp_filter = 2
    เพราะ Task นั้นแตะ routing โดยตรงและต้องมั่นใจเรื่อง route flapping/NAT/
    NetlinkMonitor timing มากกว่า Phase 1
 
+## เพิ่มเติม 2026-09-09: บั๊ก "สลับ WAN active แล้ว default route หายไปเลย" (Task 20-27)
+
+### อาการที่เจ้าของโปรเจกต์รายงาน (user-reported symptom)
+
+หลัง merge PR 167 (Multi-WAN Failover Phase 2) ขึ้น `main`: เมื่อ WAN uplink ที่
+active สลับ (ทั้งแบบ auto failover และ manual override) **บางครั้ง default route
+ของอินเทอร์เฟซหนึ่งหายไปทั้งหมด** ไม่ใช่แค่ metric ผิด — `ip route show default`
+ไม่เห็น route ของอินเทอร์เฟซนั้นเลย ทำให้ traffic ผ่านเส้นนั้นใช้งานไม่ได้จนกว่าจะ
+มีคน apply config ใหม่/รีสตาร์ท pigate ด้วยมือ
+
+### Root cause
+
+Linux อนุญาต default route ได้แค่ 1 เส้นต่อ metric ต่อ routing table เท่านั้น —
+`netlink.RouteAdd` ใช้ flag `NLM_F_EXCL` จึง fail ด้วย `EEXIST` ถ้ามี default
+route ที่ metric เดิมอยู่แล้ว **แม้จะเป็นคนละอินเทอร์เฟซก็ตาม** (FIB key ของ
+default route ไม่รวม interface/nexthop) `WanFailoverController` (Decision B เดิม)
+ให้ uplink "active" ทุกตัวใช้ metric คงที่ตัวเดียวกัน (`50`) — เมื่อสลับ active
+จาก A ไป B, `enforceInterfaceMetrics` (`service/routing.go`) ปรับ metric ของแต่
+ละอินเทอร์เฟซตามลำดับใน DB แบบสุ่ม (ไม่มี "demote ก่อน promote") แล้วเรียก
+`EnforceDefaultRouteMetric` ทันทีต่ออินเทอร์เฟซ ซึ่ง implementation เดิมของ
+`real_routing.go` ทำ **`RouteDel` ก่อนแล้วค่อย `RouteAdd`** — ถ้าโค้ดประมวลผล
+อินเทอร์เฟซที่กำลังจะขึ้นเป็น active **ก่อน**ที่อินเทอร์เฟซเดิมจะถูกย้ายออกจาก
+metric `50` สำเร็จ, `RouteAdd` ของตัวใหม่จะ fail ด้วย `EEXIST` แต่ `RouteDel`
+ของตัวเก่าทำสำเร็จไปแล้ว → **อินเทอร์เฟซเดิมไม่มี default route เหลืออยู่เลย**
+error ที่เกิดขึ้นก็แค่ `log.Printf` เงียบๆ ไม่มี retry/rollback/event log ทำให้
+บั๊กนี้เกิดขึ้นแบบ deterministic ต่อทิศทางการสลับ (ทิศทางไหนประมวลผล "ตัวที่กำลัง
+จะ active" ก่อน ทิศทางนั้นจะเจอบั๊ก) แต่มองไม่เห็นจนกว่าจะมีคนเช็ค `ip route` เอง
+
+สาเหตุร่วมอื่นๆ ที่ทำให้บั๊กนี้กว้างขึ้น (ทั้งหมดแก้แล้วใน Task 20-27):
+- ไม่มีการล็อกระหว่าง `WanFailoverController`'s route mutation, `NetlinkMonitor`'s
+  reconciliation (trigger จาก route-change event เดียวกัน ผ่าน "routing" subscriber
+  ใน `main.go`), และ HTTP-triggered reconcile — route เดียวกันถูก del/add จาก 2
+  goroutine พร้อมกันได้ (แก้ด้วย T-22, `RoutingService.reconcileMu`)
+- `restoreFailoverOverride` (path ปิด kill switch) มีความเสี่ยง `EEXIST` แบบเดียวกัน
+  ถ้า snapshot/configured metric ของ 2 อินเทอร์เฟซบังเอิญตรงกัน
+- test double ทั้งหมด (`kernel.MockRouting.EnforceDefaultRouteMetric`,
+  `trackingRoutingManager` ใน `routing_test.go`) return `nil` แบบไม่มีเงื่อนไข
+  เสมอ — ไม่มี test ไหนใน repo จำลองบั๊กนี้ได้เลย จึงหลุดออกไปโดยไม่มี test จับ
+  (แก้ด้วย T-25, ดูรายละเอียดใน `docs/ref/todo/multi-wan-failover-plan.md` §
+  "Bug fix: route หายหลังสลับ WAN active")
+
+### การแก้ไข (สรุป, รายละเอียดเต็มที่ `docs/tech_stack_design.md` §11 "Decision F")
+
+1. **T-20** — `EnforceDefaultRouteMetric` เป็น make-before-break (`RouteAdd` ก่อน
+   `RouteDel`) ห้ามใช้ `RouteReplace` แทน
+2. **T-21** — `enforceInterfaceMetrics` demote ทุกอินเทอร์เฟซให้เสร็จก่อนเสมอ แล้ว
+   ค่อย promote (เมื่อมี override/restore กำลังทำงานอยู่)
+3. **T-22** — ล็อกทั้ง `reconcileKernelRoutingTable` ด้วย mutex แยก (`reconcileMu`)
+4. **T-23** — log เข้า central event log (`critical`, ครั้งเดียวต่อ episode) เมื่อ
+   enforce fail แทนที่จะเงียบแค่ log บรรทัดเดียว
+5. **T-24 (Decision F)** — เปลี่ยนสูตร active metric จากค่าคงที่ (`50`) เป็น
+   ต่อ-uplink (`50 + priority`) + บังคับ priority ไม่ซ้ำกัน (DB UNIQUE index) — ทำให้
+   ทุก uplink มี "ที่ของตัวเอง" ถาวร ไม่มีทางชนกันระหว่างการสลับปกติ
+6. **T-25** — แก้ test double (`MockRouting`/`trackingRoutingManager`) ให้จำลอง FIB
+   จริง (ปฏิเสธ `EEXIST` เหมือน kernel จริง) เพื่อให้ T-26 เขียน regression test
+   จับบั๊กนี้ได้จริง
+
+### สคริปต์ตรวจสอบซ้ำบนเครื่องจริง (journalctl)
+
+รันหลังสลับ WAN active ไป-กลับหลายรอบ (ทั้ง auto failover และ manual override):
+
+```bash
+journalctl -u pigate | grep -E "failed to enforce WAN failover metric override|failed to re-add default route"
+```
+
+- **ไม่พบบรรทัดไหนเลย** = ไม่มีการ enforce metric override ที่ fail ระหว่างการ
+  ทดสอบ (คาดหวังผลนี้ในสภาวะปกติ)
+- ถ้าพบ ให้เช็คต่อว่า `ip route show default` ของทั้งสองอินเทอร์เฟซยังมี route
+  อยู่ (แม้จะไม่ตรง metric ที่ต้องการ) — ถ้าอินเทอร์เฟซไหนไม่มี default route เลย
+  = บั๊กนี้ยังไม่ได้แก้ ให้รายงานกลับทันที พร้อมแนบผลลัพธ์ทั้งสองคำสั่งด้านบน และ
+  `journalctl -u pigate | grep -E "Retrying metric enforcement|WAN failover override on"`
+- ผลการทดสอบซ้ำบนบอร์ดจริงของ Task 20-27 (สลับ WAN active หลายรอบ, ยืนยันว่าไม่มี
+  route หาย) ยังรอเจ้าของโปรเจกต์กรอกเพิ่มในไฟล์นี้ — ทีม AI ตรวจได้แค่ระดับ
+  unit test (`trackingRoutingManager`/`kernel.MockRouting` จำลอง FIB) เท่านั้น
+
 **หมายเหตุอัปเดต 2026-09-07 (Phase 2 โค้ดเสร็จแล้ว):** Task 13.5, 14-19 ของแผน
 (`docs/ref/todo/multi-wan-failover-plan.md`) implement ครบแล้วโดย ai-developer —
 build/vet/test ระดับ unit ผ่านทั้งหมด และทดสอบ mock-mode end-to-end ผ่าน curl

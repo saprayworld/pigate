@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"pigate/internal/model"
+
 	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 )
@@ -924,6 +926,17 @@ func migrate(db *sql.DB) error {
 		return fmt.Errorf("failed to backfill HTTPS admin access: %w", err)
 	}
 
+	// Decision F (docs/ref/todo/multi-wan-failover-plan.md, T-24): the
+	// failover controller's collision-free metric bands (see
+	// service/wan_failover.go) depend entirely on WAN uplink Priority being
+	// unique across every wan_uplinks row. Existing installs may already
+	// have duplicate priorities (there was no constraint before this
+	// migration) — renumber them before creating the UNIQUE index, or the
+	// CREATE UNIQUE INDEX below would fail and abort boot.
+	if err := ensureUniqueWanUplinkPriorityIndex(db); err != nil {
+		return fmt.Errorf("failed to enforce unique WAN uplink priorities: %w", err)
+	}
+
 	return nil
 }
 
@@ -1036,6 +1049,91 @@ func ensureUniqueAliasIndex(db *sql.DB) error {
 
 	if _, err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_network_interfaces_alias ON network_interfaces(alias COLLATE NOCASE)"); err != nil {
 		return fmt.Errorf("failed to create unique alias index: %w", err)
+	}
+	return nil
+}
+
+// ensureUniqueWanUplinkPriorityIndex renumbers any duplicate wan_uplinks
+// priority values (auto-assigning each duplicate the smallest unused
+// positive integer, in rowid order so the first-created row of a duplicate
+// pair keeps its original priority) and then creates the UNIQUE index that
+// enforces uniqueness from then on — Decision F's collision-free metric
+// bands (docs/ref/todo/multi-wan-failover-plan.md, T-24) depend on this
+// invariant holding at all times. Mirrors ensureUniqueAliasIndex's
+// normalize-then-index shape immediately above. Idempotent and safe on both
+// a fresh and an existing database (a fresh install never has duplicates,
+// so this is a no-op there beyond creating the index).
+//
+// model.MaxWanUplinks (16) is a HARD ceiling here, not just an aspiration:
+// Decision F's active/standby default-route metric bands (see
+// model.WanReservedActiveMetricMin/Max, model.WanReservedStandbyMetricMin/Max)
+// are sized to exactly cover every wanFailoverActiveMetricBase+Priority /
+// wanFailoverStandbyMetricBase+10*Priority value for Priority 1..16 — a
+// renumbered priority above 16 would silently produce an active-band metric
+// (67+) outside those reserved bands, reopening the exact metric-collision
+// class Decision F was built to close. db.Repository.CreateWanUplink now
+// enforces this cap going forward (QA round-1 fix, Finding 3), so this
+// branch should be unreachable on any database created after that fix
+// shipped; it exists purely to fail loudly (hard startup error, matching
+// this function's existing "abort boot rather than silently misconfigure"
+// contract) on a PRE-EXISTING database that already has more than 16 rows,
+// rather than silently assigning an out-of-band priority.
+func ensureUniqueWanUplinkPriorityIndex(db *sql.DB) error {
+	rows, err := db.Query("SELECT id, priority FROM wan_uplinks ORDER BY rowid")
+	if err != nil {
+		return err
+	}
+	type uplinkRow struct {
+		id       string
+		priority int
+	}
+	var all []uplinkRow
+	for rows.Next() {
+		var r uplinkRow
+		if err := rows.Scan(&r.id, &r.priority); err != nil {
+			rows.Close()
+			return err
+		}
+		all = append(all, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if len(all) > model.MaxWanUplinks {
+		return fmt.Errorf("wan_uplinks has %d rows, exceeding the hard cap of %d (model.MaxWanUplinks) that Decision F's collision-free metric bands depend on — remove excess WAN uplinks manually before upgrading", len(all), model.MaxWanUplinks)
+	}
+
+	taken := make(map[int]bool, len(all))
+	for _, r := range all {
+		if !taken[r.priority] {
+			taken[r.priority] = true
+			continue
+		}
+		// Duplicate: reassign to the smallest unused positive integer.
+		candidate := 1
+		for taken[candidate] {
+			candidate++
+		}
+		if candidate > model.MaxWanUplinks {
+			// Cannot happen given the len(all) > MaxWanUplinks guard above
+			// (there are at most MaxWanUplinks rows, so at most MaxWanUplinks
+			// distinct positive integers are ever needed) — kept as an
+			// explicit, loud failure rather than a silent out-of-band
+			// assignment in case that invariant is ever violated by a future
+			// change to this function.
+			return fmt.Errorf("cannot de-duplicate priority for wan uplink %s: the smallest unused priority (%d) exceeds the hard cap of %d (model.MaxWanUplinks) that Decision F's collision-free metric bands depend on", r.id, candidate, model.MaxWanUplinks)
+		}
+		if _, err := db.Exec("UPDATE wan_uplinks SET priority = ? WHERE id = ?", candidate, r.id); err != nil {
+			return fmt.Errorf("failed to de-duplicate priority for wan uplink %s: %w", r.id, err)
+		}
+		log.Printf("[Migration] Warning: WAN uplink %s had duplicate priority %d, renumbered to %d", r.id, r.priority, candidate)
+		taken[candidate] = true
+	}
+
+	if _, err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_wan_uplinks_priority ON wan_uplinks(priority)"); err != nil {
+		return fmt.Errorf("failed to create unique wan_uplinks priority index: %w", err)
 	}
 	return nil
 }

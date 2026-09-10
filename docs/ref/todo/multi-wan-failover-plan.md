@@ -537,6 +537,19 @@ linux`), `backend/internal/kernel/real_path_probe_test.go` (ใหม่)
 11. **Phase 0 ต้องทำโดยเจ้าของโปรเจกต์บนบอร์ดจริง** ทีม AI ไม่มีสิทธิ์เข้าถึง
     ฮาร์ดแวร์ที่มี WAN 2 เส้น ห้ามเริ่ม Task 1 จนกว่า Task 0 ข้อ 1, 2, 6 จะ
     PASS และบันทึกผลลง `docs/ref/wan-failover-findings.md`
+12. **Linux อนุญาต default route ได้แค่ 1 เส้นต่อ metric ต่อ routing table
+    เท่านั้น** (พบเป็นบั๊กจริงหลัง merge PR 167 — ดู Decision F ด้านล่าง และ
+    `docs/tech_stack_design.md` §11) — `netlink.RouteAdd` ใช้ `NLM_F_EXCL` จึง
+    fail ด้วย `EEXIST` ถ้ามี default route ที่ metric เดิมอยู่แล้ว **แม้จะเป็น
+    คนละอินเทอร์เฟซ** เพราะ FIB key ของ default route ไม่รวม interface/nexthop
+    ผลคือ: (ก) การเปลี่ยน metric ต้องเป็น **make-before-break** (`RouteAdd`
+    เส้นใหม่ก่อน แล้วค่อย `RouteDel` เส้นเก่า) และห้ามทำลายเส้นเก่าถ้า `RouteAdd`
+    fail เด็ดขาด, (ข) **ห้ามใช้ `netlink.RouteReplace` แทนการ del+add** เพราะมัน
+    จับคู่ด้วย `(dst, tos, priority, table)` ที่ไม่รวม interface จะไป "แย่ง"
+    route ของอินเทอร์เฟซอื่นแทนที่จะ fail ให้เห็น, (ค) การปรับ metric หลาย
+    อินเทอร์เฟซพร้อมกัน (เช่นตอนสลับ active WAN) ต้อง **demote (ย้ายออกจาก
+    metric เดิม) ให้เสร็จก่อนเสมอ แล้วค่อย promote (ย้ายเข้า metric ใหม่)** ห้าม
+    เรียงตามลำดับ DB แบบสุ่ม
 
 **การทดสอบ:**
 - mock mode ครอบคลุมได้: UI ทั้งหมด, validation, state machine (fail/
@@ -627,6 +640,28 @@ linux`), `backend/internal/kernel/real_path_probe_test.go` (ใหม่)
 >   `docs/tech_stack_design.md` §11 และ doc comment ของ
 >   `model.WanFailoverSettings`
 
+> **Decision F อนุมัติโดยเจ้าของโปรเจกต์ 2026-09-09** (Task 20-27 — แก้บั๊ก
+> "สลับ WAN active แล้ว route หายไปเลย" ที่รายงานหลัง merge PR 167 — root cause
+> เต็มอยู่ใน `docs/tech_stack_design.md` §11 และ Caution ข้อ 12 ด้านบน) เลือกใช้
+> F-2 + F-1 ร่วมกัน คู่กับ Decision B เดิม:
+> - **F-2** — เปลี่ยนสูตร metric band ของ active uplink จากค่าคงที่ตัวเดียว
+>   (`50`) เป็น **ต่อ-uplink** `50 + Priority` (Priority 1..16 → `51..66`)
+>   standby ยังเป็น `1000 + 10×Priority` เหมือนเดิม (Decision B) — ทำให้ทุก
+>   uplink มี "ที่ของตัวเอง" ถาวรทั้งสอง band ไม่มีทางชนกันระหว่างการสลับ
+> - **F-1** — บังคับ `wan_uplinks.priority` ไม่ซ้ำกันข้ามทุกแถว (DB UNIQUE
+>   INDEX + validation ที่ repo layer) เพราะ F-2 ปลอดชนกันได้ก็ต่อเมื่อ
+>   Priority ไม่ซ้ำเท่านั้น — migration renumber ค่าที่ซ้ำกันของฐานข้อมูลเดิม
+>   โดยอัตโนมัติก่อนสร้าง index (ไม่ทำฐานข้อมูลเดิมพังตอนอัปเกรด)
+> - เพิ่ม validation ว่า Metric ที่ผู้ใช้ตั้งเองในหน้า Interfaces (precedence
+>   ระดับ 4) ต้องไม่ตกอยู่ใน reserved band ทั้งสอง (`51-66`, `1000-1200`) ถ้า
+>   อินเทอร์เฟซนั้นเป็น WAN uplink อยู่
+> - คู่กับ Decision F: T-20 (make-before-break ที่ kernel layer), T-21
+>   (demote-ก่อน-promote-เสมอที่ service layer), T-22 (ล็อก reconcile ทั้งหมด
+>   ด้วย mutex แยก กัน `NetlinkMonitor`/controller tick/HTTP-triggered reconcile
+>   แย่งกัน del/add), T-23 (event log เมื่อ enforce fail แทนที่จะเงียบแค่
+>   log บรรทัดเดียว) — รายละเอียดเต็มที่ `docs/tech_stack_design.md` §11 และ
+>   `docs/ref/wan-failover-findings.md`
+
 - [x] Task 13.5: probe round scheduling hardening (concurrency + budget validation)
 - [x] Task 14: `routing.go` precedence + override API
 - [x] Task 15: `wan_failover.go` controller (dampening, anti-blackhole, manual bypass MinHold+RevertDelay)
@@ -649,3 +684,59 @@ linux`), `backend/internal/kernel/real_path_probe_test.go` (ใหม่)
 - [x] `grep -rn "failoverOnDegraded\|FailoverOnDegraded"` ไม่พบเลย (ยืนยัน D-7)
 - [x] `wan_metrics_ring.go` ไม่ import `internal/db`; `wan_monitor.go` ไม่
       import kernel routing; `wan_failover.go` ไม่ import kernel เลย
+
+### Bug fix: route หายหลังสลับ WAN active (Task 20-27, 2026-09-09)
+
+รายงานโดยเจ้าของโปรเจกต์หลัง merge PR 167 — root cause วินิจฉัยแล้วโดย
+ai-tech-lead, แก้โดย ai-developer, รายละเอียดเต็มบันทึกถาวรที่
+`docs/tech_stack_design.md` §11 (หัวข้อ "Decision F") และ
+`docs/ref/wan-failover-findings.md`
+
+- [x] T-20: `kernel/real_routing.go` `EnforceDefaultRouteMetric` เป็น
+      make-before-break (RouteAdd ก่อน RouteDel, ห้าม `RouteReplace`) +
+      `kernel/routing_errors.go` (sentinel errors `ErrDefaultRouteMetricConflict`/
+      `ErrDefaultRouteUnreachable`)
+- [x] T-21: `service/routing.go` `enforceInterfaceMetrics` แยก 2 phase
+      (PLAN แล้ว demote-ทั้งหมด-ก่อน-promote) เมื่อมี override/restore อยู่
+      จริง, short-circuit กลับ path เดิมเป๊ะเมื่อไม่มี (regression guard เดิม
+      ของ Task 14 ยังผ่าน)
+- [x] T-22: `RoutingService.reconcileMu` ล็อกทั้ง `reconcileKernelRoutingTable`
+      กัน `NetlinkMonitor`/controller tick/HTTP-triggered reconcile แย่งกัน
+      del/add เส้นเดียวกัน
+- [x] T-23: event log (`network`/`wan-failover`/`critical`) เมื่อ enforce
+      override/restore fail ครั้งเดียวต่อ episode + field `enforceFailed`
+      (boolean รวม) ใน `GET /api/wan/status` และ `enforceFailedInterfaces`
+      (รายชื่ออินเทอร์เฟซละเอียด) ใน `GET /api/wan/failover` (openapi ทั้งสอง
+      ไฟล์อัปเดตแล้ว — เดิม endpoint หลังยังไม่ return field นี้จริง แก้ใน
+      QA round-1, Finding 2)
+- [x] T-24 (Decision F): active metric = `50+priority`, บังคับ priority
+      ไม่ซ้ำ (DB UNIQUE index + repo validation, migration renumber ของเดิม),
+      validate ไม่ให้ Metric ของ interface ตกใน reserved band
+- [x] T-25: `kernel.MockRouting`/`trackingRoutingManager` จำลอง FIB จริง
+      (EnforceDefaultRouteMetric mutate ตาราง+ปฏิเสธ EEXIST) แทนที่ log-only
+      no-op เดิม — พร้อม `SnapshotBefore`/`SetFailEnforce` test hook ใหม่
+      (คง Task 14 test intent เดิมไว้ครบ)
+- [x] T-26: regression tests ใหม่ 6 ตัว (`routing_test.go`/
+      `wan_failover_test.go`) — ยืนยันด้วยการ revert T-21 ชั่วคราวแล้วรัน
+      ซ้ำจริงว่า `TestEnforceInterfaceMetrics_DemotesBeforePromotes` FAIL
+      (พิสูจน์ regression guard ใช้งานได้จริง) ส่วนอีก 4 ตัวยังผ่านแม้ปิด T-21
+      เพราะ Decision F เองตัดโอกาสชนกันของ 2-uplink switch ปกติไปแล้ว — ดู
+      หมายเหตุออกแบบในรายงานส่งงานของ ai-developer
+- [x] T-27: เอกสาร (ไฟล์นี้ + `docs/tech_stack_design.md` §11 +
+      `docs/ref/wan-failover-findings.md`)
+- [x] T-28 (พบโดย ai-qa ระหว่าง final verification pass): `service/backup.go`
+      `validateConfig` เพิ่ม fail-closed validation ให้
+      `cfg.WanFailoverSettings` ผ่าน `model.ValidateWanFailoverSettings` ก่อน
+      เขียน DB — เดิม `db/backup_repo.go` `RestoreConfig` เขียนแถวนี้ผ่าน raw
+      `UPDATE ... WHERE id = 1` ข้าม `db.Repository.UpdateWanFailoverSettings`
+      (และ validation ของมัน) ไปเลย ทำให้ backup ที่ถูกแก้ไข/เสียหายสามารถฝัง
+      `minHoldSeconds`/`revertDelaySeconds` ที่ผิดช่วงเข้าไปได้ (ค่าลบทำให้
+      anti-flap dampening ไม่ทำงานเลย, ค่าใหญ่เกินทำให้ failover ค้างหลังสลับ
+      ครั้งแรก) และมีผลทันทีเพราะ `WanFailoverController.tick()` อ่านค่านี้จาก
+      DB ทุก 2 วินาทีโดยไม่มี restart backstop
+- [x] `go build ./... && go vet ./... && go test ./...` ผ่านทั้งหมด (backend) —
+      `go test -race` **ยังไม่ได้รันซ้ำ** ด้วยเหตุผลเดิม (ไม่มี gcc/cgo ใน
+      แซนด์บ็อกซ์) เป็นหน้าที่เจ้าของโปรเจกต์รันก่อน merge จริง
+- [ ] ทดสอบซ้ำบนบอร์ดจริง (สลับ WAN active ไป-กลับหลายรอบ แล้วเช็ค `ip route`
+      ทั้งสองเส้นไม่หายไป) — Decision D เดิม เป็นหน้าที่เจ้าของโปรเจกต์ ดู
+      journalctl command ที่ `docs/ref/wan-failover-findings.md`

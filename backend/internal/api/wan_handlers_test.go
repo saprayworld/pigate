@@ -363,6 +363,77 @@ func TestWanFailoverSettings_GetAndUpdate(t *testing.T) {
 	}
 }
 
+// TestWanFailoverSettings_GetIncludesPerInterfaceDiagnostics covers the QA
+// round-1 fix (Finding 2): GET /api/wan/failover must fold in the
+// controller's current per-interface "bypassed" diagnostic (mirroring how
+// GET /api/wan/status already folds it down into the single
+// bypassedByStaticRoute aggregate boolean) — before this fix, the raw
+// model.WanFailoverSettings DB row was returned with no way to discover
+// WHICH interface was bypassed from any endpoint.
+func TestWanFailoverSettings_GetIncludesPerInterfaceDiagnostics(t *testing.T) {
+	server, repo := buildTestServer(t, false)
+	probe := kernel.NewMockPathProbe()
+	bus := service.NewNetEventBus()
+	eventLog := service.NewEventLogService(repo)
+	monitor := service.NewWanMonitor(repo, probe, eventLog, bus, service.NewWanUplinkMetricsRing())
+	server.SetWanMonitor(monitor)
+	controller := service.NewWanFailoverController(repo, monitor, server.routingService, eventLog, bus)
+	server.SetWanFailover(controller)
+	handler := RegisterRoutes(server)
+	AddSession("mock_session_id_test_token", "pigate")
+
+	// Before anything is bypassed/failed, both diagnostic fields must be
+	// absent (omitempty), not present-but-empty.
+	req0 := httptest.NewRequest("GET", "/api/wan/failover", nil)
+	addSessionCookie(req0, wanTestAuthToken)
+	rec0 := httptest.NewRecorder()
+	handler.ServeHTTP(rec0, req0)
+	if rec0.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec0.Code, rec0.Body.String())
+	}
+	var initial map[string]any
+	if err := json.Unmarshal(rec0.Body.Bytes(), &initial); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if _, ok := initial["bypassed"]; ok {
+		t.Errorf(`expected no "bypassed" key when nothing is bypassed yet (omitempty), got: %v`, initial["bypassed"])
+	}
+	if _, ok := initial["enforceFailedInterfaces"]; ok {
+		t.Errorf(`expected no "enforceFailedInterfaces" key when nothing has failed yet (omitempty), got: %v`, initial["enforceFailedInterfaces"])
+	}
+
+	// Drive a real bypass condition through the routing service the
+	// controller was wired with: a WAN failover override on an interface
+	// that also has an active DB static 0.0.0.0/0 route — precedence level
+	// 1 in service.RoutingService.enforceInterfaceMetrics bypasses the
+	// override entirely.
+	if err := repo.CreateRoute(model.StaticRoute{
+		ID: "route-bypass-test", Destination: "0.0.0.0/0", Gateway: "10.0.0.1",
+		Interface: "eth-bypass", Status: true, Type: "customgateway",
+	}); err != nil {
+		t.Fatalf("Failed to seed static default route: %v", err)
+	}
+	server.routingService.SetFailoverMetricOverride("eth-bypass", 51)
+	if err := server.routingService.ReconcileKernelRoutingTable(); err != nil {
+		t.Fatalf("ReconcileKernelRoutingTable failed: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/wan/failover", nil)
+	addSessionCookie(req, wanTestAuthToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp WanFailoverSettingsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if len(resp.Bypassed) != 1 || resp.Bypassed[0] != "eth-bypass" {
+		t.Errorf(`expected "bypassed" == ["eth-bypass"], got %v`, resp.Bypassed)
+	}
+}
+
 func TestWanFailoverSettings_ManualModeValidation(t *testing.T) {
 	handler, _, _, _, _ := setupWanFailoverTestServer(t)
 

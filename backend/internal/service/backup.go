@@ -1119,6 +1119,61 @@ func validateConfig(cfg model.BackupConfig) error {
 			return fmt.Errorf("wifi preset %q: %w", p.Name, err)
 		}
 	}
+	// Same fail-closed treatment for Multi-WAN Failover uplinks (QA round-2
+	// fix, Finding 3 gap): db/backup_repo.go RestoreConfig writes wan_uplinks
+	// rows straight to the DB, bypassing db.Repository.CreateWanUplink
+	// entirely — so none of its checks (per-row model.ValidateWanUplink, the
+	// model.MaxWanUplinks total-row cap, or priority uniqueness) ran on that
+	// path. Decision F's active/standby default-route metric bands
+	// (wan_uplink.go) are only collision-free as long as those checks hold,
+	// so a crafted backup that smuggled a 17th row or an out-of-range
+	// priority would reopen exactly the metric-collision class the cap was
+	// built to close, live, immediately after import (the only backstop
+	// being the next process restart's migration hard-fail). Enforce the
+	// same checks CreateWanUplink enforces at the repo layer, here, before
+	// any write.
+	if len(cfg.WanUplinks) > model.MaxWanUplinks {
+		return fmt.Errorf("wan uplinks: at most %d are allowed, got %d", model.MaxWanUplinks, len(cfg.WanUplinks))
+	}
+	seenWanPriorities := make(map[int]bool, len(cfg.WanUplinks))
+	for _, u := range cfg.WanUplinks {
+		input := model.WanUplinkInput{
+			Name: u.Name, Interface: u.Interface, Priority: u.Priority,
+			ProbeTargets: u.ProbeTargets, ProbeMethod: u.ProbeMethod, ProbeTCPPort: u.ProbeTCPPort,
+			ProbeIntervalSeconds: u.ProbeIntervalSeconds, ProbeCount: u.ProbeCount, ProbeTimeoutMs: u.ProbeTimeoutMs,
+			LossThresholdPct: u.LossThresholdPct, LatencyThresholdMs: u.LatencyThresholdMs,
+			FailStrikes: u.FailStrikes, RecoverStrikes: u.RecoverStrikes, Status: u.Status, Description: u.Description,
+		}
+		if err := model.ValidateWanUplink(input); err != nil {
+			return fmt.Errorf("wan uplink %q: %w", u.Name, err)
+		}
+		// Give a clear validation error here rather than relying on the
+		// UNIQUE index on wan_uplinks(priority) to fail mid-transaction
+		// (same reasoning as wanUplinkPriorityInUse in db/wan_repo.go).
+		if seenWanPriorities[u.Priority] {
+			return fmt.Errorf("wan uplink %q: priority %d is already used by another wan uplink in this backup — priorities must be unique", u.Name, u.Priority)
+		}
+		seenWanPriorities[u.Priority] = true
+	}
+	// Same fail-closed treatment for the global WanFailoverSettings row
+	// (docs/ref/todo/multi-wan-failover-plan.md, T-28 — ai-qa's final
+	// verification pass): db/backup_repo.go RestoreConfig writes this row via
+	// a raw `UPDATE ... WHERE id = 1`, bypassing db.Repository.
+	// UpdateWanFailoverSettings and therefore model.ValidateWanFailoverSettings
+	// entirely. That guarantee matters here more than most: WanFailoverController.
+	// tick() re-reads these settings from the DB every 2s (no restart backstop),
+	// and decideActiveUplink's anti-flap dampening depends on both bounds — a
+	// negative MinHoldSeconds makes its `elapsed < hold` check never true
+	// (dampening silently disabled, so failover can flap on every probe cycle),
+	// while an unbounded-large MinHoldSeconds/RevertDelaySeconds freezes
+	// failover after the first switch. Nil-guarded because the field is a
+	// pointer with omitempty (model/backup.go) precisely so backups predating
+	// this feature stay checksum-compatible — they must keep importing cleanly.
+	if cfg.WanFailoverSettings != nil {
+		if err := model.ValidateWanFailoverSettings(*cfg.WanFailoverSettings); err != nil {
+			return fmt.Errorf("wan failover settings: %w", err)
+		}
+	}
 	return nil
 }
 

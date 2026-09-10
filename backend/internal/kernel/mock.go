@@ -240,19 +240,45 @@ func (m *MockNetwork) GetWifiStatus(name string) (*model.WifiConnectionStatus, e
 	}, nil
 }
 
-// MockRouting implements RoutingManager for local testing
+// MockRouting implements RoutingManager for local testing.
+//
+// T-25 (docs/ref/wan-failover-findings.md): EnforceDefaultRouteMetric used
+// to be a log-only no-op that never wrote into defaultRouteMetrics — which
+// meant NO test double in the repo could ever reproduce a metric-slot
+// conflict (kernel.ErrDefaultRouteMetricConflict), which is exactly why the
+// WAN failover route-disappears bug shipped without a failing test. It now
+// simulates the real kernel's FIB: defaultRouteMetrics is a live table that
+// EnforceDefaultRouteMetric actually mutates (mirroring real_routing.go's
+// make-before-break contract, including refusing a change and leaving the
+// table untouched when another interface already holds the target metric).
 type MockRouting struct {
 	mu                    sync.Mutex
 	enableEditSystemRoute bool
-	// defaultRouteMetrics backs DefaultRouteMetric (Task 14, Decision C) —
-	// unlike the real backend, the mock has no actual kernel routing table to
-	// read from, so tests seed "the kernel currently has this metric on this
-	// interface" explicitly via SetDefaultRouteMetric. EnforceDefaultRouteMetric
-	// below deliberately does NOT write into this map: it stays a log-only
-	// no-op (matching its pre-Task-14 behavior) so tests can assert on
-	// "what was the interface's metric BEFORE the override" (the snapshot)
-	// independently of "what did we just tell the kernel to enforce".
+	// defaultRouteMetrics is the simulated kernel default-route table
+	// (ifaceName -> current priority). Tests seed the INITIAL state via
+	// SetDefaultRouteMetric; from then on EnforceDefaultRouteMetric mutates
+	// it just like a real RouteAdd/RouteDel pair would, so DefaultRouteMetric
+	// always reflects "what the kernel has right now" — necessary for
+	// service.RoutingService's demote-before-promote classification and
+	// skip-if-already-at-target optimization to behave the same way against
+	// this mock as against the real kernel.
 	defaultRouteMetrics map[string]int
+	// snapshotBefore preserves, per interface, whatever defaultRouteMetrics
+	// held the moment BEFORE that interface's very first
+	// EnforceDefaultRouteMetric call — added because Task 14's tests need to
+	// assert "the value before the override" independently of "what the
+	// (now live-mutating) table has now", which defaultRouteMetrics alone
+	// can no longer answer once it live-updates (see SnapshotBefore).
+	snapshotBefore map[string]int
+	// failEnforce is a per-interface hook: while set, EVERY
+	// EnforceDefaultRouteMetric(ifaceName, ...) call fails with the given
+	// error instead of touching defaultRouteMetrics at all — lets a test
+	// force a persisting failure (e.g. kernel.ErrDefaultRouteMetricConflict)
+	// without needing two real interfaces to naturally collide, including
+	// across a retry or several reconcile passes. Cleared explicitly via
+	// ClearFailEnforce (not auto-consumed) so a test can control exactly how
+	// long the failure persists. See SetFailEnforce.
+	failEnforce map[string]error
 }
 
 func NewMockRouting() *MockRouting {
@@ -263,15 +289,79 @@ func (m *MockRouting) SetEnableEditSystemRoute(enable bool) {
 	m.enableEditSystemRoute = enable
 }
 
+// SetFailEnforce makes every subsequent EnforceDefaultRouteMetric(ifaceName,
+// ...) call fail with err (e.g. kernel.ErrDefaultRouteMetricConflict)
+// instead of touching the simulated FIB, until ClearFailEnforce is called —
+// see the failEnforce field's doc comment.
+func (m *MockRouting) SetFailEnforce(ifaceName string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failEnforce == nil {
+		m.failEnforce = make(map[string]error)
+	}
+	m.failEnforce[ifaceName] = err
+}
+
+// ClearFailEnforce removes a SetFailEnforce hook for ifaceName, letting
+// EnforceDefaultRouteMetric calls on it succeed/fail on their own merits
+// again.
+func (m *MockRouting) ClearFailEnforce(ifaceName string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.failEnforce, ifaceName)
+}
+
+// EnforceDefaultRouteMetric simulates the real kernel's default-route FIB
+// (T-25) — see the MockRouting/defaultRouteMetrics doc comments above.
 func (m *MockRouting) EnforceDefaultRouteMetric(ifaceName string, metric int) error {
 	log.Printf("[MockRouting] EnforceDefaultRouteMetric called: Interface: %s, Metric: %d", ifaceName, metric)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.failEnforce != nil {
+		if err, ok := m.failEnforce[ifaceName]; ok {
+			return err
+		}
+	}
+
+	if m.defaultRouteMetrics == nil {
+		m.defaultRouteMetrics = make(map[string]int)
+	}
+	if m.snapshotBefore == nil {
+		m.snapshotBefore = make(map[string]int)
+	}
+	if _, already := m.snapshotBefore[ifaceName]; !already {
+		if cur, found := m.defaultRouteMetrics[ifaceName]; found {
+			m.snapshotBefore[ifaceName] = cur
+		}
+	}
+
+	if cur, found := m.defaultRouteMetrics[ifaceName]; found && cur == metric {
+		return nil // already there — idempotent, matches real_routing.go
+	}
+
+	for otherIface, otherMetric := range m.defaultRouteMetrics {
+		if otherIface != ifaceName && otherMetric == metric {
+			// Simulated EEXIST: another interface already holds this exact
+			// metric — refuse the change, leave defaultRouteMetrics
+			// (including ifaceName's own current entry, if any) untouched.
+			return fmt.Errorf("simulated EEXIST: interface %q already holds metric %d: %w", otherIface, metric, ErrDefaultRouteMetricConflict)
+		}
+	}
+
+	m.defaultRouteMetrics[ifaceName] = metric
 	return nil
 }
 
 // SetDefaultRouteMetric seeds/updates what DefaultRouteMetric(ifaceName)
 // reports — a test hook, see the defaultRouteMetrics field's doc comment.
 // Pass found=false to simulate "this interface currently has no default
-// route" (clears any previously seeded value).
+// route" (clears any previously seeded value). Unlike
+// EnforceDefaultRouteMetric, this bypasses the simulated conflict check —
+// it directly sets up the INITIAL state a test wants to start from,
+// mirroring how a real interface's dhcpcd-installed route exists before
+// pigate ever calls EnforceDefaultRouteMetric on it.
 func (m *MockRouting) SetDefaultRouteMetric(ifaceName string, metric int, found bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -280,6 +370,19 @@ func (m *MockRouting) SetDefaultRouteMetric(ifaceName string, metric int, found 
 		return
 	}
 	m.defaultRouteMetrics[ifaceName] = metric
+}
+
+// SnapshotBefore returns whatever defaultRouteMetrics held for ifaceName the
+// moment BEFORE its first EnforceDefaultRouteMetric call ever mutated it —
+// see the snapshotBefore field's doc comment. found=false when
+// EnforceDefaultRouteMetric has never been called for ifaceName, or
+// ifaceName had no seeded value at that time. Test-only; not part of the
+// RoutingManager interface.
+func (m *MockRouting) SnapshotBefore(ifaceName string) (metric int, found bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.snapshotBefore[ifaceName]
+	return v, ok
 }
 
 // DefaultRouteMetric implements kernel.RoutingManager's read-only Task 14

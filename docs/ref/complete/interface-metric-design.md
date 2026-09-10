@@ -139,6 +139,10 @@ per-interface แล้ว restart dhcpcd — ตัดทิ้งเพรา�
    (ชนะสุด) กับ interface metric เดิม (แพ้สุด) ดูตาราง precedence เต็มที่
    `docs/tech_stack_design.md` §11 และ implementation ที่ `RoutingService.
    enforceInterfaceMetrics`/`enforceOneInterfaceMetric` ใน `service/routing.go`
+   **อัปเดตอีกครั้ง (T-24, Decision F, 2026-09-09):** ค่า Metric ที่ตั้งในหน้านี้จะถูก
+   ปฏิเสธถ้าตกอยู่ใน reserved band ของ failover controller (`51-66` หรือ `1000-1200`)
+   เมื่ออินเทอร์เฟซนั้นเป็น WAN uplink อยู่ (`model.ValidateWanUplinkInterfaceMetric`)
+   — กัน collision คลาสใหม่ระหว่างค่าที่ผู้ใช้ตั้งเองกับ band ของ controller
 
 2. **Enforcement ต้อง idempotent** — แก้ metric ด้วย RouteDel+RouteAdd จะ trigger Route
    event เข้า NetlinkMonitor อีกรอบ → reconcile อีกรอบ ถ้าเช็ค `Priority != metric` ก่อน
@@ -146,8 +150,16 @@ per-interface แล้ว restart dhcpcd — ตัดทิ้งเพรา�
    event loop ไม่รู้จบ
 
 3. **ช่วงเวลาสั้น ๆ ที่ไม่มี default route** — การเปลี่ยน metric ใช้ RouteReplace ไม่ได้
-   (kernel มองว่า priority ต่างกัน = คนละ route) ต้อง Del แล้ว Add ทำให้มีหน้าต่างเสี้ยว
-   วินาทีที่ traffic ขาออกไม่มีทางไป — ยอมรับได้ แต่ควร Add ให้เร็วที่สุดหลัง Del และ log ไว้
+   (kernel มองว่า priority ต่างกัน = คนละ route) ต้อง Del แล้ว Add
+   **อัปเดต (Multi-WAN Failover T-20, 2026-09-09, แก้บั๊กจริงที่พบหลังใช้งาน):**
+   ลำดับ "Del แล้ว Add" ที่เขียนไว้เดิมด้านบน**ผิด** และเป็นสาเหตุของบั๊ก "สลับ WAN
+   active แล้ว default route หายไปเลย" — ถ้า `RouteAdd` เส้นใหม่ fail (เช่นชนกับอีก
+   อินเทอร์เฟซที่ metric เดียวกัน, ดู `docs/tech_stack_design.md` §11 "Decision F")
+   หลังจากที่ `RouteDel` เส้นเก่าทำสำเร็จไปแล้ว อินเทอร์เฟซนั้นจะไม่มี default route
+   เหลือเลย ลำดับที่ถูกต้อง (ปัจจุบันใน `real_routing.go`) คือ **make-before-break**:
+   `RouteAdd` เส้นใหม่ก่อนเสมอ (มี 2 default route คนละ metric อยู่ร่วมกันชั่วคราวได้
+   ปลอดภัย) แล้วค่อย `RouteDel` เส้นเก่าเมื่อเส้นใหม่ยืนยันสำเร็จแล้วเท่านั้น ถ้า
+   `RouteAdd` fail ห้ามแตะเส้นเก่าเลย
 
 4. **ต้องคงค่า route attributes เดิมตอน re-add** — Protocol (dhcp/ra/boot), Scope, Src, Gw
    ของ route ที่ dhcpcd สร้าง ต้อง copy มาครบ **ห้าม** ให้กลายเป็น proto 120 (route ที่

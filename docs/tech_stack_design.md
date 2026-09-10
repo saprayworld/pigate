@@ -322,6 +322,85 @@ Controller ใช้ **ค่าคงที่ตายตัว** (ไม่�
 ทางเลือกเส้น standby มาแทนโดยบังเอิญ) และไม่มีค่าเท่ากันระหว่าง standby สองเส้นที่ priority ต่างกัน (กัน tie-break
 ที่คาดเดายาก)
 
+> **อัปเดต 2026-09-09 — ตารางด้านบน (active = ค่าคงที่ `50` ตัวเดียวใช้ร่วมกันทุก
+> uplink) คือรูปแบบเดิมของ Decision B ที่ถูกแทนที่ด้วย Decision F ด้านล่างแล้ว**
+> เก็บไว้เพื่ออ้างอิงประวัติเท่านั้น — โค้ดปัจจุบันใช้สูตร Decision F
+
+### Decision F — Collision-Free Metric Bands + Priority Uniqueness (2026-09-09)
+
+**บั๊กที่พบจากการใช้งานจริง (root cause):** Decision B ให้ uplink ที่ "active" ทุกตัวใช้ metric
+คงที่ตัวเดียวกัน (`50`) โดยไม่สนใจว่าเป็น uplink ไหน เมื่อ failover controller สลับ active จาก uplink A
+ไป uplink B, `enforceInterfaceMetrics` (ใน `routing.go`) ปรับ metric ของแต่ละอินเทอร์เฟซ**ตามลำดับใน DB
+แบบสุ่ม** (ไม่มี "demote ก่อน promote") แล้วเรียก `EnforceDefaultRouteMetric` ทันทีต่ออินเทอร์เฟซ ซึ่ง
+implementation เดิมของ kernel layer (`real_routing.go`) ทำ **`RouteDel` ก่อนแล้วค่อย `RouteAdd`** — Linux
+netlink `RouteAdd` ใช้ flag `NLM_F_EXCL` ซึ่งจะ**ปฏิเสธด้วย `EEXIST`** ถ้ามี default route ที่ metric เดิม
+(`dst`, `tos`, `priority`) อยู่แล้ว **แม้จะเป็นคนละอินเทอร์เฟซก็ตาม** (FIB key ของ default route ไม่รวม
+interface/nexthop) ดังนั้นไม่ว่าจะสลับทิศทางไหน ถ้าโค้ดประมวลผล "อินเทอร์เฟซที่กำลังจะขึ้นเป็น active"
+**ก่อน**ที่ "อินเทอร์เฟซที่เคย active" จะถูกย้ายออกจาก metric `50` สำเร็จ, `RouteAdd` ของตัวใหม่จะ fail ด้วย
+`EEXIST` — แต่ `RouteDel` ของตัวเก่าทำสำเร็จไปแล้วก่อนหน้านั้น (ลำดับเดิมคือ del-ก่อน-add) ผลคือ**อินเทอร์เฟซเดิม
+ไม่มี default route เหลืออยู่เลย** และ error ที่เกิดขึ้นก็แค่ `log.Printf` เงียบๆ ไม่มี retry/rollback/event log
+ทำให้ปัญหานี้มองไม่เห็นจนกว่าจะมีคนเช็ค `ip route` เอง (ดูรายละเอียดการวินิจฉัยและวิธีตรวจสอบซ้ำใน
+`docs/ref/wan-failover-findings.md`)
+
+**การแก้ไข (T-20 ถึง T-24) เลือกใช้ F-2 + F-1 ร่วมกัน:**
+
+* **F-2 (ปรับสูตร metric band)** — Active metric ไม่ใช้ค่าคงที่ตัวเดียวอีกต่อไป แต่เป็น
+  `50 + Priority` (Priority 1..16 → active band `51..66`) ส่วน Standby ยังเป็น `1000 + 10 × Priority`
+  เหมือนเดิม (`1010..1160`) ทำให้ **ทุก uplink มี "ที่ของตัวเอง" ถาวรทั้งใน active band และ standby band** —
+  ไม่มีทางที่ 2 uplink จะต้องการ metric เดียวกันพร้อมกัน แม้ระหว่างการสลับกำลังดำเนินอยู่ก็ตาม
+* **F-1 (บังคับ Priority ไม่ซ้ำ)** — ความปลอดจากการชนกันของ F-2 ขึ้นอยู่กับ Priority ที่**ไม่ซ้ำกัน**ระหว่าง
+  ทุกแถวใน `wan_uplinks` ทั้งหมด จึงเพิ่ม `UNIQUE INDEX` บนคอลัมน์ `priority` (migration
+  `ensureUniqueWanUplinkPriorityIndex`, `db/connection.go` — renumber ค่าที่ซ้ำกันของแถวเดิมโดยอัตโนมัติก่อน
+  สร้าง index เพื่อไม่ให้ฐานข้อมูลเก่าพังตอนอัปเกรด) และตรวจซ้ำที่ repo layer (`CreateWanUplink`/
+  `UpdateWanUplink`) เพื่อ error message ที่ชัดเจนกว่า raw sqlite constraint
+* นอกจากนี้ Metric ที่ผู้ใช้ตั้งเองในหน้า Interfaces (precedence ระดับ 4) จะถูกปฏิเสธถ้าตกอยู่ใน
+  reserved band ทั้งสอง (`model.WanReservedActiveMetricMin/Max` = 51-66,
+  `model.WanReservedStandbyMetricMin/Max` = 1000-1200) เมื่ออินเทอร์เฟซนั้นเป็น WAN uplink อยู่
+  (`model.ValidateWanUplinkInterfaceMetric`, เรียกจาก `InterfaceService.ApplyInterfaceConfig`)
+
+**การแก้ไขที่ระดับ kernel/service layer (T-20/T-21/T-22, ยังคงจำเป็นแม้ Decision F จะตัด collision ระหว่าง
+2 uplink ที่ทำงานปกติออกไปแล้ว):**
+
+1. **Make-before-break (T-20, `kernel/real_routing.go` `EnforceDefaultRouteMetric`)** — สลับลำดับเป็น
+   `RouteAdd` เส้นใหม่**ก่อน** แล้วค่อย `RouteDel` เส้นเก่า ถ้า `RouteAdd` fail จะ**ไม่แตะเส้นเก่าเลย** (มี 2
+   default route คนละ metric อยู่ร่วมกันชั่วคราวได้ปลอดภัย — kernel เลือกใช้ metric ที่น้อยกว่าเอง) ถ้า
+   `RouteDel` เส้นเก่า fail หลัง `RouteAdd` สำเร็จ จะ rollback ด้วยการลบเส้นใหม่ทิ้ง **ห้ามใช้
+   `netlink.RouteReplace` แทน** เพราะ `RouteReplace` จับคู่ด้วย `(dst, tos, priority, table)` ที่ไม่รวม
+   interface — ถ้ามีอินเทอร์เฟซอื่นถือ metric นั้นอยู่ก่อน จะไป "แย่ง" route ของอินเทอร์เฟซนั้นแทนที่จะ fail
+   ให้เห็นชัดๆ ข้อผิดพลาดสื่อผ่าน sentinel error สองตัว (`kernel.ErrDefaultRouteMetricConflict` สำหรับ
+   `EEXIST`, `kernel.ErrDefaultRouteUnreachable` สำหรับ `ENETDOWN`/`ENETUNREACH`) ที่ wrap ด้วย `%w` ให้
+   `errors.Is` ใช้ได้จาก service layer
+2. **Demote ก่อน Promote เสมอ (T-21, `service/routing.go` `enforceInterfaceMetrics`)** — เมื่อมี override/
+   restore ที่กำลังทำงานอยู่ (ไม่ใช่ path เดิมของ Phase 1 ที่ regression guard ล็อกลำดับ call ไว้ตายตัว)
+   ระบบจะแยกเป็น 2 phase: PLAN (คำนวณ target metric ของทุกอินเทอร์เฟซโดยยังไม่แตะ kernel) แล้ว EXECUTE โดย
+   ทำ **DEMOTE ทุกตัวก่อน** (target metric สูงกว่าปัจจุบัน) แล้วค่อยทำ **PROMOTE** (target ต่ำกว่าปัจจุบัน) —
+   ถ้ายัง fail ด้วย `ErrDefaultRouteMetricConflict` จะ retry อีกครั้งหลังจบทั้งสอง phase (ครอบคลุมกรณี
+   ขอบ เช่นมีอินเทอร์เฟซนอก DB) นี่คือหลักการ **"ต้องเคลียร์ metric slot เดิมออกก่อนที่ใครจะเข้ามาจับจอง"**
+   ซึ่งเป็นกลไกที่แก้บั๊กจริงๆ ไม่ใช่แค่ Decision F เพียงอย่างเดียว — เพราะยังมีกรณีที่ Decision F เอง
+   ป้องกันไม่ได้ เช่น 2 อินเทอร์เฟซที่บังเอิญมี metric เดิม (ก่อน override) เท่ากันตอน restore กลับ
+   (kill switch ปิด)
+3. **ล็อกการ reconcile ทั้งหมด (T-22, `RoutingService.reconcileMu`)** — ทุก `RouteDel`/`RouteAdd` ที่ทำ
+   จะยิง netlink route-change event กลับมาให้ `NetlinkMonitor` เห็น แล้ว publish ต่อเป็น
+   `AddrRouteChanged` ซึ่งมี subscriber "routing" ใน `main.go` เรียก `ReconcileKernelRoutingTable()` ซ้ำ
+   — เกิดขึ้นพร้อมกับ tick ของ failover controller เองและ HTTP-triggered reconcile ได้ ถ้าไม่ล็อก
+   จะทำให้ 2 goroutine สลับกัน del/add เส้นทางเดียวกัน ขยายช่วงเวลาที่บั๊กนี้จะเกิดขึ้นได้ `reconcileMu`
+   (แยกจาก `mu` ที่ guard แค่ 4-5 map ภายใน) จึงครอบทั้ง `ApplyRoutes` + `enforceInterfaceMetrics`
+4. **มองเห็นได้จาก event log (T-23)** — เมื่อ `EnforceDefaultRouteMetric` fail ระหว่าง apply/restore
+   override จะ log เข้า central event log (category `network`, severity `critical`) ครั้งเดียวต่อ
+   "episode" (เคลียร์เมื่อสำเร็จ) แทนที่จะเงียบแค่ log บรรทัดเดียวเหมือนเดิม และมี field
+   `enforceFailed` (boolean รวม) เพิ่มใน `GET /api/wan/status`, ส่วนรายชื่ออินเทอร์เฟซแบบละเอียด
+   (`enforceFailedInterfaces`) อยู่ที่ `GET /api/wan/failover` (QA round-1 fix, Finding 2 —
+   ก่อนหน้านี้ endpoint นี้ยังไม่ได้ return field ดังกล่าวจริง แม้เอกสารจะอ้างถึงไว้แล้วก็ตาม)
+
+**ตรวจสอบซ้ำบนเครื่องจริง (journalctl):**
+
+```
+journalctl -u pigate | grep -E "failed to enforce WAN failover metric override|failed to re-add default route"
+```
+
+ถ้าไม่พบบรรทัดไหนเลยหลังสลับ WAN active ไปมาหลายรอบ = ไม่มีการ enforce ที่ fail เงียบๆ (ดูรายละเอียดเพิ่มเติมและ
+สคริปต์ตรวจสอบซ้ำแบบเต็มใน `docs/ref/wan-failover-findings.md`)
+
 ### กฎ Anti-Flap/Anti-Blackhole ที่เกี่ยวข้อง (สรุปจาก `wan_failover.go`)
 
 * **MinHoldSeconds** — ห้ามสลับ uplink อัตโนมัติ (auto mode) ถี่กว่านี้

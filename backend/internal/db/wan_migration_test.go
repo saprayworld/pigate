@@ -1,6 +1,8 @@
 package db
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"pigate/internal/model"
@@ -172,6 +174,108 @@ func TestWanUplinkInterfaceUnique(t *testing.T) {
 	input.Name = "Duplicate"
 	if _, err := repo.CreateWanUplink(input); err == nil {
 		t.Fatal("expected second uplink on the same interface to fail (UNIQUE constraint)")
+	}
+}
+
+// TestCreateWanUplink_RejectsBeyondMaxCap covers the QA round-1 fix
+// (Finding 3): model.MaxWanUplinks (16) must be enforced as a hard ceiling
+// on the TOTAL number of wan_uplinks rows, not just each individual
+// Priority value — filling the table to exactly the cap must still succeed,
+// and the (MaxWanUplinks+1)th create must be rejected with a clear error
+// referencing the cap, leaving the row count unchanged.
+func TestCreateWanUplink_RejectsBeyondMaxCap(t *testing.T) {
+	rawDB, err := InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer rawDB.Close()
+
+	repo := NewRepository(rawDB)
+
+	for i := 1; i <= model.MaxWanUplinks; i++ {
+		input := model.WanUplinkInput{
+			Name: fmt.Sprintf("wan-%d", i), Interface: fmt.Sprintf("eth%d", i), Priority: i,
+			ProbeTargets: []string{"1.1.1.1"}, ProbeMethod: model.WanProbeMethodICMP,
+			ProbeIntervalSeconds: 5, ProbeCount: 3, ProbeTimeoutMs: 1000,
+			LossThresholdPct: 50, LatencyThresholdMs: 200, FailStrikes: 3, RecoverStrikes: 3,
+		}
+		if _, err := repo.CreateWanUplink(input); err != nil {
+			t.Fatalf("CreateWanUplink #%d (at the cap) failed unexpectedly: %v", i, err)
+		}
+	}
+
+	list, err := repo.GetWanUplinks()
+	if err != nil {
+		t.Fatalf("GetWanUplinks failed: %v", err)
+	}
+	if len(list) != model.MaxWanUplinks {
+		t.Fatalf("expected exactly %d uplinks after filling to the cap, got %d", model.MaxWanUplinks, len(list))
+	}
+
+	// The (MaxWanUplinks+1)th create must be rejected — note this uplink's
+	// priority (1) would otherwise also collide, but the cap check must fire
+	// (and be reported) regardless of priority.
+	overflow := model.WanUplinkInput{
+		Name: "one-too-many", Interface: "eth-overflow", Priority: model.MaxWanUplinks + 1,
+		ProbeTargets: []string{"1.1.1.1"}, ProbeMethod: model.WanProbeMethodICMP,
+		ProbeIntervalSeconds: 5, ProbeCount: 3, ProbeTimeoutMs: 1000,
+		LossThresholdPct: 50, LatencyThresholdMs: 200, FailStrikes: 3, RecoverStrikes: 3,
+	}
+	// Priority > 16 is already rejected by ValidateWanUplink itself; use a
+	// value that passes per-row validation (1..16) so the assertion is
+	// actually exercising the TOTAL-COUNT cap, not the per-row range check.
+	overflow.Priority = 1
+	if _, err := repo.CreateWanUplink(overflow); err == nil {
+		t.Fatal("expected the 17th CreateWanUplink to fail once the 16-uplink cap is reached")
+	} else if !strings.Contains(err.Error(), fmt.Sprintf("%d", model.MaxWanUplinks)) {
+		t.Errorf("expected the cap-rejection error to mention the cap (%d), got: %v", model.MaxWanUplinks, err)
+	}
+
+	list, err = repo.GetWanUplinks()
+	if err != nil {
+		t.Fatalf("GetWanUplinks failed: %v", err)
+	}
+	if len(list) != model.MaxWanUplinks {
+		t.Errorf("expected uplink count to remain %d after the rejected 17th create, got %d", model.MaxWanUplinks, len(list))
+	}
+}
+
+// TestEnsureUniqueWanUplinkPriorityIndex_FailsLoudlyBeyondCap covers the
+// migration's defensive half of the QA round-1 fix (Finding 3): a
+// PRE-EXISTING database that already has more than model.MaxWanUplinks rows
+// (only possible if it predates the CreateWanUplink cap added above, or was
+// edited directly) must make the migration fail loudly at startup rather
+// than silently renumbering some row's priority above the cap and reopening
+// Decision F's metric-collision class. Rows are inserted via raw SQL,
+// bypassing the repository (and its now-enforced cap), to simulate exactly
+// that pre-existing state.
+func TestEnsureUniqueWanUplinkPriorityIndex_FailsLoudlyBeyondCap(t *testing.T) {
+	rawDB, err := InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer rawDB.Close()
+
+	// Drop the unique index so raw inserts with intentionally duplicate/
+	// out-of-range priorities are not themselves rejected by SQLite before
+	// the migration under test even gets to inspect the rows.
+	if _, err := rawDB.Exec("DROP INDEX IF EXISTS idx_wan_uplinks_priority"); err != nil {
+		t.Fatalf("failed to drop wan_uplinks priority index: %v", err)
+	}
+
+	for i := 1; i <= model.MaxWanUplinks+1; i++ {
+		if _, err := rawDB.Exec(
+			"INSERT INTO wan_uplinks (id, name, interface, priority) VALUES (?, ?, ?, ?)",
+			fmt.Sprintf("wan-raw-%d", i), fmt.Sprintf("Raw %d", i), fmt.Sprintf("raw%d", i), i,
+		); err != nil {
+			t.Fatalf("raw insert #%d failed: %v", i, err)
+		}
+	}
+
+	if err := ensureUniqueWanUplinkPriorityIndex(rawDB); err == nil {
+		t.Fatal("expected ensureUniqueWanUplinkPriorityIndex to fail loudly with more than MaxWanUplinks rows present")
+	} else if !strings.Contains(err.Error(), fmt.Sprintf("%d", model.MaxWanUplinks)) {
+		t.Errorf("expected the error to mention the cap (%d), got: %v", model.MaxWanUplinks, err)
 	}
 }
 
