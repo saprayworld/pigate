@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"net"
 	"time"
 
 	"pigate/internal/model"
@@ -121,10 +122,34 @@ type RoutingManager interface {
 	DeleteRoute(route model.StaticRoute) error
 	SetEnableEditSystemRoute(enable bool)
 	// EnforceDefaultRouteMetric ensures the IPv4 default gateway route on ifaceName
-	// has the given priority, deleting and re-adding it (preserving proto/scope/src/gw)
-	// if the current priority differs. Used to override the metric of dhcpcd-managed
-	// default routes for multi-WAN failover ordering. IPv4 only.
+	// has the given priority (preserving proto/scope/src/gw) if the current priority
+	// differs. Used to override the metric of dhcpcd-managed default routes for
+	// multi-WAN failover ordering. IPv4 only.
+	//
+	// Contract (T-20, docs/ref/wan-failover-findings.md): implementations MUST be
+	// make-before-break — add the new route at the target metric BEFORE deleting
+	// the old one — and must NEVER destroy the interface's existing default route
+	// if the new one cannot be installed; on failure the old route must be left
+	// intact and an error returned. A failed add wraps ErrDefaultRouteMetricConflict
+	// when another interface already holds a route at that exact metric (EEXIST —
+	// Linux allows only one default route per metric per table, and NLM_F_EXCL
+	// rejects a second one even though the outgoing interface differs), or
+	// ErrDefaultRouteUnreachable when the interface/gateway is not currently
+	// reachable (ENETDOWN/ENETUNREACH). Both are wrapped with %w so callers can use
+	// errors.Is. netlink.RouteReplace must never be used as a substitute for
+	// delete+add here: it would silently re-point whatever OTHER interface already
+	// owns the target metric instead of failing loudly.
 	EnforceDefaultRouteMetric(ifaceName string, metric int) error
+	// DefaultRouteMetric is a READ-ONLY counterpart to EnforceDefaultRouteMetric
+	// (docs/ref/todo/multi-wan-failover-plan.md Task 14, Decision C): it reports
+	// the current priority of the IPv4 default gateway route on ifaceName without
+	// modifying anything, so the WAN failover metric-override machinery
+	// (service.RoutingService) can snapshot a route's pre-override metric before
+	// overriding it and restore that exact value later (e.g. when the kill
+	// switch is turned off). found is false when ifaceName has no IPv4 default
+	// route with a gateway right now (nothing to snapshot) — that is not itself
+	// an error. IPv4 only, mirroring EnforceDefaultRouteMetric.
+	DefaultRouteMetric(ifaceName string) (metric int, found bool, err error)
 }
 
 // DhcpManager abstracts DHCP configuration updates and active lease logs parsing
@@ -366,6 +391,48 @@ type SystemServiceManager interface {
 	// already resolved unit from a server-side whitelist — never pass a raw,
 	// client-supplied string straight through (unit-name injection).
 	Restart(unit string) error
+}
+
+// PathProbeManager abstracts sending ICMP/TCP-connect health probes out a
+// specific network interface, for the Multi-WAN Failover health monitor
+// (docs/ref/todo/multi-wan-failover-plan.md, Phase 1 — read-only with
+// respect to routing/nftables, D-1). Both methods:
+//  1. are strictly read-only: they never modify routing, firewall, or any
+//     other system state — this is a measurement probe, nothing else;
+//  2. MUST bind the probe socket to ifaceName via SO_BINDTODEVICE (not just
+//     rely on source-IP selection), since a multi-WAN host has more than one
+//     default route active at once and the kernel's normal route selection
+//     would otherwise not exercise the path being asked about;
+//  3. MUST respect ctx and always return within count*timeout — a caller
+//     (the periodic WAN monitor) must never be blocked indefinitely by a
+//     socket that never gets a reply;
+//  4. treat "the destination never replied" as a normal, non-error result
+//     (the returned model.WanProbeSample simply has Received==0/a shorter
+//     RTTsMs) — an error return is reserved for the probe mechanism itself
+//     failing (e.g. socket() failed, permission denied, interface does not
+//     exist), which is a different condition the health monitor must
+//     distinguish from "target is unreachable";
+//  5. MUST always set Sample.Method and Sample.MetricQuality on every
+//     return (including the zero-value/error paths a caller might still
+//     read fields off of) — ProbeTCP always reports MetricQuality
+//     "connect-only" (TCP-connect cannot measure jitter, D-6), while
+//     ProbeICMP reports "full".
+//
+// Deciding WHEN to fall back from ICMP to TCP (the "auto" ProbeMethod,
+// D-5) is entirely a service-layer (service.WanMonitor) concern — this
+// interface has no notion of "auto" at all, it only ever probes the one
+// method it was asked for.
+type PathProbeManager interface {
+	// ProbeICMP sends count ICMP Echo Requests to target out ifaceName,
+	// waiting up to timeout for each reply, and returns a summary sample.
+	ProbeICMP(ctx context.Context, ifaceName string, target net.IP, count int, timeout time.Duration) (model.WanProbeSample, error)
+	// ProbeTCP attempts count TCP connections to target:port out ifaceName,
+	// waiting up to timeout for each to establish, and returns a summary
+	// sample. A connection actively refused by the remote host counts as the
+	// destination being reachable (the path works, nothing is listening on
+	// that port) — see real_path_probe.go for why that is counted as success
+	// in the reachability sense despite being a "connection error".
+	ProbeTCP(ctx context.Context, ifaceName string, target net.IP, port, count int, timeout time.Duration) (model.WanProbeSample, error)
 }
 
 // CapabilityProber abstracts read-only detection of whether the kernel

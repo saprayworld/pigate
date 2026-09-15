@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"pigate/internal/model"
+
 	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 )
@@ -563,6 +565,48 @@ func migrate(db *sql.DB) error {
 			max_restarts_before_pause INTEGER NOT NULL DEFAULT 3
 		);`,
 
+		// wan_uplinks / wan_failover_settings: configured WAN paths + the
+		// global failover kill switch (docs/ref/todo/multi-wan-failover-plan.md
+		// Task 2). probe_targets is a comma-separated list of IPv4 literals
+		// (mirrors dns_server_settings.upstream_servers's storage convention,
+		// see db/repository.go GetDNSServerSettings) — validated as IPv4-only,
+		// non-hostname entries by model.ValidateWanUplink before being
+		// persisted, so no injection concern from the comma-join/split. Phase 1
+		// (this migration) is entirely read-only with respect to
+		// routing/nftables (D-1) — these tables only ever feed the read-only
+		// health monitor; nothing here is consulted by any kernel-mutating
+		// code path yet. wan_failover_settings.enabled defaults to 0 (kill
+		// switch OFF) so installing this feature changes nothing on an
+		// existing deployment until an operator opts in (plan Caution 9).
+		// There is intentionally no failover_on_degraded column (D-7).
+		`CREATE TABLE IF NOT EXISTS wan_uplinks (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			interface TEXT UNIQUE NOT NULL,
+			priority INTEGER NOT NULL DEFAULT 1,
+			probe_targets TEXT NOT NULL DEFAULT '',
+			probe_method TEXT NOT NULL DEFAULT 'auto' CHECK(probe_method IN ('icmp', 'tcp', 'auto')),
+			probe_tcp_port INTEGER NOT NULL DEFAULT 0,
+			probe_interval_seconds INTEGER NOT NULL DEFAULT 5,
+			probe_count INTEGER NOT NULL DEFAULT 3,
+			probe_timeout_ms INTEGER NOT NULL DEFAULT 1000,
+			loss_threshold_pct REAL NOT NULL DEFAULT 50,
+			latency_threshold_ms REAL NOT NULL DEFAULT 200,
+			fail_strikes INTEGER NOT NULL DEFAULT 3,
+			recover_strikes INTEGER NOT NULL DEFAULT 3,
+			status INTEGER NOT NULL DEFAULT 1 CHECK(status IN (0,1)),
+			description TEXT NOT NULL DEFAULT ''
+		);`,
+
+		`CREATE TABLE IF NOT EXISTS wan_failover_settings (
+			id INTEGER PRIMARY KEY CHECK(id = 1),
+			enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)),
+			mode TEXT NOT NULL DEFAULT 'auto' CHECK(mode IN ('auto', 'manual')),
+			manual_uplink_id TEXT NOT NULL DEFAULT '',
+			min_hold_seconds INTEGER NOT NULL DEFAULT 60,
+			revert_delay_seconds INTEGER NOT NULL DEFAULT 120
+		);`,
+
 		`CREATE TABLE IF NOT EXISTS network_interfaces (
 			id TEXT PRIMARY KEY,
 			name TEXT UNIQUE NOT NULL,
@@ -882,6 +926,17 @@ func migrate(db *sql.DB) error {
 		return fmt.Errorf("failed to backfill HTTPS admin access: %w", err)
 	}
 
+	// Decision F (docs/ref/todo/multi-wan-failover-plan.md, T-24): the
+	// failover controller's collision-free metric bands (see
+	// service/wan_failover.go) depend entirely on WAN uplink Priority being
+	// unique across every wan_uplinks row. Existing installs may already
+	// have duplicate priorities (there was no constraint before this
+	// migration) — renumber them before creating the UNIQUE index, or the
+	// CREATE UNIQUE INDEX below would fail and abort boot.
+	if err := ensureUniqueWanUplinkPriorityIndex(db); err != nil {
+		return fmt.Errorf("failed to enforce unique WAN uplink priorities: %w", err)
+	}
+
 	return nil
 }
 
@@ -994,6 +1049,91 @@ func ensureUniqueAliasIndex(db *sql.DB) error {
 
 	if _, err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_network_interfaces_alias ON network_interfaces(alias COLLATE NOCASE)"); err != nil {
 		return fmt.Errorf("failed to create unique alias index: %w", err)
+	}
+	return nil
+}
+
+// ensureUniqueWanUplinkPriorityIndex renumbers any duplicate wan_uplinks
+// priority values (auto-assigning each duplicate the smallest unused
+// positive integer, in rowid order so the first-created row of a duplicate
+// pair keeps its original priority) and then creates the UNIQUE index that
+// enforces uniqueness from then on — Decision F's collision-free metric
+// bands (docs/ref/todo/multi-wan-failover-plan.md, T-24) depend on this
+// invariant holding at all times. Mirrors ensureUniqueAliasIndex's
+// normalize-then-index shape immediately above. Idempotent and safe on both
+// a fresh and an existing database (a fresh install never has duplicates,
+// so this is a no-op there beyond creating the index).
+//
+// model.MaxWanUplinks (16) is a HARD ceiling here, not just an aspiration:
+// Decision F's active/standby default-route metric bands (see
+// model.WanReservedActiveMetricMin/Max, model.WanReservedStandbyMetricMin/Max)
+// are sized to exactly cover every wanFailoverActiveMetricBase+Priority /
+// wanFailoverStandbyMetricBase+10*Priority value for Priority 1..16 — a
+// renumbered priority above 16 would silently produce an active-band metric
+// (67+) outside those reserved bands, reopening the exact metric-collision
+// class Decision F was built to close. db.Repository.CreateWanUplink now
+// enforces this cap going forward (QA round-1 fix, Finding 3), so this
+// branch should be unreachable on any database created after that fix
+// shipped; it exists purely to fail loudly (hard startup error, matching
+// this function's existing "abort boot rather than silently misconfigure"
+// contract) on a PRE-EXISTING database that already has more than 16 rows,
+// rather than silently assigning an out-of-band priority.
+func ensureUniqueWanUplinkPriorityIndex(db *sql.DB) error {
+	rows, err := db.Query("SELECT id, priority FROM wan_uplinks ORDER BY rowid")
+	if err != nil {
+		return err
+	}
+	type uplinkRow struct {
+		id       string
+		priority int
+	}
+	var all []uplinkRow
+	for rows.Next() {
+		var r uplinkRow
+		if err := rows.Scan(&r.id, &r.priority); err != nil {
+			rows.Close()
+			return err
+		}
+		all = append(all, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if len(all) > model.MaxWanUplinks {
+		return fmt.Errorf("wan_uplinks has %d rows, exceeding the hard cap of %d (model.MaxWanUplinks) that Decision F's collision-free metric bands depend on — remove excess WAN uplinks manually before upgrading", len(all), model.MaxWanUplinks)
+	}
+
+	taken := make(map[int]bool, len(all))
+	for _, r := range all {
+		if !taken[r.priority] {
+			taken[r.priority] = true
+			continue
+		}
+		// Duplicate: reassign to the smallest unused positive integer.
+		candidate := 1
+		for taken[candidate] {
+			candidate++
+		}
+		if candidate > model.MaxWanUplinks {
+			// Cannot happen given the len(all) > MaxWanUplinks guard above
+			// (there are at most MaxWanUplinks rows, so at most MaxWanUplinks
+			// distinct positive integers are ever needed) — kept as an
+			// explicit, loud failure rather than a silent out-of-band
+			// assignment in case that invariant is ever violated by a future
+			// change to this function.
+			return fmt.Errorf("cannot de-duplicate priority for wan uplink %s: the smallest unused priority (%d) exceeds the hard cap of %d (model.MaxWanUplinks) that Decision F's collision-free metric bands depend on", r.id, candidate, model.MaxWanUplinks)
+		}
+		if _, err := db.Exec("UPDATE wan_uplinks SET priority = ? WHERE id = ?", candidate, r.id); err != nil {
+			return fmt.Errorf("failed to de-duplicate priority for wan uplink %s: %w", r.id, err)
+		}
+		log.Printf("[Migration] Warning: WAN uplink %s had duplicate priority %d, renumbered to %d", r.id, r.priority, candidate)
+		taken[candidate] = true
+	}
+
+	if _, err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_wan_uplinks_priority ON wan_uplinks(priority)"); err != nil {
+		return fmt.Errorf("failed to create unique wan_uplinks priority index: %w", err)
 	}
 	return nil
 }
@@ -1237,6 +1377,22 @@ func seed(db *sql.DB, dsn string, mockMode bool) error {
 	if dhcpHealthCount == 0 {
 		_, err := db.Exec(`INSERT INTO dhcp_health_settings (id, enabled, check_interval_seconds, consecutive_strikes, min_running_seconds, restart_backoff_seconds, max_restarts_before_pause) VALUES
 			(1, 1, 60, 3, 30, 300, 3)`)
+		if err != nil {
+			return err
+		}
+	}
+
+	// 5.3 Seed Default WAN Failover Settings (docs/ref/todo/
+	// multi-wan-failover-plan.md Task 2) — enabled=0 (kill switch OFF) so a
+	// fresh install/upgrade never changes routing behavior until an operator
+	// opts in (plan Caution 9).
+	var wanFailoverCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM wan_failover_settings").Scan(&wanFailoverCount); err != nil {
+		return err
+	}
+	if wanFailoverCount == 0 {
+		_, err := db.Exec(`INSERT OR IGNORE INTO wan_failover_settings (id, enabled, mode, manual_uplink_id, min_hold_seconds, revert_delay_seconds) VALUES
+			(1, 0, 'auto', '', 60, 120)`)
 		if err != nil {
 			return err
 		}

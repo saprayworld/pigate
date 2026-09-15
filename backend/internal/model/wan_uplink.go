@@ -1,0 +1,366 @@
+package model
+
+import "fmt"
+
+// Package-level WAN uplink probe method constants. ProbeMethod on WanUplink
+// must be exactly one of these three values (see ValidateWanUplink in
+// wan_validate.go). "auto" means: try ICMP first, and if that round gets zero
+// replies, immediately fall back to TCP-connect within the SAME probing
+// round — never "declare down, then retry" (docs/ref/todo/
+// multi-wan-failover-plan.md D-5). This lets an ISP that blocks outbound
+// ICMP still be monitored via TCP without a false-positive "down".
+const (
+	WanProbeMethodICMP = "icmp"
+	WanProbeMethodTCP  = "tcp"
+	WanProbeMethodAuto = "auto"
+)
+
+// WAN uplink health states (WanUplinkState.State). "degraded" is a
+// display-only state: it is derived from a latency-threshold breach with no
+// packet loss, and — per an explicit product decision (D-7, 2026-09-06) —
+// NEVER triggers a failover. Only "down" (loss-threshold breach for
+// FailStrikes consecutive rounds) does. There is deliberately no toggle
+// anywhere in this package that would let a "degraded" reading drive a
+// failover decision.
+const (
+	WanStateUnknown  = "unknown"
+	WanStateUp       = "up"
+	WanStateDegraded = "degraded"
+	WanStateDown     = "down"
+)
+
+// WanMetricQuality describes how much a probe round's numbers can be
+// trusted. TCP-connect only ever proves connect-time (a latency proxy) and
+// success/failure (a loss proxy) — it cannot produce a meaningful jitter
+// figure, so MetricQuality tells the frontend when to gray out/hide jitter
+// (D-6) rather than show a number that looks precise but is not.
+const (
+	WanMetricQualityFull        = "full"
+	WanMetricQualityConnectOnly = "connect-only"
+)
+
+// WAN failover operating modes (WanFailoverSettings.Mode).
+const (
+	WanFailoverModeAuto   = "auto"
+	WanFailoverModeManual = "manual"
+)
+
+// Decision F (docs/ref/todo/multi-wan-failover-plan.md, approved
+// 2026-09-09, alongside Decision B recorded in service/wan_failover.go): the
+// failover controller's active/standby default-route metric bands are
+// permanent, reserved ranges that a WAN uplink interface's
+// manually-configured Metric (Interfaces page, level-4 precedence in
+// service.RoutingService.enforceInterfaceMetrics) must never fall inside —
+// see ValidateWanUplinkInterfaceMetric. The active band (51..66) exactly
+// covers every possible wanFailoverActiveMetricBase+Priority value for
+// Priority 1..16; the standby band (1000..1200) covers every possible
+// wanFailoverStandbyMetricBase+10*Priority value (1010..1160) with generous
+// headroom.
+const (
+	WanReservedActiveMetricMin  = 51
+	WanReservedActiveMetricMax  = 66
+	WanReservedStandbyMetricMin = 1000
+	WanReservedStandbyMetricMax = 1200
+)
+
+// MaxWanUplinks is the hard ceiling on the TOTAL number of wan_uplinks rows
+// (QA round-1 fix, Finding 3). Decision F's entire collision-freedom
+// argument — active metric = wanFailoverActiveMetricBase+Priority, standby =
+// wanFailoverStandbyMetricBase+10*Priority — is built on Priority never
+// exceeding 16 (ValidateWanUplink already enforces 1..16 per row via this
+// same constant, and the two reserved bands above are sized exactly to
+// cover Priority 1..16). That per-row check alone is not enough: nothing
+// previously capped how many wan_uplinks rows could exist in total, so
+// db/connection.go's duplicate-priority migration could, in principle, need
+// to renumber a row above 16 if more than 16 rows ever existed — producing
+// an active-band metric (67+) outside the reserved bands and silently
+// reopening the exact collision class Decision F was built to close. This
+// constant is enforced both at creation time (db.Repository.CreateWanUplink,
+// rejecting a 17th uplink outright) and defensively inside the migration
+// itself (db/connection.go ensureUniqueWanUplinkPriorityIndex, which now
+// hard-fails at startup rather than assigning an out-of-band priority).
+const MaxWanUplinks = 16
+
+// ValidateWanUplinkInterfaceMetric checks that metric (a WAN uplink
+// interface's manually-configured model.NetworkInterface.Metric) does not
+// fall inside either of Decision F's reserved default-route metric bands —
+// doing so would create a NEW class of metric collision (this time between
+// an operator's own static setting and the failover controller's
+// active/standby bands) on top of the one Decision F already closed between
+// uplinks themselves. Called from service.InterfaceService.
+// ApplyInterfaceConfig only when the target interface is currently a WAN
+// uplink (db.Repository.GetWanUplinks).
+func ValidateWanUplinkInterfaceMetric(metric int) error {
+	if metric >= WanReservedActiveMetricMin && metric <= WanReservedActiveMetricMax {
+		return fmt.Errorf("metric %d is reserved for the WAN failover active-uplink band (%d-%d) and cannot be manually assigned to a WAN uplink interface", metric, WanReservedActiveMetricMin, WanReservedActiveMetricMax)
+	}
+	if metric >= WanReservedStandbyMetricMin && metric <= WanReservedStandbyMetricMax {
+		return fmt.Errorf("metric %d is reserved for the WAN failover standby-uplink band (%d-%d) and cannot be manually assigned to a WAN uplink interface", metric, WanReservedStandbyMetricMin, WanReservedStandbyMetricMax)
+	}
+	return nil
+}
+
+// MaxWanProbeTargets caps how many ProbeTargets a single WanUplink may
+// configure. Every configured target is probed every round (WanMonitor.
+// probeAllTargets), so this cap also bounds the worst-case width of one
+// probe round now that ValidateWanUplink enforces a hard "the round must fit
+// inside ProbeIntervalSeconds" budget (see the budget check below) — without
+// a cap on target count, that budget check alone could not prevent an
+// operator from configuring an unreasonably wide round.
+const MaxWanProbeTargets = 4
+
+// WanUplink is one configured WAN path (e.g. the primary wired uplink or a
+// 4G/backup Wi-Fi uplink) that PiGate health-checks via ICMP/TCP probes sent
+// out ifaceName with SO_BINDTODEVICE (kernel.PathProbeManager). It is
+// persisted config (db.wan_repo.go), not runtime state — see WanUplinkState
+// for the live health/metric side.
+//
+// ProbeTargets are IPv4 literals ONLY, never hostnames — probing a hostname
+// would create a DNS-availability dependency loop right when the network is
+// in trouble, and would let DNS answers (poisonable from the LAN, see
+// tech_stack_design.md §8) influence failover behavior. There is
+// intentionally no built-in default target: an operator must type one in
+// explicitly (privacy — do not silently probe a third party on their
+// behalf).
+type WanUplink struct {
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Interface string `json:"interface,omitempty"`
+	// Priority orders uplinks for the Phase 2 auto-failover controller:
+	// lower value = higher priority = tried first. Not used in Phase 1
+	// (Task 1-13 are read-only with respect to routing).
+	Priority int `json:"priority,omitempty"`
+	// ProbeTargets is one or more IPv4 literals to probe every round. All
+	// configured targets are probed; a round is considered "received" for a
+	// target that replies (see WanProbeSample).
+	ProbeTargets []string `json:"probeTargets,omitempty"`
+	// ProbeMethod is one of WanProbeMethodICMP/TCP/Auto.
+	ProbeMethod string `json:"probeMethod,omitempty"`
+	// ProbeTCPPort is the destination port for TCP-connect probes. Required
+	// (1-65535) when ProbeMethod is "tcp" or "auto"; must be 0 when
+	// ProbeMethod is "icmp".
+	ProbeTCPPort int `json:"probeTcpPort,omitempty"`
+	// ProbeIntervalSeconds is how often a full probe round (ProbeCount
+	// packets to every ProbeTargets entry) runs.
+	ProbeIntervalSeconds int `json:"probeIntervalSeconds,omitempty"`
+	// ProbeCount is how many packets/connections are sent per target per
+	// round (used to compute loss% and, for ICMP, jitter).
+	ProbeCount int `json:"probeCount,omitempty"`
+	// ProbeTimeoutMs bounds how long a single packet/connection may wait for
+	// a reply before being counted as lost.
+	ProbeTimeoutMs int `json:"probeTimeoutMs,omitempty"`
+	// LossThresholdPct is the packet-loss percentage (over one round) at or
+	// above which this uplink is considered failing for that round.
+	LossThresholdPct float64 `json:"lossThresholdPct,omitempty"`
+	// LatencyThresholdMs is the average-latency threshold (over one round)
+	// above which this uplink is considered "degraded" for that round — a
+	// display-only signal, see WanStateDegraded above.
+	LatencyThresholdMs float64 `json:"latencyThresholdMs,omitempty"`
+	// FailStrikes is how many consecutive failing rounds are required before
+	// the uplink transitions to WanStateDown.
+	FailStrikes int `json:"failStrikes,omitempty"`
+	// RecoverStrikes is how many consecutive healthy rounds are required
+	// before a WanStateDown uplink transitions back to WanStateUp.
+	RecoverStrikes int `json:"recoverStrikes,omitempty"`
+	// Status enables/disables monitoring for this uplink entirely (a
+	// disabled uplink is never probed and never contributes a state).
+	Status      bool   `json:"status,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// WanUplinkInput is the create/update payload for WanUplink (no ID — mirrors
+// QosRuleInput/model.QosRule).
+type WanUplinkInput struct {
+	Name                 string   `json:"name,omitempty"`
+	Interface            string   `json:"interface,omitempty"`
+	Priority             int      `json:"priority,omitempty"`
+	ProbeTargets         []string `json:"probeTargets,omitempty"`
+	ProbeMethod          string   `json:"probeMethod,omitempty"`
+	ProbeTCPPort         int      `json:"probeTcpPort,omitempty"`
+	ProbeIntervalSeconds int      `json:"probeIntervalSeconds,omitempty"`
+	ProbeCount           int      `json:"probeCount,omitempty"`
+	ProbeTimeoutMs       int      `json:"probeTimeoutMs,omitempty"`
+	LossThresholdPct     float64  `json:"lossThresholdPct,omitempty"`
+	LatencyThresholdMs   float64  `json:"latencyThresholdMs,omitempty"`
+	FailStrikes          int      `json:"failStrikes,omitempty"`
+	RecoverStrikes       int      `json:"recoverStrikes,omitempty"`
+	Status               bool     `json:"status,omitempty"`
+	Description          string   `json:"description,omitempty"`
+}
+
+// WanUplinkState is the RAM-only (never persisted — tech_stack_design.md §8)
+// live health snapshot of one uplink, built by service.WanMonitor from the
+// most recent probe round(s). Served by GET /api/wan/status.
+type WanUplinkState struct {
+	UplinkID  string `json:"uplinkId,omitempty"`
+	Interface string `json:"interface,omitempty"`
+	// State is one of WanStateUnknown/Up/Degraded/Down. Unknown means "never
+	// successfully probed yet" or "the probe itself errored" (a kernel/socket
+	// failure, NOT the same thing as the remote target not answering).
+	State string `json:"state,omitempty"`
+	// Active reports whether this uplink is the one currently carrying
+	// traffic, per the Phase 2 failover controller. Always false when that
+	// controller is disabled (wan_failover_settings.enabled=0).
+	Active bool `json:"active,omitempty"`
+	// LastLatencyMs/JitterMs/LossPct are deliberately WITHOUT omitempty: a
+	// healthy uplink legitimately reports 0 (no loss, no jitter) and that is
+	// meaningfully different from "field absent" — omitting them here would
+	// make the JSON encoder drop a true zero, which crashed the frontend
+	// (undefined.toFixed()) the first time a freshly probed uplink came back
+	// with 0% loss.
+	LastLatencyMs float64 `json:"lastLatencyMs"`
+	// JitterMs is only meaningful when MetricQuality == WanMetricQualityFull
+	// (D-6) — a connect-only round still fills this with 0, callers MUST
+	// check MetricQuality before displaying it.
+	JitterMs float64 `json:"jitterMs"`
+	LossPct  float64 `json:"lossPct"`
+	// EffectiveMethod is the method actually used on the most recent round
+	// ("icmp" or "tcp") — may differ from the configured ProbeMethod when
+	// ProbeMethod=="auto" and ICMP has gone sticky-failed (D-5).
+	EffectiveMethod string `json:"effectiveMethod,omitempty"`
+	MetricQuality   string `json:"metricQuality,omitempty"`
+	// Strikes is the current consecutive fail/recover streak count driving
+	// the next state transition (see service.decideState).
+	Strikes      int    `json:"strikes,omitempty"`
+	LastChangeAt string `json:"lastChangeAt,omitempty"` // RFC3339; empty until the first state change
+	Reason       string `json:"reason,omitempty"`
+	// LastProbeAt is RFC3339, the timestamp of the most recent probe round
+	// attempted for this uplink (whether it succeeded, errored, or was cut
+	// short by the round deadline) — empty until the first round ever runs.
+	LastProbeAt string `json:"lastProbeAt,omitempty"`
+	// Stale is Phase 2's "this reading is too old to make a failover decision
+	// from" signal (docs/ref/todo/multi-wan-failover-plan.md Decision E):
+	// true when LastProbeAt is older than max(3x its own ProbeIntervalSeconds,
+	// 30s). A stale uplink is never selected as the active uplink by
+	// service.wan_failover.go, even if its last-known State was "up" — but
+	// staleness never by itself forces a failover away from an uplink that IS
+	// currently active (see D-7's "display-only" precedent: the controller
+	// only reacts to State=="down", staleness is an additional selection
+	// filter, not a new state).
+	Stale bool `json:"stale,omitempty"`
+}
+
+// WanProbeSample is the raw result of one probe round for one uplink,
+// produced by kernel.PathProbeManager and fed into service.WanUplinkMetricsRing
+// (RAM-only, D-3). RTTsMs holds only the round-trip times of packets that
+// actually got a reply — its length is <= Sent, and Received == len(RTTsMs).
+type WanProbeSample struct {
+	TimestampUnix int64     `json:"timestampUnix,omitempty"`
+	Sent          int       `json:"sent,omitempty"`
+	Received      int       `json:"received,omitempty"`
+	RTTsMs        []float64 `json:"rttsMs,omitempty"`
+	Method        string    `json:"method,omitempty"`
+	MetricQuality string    `json:"metricQuality,omitempty"`
+}
+
+// WanMetricPoint is one 5-minute bucket of a WAN uplink's latency/loss
+// history, as served by GET /api/wan/metrics (service.WanUplinkMetricsRing).
+// JitterMs is a pointer so a bucket with no full-quality (ICMP) samples can
+// omit it entirely (nil) rather than send a misleading 0 (D-6) — the
+// frontend must treat a nil JitterMs as "no data", not "zero jitter".
+type WanMetricPoint struct {
+	Timestamp    string   `json:"timestamp,omitempty"`
+	AvgLatencyMs float64  `json:"avgLatencyMs,omitempty"`
+	MaxLatencyMs float64  `json:"maxLatencyMs,omitempty"`
+	JitterMs     *float64 `json:"jitterMs,omitempty"`
+	LossPct      float64  `json:"lossPct,omitempty"`
+}
+
+// WanStatusEntry combines one uplink's static config essentials (name,
+// priority) with its live health state, as served by GET /api/wan/status.
+// WanUplinkState is embedded so its fields (state, latency, effective
+// method, ...) flatten directly into the JSON object rather than nesting
+// under a sub-key.
+type WanStatusEntry struct {
+	WanUplinkState
+	Name     string `json:"name,omitempty"`
+	Priority int    `json:"priority,omitempty"`
+}
+
+// WanStatusResponse is GET /api/wan/status's top-level payload. Uplinks
+// always contains one entry per configured uplink (model.WanUplink row),
+// even one that has never been probed yet (State==WanStateUnknown in that
+// case) — a caller must never need to cross-reference GET /api/wan/uplinks
+// separately just to know an uplink exists.
+//
+// BypassedByStaticRoute/ActiveUplinkID/LastSwitchAt/LastSwitchReason/
+// EnforceFailed are populated from the Phase 2 automatic failover
+// controller — they stay at their zero value whenever that controller is
+// disabled (wan_failover_settings.enabled=0), since nothing changes routing
+// until then.
+type WanStatusResponse struct {
+	Uplinks               []WanStatusEntry `json:"uplinks"`
+	BypassedByStaticRoute bool             `json:"bypassedByStaticRoute,omitempty"`
+	ActiveUplinkID        string           `json:"activeUplinkId,omitempty"`
+	LastSwitchAt          string           `json:"lastSwitchAt,omitempty"`
+	LastSwitchReason      string           `json:"lastSwitchReason,omitempty"`
+	// EnforceFailed (T-23, docs/ref/wan-failover-findings.md) is true when at
+	// least one interface currently has a failed WAN failover metric
+	// override/restore enforcement (kernel.RoutingManager.
+	// EnforceDefaultRouteMetric returned an error that persisted past the
+	// automatic retry) — mirrors BypassedByStaticRoute's shape (a single
+	// flag, not a per-interface list; per-interface detail is available via
+	// GET /api/wan/failover's enforceFailedInterfaces list instead). Always
+	// false when the failover controller has never been wired/enabled.
+	EnforceFailed bool `json:"enforceFailed,omitempty"`
+}
+
+// WanFailoverSettings is the single-row (id=1) global failover configuration
+// (db.wan_repo.go table wan_failover_settings). Enabled defaults to false
+// (kill switch OFF) so installing this feature never changes behavior on an
+// existing deployment until an operator opts in.
+//
+// There is deliberately no field here to make a "degraded" reading drive a
+// failover decision (D-7): only "down" ever does. Do not add one back
+// without re-reading D-7's rationale in docs/ref/todo/
+// multi-wan-failover-plan.md.
+type WanFailoverSettings struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// Mode is one of WanFailoverModeAuto/Manual.
+	Mode string `json:"mode,omitempty"`
+	// ManualUplinkID is the uplink forced active when Mode=="manual".
+	// Required (non-empty) when Mode=="manual".
+	ManualUplinkID string `json:"manualUplinkId,omitempty"`
+	// MinHoldSeconds is the minimum time between two failovers (anti-flap
+	// dampening) — enforced by the Phase 2 controller, not anything in this
+	// package. AUTO mode only: a manual override always takes effect
+	// immediately regardless of this value (service/wan_failover.go
+	// decideActiveUplink).
+	MinHoldSeconds int `json:"minHoldSeconds,omitempty"`
+	// RevertDelaySeconds is how long the primary uplink must stay healthy
+	// before the controller reverts back to it from a backup. AUTO mode
+	// only, same exemption as MinHoldSeconds above — a manual override to a
+	// higher-priority uplink is never held up by this either.
+	RevertDelaySeconds int `json:"revertDelaySeconds,omitempty"`
+}
+
+// WanFailoverStatus is the Phase 2 failover controller's (service.
+// WanFailoverController, T-15) live status snapshot, served by the api
+// layer (T-16) both standalone (GET /api/wan/failover, alongside the raw
+// WanFailoverSettings) and folded into WanStatusResponse's four Phase 2
+// fields above. Enabled/Mode here mirror the most recently observed
+// WanFailoverSettings (cheap, lock-only read) rather than hitting the DB
+// again.
+type WanFailoverStatus struct {
+	Enabled          bool   `json:"enabled,omitempty"`
+	Mode             string `json:"mode,omitempty"`
+	ActiveUplinkID   string `json:"activeUplinkId,omitempty"`
+	LastSwitchAt     string `json:"lastSwitchAt,omitempty"`
+	LastSwitchReason string `json:"lastSwitchReason,omitempty"`
+	// Bypassed is service.RoutingService.FailoverBypassedInterfaces()'s
+	// current value: interface names that have an active WAN failover
+	// metric override but are being overridden by an even-higher-precedence
+	// active DB static 0.0.0.0/0 route (D-2 precedence level 1).
+	Bypassed []string `json:"bypassed,omitempty"`
+	// EnforceFailedInterfaces (T-23, docs/ref/wan-failover-findings.md) is
+	// service.RoutingService.EnforceFailedInterfaces()'s current value:
+	// interface names whose most recent WAN failover metric
+	// override/restore enforcement failed at the kernel level (e.g. a
+	// metric-slot conflict that persisted past the automatic retry) — a
+	// stuck enforcement is otherwise only visible in the server log and the
+	// central event log, not in the live status a UI polls. Reachable via
+	// GET /api/wan/failover (api.WanFailoverSettingsResponse, QA round-1
+	// fix, Finding 2) — GET /api/wan/status only folds this down into the
+	// single aggregate "enforceFailed" boolean on WanStatusResponse.
+	EnforceFailedInterfaces []string `json:"enforceFailedInterfaces,omitempty"`
+}

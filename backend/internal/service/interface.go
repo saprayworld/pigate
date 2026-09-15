@@ -684,6 +684,24 @@ func (s *InterfaceService) ApplyInterfaceConfig(iface model.NetworkInterface) er
 		if *iface.Metric < 1 || *iface.Metric > 9999 {
 			return fmt.Errorf("metric must be between 1 and 9999, got %d", *iface.Metric)
 		}
+		// Decision F (docs/ref/todo/multi-wan-failover-plan.md, T-24): a WAN
+		// uplink interface's manually-configured Metric must not fall inside
+		// the failover controller's reserved active/standby bands, or a
+		// future switch could collide with a value an operator picked here
+		// independently. LAN/non-uplink interfaces are unaffected — this is
+		// only a WAN-uplink-specific constraint.
+		uplinks, err := s.repo.GetWanUplinks()
+		if err != nil {
+			return fmt.Errorf("failed to check WAN uplink membership for metric validation: %w", err)
+		}
+		for _, u := range uplinks {
+			if u.Interface == iface.Name {
+				if err := model.ValidateWanUplinkInterfaceMetric(*iface.Metric); err != nil {
+					return err
+				}
+				break
+			}
+		}
 	}
 
 	metric := 0
