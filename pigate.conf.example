@@ -214,3 +214,25 @@ max-object-entries=64
 # Apply Settings runs, to bound the worst-case ruleset size from multi-value
 # objects. Default 4096, accepted range 64-65536.
 max-expanded-rules-per-policy=4096
+
+# The two keys below control how firewall policy rules are turned into nftables
+# rules (docs/ref/todo/nftables-sets-refactor-plan.md, issue #168). Both are
+# file-only (no CLI flag, so a flag left in the systemd unit can never silently
+# override them) and are only read ONCE, at process startup — changing them
+# here has NO effect until you restart the service
+# (`sudo systemctl restart pigate`).
+
+# true (default): a policy's multi-value source/destination/service/interface
+# lists are collapsed into anonymous nftables sets, so one policy becomes at
+# most 2 nft rules per chain. false: rollback switch to the legacy cartesian
+# expansion (one nft rule per source x destination x service x interface
+# combination), byte-identical to earlier releases. Must be a boolean — any
+# other value is a startup error.
+nft-use-sets=true
+
+# Maximum number of nft rules in the WHOLE ruleset that one Apply builds (both
+# modes). A ruleset above the limit is rejected with an error before anything
+# is sent to the kernel, so the previously applied ruleset stays in place.
+# Default 16384, accepted range 1024-65536 (out-of-range values clamp back to
+# the default with a warning).
+max-total-nft-rules=16384

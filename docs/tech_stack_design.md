@@ -98,7 +98,7 @@ sudo setcap cap_net_admin,cap_net_raw+ep ./pigate-backend
    * **ส่วนที่ 1: กฎความปลอดภัยเบื้องต้น (Drop & Sanity Checks)**: บล็อกแพ็กเก็ตชำรุด (INVALID), Loopback whitelist, ICMP diagnostics, บล็อกพอร์ต Samba/SMB, บล็อก rogue DHCP, บล็อก Broadcast, คัดกรอง IP Spoofing ผ่าน custom chain `pigate-not-local` และยอมรับ mDNS/SSDP
    * **ส่วนที่ 2: จุดเริ่มต้นการตรวจสอบสิทธิ์ (Audit Log)**: พ่นข้อมูลแพ็กเก็ตที่ผ่านการกรองเบื้องต้นลง syslog ด้วย Prefix `[PiGate] INP AUDIT : ` เพื่อเป็นหลักฐานว่ามีข้อมูลผ่านเข้ามาสู่ชั้นตัดสินสิทธิ์
    * **ส่วนที่ 3a: กฎไดนามิกและการอนุญาต (Dynamic Accept Rules)**: ยอมรับและสตรีมล็อก (`[PiGate] INP ACCEPT: `) สำหรับพอร์ตบริการ/IP ที่ผ่านเงื่อนไขจาก Database (เช่น HTTP, HTTPS, SSH, PING) และเชื่อมโยงกับการตั้งค่า Docker Compatibility (เช่น การยอมรับ `docker0` และ `br-*` อัตโนมัติเมื่อเปิดแฟล็ก) — ส่วนนี้อยู่**ก่อน**กฎของผู้ใช้เสมอ (ดูส่วนที่ 3b) เพื่อรับประกันเชิงโครงสร้างว่ากฎที่ผู้ใช้เขียนผิดจะปิดทางเข้าหน้าเว็บ/SSH ของตัวเองไม่ได้
-   * **ส่วนที่ 3b: กฎ Local-In Policy จากผู้ใช้ (Input Chain — User Rules)**: กฎ ACCEPT/DROP ที่ผู้ใช้สร้างจากหน้า **Local-In Policy** (`PolicyRule.Chain = "input"`) ต่อจากส่วนที่ 3a เสมอ — ใช้ generator เดียวกับ `forward`/`output` (`buildRuleExpressions`) แต่ log ไปที่ printk/journald (ไม่ใช่ NFLOG แบบ `forward`) จึงต้องใส่ `limit` และแยกกฎ log ออกจากกฎ verdict เป็นสองกฎเสมอ ไม่งั้น `limit ... log ... <verdict>` จะ drop เฉพาะแพ็กเก็ตที่ผ่านตัวจำกัดอัตรา ที่เหลือหลุดไปกฎถัดไป (ดู `docs/ref/todo/input-output-chain-firewall-plan.md` §5 ข้อ 5)
+   * **ส่วนที่ 3b: กฎ Local-In Policy จากผู้ใช้ (Input Chain — User Rules)**: กฎ ACCEPT/DROP ที่ผู้ใช้สร้างจากหน้า **Local-In Policy** (`PolicyRule.Chain = "input"`) ต่อจากส่วนที่ 3a เสมอ — ใช้ generator ตระกูลเดียวกับ `forward`/`output` (`addUserChainRulesSets` เป็นค่าเริ่มต้น หรือ `addUserChainRules` เมื่อ `nft-use-sets=false`) ล็อกของกฎผู้ใช้ทั้ง `input`/`output` ส่งไป NFLOG (`LocalNflogGroup`) ซึ่งเก็บใน ring buffer บน RAM ไม่ใช่ printk/journald จึง**ไม่ต้องมี `limit`** และใช้กฎเดียวต่อ 1 match ได้ (`counter` → `log` → verdict ในกฎเดียวกัน) — กฎแบบมี `limit` ที่ log อย่างเดียวเท่านั้น (เช่น not-local drop, AUDIT, final drop ของ input) ห้ามมี verdict ในกฎเดียวกัน เพราะ `limit ... <verdict>` จะ apply verdict เฉพาะแพ็กเก็ตที่ผ่านตัวจำกัดอัตรา ที่เหลือหลุดไปกฎถัดไป (ดู `docs/ref/todo/input-output-chain-firewall-plan.md` §5 ข้อ 5)
    * **ส่วนที่ 4: แพ็กเก็ตที่เหลือทั้งหมด (Drop Log)**: พ่นล็อกลง syslog ด้วย Prefix `[PiGate] INP DROP  : ` เพื่อความสะดวกในการติดตามเหตุการณ์ว่าแพ็กเก็ตชิ้นใดถูกบล็อกโดย Default Policy (`DROP`)
 
 2. **โครงสร้างโมเดล nftables ตัวอย่าง**:
@@ -142,10 +142,27 @@ table inet pigate {
 
         # --- Section 3b: Local-In Policy (User rules, chain="input") ---
         # Always AFTER section 3a — a user DROP rule here can never shadow the
-        # interface's own Admin Access accept above. Log-enabled rules are two
-        # nftables rules, not one (limit+log, then a separate counter+verdict):
-        # tcp dport 8443 limit rate 3/minute burst 10 packets log prefix "[PiGate] INP DROP  : "
-        # tcp dport 8443 counter drop
+        # interface's own Admin Access accept above. Each PolicyRule becomes
+        # 1 nft rule (2 at most, see below) no matter how many addresses /
+        # services / interfaces it lists: the multi-value lists collapse into
+        # anonymous sets (Anonymous+Constant, created in the same netlink
+        # batch as the rule that references them). counter + NFLOG log +
+        # verdict share one rule (no limit needed, NFLOG writes to RAM):
+        iifname { "eth0", "wlan0" } ip saddr { 10.0.0.0/8, 172.16.0.1-172.16.0.9 } \
+            ip daddr { 192.168.1.0/24 } ip protocol . th dport { tcp . 80, tcp . 443-444, udp . 53 } \
+            counter log prefix "[PiGate] INP ACCEPT: r=<rule-id> " group <LocalNflogGroup> accept
+        # A service list that mixes "protocol only" with "protocol + port"
+        # (e.g. ICMP + TCP 80) needs one extra rule, because a port match on
+        # an ICMP packet means something different — that is the only case
+        # that yields a second rule for the same policy:
+        ip protocol 1 counter accept
+        ip protocol . th dport { tcp . 80 } counter accept
+        # A list with a single value keeps the plain, set-less form
+        # (ip saddr 10.0.0.0/8, tcp dport 22, iifname "eth0"), byte-identical
+        # to the legacy per-combination rule. The pipapo/rbtree set types and
+        # payload loads (ip protocol at network header offset 9, never
+        # meta l4proto) are chosen so the match semantics equal the old
+        # cartesian expansion for every packet.
 
         # --- Section 4: Final Drop Log ---
         log prefix "[PiGate] INP DROP  : "
@@ -164,7 +181,7 @@ table inet pigate {
         meta nfproto ipv6 counter drop
 
         # --- Local-Out Policy (User rules, chain="output") ---
-        # Same two-rule split for log-enabled rules as section 3b above.
+        # Same set-based rule generation as section 3b above.
         # No final drop log — policy accept means anything unmatched falls
         # through to the implicit accept.
     }
@@ -189,7 +206,7 @@ table ip pigate_nat {
 ```
    * **การประยุกต์แบบไดนามิก (Dynamic Binding)**: Go Backend จะตรวจสอบรายชื่อการ์ดเครือข่ายจากฐานข้อมูลที่มีหน้าที่เป็น WAN (`Role = WAN`) และสร้างกฎ Masquerade สำหรับอินเทอร์เฟซเหล่านั้นโดยอัตโนมัติเมื่อสั่ง Apply Settings
 
-5. **Multi-Interface Policy Rules (In/Out หลายอินเทอร์เฟซต่อกฎ)**: `PolicyRule` หนึ่งข้อผูก In Interface และ Out Interface ได้หลายตัว (ไม่ใช่แค่ตัวเดียวหรือ `ALL` เหมือนเดิม — เก็บใน field ใหม่ `InInterfaces`/`OutInterfaces`, คอลัมน์ `in_interface`/`out_interface` เดิมยังอยู่เป็น mirror ของสมาชิกตัวแรกเพื่อ backward compatibility) ชั้น kernel (`buildRuleExpressions`) ขยายกฎ 1 ข้อของผู้ใช้เป็น **1 nftables rule ต่อคู่ (in × out)** ตามแบบ cartesian expansion เดียวกับที่ใช้อยู่แล้วกับ Address/Service Object หลายค่า (ไม่ใช้ nftables anonymous/named set) — กฎทุกตัวที่ขยายออกมายังถูก append ที่ตำแหน่งเดิมของ chain (ไม่กระทบโครงสร้าง 4 ส่วนของ input chain ในหัวข้อ 1 ด้านบน) และยังถูกนับรวมอยู่ภายใต้เพดาน `max-expanded-rules-per-policy` เดียวกับที่คุมการคูณของ source × destination × service อยู่แล้ว (ตัวคูณของ interface เป็นอีกมิติหนึ่งที่ถูกคูณเข้าไปในเพดานเดิม ไม่ใช่เพดานแยก) เพดานจำนวนอินเทอร์เฟซที่อนุญาตต่อทิศทาง (ไม่ใช่จำนวนกฎที่ขยาย) ปรับได้ผ่าน config key `max-policy-interfaces-per-direction` (ค่าเริ่มต้น 8) ดู `docs/ref/todo/multi-interface-firewall-rule-plan.md` สำหรับรายละเอียดออกแบบเต็ม
+5. **Multi-Interface Policy Rules (In/Out หลายอินเทอร์เฟซต่อกฎ)**: `PolicyRule` หนึ่งข้อผูก In Interface และ Out Interface ได้หลายตัว (ไม่ใช่แค่ตัวเดียวหรือ `ALL` เหมือนเดิม — เก็บใน field ใหม่ `InInterfaces`/`OutInterfaces`, คอลัมน์ `in_interface`/`out_interface` เดิมยังอยู่เป็น mirror ของสมาชิกตัวแรกเพื่อ backward compatibility) ชั้น kernel (`addUserChainRulesSets`) ยุบรายการ In/Out Interface, Source, Destination และ Service ของกฎ 1 ข้อเป็น **anonymous nftables set** (`iifname { ... }`, `ip saddr { ... }`, `ip protocol . th dport { ... }`) ได้ **nftables rule ไม่เกิน 2 ข้อต่อ chain ต่อ policy** (ปกติ 1 ข้อ; 2 ข้อเมื่อ service ผสม "proto อย่างเดียว" กับ "proto+port") แทนการขยาย cartesian (src × dst × service × in × out) เดิมที่โตเป็นหลักพันกฎ — set ทุกตัวเป็น `Anonymous+Constant` สร้างใน batch `Flush()` เดียวกับกฎที่อ้างถึงและสร้างใหม่ต่อกฎแต่ละข้อ (anonymous set ผูกได้กับ lookup เดียว), interval ที่ซ้อน/ติดกันถูก merge ใน Go ก่อนส่ง, มิติที่ไม่มี entry ที่ใช้ได้ = ไม่ emit กฎของ policy นั้น (fail closed, ไม่เคยส่ง set ว่าง) — กฎที่ขยายออกมายังถูก append ที่ตำแหน่งเดิมของ chain (ไม่กระทบโครงสร้าง 4 ส่วนของ input chain ในหัวข้อ 1 ด้านบน) และ `max-expanded-rules-per-policy` ใน set mode ทำหน้าที่จำกัดจำนวน entry ที่ไม่ซ้ำต่อมิติ (เกิน = ข้าม policy นั้นพร้อม warning) เพดานทั้ง ruleset ต่อการ Apply คือ `max-total-nft-rules` (default 16384; เกิน = ปฏิเสธก่อน `Flush` ruleset เดิมคงอยู่) และ `nft-use-sets=false` (file-only ทั้งคู่) คือสวิตช์ rollback กลับไปใช้การขยาย cartesian แบบเดิมทุกไบต์ ส่วนเพดานจำนวนอินเทอร์เฟซที่อนุญาตต่อทิศทาง (ไม่ใช่จำนวนกฎที่ขยาย) ปรับได้ผ่าน config key `max-policy-interfaces-per-direction` (ค่าเริ่มต้น 8) ดู `docs/ref/todo/multi-interface-firewall-rule-plan.md` สำหรับรายละเอียดออกแบบเต็ม
 
 6. **Port Forwarding (DNAT)**:
    * **กลไกการทำงาน**: การส่งต่อพอร์ตจาก WAN เข้าสู่โฮสต์ภายใน LAN (Destination NAT) สร้างเป็น chain แยก `prerouting` ที่ทำงาน**ก่อน**การตัดสินใจ routing เพื่อให้แพ็กเก็ตถูกส่งต่อไปยัง IP ภายในที่ถูกต้อง — สร้างเป็น nftables expression ของ `google/nftables` โดยตรง ไม่ใช่ shell string จึงไม่มีช่องให้ inject

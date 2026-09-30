@@ -186,6 +186,21 @@ type Config struct {
 	MaxObjectEntries          int
 	MaxExpandedRulesPerPolicy int
 
+	// NFTUseSets/MaxTotalNFTRules are also file-only (no CLI flag — docs/ref/
+	// todo/nftables-sets-refactor-plan.md D-7, issue #168), so a stale flag
+	// left in the systemd unit can never silently override the file.
+	// NFTUseSets selects how kernel/real_firewall.go expands a policy rule's
+	// multi-value address/service/interface lists: true (default) collapses
+	// them into anonymous nftables sets (at most 2 nft rules per policy per
+	// chain); false is the rollback switch back to the legacy cartesian
+	// expansion, byte-identical to before the refactor. MaxTotalNFTRules caps
+	// the number of nft rules in the WHOLE ruleset one ApplyRules pass
+	// builds (both modes): exceeding it rejects the apply before anything is
+	// sent to the kernel, so the previously applied ruleset stays in place.
+	// Both take effect only on process restart.
+	NFTUseSets       bool
+	MaxTotalNFTRules int
+
 	// FQDNRefreshEnabled/FQDNRefreshIntervalSeconds/
 	// FQDNRefreshRetryIntervalSeconds/MonitoredCounterFlushIntervalSeconds are
 	// also file-only (no matching CLI flag) — docs/ref/todo/
@@ -290,6 +305,11 @@ func Defaults() Config {
 		MaxObjectEntries:          64,
 		MaxExpandedRulesPerPolicy: 4096,
 
+		// docs/ref/todo/nftables-sets-refactor-plan.md §3.7. Must be kept in
+		// sync with kernel.NewRealFirewall's defaults.
+		NFTUseSets:       true,
+		MaxTotalNFTRules: 16384,
+
 		// Owner-confirmed defaults (D-3, docs/ref/todo/
 		// fqdn-retry-and-monitored-counters-plan.md, issue #141).
 		FQDNRefreshEnabled:                   true,
@@ -364,6 +384,11 @@ const (
 	// §2.1/T-00A).
 	keyMaxObjectEntries          = "max-object-entries"
 	keyMaxExpandedRulesPerPolicy = "max-expanded-rules-per-policy"
+
+	// keyNFTUseSets/keyMaxTotalNFTRules are also file-only (no CLI flag —
+	// docs/ref/todo/nftables-sets-refactor-plan.md D-7, issue #168).
+	keyNFTUseSets       = "nft-use-sets"
+	keyMaxTotalNFTRules = "max-total-nft-rules"
 
 	// keyFQDNRefreshEnabled/keyFQDNRefreshIntervalSeconds/
 	// keyFQDNRefreshRetryIntervalSeconds/
@@ -465,6 +490,17 @@ const (
 	maxMaxObjectEntries          = 512
 	minMaxExpandedRulesPerPolicy = 64
 	maxMaxExpandedRulesPerPolicy = 65536
+)
+
+// minMaxTotalNFTRules/maxMaxTotalNFTRules are the accepted range for the
+// whole-ruleset nft rule budget (docs/ref/todo/nftables-sets-refactor-plan.md
+// §3.7). The floor (1024) always leaves room for the fixed structural rules
+// plus a reasonable policy set; the ceiling (65536) keeps a single netlink
+// batch (and its per-rule acks) within what the enlarged socket buffers can
+// absorb.
+const (
+	minMaxTotalNFTRules = 1024
+	maxMaxTotalNFTRules = 65536
 )
 
 // minFQDNRefreshIntervalSeconds/maxFQDNRefreshIntervalSeconds,
@@ -583,6 +619,13 @@ var orderedKeys = []string{
 	// ones) keeps already-generated pigate.conf files diffing cleanly across
 	// upgrades.
 	keyDNSStatsMaxBlockedDomains,
+	// Appended at the very end, after dns-stats-max-blocked-domains, per
+	// docs/ref/todo/nftables-sets-refactor-plan.md §3.7 — keeping new keys
+	// strictly appended (rather than alphabetized among the existing ones)
+	// keeps already-generated pigate.conf files diffing cleanly across
+	// upgrades.
+	keyNFTUseSets,
+	keyMaxTotalNFTRules,
 }
 
 // KnownKeys returns the list of recognized config/flag keys, in the fixed
@@ -760,6 +803,12 @@ func Resolve(defaults Config, fileVals, explicit map[string]string) (Config, []s
 			"max-expanded-rules-per-policy=%d out of range (%d..%d), using default %d",
 			cfg.MaxExpandedRulesPerPolicy, minMaxExpandedRulesPerPolicy, maxMaxExpandedRulesPerPolicy, defaults.MaxExpandedRulesPerPolicy))
 		cfg.MaxExpandedRulesPerPolicy = defaults.MaxExpandedRulesPerPolicy
+	}
+	if cfg.MaxTotalNFTRules < minMaxTotalNFTRules || cfg.MaxTotalNFTRules > maxMaxTotalNFTRules {
+		warnings = append(warnings, fmt.Sprintf(
+			"max-total-nft-rules=%d out of range (%d..%d), using default %d",
+			cfg.MaxTotalNFTRules, minMaxTotalNFTRules, maxMaxTotalNFTRules, defaults.MaxTotalNFTRules))
+		cfg.MaxTotalNFTRules = defaults.MaxTotalNFTRules
 	}
 
 	if cfg.FQDNRefreshIntervalSeconds < minFQDNRefreshIntervalSeconds || cfg.FQDNRefreshIntervalSeconds > maxFQDNRefreshIntervalSeconds {
@@ -962,6 +1011,20 @@ func applyKey(cfg *Config, key, value string) error {
 			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
 		}
 		cfg.MaxExpandedRulesPerPolicy = n
+	case keyNFTUseSets:
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid bool for %q: %q: %w", key, value, err)
+		}
+		cfg.NFTUseSets = b
+	case keyMaxTotalNFTRules:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid int for %q: %q: %w", key, value, err)
+		}
+		// Range-checking is deliberately NOT done here — see Resolve's
+		// post-processing pass (clamp + warn, not fail-fast).
+		cfg.MaxTotalNFTRules = n
 	case keyFQDNRefreshEnabled:
 		b, err := strconv.ParseBool(value)
 		if err != nil {
@@ -1074,6 +1137,10 @@ func keyValue(cfg Config, key string) string {
 		return strconv.Itoa(cfg.MaxObjectEntries)
 	case keyMaxExpandedRulesPerPolicy:
 		return strconv.Itoa(cfg.MaxExpandedRulesPerPolicy)
+	case keyNFTUseSets:
+		return strconv.FormatBool(cfg.NFTUseSets)
+	case keyMaxTotalNFTRules:
+		return strconv.Itoa(cfg.MaxTotalNFTRules)
 	case keyFQDNRefreshEnabled:
 		return strconv.FormatBool(cfg.FQDNRefreshEnabled)
 	case keyFQDNRefreshIntervalSeconds:
