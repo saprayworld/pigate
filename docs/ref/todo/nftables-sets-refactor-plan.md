@@ -236,6 +236,16 @@ real_firewall_sets_test.go(ใหม่), real_firewall_golden_test.go(ใหม
 14. **mock mode 100% ไม่กระทบ** — key ใหม่ใช้แค่ `*RealFirewall`; ห้ามเพิ่ม method ใน `FirewallManager`
 15. ห้าม `exec.Command`/`nft` CLI ในทุกไฟล์รวมเทสต์; ห้าม dependency ใหม่ (ใช้ `mdlayher/netlink`, `x/sys/unix`, `vishvananda/netlink` ที่มีอยู่)
 16. golden test (T-01) ต้องสร้างจากโค้ด **ก่อนแก้** — ถ้าสร้างหลังแก้ มันจะยืนยันโค้ดใหม่แทนโค้ดเก่า
+17. **`nft list ruleset` อาจโชว์ anonymous `oifname`/`iifname` set (2+ interfaces) เป็น `{ "", "" }`** —
+    cosmetic bug ของ `google/nftables` v0.3.0 (ยังอยู่ใน upstream `main` ปัจจุบัน), ไม่ใช่บั๊กโค้ดนี้: `AddSet`
+    (`set.go:~624`) ใส่ userdata `NFTNL_UDATA_SET_KEYBYTEORDER=2` (big-endian) ให้ทุก set ที่ `Anonymous||Constant`
+    เสมอ ไม่สนว่า key type จริงคืออะไร แต่ datatype `string` ที่ `iifname`/`oifname` ใช้ ประกาศไว้ใน nftables เองว่า
+    `byteorder = BYTEORDER_HOST_ENDIAN` (`src/datatype.c`) — พอ `nft` เจอ hint ไม่ตรงกับที่ datatype บอก มันจะกลับไบต์
+    ก่อนพิมพ์ ชื่อ interface ที่ pad เป็น 16 ไบต์ (`padInterfaceName`) เลยโชว์เป็น string ว่าง ไบต์จริงที่ส่งผ่าน
+    netlink ไปให้ kernel ใช้ match (`makeElemList`) ไม่ได้ถูกกลับ ⇒ **match ใน kernel ถูกต้องปกติ มีผลแค่การแสดงผล**
+    (เคสเดียวกับ [google/nftables#225](https://github.com/google/nftables/issues/225) ที่เคยรายงานกับ `ipv4_addr`)
+    ยืนยันด้วยการดู packet/byte counter ของ rule นั้นเพิ่มขึ้นจริงเมื่อมี traffic ผ่าน ถ้าอยากได้ `nft list` ที่อ่านง่าย
+    ให้ตั้ง `nft-use-sets=false` (ข้อ 3.7) กลับไปใช้ legacy cartesian builder ซึ่งไม่ผ่าน anonymous set เลย
 
 ---
 
