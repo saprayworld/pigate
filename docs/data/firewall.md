@@ -113,6 +113,8 @@ CREATE TABLE IF NOT EXISTS service_object_ports (
 
 จำนวน entry ต่อ object ถูกจำกัดด้วยคีย์ `max-object-entries` ใน `pigate.conf` (default 64) และจำนวนกฎ nftables ที่ขยายออกมาต่อ policy ถูกจำกัดด้วย `max-expanded-rules-per-policy` (default 4096) — ทั้งสองเป็น file-only key (ไม่มี CLI flag คู่กัน)
 
+**โหมด sets (default)**: ตั้งแต่ issue #168 ค่าหลาย entry ของ address/service object และรายการ interface ใน policy เดียวถูกยุบเป็น anonymous nftables set + `expr.Lookup` แทนการขยายแบบ cartesian — 1 policy ได้ nft rule ไม่เกิน 2 ข้อต่อ chain (2 ข้อเมื่อ service ผสม "proto อย่างเดียว" กับ "proto+port") semantics การ match เท่าเดิม ในโหมดนี้ `max-expanded-rules-per-policy` ทำหน้าที่จำกัดจำนวน entry ที่ไม่ซ้ำต่อมิติ (เกิน = ข้าม policy นั้นพร้อม warning ไม่ตัดครึ่ง set) key file-only เพิ่มเติม: `nft-use-sets` (default `true`; `false` = rollback กลับไปขยายแบบ cartesian เดิมทุกไบต์) และ `max-total-nft-rules` (default 16384, ช่วง 1024–65536; ruleset ทั้งชุดที่มีกฎเกินถูกปฏิเสธก่อนส่งเข้า kernel ทำให้ ruleset เดิมคงอยู่)
+
 **Deprecation note**: คอลัมน์ `address_objects.type`/`address_objects.value` และ `service_objects.protocol`/`service_objects.port` เป็น **compat layer ชั่วคราว** ที่ mirror มาจาก entry แรก (`seq=1`) ของตารางลูกเท่านั้น และ **ต้องไม่ถูกอ่านเพื่อสร้างกฎไฟร์วอลล์อีกต่อไป** (โค้ดปัจจุบันอ่านจากตารางลูกเสมอ) เหตุผลที่ยังต้องเก็บคอลัมน์เหล่านี้ไว้ชั่วคราวแทนที่จะลบทิ้งทันที:
 1. SQLite รุ่นเก่าที่ยังพบใน field ไม่รองรับ `DROP COLUMN` แบบตรงไปตรงมา (ต้องสร้างตารางใหม่ทั้งตารางแล้ว copy ข้อมูล ซึ่งมีความเสี่ยงสูงกว่า)
 2. คอลัมน์เหล่านี้เป็น `NOT NULL` พร้อม `CHECK` constraint ที่ผูกกับ schema เดิม การลบทันทีจะกระทบ backward-compat ของ backup/restore ที่ยังไม่ผ่านช่วงเปลี่ยนผ่าน

@@ -201,6 +201,19 @@ type RealFirewall struct {
 	// mutex, unrelated to any nftables/netlink connection state.
 	fqdnMu   sync.Mutex
 	fqdnData map[string][]string
+
+	// useSets selects the anonymous-nftables-sets rule expansion
+	// (addUserChainRulesSets) over the legacy cartesian one. Default true;
+	// false is the rollback switch (config key "nft-use-sets", file-only,
+	// docs/ref/todo/nftables-sets-refactor-plan.md §3.7). Must stay in sync
+	// with config.Defaults().NFTUseSets.
+	useSets bool
+
+	// maxTotalNftRules bounds the number of nft rules in the WHOLE ruleset
+	// one ApplyRules pass builds (config key "max-total-nft-rules",
+	// file-only); exceeding it rejects the apply before Flush. Default must
+	// stay in sync with config.Defaults().MaxTotalNFTRules.
+	maxTotalNftRules int
 }
 
 func NewRealFirewall(dockerCompat bool) *RealFirewall {
@@ -208,6 +221,8 @@ func NewRealFirewall(dockerCompat bool) *RealFirewall {
 		dockerCompat:              dockerCompat,
 		maxExpandedRulesPerPolicy: 4096,
 		fqdnData:                  make(map[string][]string),
+		useSets:                   true,
+		maxTotalNftRules:          16384,
 	}
 }
 
@@ -239,6 +254,48 @@ func (rf *RealFirewall) SetMaxExpandedRulesPerPolicy(n int) {
 	rf.maxExpandedRulesPerPolicy = n
 }
 
+// addUserRules is the single dispatch point between the set-based and the
+// legacy cartesian expansion of user policy rules. Every user-rule call site
+// in ApplyRules goes through it, at the same position as before, so the
+// chain section order is unchanged.
+func (rf *RealFirewall) addUserRules(
+	b nftBatch,
+	table *nftables.Table,
+	nfChain *nftables.Chain,
+	chainName string,
+	rules []model.PolicyRule,
+	addrsMap map[string]model.AddressObject,
+	svcsMap map[string]model.ServiceObject,
+	acceptLogPrefix, dropLogPrefix string,
+	fqdnRec *fqdnRecorder,
+) int {
+	if rf.useSets {
+		return addUserChainRulesSets(b, table, nfChain, chainName, rules, addrsMap, svcsMap,
+			acceptLogPrefix, dropLogPrefix, rf.maxExpandedRulesPerPolicy, fqdnRec)
+	}
+	return addUserChainRules(b, table, nfChain, chainName, rules, addrsMap, svcsMap,
+		acceptLogPrefix, dropLogPrefix, rf.maxExpandedRulesPerPolicy, fqdnRec)
+}
+
+// SetUseNFTSets selects set-based (true) or legacy cartesian (false) expansion
+// of policy rules. Called once at startup from cmd/pigate/main.go with
+// config.Config.NFTUseSets, same setter pattern as
+// SetMaxExpandedRulesPerPolicy.
+func (rf *RealFirewall) SetUseNFTSets(on bool) {
+	rf.useSets = on
+}
+
+// SetMaxTotalNFTRules overrides the whole-ruleset nft rule budget (default
+// 16384). Called once at startup with config.Config.MaxTotalNFTRules. Values
+// <= 0 are ignored (keeps the built-in default rather than disabling the
+// budget).
+func (rf *RealFirewall) SetMaxTotalNFTRules(n int) {
+	if n <= 0 {
+		return
+	}
+	rf.maxTotalNftRules = n
+}
+
 func (rf *RealFirewall) ApplyRules(
 	rules []model.PolicyRule,
 	ifaces []model.NetworkInterface,
@@ -252,10 +309,15 @@ func (rf *RealFirewall) ApplyRules(
 		len(rules), rf.dockerCompat, len(addrs), len(svcs), len(portForwards))
 
 	// Connect to nftables netlink interface
-	conn, err := nftables.New()
+	conn, err := newFirewallConn()
 	if err != nil {
 		return fmt.Errorf("failed to connect to nftables: %w (requires root or CAP_NET_ADMIN)", err)
 	}
+
+	// cb wraps conn for every AddRule (and, in set mode, AddSet) so the
+	// whole-ruleset rule budget can be enforced before the single Flush
+	// below. AddTable/AddChain/FlushTable stay on conn directly.
+	cb := &countingBatch{inner: conn}
 
 	// 1. Build lookup helper maps for address and service objects
 	addrsMap := make(map[string]model.AddressObject)
@@ -292,7 +354,7 @@ func (rf *RealFirewall) ApplyRules(
 
 	// Add rules to "pigate-not-local":
 	// Rule 3.1: fib daddr type local return
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: notLocalChain,
 		Exprs: []expr.Any{
@@ -303,7 +365,7 @@ func (rf *RealFirewall) ApplyRules(
 	})
 
 	// Rule 3.2: fib daddr type multicast return
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: notLocalChain,
 		Exprs: []expr.Any{
@@ -314,7 +376,7 @@ func (rf *RealFirewall) ApplyRules(
 	})
 
 	// Rule 3.3: fib daddr type broadcast return
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: notLocalChain,
 		Exprs: []expr.Any{
@@ -327,7 +389,7 @@ func (rf *RealFirewall) ApplyRules(
 	// Rule 3.4: limit rate 3/minute burst 10 packets, log prefix "[PiGate]  INP DROP  : "
 	// to NFLOG group LocalNflogGroup (Local Traffic page) instead of printk —
 	// log-only rule (no verdict), so keeping the rate limit here is safe.
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: notLocalChain,
 		Exprs: []expr.Any{
@@ -337,7 +399,7 @@ func (rf *RealFirewall) ApplyRules(
 	})
 
 	// Rule 3.5: drop
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: notLocalChain,
 		Exprs: []expr.Any{
@@ -358,7 +420,7 @@ func (rf *RealFirewall) ApplyRules(
 
 	// --- Section 1: Sanity & Drop Checks ---
 	// ct state established,related accept
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: inputChain,
 		Exprs: []expr.Any{
@@ -370,7 +432,7 @@ func (rf *RealFirewall) ApplyRules(
 	})
 
 	// ct state invalid drop
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: inputChain,
 		Exprs: []expr.Any{
@@ -382,7 +444,7 @@ func (rf *RealFirewall) ApplyRules(
 	})
 
 	// iifname "lo" accept
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: inputChain,
 		Exprs: []expr.Any{
@@ -394,7 +456,7 @@ func (rf *RealFirewall) ApplyRules(
 
 	// icmp type { destination-unreachable, time-exceeded, parameter-problem, echo-request } accept
 	for _, icmpType := range []byte{3, 11, 12, 8} {
-		conn.AddRule(&nftables.Rule{
+		cb.AddRule(&nftables.Rule{
 			Table: table,
 			Chain: inputChain,
 			Exprs: []expr.Any{
@@ -411,7 +473,7 @@ func (rf *RealFirewall) ApplyRules(
 	// Must precede the generic drop loop below: nftables evaluates rules top-down and an
 	// accept here terminates evaluation before the unconditional drop on port 67 is reached.
 	for _, ifaceName := range dhcpServerIfaces {
-		conn.AddRule(&nftables.Rule{
+		cb.AddRule(&nftables.Rule{
 			Table: table,
 			Chain: inputChain,
 			Exprs: []expr.Any{
@@ -436,7 +498,7 @@ func (rf *RealFirewall) ApplyRules(
 		if iface.AddressingMode != "dhcp" {
 			continue
 		}
-		conn.AddRule(&nftables.Rule{
+		cb.AddRule(&nftables.Rule{
 			Table: table,
 			Chain: inputChain,
 			Exprs: []expr.Any{
@@ -458,7 +520,7 @@ func (rf *RealFirewall) ApplyRules(
 	// configured as a DHCP client (unsolicited DHCP reply traffic); DHCP-client interfaces
 	// were already accepted above.
 	for _, port := range []uint16{137, 138, 67, 68} {
-		conn.AddRule(&nftables.Rule{
+		cb.AddRule(&nftables.Rule{
 			Table: table,
 			Chain: inputChain,
 			Exprs: []expr.Any{
@@ -473,7 +535,7 @@ func (rf *RealFirewall) ApplyRules(
 
 	// tcp dport { 139, 445 } drop
 	for _, port := range []uint16{139, 445} {
-		conn.AddRule(&nftables.Rule{
+		cb.AddRule(&nftables.Rule{
 			Table: table,
 			Chain: inputChain,
 			Exprs: []expr.Any{
@@ -487,7 +549,7 @@ func (rf *RealFirewall) ApplyRules(
 	}
 
 	// fib daddr type broadcast drop
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: inputChain,
 		Exprs: []expr.Any{
@@ -498,7 +560,7 @@ func (rf *RealFirewall) ApplyRules(
 	})
 
 	// jump pigate-not-local
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: inputChain,
 		Exprs: []expr.Any{
@@ -507,7 +569,7 @@ func (rf *RealFirewall) ApplyRules(
 	})
 
 	// ip daddr 224.0.0.251 udp dport 5353 accept
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: inputChain,
 		Exprs: []expr.Any{
@@ -522,7 +584,7 @@ func (rf *RealFirewall) ApplyRules(
 	})
 
 	// ip daddr 239.255.255.250 udp dport 1900 accept
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: inputChain,
 		Exprs: []expr.Any{
@@ -545,7 +607,7 @@ func (rf *RealFirewall) ApplyRules(
 	// kernel-level debug tap, not a user-facing event (see plan §2.5). It was
 	// previously unrated (the single biggest SD-card write source in this
 	// file); add the same rate limit used elsewhere for log-only rules.
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: inputChain,
 		Exprs: []expr.Any{
@@ -560,7 +622,7 @@ func (rf *RealFirewall) ApplyRules(
 	// --- Section 3: Dynamic Accepts ---
 	// Docker Compat Bypass rules in input
 	if rf.dockerCompat {
-		conn.AddRule(&nftables.Rule{
+		cb.AddRule(&nftables.Rule{
 			Table: table,
 			Chain: inputChain,
 			Exprs: []expr.Any{
@@ -571,7 +633,7 @@ func (rf *RealFirewall) ApplyRules(
 			},
 		})
 
-		conn.AddRule(&nftables.Rule{
+		cb.AddRule(&nftables.Rule{
 			Table: table,
 			Chain: inputChain,
 			Exprs: []expr.Any{
@@ -592,11 +654,11 @@ func (rf *RealFirewall) ApplyRules(
 
 	// Admin Access rules per interface in input
 	for _, iface := range ifaces {
-		addAdminAccessRules(conn, table, inputChain, iface.Name, iface.AdminAccess)
+		addAdminAccessRules(cb, table, inputChain, iface.Name, iface.AdminAccess)
 	}
 
 	// DNS Server (dnsmasq) access rules per interface in input
-	addDNSServerAccessRules(conn, table, inputChain, dnsServerIfaces)
+	addDNSServerAccessRules(cb, table, inputChain, dnsServerIfaces)
 
 	// --- Section 3b: User input rules from the DB (Local-In Policy page) ---
 	// MUST stay after Admin Access + DNS server accept above (section 3a) and
@@ -605,8 +667,8 @@ func (rf *RealFirewall) ApplyRules(
 	// interface's own Admin Access accept, which is the structural guarantee
 	// that a bad rule here cannot lock the operator out of the web UI/SSH
 	// (plan section 2.2, Caution 8).
-	addUserChainRules(conn, table, inputChain, model.PolicyChainInput, rules, addrsMap, svcsMap,
-		"[PiGate] INP ACCEPT: ", "[PiGate] INP DROP  : ", rf.maxExpandedRulesPerPolicy, fqdnRec)
+	rf.addUserRules(cb, table, inputChain, model.PolicyChainInput, rules, addrsMap, svcsMap,
+		"[PiGate] INP ACCEPT: ", "[PiGate] INP DROP  : ", fqdnRec)
 
 	// --- Section 4: Final Drop Log ---
 	// Highest-volume log point in the whole file (catches every unsolicited
@@ -614,7 +676,7 @@ func (rf *RealFirewall) ApplyRules(
 	// gets the highest rate limit of the three log-only rules. No verdict
 	// here — the drop itself comes from the chain's policy drop — so adding
 	// a limit is safe (see buildRuleExpressions comment / Caution 2).
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: inputChain,
 		Exprs: []expr.Any{
@@ -634,7 +696,7 @@ func (rf *RealFirewall) ApplyRules(
 	})
 
 	// ct state established,related accept in forward
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: forwardChain,
 		Exprs: []expr.Any{
@@ -646,7 +708,7 @@ func (rf *RealFirewall) ApplyRules(
 	})
 
 	// ct state invalid drop in forward
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: forwardChain,
 		Exprs: []expr.Any{
@@ -659,7 +721,7 @@ func (rf *RealFirewall) ApplyRules(
 
 	// Docker Compat Bypass rules in forward
 	if rf.dockerCompat {
-		conn.AddRule(&nftables.Rule{
+		cb.AddRule(&nftables.Rule{
 			Table: table,
 			Chain: forwardChain,
 			Exprs: []expr.Any{
@@ -669,7 +731,7 @@ func (rf *RealFirewall) ApplyRules(
 			},
 		})
 
-		conn.AddRule(&nftables.Rule{
+		cb.AddRule(&nftables.Rule{
 			Table: table,
 			Chain: forwardChain,
 			Exprs: []expr.Any{
@@ -706,7 +768,7 @@ func (rf *RealFirewall) ApplyRules(
 			log.Printf("[RealFirewall] Skip port-forward %q forward-accept: %v", pf.Name, err)
 			continue
 		}
-		conn.AddRule(&nftables.Rule{
+		cb.AddRule(&nftables.Rule{
 			Table: table,
 			Chain: forwardChain,
 			Exprs: exprs,
@@ -714,11 +776,11 @@ func (rf *RealFirewall) ApplyRules(
 	}
 
 	// User rules in forward
-	addUserChainRules(conn, table, forwardChain, model.PolicyChainForward, rules, addrsMap, svcsMap,
-		"[PiGate] FWD ACCEPT: ", "[PiGate] FWD DROP  : ", rf.maxExpandedRulesPerPolicy, fqdnRec)
+	rf.addUserRules(cb, table, forwardChain, model.PolicyChainForward, rules, addrsMap, svcsMap,
+		"[PiGate] FWD ACCEPT: ", "[PiGate] FWD DROP  : ", fqdnRec)
 
 	// Final Drop Log in forward — also to the NFLOG group (see forwardLogExpr).
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: forwardChain,
 		Exprs: []expr.Any{
@@ -747,7 +809,7 @@ func (rf *RealFirewall) ApplyRules(
 	// ct state established,related accept — protects replies of sessions the
 	// box itself opened (e.g. an admin's open web UI/SSH session) from being
 	// cut by a DROP rule the user adds later (plan section 2.3).
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: outputChain,
 		Exprs: []expr.Any{
@@ -759,7 +821,7 @@ func (rf *RealFirewall) ApplyRules(
 	})
 
 	// oifname "lo" accept
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: outputChain,
 		Exprs: []expr.Any{
@@ -777,7 +839,7 @@ func (rf *RealFirewall) ApplyRules(
 	// themselves. Must come before any user output rule below so it can never
 	// be shadowed by one. Factored into outputIPv6DropExprs so
 	// policy_chain_test.go can assert this exact rule exists (Caution 13).
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: outputChain,
 		Exprs: outputIPv6DropExprs(),
@@ -786,8 +848,8 @@ func (rf *RealFirewall) ApplyRules(
 	// User rules in output (Local-Out Policy page). No final drop log —
 	// chain policy is accept, so anything not matched by a user DROP rule
 	// above simply falls through to the implicit accept.
-	addUserChainRules(conn, table, outputChain, model.PolicyChainOutput, rules, addrsMap, svcsMap,
-		"[PiGate] OUT ACCEPT: ", "[PiGate] OUT DROP  : ", rf.maxExpandedRulesPerPolicy, fqdnRec)
+	rf.addUserRules(cb, table, outputChain, model.PolicyChainOutput, rules, addrsMap, svcsMap,
+		"[PiGate] OUT ACCEPT: ", "[PiGate] OUT DROP  : ", fqdnRec)
 
 	// 6. Setup NAT table and chain for policy-based source NAT.
 	// Source NAT is now driven per firewall policy (the policy's "NAT" toggle),
@@ -810,7 +872,7 @@ func (rf *RealFirewall) ApplyRules(
 		Priority: nftables.ChainPriorityNATSource,
 	})
 
-	conn.AddRule(&nftables.Rule{
+	cb.AddRule(&nftables.Rule{
 		Table: natTable,
 		Chain: natChain,
 		Exprs: []expr.Any{
@@ -845,7 +907,7 @@ func (rf *RealFirewall) ApplyRules(
 			log.Printf("[RealFirewall] Skip port-forward %q DNAT: %v", pf.Name, err)
 			continue
 		}
-		conn.AddRule(&nftables.Rule{
+		cb.AddRule(&nftables.Rule{
 			Table: natTable,
 			Chain: dnatChain,
 			Exprs: exprs,
@@ -854,6 +916,15 @@ func (rf *RealFirewall) ApplyRules(
 	}
 	if dnatCount > 0 {
 		log.Printf("[RealFirewall] Configured %d port-forward DNAT rule(s) in prerouting", dnatCount)
+	}
+
+	// Enforce the whole-ruleset budget BEFORE the single Flush: a rejected
+	// apply sends nothing to the kernel (a non-lasting conn only transmits on
+	// Flush), so the previously applied ruleset and FQDN snapshot stay as
+	// they were.
+	if err := checkRuleBudget(cb.rules, rf.maxTotalNftRules); err != nil {
+		log.Printf("[RealFirewall] Refusing to apply firewall rules: %v", err)
+		return err
 	}
 
 	// Commit everything to the Linux Kernel
@@ -868,7 +939,12 @@ func (rf *RealFirewall) ApplyRules(
 	rf.fqdnData = fqdnRec.snapshot()
 	rf.fqdnMu.Unlock()
 
-	log.Printf("[RealFirewall] Successfully applied firewall rules to Linux kernel")
+	mode := "legacy"
+	if rf.useSets {
+		mode = "sets"
+	}
+	log.Printf("[RealFirewall] Successfully applied firewall rules to Linux kernel (mode=%s rules=%d sets=%d elements=%d)",
+		mode, cb.rules, cb.sets, cb.elems)
 	return nil
 }
 
@@ -1435,9 +1511,11 @@ func outputIPv6DropExprs() []expr.Any {
 // D-3/Caution 15) caps the number of nft rules any single PolicyRule may
 // expand into. Hitting the cap logs a warning and stops expanding further
 // combinations for that rule only; it never returns an error or fails
-// ApplyRules as a whole (plan Caution 2).
+// ApplyRules as a whole (plan Caution 2). Returns how many nft rules were
+// emitted (legacy/cartesian path — the nft-use-sets=false rollback; see
+// addUserChainRulesSets for the default set-based path).
 func addUserChainRules(
-	conn *nftables.Conn,
+	b nftBatch,
 	table *nftables.Table,
 	nfChain *nftables.Chain,
 	chainName string,
@@ -1447,7 +1525,8 @@ func addUserChainRules(
 	acceptLogPrefix, dropLogPrefix string,
 	maxExpandedRulesPerPolicy int,
 	fqdnRec *fqdnRecorder,
-) {
+) int {
+	totalEmitted := 0
 	for _, r := range rules {
 		if !r.Status || r.Chain != chainName {
 			continue
@@ -1556,13 +1635,14 @@ func addUserChainRules(
 											r.Name, r.ID, chainName, maxExpandedRulesPerPolicy, "max-expanded-rules-per-policy")
 										break srcLoop
 									}
-									conn.AddRule(&nftables.Rule{
+									b.AddRule(&nftables.Rule{
 										Table:    table,
 										Chain:    nfChain,
 										Exprs:    exprs,
 										UserData: ruleUserData,
 									})
 									expandedCount++
+									totalEmitted++
 								}
 							}
 						}
@@ -1571,6 +1651,7 @@ func addUserChainRules(
 			}
 		}
 	}
+	return totalEmitted
 }
 
 // normalizeIfaceMatchList converts a direction's interface list into the set
@@ -1598,6 +1679,151 @@ func normalizeIfaceMatchList(names []string) []string {
 	if len(out) == 0 {
 		return []string{""}
 	}
+	return out
+}
+
+// svcComboMatchExprs builds the nft match exprs for one svcCombo (section 5
+// "Service / Protocol" of buildRuleExpressions): IP protocol match, then — for
+// TCP/UDP with a concrete port spec — the destination port match. Returns nil
+// (no expressions) for an "ALL" combo. Also used by the set-mode builder
+// (real_firewall_sets.go) for singleton services, so a one-service policy
+// keeps byte-identical expressions in both modes.
+func svcComboMatchExprs(svc svcCombo) ([]expr.Any, error) {
+	if !svc.hasFilter {
+		return nil, nil
+	}
+	var out []expr.Any
+	var protoVal byte
+	switch svc.protocol {
+	case "TCP":
+		protoVal = 6
+	case "UDP":
+		protoVal = 17
+	case "ICMP":
+		protoVal = 1
+	default:
+		return nil, fmt.Errorf("unsupported protocol %q for service %q", svc.protocol, svc.objName)
+	}
+
+	// Match IP protocol
+	out = append(out, &expr.Payload{
+		DestRegister: 1,
+		Base:         expr.PayloadBaseNetworkHeader,
+		Offset:       9,
+		Len:          1,
+	})
+	out = append(out, &expr.Cmp{
+		Op:       expr.CmpOpEq,
+		Register: 1,
+		Data:     []byte{protoVal},
+	})
+
+	if protoVal != 1 { // Non-ICMP, check port
+		portStr := strings.TrimSpace(svc.port)
+		if portStr != "" && portStr != "-" && portStr != "1-65535" {
+			parts := strings.Split(portStr, "-")
+			if len(parts) == 1 {
+				portNum, err := strconv.Atoi(parts[0])
+				if err != nil {
+					return nil, fmt.Errorf("invalid port %q: %w", parts[0], err)
+				}
+				portBytes := []byte{byte(portNum >> 8), byte(portNum & 0xFF)}
+
+				out = append(out, &expr.Payload{
+					DestRegister: 1,
+					Base:         expr.PayloadBaseTransportHeader,
+					Offset:       2,
+					Len:          2,
+				})
+				out = append(out, &expr.Cmp{
+					Op:       expr.CmpOpEq,
+					Register: 1,
+					Data:     portBytes,
+				})
+			} else if len(parts) == 2 {
+				startPort, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+				if err != nil {
+					return nil, fmt.Errorf("invalid start port %q: %w", parts[0], err)
+				}
+				endPort, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+				if err != nil {
+					return nil, fmt.Errorf("invalid end port %q: %w", parts[1], err)
+				}
+				startBytes := []byte{byte(startPort >> 8), byte(startPort & 0xFF)}
+				endBytes := []byte{byte(endPort >> 8), byte(endPort & 0xFF)}
+
+				out = append(out, &expr.Payload{
+					DestRegister: 1,
+					Base:         expr.PayloadBaseTransportHeader,
+					Offset:       2,
+					Len:          2,
+				})
+				out = append(out, &expr.Cmp{
+					Op:       expr.CmpOpGte,
+					Register: 1,
+					Data:     startBytes,
+				})
+				out = append(out, &expr.Cmp{
+					Op:       expr.CmpOpLte,
+					Register: 1,
+					Data:     endBytes,
+				})
+			}
+		}
+	}
+	return out, nil
+}
+
+// userRuleSuffixExprs returns the chain-specific tail every user-rule nft rule
+// ends with, after its match expressions: counter, then (if enabled) the NFLOG
+// log expr, then — forward chain only — the fwmark tag for policy-based source
+// NAT, then the verdict. Shared by the legacy builder (buildRuleExpressions)
+// and the set-mode builder (real_firewall_sets.go) so both emit identical
+// suffix bytes.
+func userRuleSuffixExprs(chain, action string, logEnabled, nat bool, logPrefix string) []expr.Any {
+	verdictExpr := func() expr.Any {
+		if action == "ACCEPT" {
+			return &expr.Verdict{Kind: expr.VerdictAccept}
+		}
+		return &expr.Verdict{Kind: expr.VerdictDrop}
+	}
+
+	var out []expr.Any
+	if chain == model.PolicyChainForward {
+		// Forward chain: counter, then (if enabled) an NFLOG log expr — NFLOG
+		// writes to an in-RAM ring buffer, not journald/SD card, so no rate
+		// limiting is required and combining log+verdict in one rule is
+		// safe. Then the fwmark for policy-based source NAT, then verdict.
+		out = append(out, &expr.Counter{})
+		if logEnabled {
+			out = append(out, forwardLogExpr(logPrefix))
+		}
+		// Source NAT mark (policy-based NAT, forward chain only — Caution:
+		// "ห้ามใส่ fwmark/NAT ในขา input/output"). When the policy has NAT
+		// enabled and accepts the traffic, tag the packet with fwmark 0x1;
+		// the pigate_nat postrouting chain masquerades every packet carrying
+		// this mark to the outgoing interface address ("Use Outgoing
+		// Interface Address"). Only meaningful on ACCEPT — a DROPped packet
+		// never reaches postrouting, so we skip the mark for anything else.
+		if nat && action == "ACCEPT" {
+			out = append(out, &expr.Immediate{Register: 1, Data: []byte{0x01, 0x00, 0x00, 0x00}})
+			out = append(out, &expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 1})
+		}
+		out = append(out, verdictExpr())
+		return out
+	}
+
+	// input/output chain: now that the log goes to NFLOG group
+	// LocalNflogGroup (in-RAM, no SD card write) instead of printk, there is
+	// no need to rate-limit it, so it can share a single rule with the
+	// counter+verdict exactly like the forward branch above (plan §2.6). No
+	// fwmark/NAT here (input/output are never subject to policy-based
+	// source NAT — Caution: "ห้ามใส่ fwmark/NAT ในขา input/output").
+	out = append(out, &expr.Counter{})
+	if logEnabled {
+		out = append(out, localLogExpr(logPrefix))
+	}
+	out = append(out, verdictExpr())
 	return out
 }
 
@@ -1664,93 +1890,11 @@ func buildRuleExpressions(
 	}
 
 	// 5. Service / Protocol
-	if svc.hasFilter {
-		var protoVal byte
-		switch svc.protocol {
-		case "TCP":
-			protoVal = 6
-		case "UDP":
-			protoVal = 17
-		case "ICMP":
-			protoVal = 1
-		default:
-			return nil, fmt.Errorf("unsupported protocol %q for service %q", svc.protocol, svc.objName)
-		}
-
-		// Match IP protocol
-		tailExprs = append(tailExprs, &expr.Payload{
-			DestRegister: 1,
-			Base:         expr.PayloadBaseNetworkHeader,
-			Offset:       9,
-			Len:          1,
-		})
-		tailExprs = append(tailExprs, &expr.Cmp{
-			Op:       expr.CmpOpEq,
-			Register: 1,
-			Data:     []byte{protoVal},
-		})
-
-		if protoVal != 1 { // Non-ICMP, check port
-			portStr := strings.TrimSpace(svc.port)
-			if portStr != "" && portStr != "-" && portStr != "1-65535" {
-				parts := strings.Split(portStr, "-")
-				if len(parts) == 1 {
-					portNum, err := strconv.Atoi(parts[0])
-					if err != nil {
-						return nil, fmt.Errorf("invalid port %q: %w", parts[0], err)
-					}
-					portBytes := []byte{byte(portNum >> 8), byte(portNum & 0xFF)}
-
-					tailExprs = append(tailExprs, &expr.Payload{
-						DestRegister: 1,
-						Base:         expr.PayloadBaseTransportHeader,
-						Offset:       2,
-						Len:          2,
-					})
-					tailExprs = append(tailExprs, &expr.Cmp{
-						Op:       expr.CmpOpEq,
-						Register: 1,
-						Data:     portBytes,
-					})
-				} else if len(parts) == 2 {
-					startPort, err := strconv.Atoi(strings.TrimSpace(parts[0]))
-					if err != nil {
-						return nil, fmt.Errorf("invalid start port %q: %w", parts[0], err)
-					}
-					endPort, err := strconv.Atoi(strings.TrimSpace(parts[1]))
-					if err != nil {
-						return nil, fmt.Errorf("invalid end port %q: %w", parts[1], err)
-					}
-					startBytes := []byte{byte(startPort >> 8), byte(startPort & 0xFF)}
-					endBytes := []byte{byte(endPort >> 8), byte(endPort & 0xFF)}
-
-					tailExprs = append(tailExprs, &expr.Payload{
-						DestRegister: 1,
-						Base:         expr.PayloadBaseTransportHeader,
-						Offset:       2,
-						Len:          2,
-					})
-					tailExprs = append(tailExprs, &expr.Cmp{
-						Op:       expr.CmpOpGte,
-						Register: 1,
-						Data:     startBytes,
-					})
-					tailExprs = append(tailExprs, &expr.Cmp{
-						Op:       expr.CmpOpLte,
-						Register: 1,
-						Data:     endBytes,
-					})
-				}
-			}
-		}
+	svcExprs, err := svcComboMatchExprs(svc)
+	if err != nil {
+		return nil, err
 	}
-
-	verdictExpr := func() expr.Any {
-		if action == "ACCEPT" {
-			return &expr.Verdict{Kind: expr.VerdictAccept}
-		}
-		return &expr.Verdict{Kind: expr.VerdictDrop}
-	}
+	tailExprs = append(tailExprs, svcExprs...)
 
 	// D-1 Option A cartesian expansion: one ruleset per (in, out) pair, in as
 	// the outer loop and out as the inner loop (plan §2.4). Every pair shares
@@ -1776,45 +1920,7 @@ func buildRuleExpressions(
 
 			exprs = append(exprs, tailExprs...)
 
-			if chain == model.PolicyChainForward {
-				// Forward chain: counter, then (if enabled) an NFLOG log expr — NFLOG
-				// writes to an in-RAM ring buffer, not journald/SD card, so no rate
-				// limiting is required and combining log+verdict in one rule is
-				// safe. Then the fwmark for policy-based source NAT, then verdict.
-				fwdExprs := append([]expr.Any{}, exprs...)
-				fwdExprs = append(fwdExprs, &expr.Counter{})
-				if logEnabled {
-					fwdExprs = append(fwdExprs, forwardLogExpr(logPrefix))
-				}
-				// Source NAT mark (policy-based NAT, forward chain only — Caution:
-				// "ห้ามใส่ fwmark/NAT ในขา input/output"). When the policy has NAT
-				// enabled and accepts the traffic, tag the packet with fwmark 0x1;
-				// the pigate_nat postrouting chain masquerades every packet carrying
-				// this mark to the outgoing interface address ("Use Outgoing
-				// Interface Address"). Only meaningful on ACCEPT — a DROPped packet
-				// never reaches postrouting, so we skip the mark for anything else.
-				if nat && action == "ACCEPT" {
-					fwdExprs = append(fwdExprs, &expr.Immediate{Register: 1, Data: []byte{0x01, 0x00, 0x00, 0x00}})
-					fwdExprs = append(fwdExprs, &expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 1})
-				}
-				fwdExprs = append(fwdExprs, verdictExpr())
-				results = append(results, fwdExprs)
-				continue
-			}
-
-			// input/output chain: now that the log goes to NFLOG group
-			// LocalNflogGroup (in-RAM, no SD card write) instead of printk, there is
-			// no need to rate-limit it, so it can share a single rule with the
-			// counter+verdict exactly like the forward branch above (plan §2.6). No
-			// fwmark/NAT here (input/output are never subject to policy-based
-			// source NAT — Caution: "ห้ามใส่ fwmark/NAT ในขา input/output").
-			localExprs := append([]expr.Any{}, exprs...)
-			localExprs = append(localExprs, &expr.Counter{})
-			if logEnabled {
-				localExprs = append(localExprs, localLogExpr(logPrefix))
-			}
-			localExprs = append(localExprs, verdictExpr())
-			results = append(results, localExprs)
+			results = append(results, append(exprs, userRuleSuffixExprs(chain, action, logEnabled, nat, logPrefix)...))
 		}
 	}
 
@@ -1822,7 +1928,7 @@ func buildRuleExpressions(
 }
 
 func addAdminAccessRules(
-	conn *nftables.Conn,
+	b nftBatch,
 	table *nftables.Table,
 	chain *nftables.Chain,
 	ifaceName string,
@@ -1836,7 +1942,7 @@ func addAdminAccessRules(
 
 		switch access {
 		case "PING":
-			conn.AddRule(&nftables.Rule{
+			b.AddRule(&nftables.Rule{
 				Table: table,
 				Chain: chain,
 				Exprs: []expr.Any{
@@ -1855,7 +1961,7 @@ func addAdminAccessRules(
 			ports := []uint16{80, 2479}
 			for _, port := range ports {
 				portBytes := []byte{byte(port >> 8), byte(port & 0xFF)}
-				conn.AddRule(&nftables.Rule{
+				b.AddRule(&nftables.Rule{
 					Table: table,
 					Chain: chain,
 					Exprs: []expr.Any{
@@ -1873,7 +1979,7 @@ func addAdminAccessRules(
 
 		case "HTTPS":
 			portBytes := []byte{byte(443 >> 8), byte(443 & 0xFF)}
-			conn.AddRule(&nftables.Rule{
+			b.AddRule(&nftables.Rule{
 				Table: table,
 				Chain: chain,
 				Exprs: []expr.Any{
@@ -1890,7 +1996,7 @@ func addAdminAccessRules(
 
 		case "SSH":
 			portBytes := []byte{byte(22 >> 8), byte(22 & 0xFF)}
-			conn.AddRule(&nftables.Rule{
+			b.AddRule(&nftables.Rule{
 				Table: table,
 				Chain: chain,
 				Exprs: []expr.Any{
@@ -1911,7 +2017,7 @@ func addAdminAccessRules(
 // addDNSServerAccessRules opens TCP+UDP port 53 (DNS) on interfaces where the local
 // DNS Server (dnsmasq) is configured to listen, per dns_server_settings.
 func addDNSServerAccessRules(
-	conn *nftables.Conn,
+	b nftBatch,
 	table *nftables.Table,
 	chain *nftables.Chain,
 	dnsServerIfaces []string,
@@ -1919,7 +2025,7 @@ func addDNSServerAccessRules(
 	portBytes := []byte{byte(53 >> 8), byte(53 & 0xFF)}
 	for _, ifaceName := range dnsServerIfaces {
 		for _, protoVal := range []byte{6, 17} { // TCP, UDP
-			conn.AddRule(&nftables.Rule{
+			b.AddRule(&nftables.Rule{
 				Table: table,
 				Chain: chain,
 				Exprs: []expr.Any{

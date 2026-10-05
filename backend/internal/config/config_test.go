@@ -383,6 +383,8 @@ func TestWriteParseRoundTrip(t *testing.T) {
 	cfg.TrafficLogBufferCapacity = 20000
 	cfg.MaxObjectEntries = 128
 	cfg.MaxExpandedRulesPerPolicy = 8192
+	cfg.NFTUseSets = false
+	cfg.MaxTotalNFTRules = 32768
 	cfg.FQDNRefreshEnabled = false
 	cfg.FQDNRefreshIntervalSeconds = 600
 	cfg.FQDNRefreshRetryIntervalSeconds = 60
@@ -432,8 +434,8 @@ func TestWriteParseRoundTripDefaults(t *testing.T) {
 
 func TestKnownKeys(t *testing.T) {
 	keys := KnownKeys()
-	if len(keys) != 33 {
-		t.Fatalf("expected 33 known keys, got %d: %v", len(keys), keys)
+	if len(keys) != 35 {
+		t.Fatalf("expected 35 known keys, got %d: %v", len(keys), keys)
 	}
 	// "config" and "v" must never be treated as config-file keys.
 	for _, k := range keys {
@@ -521,6 +523,18 @@ func TestKnownKeys(t *testing.T) {
 	if !hasMaxObjectEntries || !hasMaxExpandedRulesPerPolicy {
 		t.Fatalf("expected max-object-entries/max-expanded-rules-per-policy in KnownKeys, got %v", keys)
 	}
+	var hasNFTUseSets, hasMaxTotalNFTRules bool
+	for _, k := range keys {
+		switch k {
+		case "nft-use-sets":
+			hasNFTUseSets = true
+		case "max-total-nft-rules":
+			hasMaxTotalNFTRules = true
+		}
+	}
+	if !hasNFTUseSets || !hasMaxTotalNFTRules {
+		t.Fatalf("expected nft-use-sets/max-total-nft-rules in KnownKeys, got %v", keys)
+	}
 	var hasFQDNEnabled, hasFQDNInterval, hasFQDNRetry, hasMonitoredFlush bool
 	for _, k := range keys {
 		switch k {
@@ -549,8 +563,8 @@ func TestKnownKeys(t *testing.T) {
 	if !hasEndpointsEnabled || !hasEndpointsMaxPerRule {
 		t.Fatalf("expected monitored-endpoints-enabled/monitored-endpoints-max-per-rule in KnownKeys, got %v", keys)
 	}
-	if keys[len(keys)-4] != "monitored-endpoints-enabled" || keys[len(keys)-3] != "monitored-endpoints-max-per-rule" {
-		t.Fatalf("expected monitored-endpoints-enabled/monitored-endpoints-max-per-rule to be the fourth/third-to-last keys, got %v", keys)
+	if keys[len(keys)-6] != "monitored-endpoints-enabled" || keys[len(keys)-5] != "monitored-endpoints-max-per-rule" {
+		t.Fatalf("expected monitored-endpoints-enabled/monitored-endpoints-max-per-rule to be the sixth/fifth-to-last keys, got %v", keys)
 	}
 	var hasMaxPolicyInterfacesPerDirection bool
 	for _, k := range keys {
@@ -561,8 +575,8 @@ func TestKnownKeys(t *testing.T) {
 	if !hasMaxPolicyInterfacesPerDirection {
 		t.Fatalf("expected max-policy-interfaces-per-direction in KnownKeys, got %v", keys)
 	}
-	if keys[len(keys)-2] != "max-policy-interfaces-per-direction" {
-		t.Fatalf("expected max-policy-interfaces-per-direction to be the second-to-last key, got %v", keys)
+	if keys[len(keys)-4] != "max-policy-interfaces-per-direction" {
+		t.Fatalf("expected max-policy-interfaces-per-direction to be the fourth-to-last key, got %v", keys)
 	}
 	var hasDNSStatsMaxBlockedDomains bool
 	for _, k := range keys {
@@ -573,8 +587,11 @@ func TestKnownKeys(t *testing.T) {
 	if !hasDNSStatsMaxBlockedDomains {
 		t.Fatalf("expected dns-stats-max-blocked-domains in KnownKeys, got %v", keys)
 	}
-	if keys[len(keys)-1] != "dns-stats-max-blocked-domains" {
-		t.Fatalf("expected dns-stats-max-blocked-domains to be the last key, got %v", keys)
+	if keys[len(keys)-3] != "dns-stats-max-blocked-domains" {
+		t.Fatalf("expected dns-stats-max-blocked-domains to be the third-to-last key, got %v", keys)
+	}
+	if keys[len(keys)-2] != "nft-use-sets" || keys[len(keys)-1] != "max-total-nft-rules" {
+		t.Fatalf("expected nft-use-sets/max-total-nft-rules to be the last two keys, got %v", keys)
 	}
 }
 
@@ -680,14 +697,14 @@ func TestWriteParseRoundTrip_MonitoredEndpointsWrittenLast(t *testing.T) {
 		t.Fatalf("Write failed: %v", err)
 	}
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	if len(lines) < 4 {
-		t.Fatalf("expected at least 4 lines, got %d", len(lines))
+	if len(lines) < 6 {
+		t.Fatalf("expected at least 6 lines, got %d", len(lines))
 	}
-	if lines[len(lines)-4] != "monitored-endpoints-enabled=true" {
-		t.Fatalf("expected monitored-endpoints-enabled=true as fourth-to-last line, got %q", lines[len(lines)-4])
+	if lines[len(lines)-6] != "monitored-endpoints-enabled=true" {
+		t.Fatalf("expected monitored-endpoints-enabled=true as sixth-to-last line, got %q", lines[len(lines)-6])
 	}
-	if lines[len(lines)-3] != "monitored-endpoints-max-per-rule=1000" {
-		t.Fatalf("expected monitored-endpoints-max-per-rule=1000 as third-to-last line, got %q", lines[len(lines)-3])
+	if lines[len(lines)-5] != "monitored-endpoints-max-per-rule=1000" {
+		t.Fatalf("expected monitored-endpoints-max-per-rule=1000 as fifth-to-last line, got %q", lines[len(lines)-5])
 	}
 }
 
@@ -702,29 +719,49 @@ func TestWriteParseRoundTrip_MaxPolicyInterfacesPerDirectionWrittenLast(t *testi
 		t.Fatalf("Write failed: %v", err)
 	}
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	if len(lines) < 2 {
-		t.Fatalf("expected at least 2 lines, got %d", len(lines))
+	if len(lines) < 4 {
+		t.Fatalf("expected at least 4 lines, got %d", len(lines))
 	}
-	if lines[len(lines)-2] != "max-policy-interfaces-per-direction=8" {
-		t.Fatalf("expected max-policy-interfaces-per-direction=8 as second-to-last line, got %q", lines[len(lines)-2])
+	if lines[len(lines)-4] != "max-policy-interfaces-per-direction=8" {
+		t.Fatalf("expected max-policy-interfaces-per-direction=8 as fourth-to-last line, got %q", lines[len(lines)-4])
 	}
 }
 
 // TestWriteParseRoundTrip_DNSStatsMaxBlockedDomainsWrittenLast locks in that
-// the newest file-only key (docs/ref/todo/
-// dns-blocked-query-statistics-plan.md T-07) is appended at the very end of
-// the generated file.
+// dns-stats-max-blocked-domains (docs/ref/todo/
+// dns-blocked-query-statistics-plan.md T-07) is appended right before the two
+// newer nftables-sets keys at the very end of the generated file.
 func TestWriteParseRoundTrip_DNSStatsMaxBlockedDomainsWrittenLast(t *testing.T) {
 	var buf bytes.Buffer
 	if err := Write(&buf, Defaults()); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	if len(lines) < 1 {
-		t.Fatalf("expected at least 1 line, got %d", len(lines))
+	if len(lines) < 3 {
+		t.Fatalf("expected at least 3 lines, got %d", len(lines))
 	}
-	if lines[len(lines)-1] != "dns-stats-max-blocked-domains=1000" {
-		t.Fatalf("expected dns-stats-max-blocked-domains=1000 as last line, got %q", lines[len(lines)-1])
+	if lines[len(lines)-3] != "dns-stats-max-blocked-domains=1000" {
+		t.Fatalf("expected dns-stats-max-blocked-domains=1000 as third-to-last line, got %q", lines[len(lines)-3])
+	}
+}
+
+// TestWriteParseRoundTrip_NFTKeysWrittenLast locks in that the newest
+// file-only keys (docs/ref/todo/nftables-sets-refactor-plan.md §3.7) are
+// appended at the very end of the generated file.
+func TestWriteParseRoundTrip_NFTKeysWrittenLast(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, Defaults()); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 lines, got %d", len(lines))
+	}
+	if lines[len(lines)-2] != "nft-use-sets=true" {
+		t.Fatalf("expected nft-use-sets=true as second-to-last line, got %q", lines[len(lines)-2])
+	}
+	if lines[len(lines)-1] != "max-total-nft-rules=16384" {
+		t.Fatalf("expected max-total-nft-rules=16384 as last line, got %q", lines[len(lines)-1])
 	}
 }
 
@@ -1194,6 +1231,79 @@ func TestResolve_MaxObjectEntriesAndMaxExpandedRulesPerPolicy(t *testing.T) {
 		}
 		if _, _, err := Resolve(Defaults(), map[string]string{"max-expanded-rules-per-policy": "abc"}, nil); err == nil {
 			t.Fatalf("expected error for non-integer max-expanded-rules-per-policy")
+		}
+	})
+}
+
+// TestResolve_NFTUseSetsAndMaxTotalNFTRules covers the two file-only
+// nftables-sets keys (docs/ref/todo/nftables-sets-refactor-plan.md §3.7):
+// defaults, file override, bool fail-fast, and int clamp+warn.
+func TestResolve_NFTUseSetsAndMaxTotalNFTRules(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		cfg, warns, err := Resolve(Defaults(), nil, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if len(warns) != 0 {
+			t.Fatalf("unexpected warnings: %v", warns)
+		}
+		if !cfg.NFTUseSets {
+			t.Fatalf("got NFTUseSets=false, want default true")
+		}
+		if cfg.MaxTotalNFTRules != 16384 {
+			t.Fatalf("got MaxTotalNFTRules=%d, want default 16384", cfg.MaxTotalNFTRules)
+		}
+	})
+
+	t.Run("nft-use-sets false from file", func(t *testing.T) {
+		cfg, _, err := Resolve(Defaults(), map[string]string{"nft-use-sets": "false"}, nil)
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if cfg.NFTUseSets {
+			t.Fatalf("got NFTUseSets=true, want false")
+		}
+	})
+
+	t.Run("nft-use-sets non-bool is an error", func(t *testing.T) {
+		if _, _, err := Resolve(Defaults(), map[string]string{"nft-use-sets": "maybe"}, nil); err == nil {
+			t.Fatalf("expected error for non-bool nft-use-sets")
+		}
+	})
+
+	t.Run("max-total-nft-rules out of range clamps to default with warning", func(t *testing.T) {
+		for _, v := range []string{"100", "70000", "0", "-1"} {
+			cfg, warns, err := Resolve(Defaults(), map[string]string{"max-total-nft-rules": v}, nil)
+			if err != nil {
+				t.Fatalf("Resolve(max-total-nft-rules=%q) failed: %v", v, err)
+			}
+			if len(warns) != 1 {
+				t.Fatalf("Resolve(max-total-nft-rules=%q): expected 1 warning, got %v", v, warns)
+			}
+			if cfg.MaxTotalNFTRules != 16384 {
+				t.Fatalf("Resolve(max-total-nft-rules=%q): got %d, want default 16384", v, cfg.MaxTotalNFTRules)
+			}
+		}
+	})
+
+	t.Run("max-total-nft-rules boundaries accepted", func(t *testing.T) {
+		for v, want := range map[string]int{"1024": 1024, "65536": 65536} {
+			cfg, warns, err := Resolve(Defaults(), map[string]string{"max-total-nft-rules": v}, nil)
+			if err != nil {
+				t.Fatalf("Resolve(max-total-nft-rules=%q) failed: %v", v, err)
+			}
+			if len(warns) != 0 {
+				t.Fatalf("Resolve(max-total-nft-rules=%q): unexpected warnings %v", v, warns)
+			}
+			if cfg.MaxTotalNFTRules != want {
+				t.Fatalf("got %d, want %d", cfg.MaxTotalNFTRules, want)
+			}
+		}
+	})
+
+	t.Run("max-total-nft-rules non-integer is an error", func(t *testing.T) {
+		if _, _, err := Resolve(Defaults(), map[string]string{"max-total-nft-rules": "abc"}, nil); err == nil {
+			t.Fatalf("expected error for non-integer max-total-nft-rules")
 		}
 	})
 }

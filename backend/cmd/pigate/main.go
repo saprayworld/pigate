@@ -225,6 +225,13 @@ func main() {
 		// *RealFirewall before it is assigned to the fw interface variable, since
 		// FirewallManager itself does not (and must not) expose this method.
 		realFw.SetMaxExpandedRulesPerPolicy(cfg.MaxExpandedRulesPerPolicy)
+		// nftables-sets refactor (docs/ref/todo/nftables-sets-refactor-plan.md
+		// §3.7, issue #168): file-only keys, same setter pattern as above.
+		// nft-use-sets=false is the rollback switch to the legacy cartesian
+		// expansion; max-total-nft-rules bounds the whole ruleset per apply.
+		realFw.SetUseNFTSets(cfg.NFTUseSets)
+		realFw.SetMaxTotalNFTRules(cfg.MaxTotalNFTRules)
+		log.Printf("Firewall: nft-use-sets=%t max-total-nft-rules=%d", cfg.NFTUseSets, cfg.MaxTotalNFTRules)
 		fw = realFw
 		net = kernel.NewRealNetwork()
 		rt = kernel.NewRealRouting(cfg.AllowEditSystemRoutes)
