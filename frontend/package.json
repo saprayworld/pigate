@@ -10,7 +10,12 @@
     "preview": "vite preview"
   },
   "resolutions": {
-    "js-yaml": "^4.3.1"
+    "js-yaml": "^4.3.1",
+    "fast-uri": "^4.2.1",
+    "hono": "^4.13.12",
+    "browserslist": "^4.29.3",
+    "ip-address": "^10.7.2",
+    "baseline-browser-mapping": "^2.11.26"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",
